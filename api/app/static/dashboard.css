@@ -5,6 +5,7 @@
 :root {
   /* Backgrounds — layered depth */
   --bg-base:        #0D0E11;
+  --bg-titlebar:    rgba(13,14,17,0.85);   /* bg-base at 85% opacity for frosted glass */
   --bg-surface:     #13151A;
   --bg-elevated:    #1C1E26;
   --bg-overlay:     rgba(255,255,255,0.05);
@@ -34,6 +35,7 @@
 
   /* Status dot colors */
   --status-live:       #30D158;
+  --status-live-rgb: 48,209,88;             /* companion for rgba() usage */
   --status-processing: #FF9F0A;
   --status-error:      #FF3B30;
   --status-pending:    #48484A;
@@ -792,7 +794,7 @@ small, .small { color: var(--text-secondary); }
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
-  background: rgba(13,14,17,0.85);
+  background: var(--bg-titlebar);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border-subtle);
@@ -825,15 +827,15 @@ small, .small { color: var(--text-secondary); }
 }
 .dot-live {
   background: var(--status-live);
-  box-shadow: 0 0 0 0 rgba(48,209,88,0.6);
+  box-shadow: 0 0 0 0 rgba(var(--status-live-rgb),0.6);
   animation: pulse-live 2s infinite;
 }
 .dot-error   { background: var(--status-error); }
 .dot-pending { background: var(--status-pending); }
 @keyframes pulse-live {
-  0%   { box-shadow: 0 0 0 0   rgba(48,209,88,0.6); }
-  70%  { box-shadow: 0 0 0 5px rgba(48,209,88,0); }
-  100% { box-shadow: 0 0 0 0   rgba(48,209,88,0); }
+  0%   { box-shadow: 0 0 0 0   rgba(var(--status-live-rgb),0.6); }
+  70%  { box-shadow: 0 0 0 5px rgba(var(--status-live-rgb),0); }
+  100% { box-shadow: 0 0 0 0   rgba(var(--status-live-rgb),0); }
 }
 .titlebar-btn {
   display: flex;

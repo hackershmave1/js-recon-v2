@@ -1103,10 +1103,8 @@ class SecurityDashboard {
     updateApiStatusIndicator(connected) {
         const dot  = document.getElementById('api-status-dot');
         const text = document.getElementById('api-status-text');
-        const badge = document.getElementById('api-status');  // legacy fallback
         if (dot)  dot.className  = connected ? 'dot dot-live' : 'dot dot-error';
         if (text) text.textContent = connected ? 'API Connected' : 'API Disconnected';
-        if (badge) badge.textContent = connected ? 'API Connected' : 'API Disconnected';
     }
 
     async checkAPIStatus() {
