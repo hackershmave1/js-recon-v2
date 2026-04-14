@@ -853,3 +853,28 @@ small, .small { color: var(--text-secondary); }
   transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 .titlebar-btn:hover { background: var(--bg-overlay); color: var(--text-primary); }
+
+/* ── App Shell ────────────────────────────────────────────── */
+.app-shell {
+  display: flex;
+  height: calc(100vh - 48px);   /* viewport minus titlebar */
+  overflow: hidden;
+}
+.app-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 16px 8px;
+}
+.app-main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  padding-bottom: 52px;   /* clearance for status bar */
+  min-width: 0;
+}
+#main-content-area { width: 100%; }

@@ -10,7 +10,7 @@
     <link href="{{ url_for('static', path='dashboard.css') }}" rel="stylesheet">
 </head>
 <body>
-    <div class="container-fluid">
+    <div class="app-shell">
         <!-- Titlebar -->
         <header class="app-titlebar">
             <div class="titlebar-brand">
@@ -29,59 +29,12 @@
             </div>
         </header>
 
-        <div class="row">
-            <!-- Left Sidebar -->
-            <div class="col-md-3">
-                <div class="card mb-4">
-                    <div class="card-header">
-                        <h5><i class="fas fa-tools"></i> Quick Actions</h5>
-                    </div>
-                    <div class="card-body">
-                        <div class="d-grid gap-2">
-                            <button class="btn btn-primary" onclick="showAnalysisTab()">
-                                <i class="fas fa-search"></i> New Analysis
-                            </button>
-                            <button class="btn btn-secondary" onclick="showFilesTab()">
-                                <i class="fas fa-folder"></i> View Files
-                            </button>
-                            <button class="btn btn-info" onclick="showSessionsTab()">
-                                <i class="fas fa-history"></i> Sessions
-                            </button>
-                        </div>
-                    </div>
-                </div>
+        <aside class="app-sidebar" id="app-sidebar">
+            <!-- Nav rail populated in Task 5 -->
+        </aside>
 
-                <div class="card mb-4">
-                    <div class="card-header">
-                        <h6><i class="fas fa-chart-bar"></i> Statistics</h6>
-                    </div>
-                    <div class="card-body">
-                        <div class="row text-center">
-                            <div class="col-12 mb-2">
-                                <div class="stat-box">
-                                    <div class="stat-number" id="total-files">-</div>
-                                    <div class="stat-label">Total Files</div>
-                                </div>
-                            </div>
-                            <div class="col-12 mb-2">
-                                <div class="stat-box">
-                                    <div class="stat-number" id="total-sessions">-</div>
-                                    <div class="stat-label">Sessions</div>
-                                </div>
-                            </div>
-                            <div class="col-12">
-                                <div class="stat-box">
-                                    <div class="stat-number" id="total-endpoints">-</div>
-                                    <div class="stat-label">Endpoints Found</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Main Content Area -->
-            <div class="col-md-9">
+        <main class="app-main">
+            <div id="main-content-area">
                 <!-- Analysis Tab -->
                 <div id="analysis-tab" class="main-tab-content">
                     <div class="card mb-4">
@@ -355,9 +308,9 @@
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
-    </div>
+            </div><!-- /#main-content-area -->
+        </main>
+    </div><!-- /.app-shell -->
 
     <!-- Loading Modal -->
     <div class="modal fade" id="loadingModal" tabindex="-1" aria-hidden="true">
