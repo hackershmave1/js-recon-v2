@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>JS Extractor Settings</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --panel-2: #f3f4f7;
+      --text: #0b0b0d;
+      --muted: #6b6f76;
+      --line: #e2e5ea;
+      --accent: #0a84ff;
+      --accent-2: #111315;
+      --success: #39c26b;
+      --danger: #ff3b30;
+      --shadow: 0 12px 30px rgba(0,0,0,0.12);
+      --radius: 14px;
+    }
+
+    body {
+      font-family: "SF Pro Text", "SF Pro Display", -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      padding: 26px;
+      max-width: 860px;
+      margin: 0 auto;
+      background: linear-gradient(180deg, #ffffff 0%, #f5f6f8 100%);
+      color: var(--text);
+    }
+    
+    h1 {
+      color: var(--text);
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 12px;
+      margin: 0 0 18px 0;
+      letter-spacing: 0.3px;
+      font-weight: 600;
+    }
+
+    .subhead {
+      color: var(--muted);
+      margin-bottom: 18px;
+      font-size: 13px;
+    }
+    
+    .setting-group {
+      margin-bottom: 18px;
+      padding: 16px;
+      background: var(--panel);
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      box-shadow: 0 1px 0 rgba(255,255,255,0.8) inset;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    
+    input[type="text"],
+    textarea {
+      width: 100%;
+      padding: 12px;
+      box-sizing: border-box;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      background: var(--panel-2);
+    }
+    
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+    }
+    
+    input[type="checkbox"] {
+      margin-right: 10px;
+      width: 18px;
+      height: 18px;
+      vertical-align: middle;
+      accent-color: var(--accent);
+    }
+    
+    .checkbox-label {
+      display: inline-block;
+      font-weight: 500;
+      cursor: pointer;
+      color: var(--text);
+    }
+    
+    button {
+      padding: 12px 20px;
+      margin-right: 10px;
+      margin-top: 10px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    
+    .btn-primary {
+      background: var(--accent-2);
+      color: white;
+    }
+    
+    .btn-secondary {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+    
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow);
+    }
+    
+    .help-text {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    
+    #status {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 10px;
+      display: none;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+    
+    #status.success {
+      color: #1d5b35;
+      border: 1px solid #b9e4c8;
+      background: #ecf9f1;
+    }
+    
+    #status.error {
+      color: #7a1f1f;
+      border: 1px solid #f3c3c3;
+      background: #fdecec;
+    }
+  </style>
+</head>
+<body>
+  <h1>JS Security Extractor Settings</h1>
+  <div class="subhead">Clean, precise controls for capture scope and processing behavior.</div>
+  
+  <div class="setting-group">
+    <label class="checkbox-label">
+      <input type="checkbox" id="useDomainScope">
+      Enable Domain Scope Filtering
+    </label>
+    <div class="help-text">
+      Only capture JavaScript from specific domains
+    </div>
+  </div>
+  
+  <div class="setting-group">
+    <label for="domainScopes">Domain Scopes (one per line):</label>
+    <textarea id="domainScopes" placeholder="wishandwash.co.il&#10;api.wishandwash.co.il&#10;cdn.wishandwash.co.il"></textarea>
+    <div class="help-text">
+      Enter domain names to filter. Subdomain matching is supported.
+      Leave empty to capture from all domains.
+    </div>
+  </div>
+  
+  <div class="setting-group">
+    <label class="checkbox-label">
+      <input type="checkbox" id="useLocalApi" checked disabled>
+      Local API Upload (always enabled)
+    </label>
+    <div class="help-text">
+      Captured files are always sent to the configured API endpoint.
+    </div>
+  </div>
+  
+  <div class="setting-group">
+    <label for="apiEndpoint">API Endpoint:</label>
+    <input type="text" id="apiEndpoint" value="http://localhost:3000/api/save-files">
+    <div class="help-text">
+      URL of your local processing API (must be running)
+    </div>
+  </div>
+  
+  <div class="setting-group">
+    <label class="checkbox-label">
+      <input type="checkbox" id="autoStart">
+      Auto-start capture on browser launch
+    </label>
+  </div>
+
+  <div class="setting-group">
+    <label class="checkbox-label">
+      <input type="checkbox" id="performAnalysisOnUpload">
+      Analyze files on upload
+    </label>
+    <div class="help-text">
+      When enabled, include intent to run server-side analysis during upload.
+    </div>
+  </div>
+  
+  <div class="setting-group">
+    <label class="checkbox-label">
+      <input type="checkbox" id="captureSourceMaps" checked>
+      Automatically fetch source maps
+    </label>
+    <div class="help-text">
+      Automatically download .map files when detected
+    </div>
+  </div>
+
+  <div class="setting-group">
+    <label class="checkbox-label">
+      <input type="checkbox" id="allowSourceMapFallback">
+      Allow .map fallback fetch
+    </label>
+    <div class="help-text">
+      If no sourceMappingURL comment exists, attempt {file}.map
+    </div>
+  </div>
+
+  <div class="setting-group">
+    <label class="checkbox-label">
+      <input type="checkbox" id="captureAuthContext" checked>
+      Capture auth context for sourcemap replay
+    </label>
+    <div class="help-text">
+      Capture allowlisted auth headers/cookie presence from script requests so backend sourcemap fallback can reuse authenticated context.
+    </div>
+  </div>
+
+  <div class="setting-group">
+    <label for="authContextDomains">Auth Context Domains (one per line):</label>
+    <textarea id="authContextDomains" placeholder="wishandwash.co.il"></textarea>
+    <div class="help-text">
+      Explicit per-domain control for auth-context capture. Leave empty to allow all in-scope domains.
+    </div>
+  </div>
+  
+  <div class="setting-group">
+    <label class="checkbox-label">
+      <input type="checkbox" id="resolveDependencies" checked>
+      Automatically resolve dependencies
+    </label>
+    <div class="help-text">
+      Fetch webpack chunks and imports automatically
+    </div>
+  </div>
+
+  <div class="setting-group">
+    <label class="checkbox-label">
+      <input type="checkbox" id="importRepPlusSignals">
+      Import REP+ script hints
+    </label>
+    <div class="help-text">
+      If REP+ is installed, import script-like URLs it discovers and merge them into dependency capture hints.
+    </div>
+  </div>
+
+  <div class="setting-group">
+    <label for="repPlusExtensionId">REP+ Extension ID (optional):</label>
+    <input type="text" id="repPlusExtensionId" placeholder="abcdefghijklmnopabcdefghijklmnop">
+    <div class="help-text">
+      Needed for direct REP+ messaging. Leave blank to disable direct extension ping and run standalone.
+    </div>
+  </div>
+
+  <div class="setting-group">
+    <label class="checkbox-label">
+      <input type="checkbox" id="exportIncludeContent">
+      Include file contents in export
+    </label>
+    <div class="help-text">
+      Export full JavaScript and source map content (larger files)
+    </div>
+  </div>
+  
+  <button id="save" class="btn-primary">💾 Save Settings</button>
+  <button id="reset" class="btn-secondary">🔄 Reset to Defaults</button>
+  
+  <div id="status"></div>
+  
+  <script src="options.js"></script>
+</body>
+</html>

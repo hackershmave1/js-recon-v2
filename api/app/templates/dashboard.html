@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🔍 JavaScript Security Extractor</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', path='dashboard.css') }}" rel="stylesheet">
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- Header -->
+        <nav class="navbar navbar-dark bg-dark mb-4">
+            <div class="container-fluid">
+                <span class="navbar-brand mb-0 h1">
+                    <i class="fas fa-shield-alt"></i> JavaScript Security Extractor
+                </span>
+                <div class="navbar-nav flex-row">
+                    <span class="nav-item me-3">
+                        <span class="badge bg-success" id="api-status">API Connected</span>
+                    </span>
+                    <button class="btn btn-outline-light btn-sm" onclick="checkAPIStatus()">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+            </div>
+        </nav>
+
+        <div class="row">
+            <!-- Left Sidebar -->
+            <div class="col-md-3">
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5><i class="fas fa-tools"></i> Quick Actions</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-grid gap-2">
+                            <button class="btn btn-primary" onclick="showAnalysisTab()">
+                                <i class="fas fa-search"></i> New Analysis
+                            </button>
+                            <button class="btn btn-secondary" onclick="showFilesTab()">
+                                <i class="fas fa-folder"></i> View Files
+                            </button>
+                            <button class="btn btn-info" onclick="showSessionsTab()">
+                                <i class="fas fa-history"></i> Sessions
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h6><i class="fas fa-chart-bar"></i> Statistics</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row text-center">
+                            <div class="col-12 mb-2">
+                                <div class="stat-box">
+                                    <div class="stat-number" id="total-files">-</div>
+                                    <div class="stat-label">Total Files</div>
+                                </div>
+                            </div>
+                            <div class="col-12 mb-2">
+                                <div class="stat-box">
+                                    <div class="stat-number" id="total-sessions">-</div>
+                                    <div class="stat-label">Sessions</div>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <div class="stat-box">
+                                    <div class="stat-number" id="total-endpoints">-</div>
+                                    <div class="stat-label">Endpoints Found</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Content Area -->
+            <div class="col-md-9">
+                <!-- Analysis Tab -->
+                <div id="analysis-tab" class="main-tab-content">
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5><i class="fas fa-code"></i> JavaScript Analysis</h5>
+                        </div>
+                        <div class="card-body">
+                            <form id="analysis-form">
+                                <div class="mb-3">
+                                    <label for="js-url" class="form-label">Source URL</label>
+                                    <input type="url" class="form-control" id="js-url" placeholder="https://wishandwash.co.il/assets/index-BDSyL5Fh.js">
+                                    <small class="text-muted">Required. If content is empty, the API will fetch this URL and analyze it.</small>
+                                </div>
+
+                                <div id="analysis-context-card" class="analysis-context-card d-none mb-3">
+                                    <div class="analysis-context-card-header">
+                                        <span><i class="fas fa-circle-info me-2"></i>Analysis Context</span>
+                                        <button type="button" class="btn btn-outline-secondary btn-sm d-none" id="analysis-context-back-btn" onclick="dashboard.openAnalysisContextSession()">
+                                            <i class="fas fa-arrow-left me-1"></i>Back to Session Files
+                                        </button>
+                                    </div>
+                                    <div class="analysis-context-grid">
+                                        <div class="analysis-context-label">Mode</div>
+                                        <div class="analysis-context-value" id="analysis-context-mode">-</div>
+                                        <div class="analysis-context-label">Source URL</div>
+                                        <div class="analysis-context-value">
+                                            <a id="analysis-context-url" href="#" target="_blank" rel="noopener noreferrer"></a>
+                                        </div>
+                                        <div class="analysis-context-label">File ID</div>
+                                        <div class="analysis-context-value" id="analysis-context-file-id">-</div>
+                                        <div class="analysis-context-label">Session ID</div>
+                                        <div class="analysis-context-value" id="analysis-context-session-id">-</div>
+                                        <div class="analysis-context-label">Analysis Status</div>
+                                        <div class="analysis-context-value" id="analysis-context-status">-</div>
+                                        <div class="analysis-context-label">Source Map</div>
+                                        <div class="analysis-context-value" id="analysis-context-map">-</div>
+                                        <div class="analysis-context-label">Failure</div>
+                                        <div class="analysis-context-value" id="analysis-context-failure">-</div>
+                                        <div class="analysis-context-label">Stored Content</div>
+                                        <div class="analysis-context-value" id="analysis-context-content">-</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label for="js-content" class="form-label">JavaScript Content (Optional)</label>
+                                    <textarea class="form-control" id="js-content" rows="12" 
+                                        placeholder="Paste JavaScript content here or drag & drop a .js file. Leave empty to fetch from URL..."></textarea>
+                                </div>
+
+                                <div class="row mb-3">
+                                    <div class="col-md-6">
+                                        <label class="form-label">Analysis Type</label>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="analysis-type" value="comprehensive" id="comprehensive" checked>
+                                            <label class="form-check-label" for="comprehensive">
+                                                <strong>Comprehensive</strong> - Full analysis (slower)
+                                            </label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="analysis-type" value="jsluice" id="jsluice">
+                                            <label class="form-check-label" for="jsluice">
+                                                <strong>JSluice Only</strong> - Fast URL/secret extraction
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Options</label>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="include-sourcemap" checked>
+                                            <label class="form-check-label" for="include-sourcemap">
+                                                Include source map processing
+                                            </label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="resolve-urls" checked>
+                                            <label class="form-check-label" for="resolve-urls">
+                                                Resolve relative URLs
+                                            </label>
+                                        </div>
+                                        <hr class="my-2">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="use-rep-endpoints" checked>
+                                            <label class="form-check-label" for="use-rep-endpoints">
+                                                REP endpoint extractor (default)
+                                            </label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="use-rep-secrets" checked>
+                                            <label class="form-check-label" for="use-rep-secrets">
+                                                REP Kingfisher secret scanner (default)
+                                            </label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="use-jsluice-endpoints">
+                                            <label class="form-check-label" for="use-jsluice-endpoints">
+                                                jsluice endpoint extractor (optional)
+                                            </label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="use-jsluice-secrets">
+                                            <label class="form-check-label" for="use-jsluice-secrets">
+                                                jsluice secret extractor (optional)
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="d-grid">
+                                    <button type="submit" class="btn btn-success btn-lg">
+                                        <i class="fas fa-play"></i> Start Analysis
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Results Section -->
+                    <div id="results-section" style="display: none;">
+                        <div class="card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h5 class="mb-1"><i class="fas fa-chart-line"></i> Analysis Results</h5>
+                                    <small class="text-muted" id="results-context">No analysis context selected.</small>
+                                </div>
+                                <div>
+                                    <span id="processing-time" class="badge bg-info me-2"></span>
+                                    <button class="btn btn-outline-secondary btn-sm" onclick="exportResults()">
+                                        <i class="fas fa-download"></i> Export
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <!-- Results Tabs -->
+                                <ul class="nav nav-tabs" role="tablist">
+                                    <li class="nav-item">
+                                        <a class="nav-link active" data-bs-toggle="tab" href="#endpoints-tab" role="tab">
+                                            <i class="fas fa-globe"></i> Endpoints <span id="endpoints-count" class="badge bg-primary">0</span>
+                                        </a>
+                                    </li>
+                                    <li class="nav-item">
+                                        <a class="nav-link" data-bs-toggle="tab" href="#secrets-tab" role="tab">
+                                            <i class="fas fa-key"></i> Secrets <span id="secrets-count" class="badge bg-danger">0</span>
+                                        </a>
+                                    </li>
+                                    <li class="nav-item">
+                                        <a class="nav-link" data-bs-toggle="tab" href="#dependencies-tab" role="tab">
+                                            <i class="fas fa-sitemap"></i> Dependencies <span id="deps-count" class="badge bg-warning">0</span>
+                                        </a>
+                                    </li>
+                                    <li class="nav-item">
+                                        <a class="nav-link" data-bs-toggle="tab" href="#sourcemap-tab" role="tab">
+                                            <i class="fas fa-map"></i> Source Maps <span id="sourcemap-count" class="badge bg-secondary">0</span>
+                                        </a>
+                                    </li>
+                                </ul>
+
+                                <div class="tab-content mt-3">
+                                    <!-- Endpoints Tab -->
+                                    <div id="endpoints-tab" class="tab-pane active">
+                                        <div id="endpoints-content"></div>
+                                    </div>
+
+                                    <!-- Secrets Tab -->
+                                    <div id="secrets-tab" class="tab-pane">
+                                        <div id="secrets-content"></div>
+                                    </div>
+
+                                    <!-- Dependencies Tab -->
+                                    <div id="dependencies-tab" class="tab-pane">
+                                        <div id="dependencies-content"></div>
+                                    </div>
+
+                                    <!-- Source Map Tab -->
+                                    <div id="sourcemap-tab" class="tab-pane">
+                                        <div id="sourcemap-content"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Files Tab -->
+                <div id="files-tab" class="main-tab-content" style="display: none;">
+                    <div class="card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <div>
+                                <h5 class="mb-1"><i class="fas fa-folder"></i> Stored Files</h5>
+                                <small class="text-muted" id="files-scope-label">Scope: All Sessions</small>
+                            </div>
+                            <div>
+                                <button class="btn btn-outline-secondary btn-sm me-2" id="clear-files-filter-btn" style="display: none;" onclick="clearSessionFilesFilter()">
+                                    <i class="fas fa-layer-group"></i> All Sessions
+                                </button>
+                                <button class="btn btn-primary btn-sm" onclick="refreshFiles()">
+                                    <i class="fas fa-sync-alt"></i> Refresh
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="list-filter-bar mb-3">
+                                <div class="row g-2 align-items-end">
+                                    <div class="col-md-6">
+                                        <label for="files-filter-query" class="form-label mb-1">Search Files</label>
+                                        <input type="text" class="form-control form-control-sm" id="files-filter-query" placeholder="URL, hash, or session id">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="files-filter-status" class="form-label mb-1">Analysis Status</label>
+                                        <select class="form-select form-select-sm" id="files-filter-status">
+                                            <option value="all">All statuses</option>
+                                            <option value="not_analyzed">Not analyzed</option>
+                                            <option value="analyzing">Analyzing</option>
+                                            <option value="completed">Analyzed</option>
+                                            <option value="failed">Failed</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-2 d-grid">
+                                        <button class="btn btn-outline-secondary btn-sm" id="files-filter-clear" type="button">
+                                            <i class="fas fa-filter-circle-xmark me-1"></i>Clear
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="files-sourcemap-validation-summary" class="sourcemap-validation-summary mb-3 d-none"></div>
+                            <div id="files-bulk-actions" class="bulk-actions-container d-none mb-3"></div>
+                            <div id="files-content">
+                                <p class="text-center text-muted">Loading files...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sessions Tab -->
+                <div id="sessions-tab" class="main-tab-content" style="display: none;">
+                    <div class="card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0"><i class="fas fa-history"></i> Analysis Sessions</h5>
+                            <button class="btn btn-success btn-sm" id="create-session-btn" type="button">
+                                <i class="fas fa-plus me-1"></i>Create New Session
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <div class="list-filter-bar mb-3">
+                                <div class="row g-2 align-items-end">
+                                    <div class="col-md-6">
+                                        <label for="sessions-filter-query" class="form-label mb-1">Search Sessions</label>
+                                        <input type="text" class="form-control form-control-sm" id="sessions-filter-query" placeholder="Session name or id">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="sessions-filter-status" class="form-label mb-1">Activity</label>
+                                        <select class="form-select form-select-sm" id="sessions-filter-status">
+                                            <option value="all">All</option>
+                                            <option value="active">Active (running)</option>
+                                            <option value="completed">Completed</option>
+                                            <option value="failed">Failed</option>
+                                            <option value="cancelled">Stopped</option>
+                                            <option value="idle">Idle</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-2 d-grid">
+                                        <button class="btn btn-outline-secondary btn-sm" id="sessions-filter-clear" type="button">
+                                            <i class="fas fa-filter-circle-xmark me-1"></i>Clear
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="sessions-bulk-actions" class="bulk-actions-container d-none mb-3"></div>
+                            <div id="sessions-content">
+                                <p class="text-center text-muted">Loading sessions...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Modal -->
+    <div class="modal fade" id="loadingModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-body text-center">
+                    <div class="spinner-border text-primary mb-3" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <h5>Analyzing JavaScript...</h5>
+                    <p id="loading-message">Please wait while we process your code.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reconstructed Sources Modal -->
+    <div class="modal fade" id="reconstructedSourcesModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fas fa-code-branch"></i> Reconstructed Source Files
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="reconstructed-sources-loading" class="text-center" style="display: none;">
+                        <div class="spinner-border text-primary mb-3" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <p>Loading reconstructed source files...</p>
+                    </div>
+                    <div id="reconstructed-sources-error" class="alert alert-danger" style="display: none;">
+                        <i class="fas fa-exclamation-triangle"></i> <span id="reconstructed-sources-error-msg">Error loading sources</span>
+                    </div>
+                    <div id="reconstructed-sources-content">
+                        <!-- Content will be populated dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Session Summary Modal -->
+    <div class="modal fade" id="sessionSummaryModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="session-summary-title">
+                        <i class="fas fa-clipboard-list me-2"></i>Session Analysis Summary
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="session-summary-loading" class="text-center" style="display: none;">
+                        <div class="spinner-border text-primary mb-3" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <p>Loading session analysis summary...</p>
+                    </div>
+                    <div id="session-summary-error" class="alert alert-danger" style="display: none;">
+                        <i class="fas fa-triangle-exclamation me-2"></i>
+                        <span id="session-summary-error-msg">Failed to load session summary.</span>
+                    </div>
+                    <div id="session-summary-content"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Session Analyze Config Modal -->
+    <div class="modal fade" id="sessionAnalyzeConfigModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 class="modal-title mb-1">
+                            <i class="fas fa-sliders me-2"></i>Analyze Session Configuration
+                        </h5>
+                        <small class="text-muted">Target: <span id="session-analyze-target-name">Session</span></small>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form id="session-analyze-form">
+                    <div class="modal-body">
+                        <div class="alert alert-light border session-analyze-help">
+                            <strong>Quick run</strong> uses safe defaults. <strong>Advanced run</strong> applies all selections below and saves them for next time.
+                        </div>
+
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label for="session-analyze-analysis-type" class="form-label">Analysis Type</label>
+                                <select id="session-analyze-analysis-type" class="form-select">
+                                    <option value="comprehensive">Comprehensive (REP + optional jsluice)</option>
+                                    <option value="jsluice">JSluice-only</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="session-analyze-max-files" class="form-label">Max Files to Analyze (optional)</label>
+                                <input id="session-analyze-max-files" type="number" min="1" max="20000" class="form-control" placeholder="No limit">
+                            </div>
+                            <div class="col-md-6">
+                                <label for="session-analyze-max-failures" class="form-label">Stop After Failures (optional)</label>
+                                <input id="session-analyze-max-failures" type="number" min="1" max="5000" class="form-control" placeholder="No limit">
+                            </div>
+                            <div class="col-md-6">
+                                <label for="session-analyze-timeout-ms" class="form-label">Per-file Timeout ms (optional)</label>
+                                <input id="session-analyze-timeout-ms" type="number" min="250" max="120000" class="form-control" placeholder="Default">
+                            </div>
+                            <div class="col-md-6">
+                                <label for="session-analyze-retry-attempts" class="form-label">Retry Attempts</label>
+                                <input id="session-analyze-retry-attempts" type="number" min="0" max="5" class="form-control" placeholder="0">
+                            </div>
+                        </div>
+
+                        <hr class="my-3">
+
+                        <div class="row">
+                            <div class="col-md-6">
+                                <h6 class="mb-2">General Options</h6>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="session-analyze-include-sourcemap" checked>
+                                    <label class="form-check-label" for="session-analyze-include-sourcemap">Include source map processing</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="session-analyze-resolve-urls" checked>
+                                    <label class="form-check-label" for="session-analyze-resolve-urls">Resolve relative URLs</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="session-analyze-include-reconstructed" checked>
+                                    <label class="form-check-label" for="session-analyze-include-reconstructed">Include reconstructed source files</label>
+                                </div>
+                                <div class="form-check mt-2">
+                                    <input class="form-check-input" type="checkbox" id="session-analyze-continue-on-error" checked>
+                                    <label class="form-check-label" for="session-analyze-continue-on-error">Continue on error (disable for fail-fast)</label>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <h6 class="mb-2">Extractor Toggles</h6>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="session-analyze-use-rep-endpoints" checked>
+                                    <label class="form-check-label" for="session-analyze-use-rep-endpoints">REP endpoint extractor</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="session-analyze-use-rep-secrets" checked>
+                                    <label class="form-check-label" for="session-analyze-use-rep-secrets">REP Kingfisher secret scanner</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="session-analyze-use-jsluice-endpoints">
+                                    <label class="form-check-label" for="session-analyze-use-jsluice-endpoints">jsluice endpoint extractor</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="session-analyze-use-jsluice-secrets">
+                                    <label class="form-check-label" for="session-analyze-use-jsluice-secrets">jsluice secret extractor</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer d-flex justify-content-between">
+                        <div>
+                            <button type="button" class="btn btn-outline-primary" id="session-analyze-run-quick">
+                                <i class="fas fa-bolt me-1"></i>Quick Run
+                            </button>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-success" id="session-analyze-run-advanced">
+                                <i class="fas fa-play me-1"></i>Start Advanced Run
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recon Session Create Modal -->
+    <div class="modal fade" id="createSessionModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fas fa-rocket me-2"></i>Create Session and Start Katana Recon
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form id="create-session-form">
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label for="create-session-name" class="form-label">Session Name (optional)</label>
+                            <input type="text" class="form-control" id="create-session-name" maxlength="120" placeholder="wishandwash recon">
+                        </div>
+                        <div class="mb-3">
+                            <label for="create-session-target-url" class="form-label">Target URL</label>
+                            <input type="url" class="form-control" id="create-session-target-url" required placeholder="https://wishandwash.co.il">
+                            <small class="text-muted">Use a full URL. Example: <code>https://wishandwash.co.il</code></small>
+                        </div>
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <label for="create-session-discovery-engine" class="form-label">Discovery Engine</label>
+                                <select id="create-session-discovery-engine" class="form-select">
+                                    <option value="katana" selected>Katana</option>
+                                    <option value="hybrid">Hybrid (Katana + Headless)</option>
+                                    <option value="headless">Headless only</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label for="create-session-max-assets" class="form-label">Max Assets</label>
+                                <input type="number" min="1" max="5000" class="form-control" id="create-session-max-assets" value="500">
+                            </div>
+                            <div class="col-md-4">
+                                <label for="create-session-max-depth" class="form-label">Max Depth</label>
+                                <input type="number" min="0" max="5" class="form-control" id="create-session-max-depth" value="3">
+                            </div>
+                        </div>
+                        <div class="row g-3 mt-1">
+                            <div class="col-md-4">
+                                <label for="create-session-timeout-seconds" class="form-label">Timeout (seconds)</label>
+                                <input type="number" min="3" max="120" class="form-control" id="create-session-timeout-seconds" value="20">
+                            </div>
+                            <div class="col-md-4">
+                                <label for="create-session-wait-after-load-ms" class="form-label">Wait After Load (ms)</label>
+                                <input type="number" min="0" max="30000" class="form-control" id="create-session-wait-after-load-ms" value="2500">
+                            </div>
+                            <div class="col-md-4">
+                                <label for="create-session-max-response-bytes" class="form-label">Max Response (bytes)</label>
+                                <input type="number" min="1024" max="52428800" class="form-control" id="create-session-max-response-bytes" value="12582912">
+                            </div>
+                        </div>
+                        <div class="form-check mt-3">
+                            <input class="form-check-input" type="checkbox" id="create-session-same-origin" checked>
+                            <label class="form-check-label" for="create-session-same-origin">Same-origin only</label>
+                        </div>
+                        <div class="form-check mt-2">
+                            <input class="form-check-input" type="checkbox" id="create-session-include-sourcemaps" checked>
+                            <label class="form-check-label" for="create-session-include-sourcemaps">Include source map discovery/fetch</label>
+                        </div>
+                        <div class="form-check mt-2">
+                            <input class="form-check-input" type="checkbox" id="create-session-perform-analysis" checked>
+                            <label class="form-check-label" for="create-session-perform-analysis">Auto-analyze ingested JS files</label>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-success" id="create-session-submit-btn">
+                            <i class="fas fa-play me-1"></i>Start Session Crawl
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- File Analyze Config Modal -->
+    <div class="modal fade" id="fileAnalyzeConfigModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 class="modal-title mb-1">
+                            <i class="fas fa-sliders me-2"></i>Analyze File Configuration
+                        </h5>
+                        <small class="text-muted">Target: <span id="file-analyze-target-name">File</span></small>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form id="file-analyze-form">
+                    <div class="modal-body">
+                        <div class="alert alert-light border session-analyze-help">
+                            <strong>Quick run</strong> uses defaults. <strong>Advanced run</strong> applies the selections below and saves them for next runs.
+                        </div>
+
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label for="file-analyze-analysis-type" class="form-label">Analysis Type</label>
+                                <select id="file-analyze-analysis-type" class="form-select">
+                                    <option value="comprehensive">Comprehensive (REP + optional jsluice)</option>
+                                    <option value="jsluice">JSluice-only</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="file-analyze-retry-attempts" class="form-label">Retry Attempts</label>
+                                <input id="file-analyze-retry-attempts" type="number" min="0" max="5" class="form-control" placeholder="0">
+                            </div>
+                        </div>
+
+                        <hr class="my-3">
+
+                        <div class="row">
+                            <div class="col-md-6">
+                                <h6 class="mb-2">General Options</h6>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="file-analyze-include-sourcemap" checked>
+                                    <label class="form-check-label" for="file-analyze-include-sourcemap">Include source map processing</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="file-analyze-resolve-urls" checked>
+                                    <label class="form-check-label" for="file-analyze-resolve-urls">Resolve relative URLs</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="file-analyze-include-reconstructed" checked>
+                                    <label class="form-check-label" for="file-analyze-include-reconstructed">Include reconstructed source files</label>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <h6 class="mb-2">Extractor Toggles</h6>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="file-analyze-use-rep-endpoints" checked>
+                                    <label class="form-check-label" for="file-analyze-use-rep-endpoints">REP endpoint extractor</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="file-analyze-use-rep-secrets" checked>
+                                    <label class="form-check-label" for="file-analyze-use-rep-secrets">REP Kingfisher secret scanner</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="file-analyze-use-jsluice-endpoints">
+                                    <label class="form-check-label" for="file-analyze-use-jsluice-endpoints">jsluice endpoint extractor</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="file-analyze-use-jsluice-secrets">
+                                    <label class="form-check-label" for="file-analyze-use-jsluice-secrets">jsluice secret extractor</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer d-flex justify-content-between">
+                        <div>
+                            <button type="button" class="btn btn-outline-primary" id="file-analyze-run-quick">
+                                <i class="fas fa-bolt me-1"></i>Quick Run
+                            </button>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-success" id="file-analyze-run-advanced">
+                                <i class="fas fa-play me-1"></i>Start Advanced Run
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', path='dashboard-failure-utils.js') }}"></script>
+    <script src="{{ url_for('static', path='dashboard.js') }}"></script>
+</body>
+</html>
