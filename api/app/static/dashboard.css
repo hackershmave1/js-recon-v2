@@ -160,25 +160,32 @@ hr { border-color: var(--border-subtle); opacity: 1; }
 /* Bootstrap small */
 small, .small { color: var(--text-secondary); }
 
-/* Card enhancements */
+/* ── Dark Glass Panels ────────────────────────────────────── */
 .card {
-    border: none;
-    border-radius: 12px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  box-shadow: none;
+  transition: border-color var(--dur-fast) ease;
 }
-
-.card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-}
-
+.card:hover { border-color: var(--border-default); }
 .card-header {
-    background: linear-gradient(135deg, var(--dark-color), #495057);
-    color: white;
-    border-radius: 12px 12px 0 0 !important;
-    border-bottom: none;
+  background: transparent;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 16px 16px 0 0;
+  padding: 14px 20px;
+  color: var(--text-primary);
 }
+.card-header h5, .card-header h6 {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin: 0;
+}
+.card-body   { padding: 20px; background: transparent; color: var(--text-primary); }
+.card-footer { background: transparent; border-top: 1px solid var(--border-subtle); padding: 12px 20px; }
 
 /* Textarea enhancements */
 #js-content {
@@ -200,16 +207,46 @@ small, .small { color: var(--text-secondary); }
     background-color: rgba(25, 135, 84, 0.1);
 }
 
-/* Button enhancements */
+/* ── Buttons ──────────────────────────────────────────────── */
 .btn {
-    border-radius: 8px;
-    font-weight: 500;
-    transition: all 0.2s ease;
+  border-radius: 8px;
+  font-weight: 500;
+  font-size: 0.875rem;
+  font-family: var(--font-sans);
+  transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
+.btn:hover { transform: none; }   /* no layout-shifting translateY */
 
-.btn:hover {
-    transform: translateY(-1px);
-}
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover { background: #6b77e0; border-color: #6b77e0; color: #fff; }
+.btn-primary:focus { box-shadow: 0 0 0 3px var(--accent-glow); }
+
+.btn-success { background: rgba(48,209,88,0.15); border-color: rgba(48,209,88,0.3); color: var(--severity-low); }
+.btn-success:hover { background: rgba(48,209,88,0.25); color: var(--severity-low); border-color: rgba(48,209,88,0.4); }
+
+.btn-secondary { background: var(--bg-elevated); border-color: var(--border-default); color: var(--text-secondary); }
+.btn-secondary:hover { background: var(--bg-overlay); color: var(--text-primary); }
+
+.btn-info { background: rgba(168,218,255,0.12); border-color: rgba(168,218,255,0.25); color: var(--text-mono); }
+.btn-info:hover { background: rgba(168,218,255,0.2); color: var(--text-mono); }
+
+.btn-danger { background: rgba(255,59,48,0.15); border-color: rgba(255,59,48,0.3); color: var(--severity-critical); }
+.btn-danger:hover { background: rgba(255,59,48,0.25); color: var(--severity-critical); }
+
+.btn-outline-secondary { border-color: var(--border-default); color: var(--text-secondary); background: transparent; }
+.btn-outline-secondary:hover { background: var(--bg-elevated); color: var(--text-primary); border-color: var(--border-strong); }
+
+.btn-outline-primary { border-color: rgba(94,106,210,0.4); color: var(--accent); background: transparent; }
+.btn-outline-primary:hover { background: var(--accent-subtle); border-color: var(--accent); color: var(--accent); }
+
+.btn-outline-light { border-color: var(--border-default); color: var(--text-secondary); background: transparent; }
+.btn-outline-light:hover { background: var(--bg-elevated); color: var(--text-primary); }
+
+.btn-outline-danger { border-color: rgba(255,59,48,0.35); color: var(--severity-critical); background: transparent; }
+.btn-outline-danger:hover { background: rgba(255,59,48,0.1); }
+
+.btn-lg { padding: 12px 20px; font-size: 0.9375rem; border-radius: 10px; }
+.btn-sm { padding: 4px 10px; font-size: 0.8125rem; border-radius: 6px; }
 
 .bulk-actions-container {
     background: #f8fafc;
