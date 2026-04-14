@@ -49,8 +49,29 @@
 
             <div class="nav-divider"></div>
 
-            <!-- Bento stats — populated in Task 6 -->
-            <div id="sidebar-stats-container"></div>
+            <!-- Bento stats — Task 6 -->
+            <div class="stat-bento">
+                <div class="stat-tile" onclick="showFilesTab()" title="View all files">
+                    <div class="stat-num" id="total-files">—</div>
+                    <div class="stat-lbl">JS Files</div>
+                </div>
+                <div class="stat-tile" onclick="showSessionsTab()" title="View sessions">
+                    <div class="stat-num" id="total-sessions">—</div>
+                    <div class="stat-lbl">Sessions</div>
+                </div>
+                <div class="stat-tile" data-accent="green" title="Endpoints found">
+                    <div class="stat-num" id="total-endpoints">—</div>
+                    <div class="stat-lbl">Endpoints</div>
+                </div>
+                <div class="stat-tile" data-accent="red" title="Secrets detected">
+                    <div class="stat-num" id="total-secrets">—</div>
+                    <div class="stat-lbl">Secrets</div>
+                </div>
+                <div class="stat-tile span-full" data-accent="indigo" title="Sourcemaps processed">
+                    <div class="stat-num" id="total-sourcemaps">—</div>
+                    <div class="stat-lbl">Sourcemaps</div>
+                </div>
+            </div>
 
             <div class="nav-spacer"></div>
         </aside>

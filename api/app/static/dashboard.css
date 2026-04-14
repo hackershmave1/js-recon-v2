@@ -160,27 +160,6 @@ hr { border-color: var(--border-subtle); opacity: 1; }
 /* Bootstrap small */
 small, .small { color: var(--text-secondary); }
 
-/* Stat boxes in sidebar */
-.stat-box {
-    background: linear-gradient(135deg, var(--primary-color), #0056b3);
-    color: white;
-    padding: 15px;
-    border-radius: 8px;
-    margin-bottom: 10px;
-}
-
-.stat-number {
-    font-size: 2rem;
-    font-weight: bold;
-    line-height: 1;
-}
-
-.stat-label {
-    font-size: 0.8rem;
-    opacity: 0.9;
-    margin-top: 5px;
-}
-
 /* Card enhancements */
 .card {
     border: none;
@@ -438,10 +417,6 @@ small, .small { color: var(--text-secondary); }
     
     .col-md-3, .col-md-9 {
         margin-bottom: 20px;
-    }
-    
-    .stat-number {
-        font-size: 1.5rem;
     }
     
     .card-body {
@@ -911,3 +886,40 @@ small, .small { color: var(--text-secondary); }
 .nav-item svg    { width: 16px; height: 16px; flex-shrink: 0; }
 .nav-divider     { height: 1px; background: var(--border-subtle); margin: 8px 4px; }
 .nav-spacer      { flex: 1; }
+
+/* ── Bento Stat Tiles ─────────────────────────────────────── */
+.stat-bento {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 8px 4px;
+}
+.stat-tile {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 10px 10px 8px;
+  cursor: pointer;
+  transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+.stat-tile:hover { background: var(--bg-overlay); border-color: var(--border-default); }
+.stat-tile.span-full { grid-column: 1 / -1; }
+.stat-num {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.stat-lbl {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.stat-tile[data-accent="green"]  .stat-num { color: var(--severity-low); }
+.stat-tile[data-accent="red"]    .stat-num { color: var(--severity-critical); }
+.stat-tile[data-accent="indigo"] .stat-num { color: var(--accent); }
