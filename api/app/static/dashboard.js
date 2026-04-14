@@ -1829,6 +1829,11 @@ class SecurityDashboard {
                     .finally(() => this.loadSessions());
             }
         }
+
+        // Sync nav rail active state
+        document.querySelectorAll('.nav-item[id^="nav-"]').forEach(el => el.classList.remove('active'));
+        const activeNav = document.getElementById('nav-' + tabName);
+        if (activeNav) activeNav.classList.add('active');
     }
 
     async refreshActiveReconJobs(options = {}) {
