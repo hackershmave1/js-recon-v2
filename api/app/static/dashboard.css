@@ -1,14 +1,74 @@
-/* JavaScript Security Extractor Dashboard Styles */
+/* JS Security Extractor — Apple-grade dark design system */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300;0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;1,14..32,400&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-    --primary-color: #0d6efd;
-    --success-color: #198754;
-    --danger-color: #dc3545;
-    --warning-color: #fd7e14;
-    --info-color: #0dcaf0;
-    --dark-color: #212529;
-    --light-gray: #f8f9fa;
-    --border-color: #dee2e6;
+  /* Backgrounds — layered depth */
+  --bg-base:        #0D0E11;
+  --bg-surface:     #13151A;
+  --bg-elevated:    #1C1E26;
+  --bg-overlay:     rgba(255,255,255,0.05);
+
+  /* Borders */
+  --border-subtle:  rgba(255,255,255,0.06);
+  --border-default: rgba(255,255,255,0.10);
+  --border-strong:  rgba(255,255,255,0.18);
+
+  /* Text hierarchy */
+  --text-primary:   #F2F2F7;
+  --text-secondary: #8E8E93;
+  --text-tertiary:  #48484A;
+  --text-mono:      #A8DAFF;
+
+  /* Accent — Apple system indigo */
+  --accent:         #5E6AD2;
+  --accent-glow:    rgba(94,106,210,0.20);
+  --accent-subtle:  rgba(94,106,210,0.12);
+
+  /* Severity — iOS semantic colors */
+  --severity-critical: #FF3B30;
+  --severity-high:     #FF9F0A;
+  --severity-medium:   #FFD60A;
+  --severity-low:      #30D158;
+  --severity-info:     #5E6AD2;
+
+  /* Status dot colors */
+  --status-live:       #30D158;
+  --status-processing: #FF9F0A;
+  --status-error:      #FF3B30;
+  --status-pending:    #48484A;
+
+  /* Typography */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+
+  /* Animation */
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in:     cubic-bezier(0.4, 0, 1, 1);
+  --dur-fast:    150ms;
+  --dur-normal:  250ms;
+  --dur-enter:   300ms;
+
+  /* Bootstrap override tokens — keeps existing HTML class names working */
+  --bs-body-bg:      #0D0E11;
+  --bs-body-color:   #F2F2F7;
+  --bs-border-color: rgba(255,255,255,0.10);
+  --bs-primary:      #5E6AD2;
+  --bs-success:      #30D158;
+  --bs-danger:       #FF3B30;
+  --bs-warning:      #FF9F0A;
+  --bs-info:         #A8DAFF;
+  --bs-secondary:    #48484A;
+
+  /* Legacy alias tokens — preserves any inline var() references in JS */
+  --primary-color: var(--accent);
+  --success-color: var(--severity-low);
+  --danger-color:  var(--severity-critical);
+  --warning-color: var(--severity-high);
+  --info-color:    var(--text-mono);
+  --dark-color:    var(--bg-elevated);
+  --light-gray:    var(--bg-surface);
+  --border-color:  var(--border-default);
 }
 
 body {
