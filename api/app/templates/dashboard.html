@@ -11,22 +11,23 @@
 </head>
 <body>
     <div class="container-fluid">
-        <!-- Header -->
-        <nav class="navbar navbar-dark bg-dark mb-4">
-            <div class="container-fluid">
-                <span class="navbar-brand mb-0 h1">
-                    <i class="fas fa-shield-alt"></i> JavaScript Security Extractor
-                </span>
-                <div class="navbar-nav flex-row">
-                    <span class="nav-item me-3">
-                        <span class="badge bg-success" id="api-status">API Connected</span>
-                    </span>
-                    <button class="btn btn-outline-light btn-sm" onclick="checkAPIStatus()">
-                        <i class="fas fa-sync-alt"></i> Refresh
-                    </button>
-                </div>
+        <!-- Titlebar -->
+        <header class="app-titlebar">
+            <div class="titlebar-brand">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                JS Security Extractor
             </div>
-        </nav>
+            <div class="titlebar-right">
+                <div class="api-status-dot" id="api-status-wrapper">
+                    <span class="dot dot-pending" id="api-status-dot"></span>
+                    <span id="api-status-text">Connecting…</span>
+                </div>
+                <button class="titlebar-btn" onclick="checkAPIStatus()" aria-label="Refresh API status">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    Refresh
+                </button>
+            </div>
+        </header>
 
         <div class="row">
             <!-- Left Sidebar -->

@@ -1100,9 +1100,16 @@ class SecurityDashboard {
         });
     }
 
+    updateApiStatusIndicator(connected) {
+        const dot  = document.getElementById('api-status-dot');
+        const text = document.getElementById('api-status-text');
+        const badge = document.getElementById('api-status');  // legacy fallback
+        if (dot)  dot.className  = connected ? 'dot dot-live' : 'dot dot-error';
+        if (text) text.textContent = connected ? 'API Connected' : 'API Disconnected';
+        if (badge) badge.textContent = connected ? 'API Connected' : 'API Disconnected';
+    }
+
     async checkAPIStatus() {
-        const statusElement = document.getElementById('api-status');
-        
         try {
             const [healthResponse, sessionsResponse] = await Promise.all([
                 axios.get(`${this.apiBase}/health`),
@@ -1110,14 +1117,12 @@ class SecurityDashboard {
             ]);
             const sessionsOk = Array.isArray(sessionsResponse.data);
             if (healthResponse.data.status === 'healthy' && sessionsOk) {
-                statusElement.textContent = 'API Connected';
-                statusElement.className = 'badge bg-success';
+                this.updateApiStatusIndicator(true);
             } else {
                 throw new Error('Unhealthy response');
             }
         } catch (error) {
-            statusElement.textContent = 'API Disconnected';
-            statusElement.className = 'badge bg-danger';
+            this.updateApiStatusIndicator(false);
             console.error('API Status Error:', error);
         }
     }
