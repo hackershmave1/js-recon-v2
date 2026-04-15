@@ -187,25 +187,30 @@ small, .small { color: var(--text-secondary); }
 .card-body   { padding: 20px; background: transparent; color: var(--text-primary); }
 .card-footer { background: transparent; border-top: 1px solid var(--border-subtle); padding: 12px 20px; }
 
-/* Textarea enhancements */
+/* ── Terminal Code Viewer ─────────────────────────────────── */
 #js-content {
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-    font-size: 14px;
-    line-height: 1.5;
-    resize: vertical;
-    border: 2px dashed var(--border-color);
-    transition: border-color 0.3s ease;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  resize: vertical;
+  background: #0A0A0C;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  color: var(--text-mono);
+  padding: 14px 16px;
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
-
 #js-content:focus {
-    border-color: var(--primary-color);
-    border-style: solid;
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
 }
-
 #js-content.drag-over {
-    border-color: var(--success-color);
-    background-color: rgba(25, 135, 84, 0.1);
+  border-color: var(--severity-low);
+  background-color: rgba(48,209,88,0.04);
+  box-shadow: 0 0 0 3px rgba(48,209,88,0.12);
 }
+#js-content::placeholder { color: var(--text-tertiary); }
 
 /* ── Buttons ──────────────────────────────────────────────── */
 .btn {
@@ -326,15 +331,19 @@ small, .small { color: var(--text-secondary); }
     word-break: break-all;
 }
 
+/* Result context code blocks */
 .result-context {
-    background: #f1f3f4;
-    border-left: 4px solid var(--info-color);
-    padding: 10px;
-    margin-top: 10px;
-    font-family: monospace;
-    font-size: 0.9em;
-    overflow-x: auto;
-    white-space: pre-wrap;
+  background: #0A0A0C;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  padding: 10px 14px;
+  margin-top: 10px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-mono);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  line-height: 1.6;
 }
 
 .confidence-badge {
@@ -398,40 +407,22 @@ small, .small { color: var(--text-secondary); }
     margin-left: 10px;
 }
 
-/* Source map file tree */
-.sourcemap-file {
-    background: white;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    margin-bottom: 8px;
-    overflow: hidden;
-}
-
-.sourcemap-file-header {
-    background: var(--light-gray);
-    padding: 10px;
-    cursor: pointer;
-    border-bottom: 1px solid var(--border-color);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.sourcemap-file-content {
-    padding: 15px;
-    max-height: 400px;
-    overflow-y: auto;
-}
-
 .sourcemap-preview {
-    font-family: monospace;
-    background: #f8f9fa;
-    padding: 10px;
-    border-radius: 4px;
-    font-size: 0.9em;
-    line-height: 1.4;
-    white-space: pre-wrap;
+  font-family: var(--font-mono);
+  background: #0A0A0C;
+  border: 1px solid var(--border-subtle);
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: var(--text-mono);
 }
+
+/* Generic pre/code blocks */
+pre { background: #0A0A0C; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 14px; color: var(--text-mono); font-family: var(--font-mono); font-size: 0.8125rem; }
+code { font-family: var(--font-mono); color: var(--text-mono); background: rgba(168,218,255,0.08); padding: 1px 5px; border-radius: 3px; font-size: 0.875em; }
+pre code { background: none; padding: 0; }
 
 /* Loading states */
 .loading {
