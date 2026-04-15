@@ -576,29 +576,46 @@ pre code { background: none; padding: 0; }
     opacity: 0.5;
 }
 
-/* Analysis progress */
+/* ── Progress Toast ───────────────────────────────────────── */
 .analysis-progress {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    background: white;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 15px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    z-index: 1050;
-    min-width: 300px;
-    display: none;
+  position: fixed;
+  bottom: 52px;     /* above status bar */
+  right: 24px;
+  width: 340px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
+  padding: 16px 18px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px var(--border-subtle);
+  z-index: 1050;
+  transform: translateY(calc(100% + 80px));
+  opacity: 0;
+  transition:
+    transform var(--dur-enter) var(--ease-spring),
+    opacity   var(--dur-enter) var(--ease-spring);
+  pointer-events: none;
+  color: var(--text-primary);
 }
-
 .analysis-progress.show {
-    display: block;
-    animation: slideInRight 0.3s ease-out;
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
 }
-
-@keyframes slideInRight {
-    from { transform: translateX(100%); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
+.toast-progress-track {
+  height: 3px;
+  background: var(--border-subtle);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 12px;
+}
+.toast-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  width: 0%;
+  transition: width 400ms var(--ease-spring);
 }
 
 .session-name-display {
