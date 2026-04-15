@@ -25,9 +25,12 @@
   --accent:         #5E6AD2;
   --accent-glow:    rgba(94,106,210,0.20);
   --accent-subtle:  rgba(94,106,210,0.12);
+  --accent-hover:   #6b77e0;             /* accent lightened for hover states */
+  --accent-border:  rgba(94,106,210,0.35); /* accent at ~35% for borders */
 
   /* Severity — iOS semantic colors */
   --severity-critical: #FF3B30;
+  --severity-critical-muted: rgba(255,100,90,0.9); /* softened for guidance text */
   --severity-high:     #FF9F0A;
   --severity-medium:   #FFD60A;
   --severity-low:      #30D158;
@@ -223,7 +226,7 @@ small, .small { color: var(--text-secondary); }
 .btn:hover { transform: none; }   /* no layout-shifting translateY */
 
 .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn-primary:hover { background: #6b77e0; border-color: #6b77e0; color: #fff; }
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: #fff; }
 .btn-primary:focus { box-shadow: 0 0 0 3px var(--accent-glow); }
 
 .btn-success { background: rgba(48,209,88,0.15); border-color: rgba(48,209,88,0.3); color: var(--severity-low); }
@@ -241,7 +244,7 @@ small, .small { color: var(--text-secondary); }
 .btn-outline-secondary { border-color: var(--border-default); color: var(--text-secondary); background: transparent; }
 .btn-outline-secondary:hover { background: var(--bg-elevated); color: var(--text-primary); border-color: var(--border-strong); }
 
-.btn-outline-primary { border-color: rgba(94,106,210,0.4); color: var(--accent); background: transparent; }
+.btn-outline-primary { border-color: var(--accent-border); color: var(--accent); background: transparent; }
 .btn-outline-primary:hover { background: var(--accent-subtle); border-color: var(--accent); color: var(--accent); }
 
 .btn-outline-light { border-color: var(--border-default); color: var(--text-secondary); background: transparent; }
@@ -656,7 +659,7 @@ pre code { background: none; padding: 0; }
 }
 .failure-panel-title    { color: var(--severity-critical); font-size: 0.85rem; font-weight: 700; }
 .failure-panel-details  { color: var(--text-secondary); font-size: 0.82rem; margin-top: 4px; overflow-wrap: anywhere; }
-.failure-panel-guidance { color: rgba(255,100,90,0.9); font-size: 0.8rem; margin-top: 4px; }
+.failure-panel-guidance { color: var(--severity-critical-muted); font-size: 0.8rem; margin-top: 4px; }
 
 /* ── Analysis Context Card ────────────────────────────────── */
 .analysis-context-card { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; overflow: hidden; }
@@ -720,12 +723,6 @@ pre code { background: none; padding: 0; }
 .sourcemap-file-header { background: var(--bg-overlay); padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; color: var(--text-secondary); font-size: 0.875rem; transition: color var(--dur-fast) ease; }
 .sourcemap-file-header:hover { color: var(--text-primary); }
 .sourcemap-file-content { padding: 14px; max-height: 400px; overflow-y: auto; }
-
-.summary-wrap {
-    max-width: 520px;
-    overflow-wrap: anywhere;
-    word-break: break-word;
-}
 
 /* ── Titlebar ─────────────────────────────────────────────── */
 .app-titlebar {
