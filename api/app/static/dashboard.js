@@ -578,6 +578,10 @@ class SecurityDashboard {
         }
 
         this.runningSessionAnalyses.add(sessionId);
+        const progressEl = document.getElementById('analysis-progress');
+        if (progressEl) progressEl.classList.add('show');
+        const fillEl = document.getElementById('toast-progress-fill');
+        if (fillEl) fillEl.style.width = '0%';
         try {
             const response = await axios.post(
                 `${this.apiBase}/api/sessions/${sessionId}/analyze/start`,
@@ -607,6 +611,8 @@ class SecurityDashboard {
             });
         } catch (error) {
             this.runningSessionAnalyses.delete(sessionId);
+            const progressElErr = document.getElementById('analysis-progress');
+            if (progressElErr) progressElErr.classList.remove('show');
             const detail = error?.response?.data?.detail;
             const message = typeof detail === 'string' ? detail : (detail?.message || error.message);
             this.showAlert(`Session analysis failed: ${message}`, 'danger');
@@ -2410,6 +2416,10 @@ class SecurityDashboard {
             await this.loadFiles();
         }
         this.showLoadingModal(true);
+        const progressEl = document.getElementById('analysis-progress');
+        if (progressEl) progressEl.classList.add('show');
+        const fillEl = document.getElementById('toast-progress-fill');
+        if (fillEl) fillEl.style.width = '0%';
         try {
             const response = await axios.post(`${this.apiBase}/api/files/${fileId}/analyze`, { options });
             const hydrated = await this.viewStoredAnalysis(fileId, {
@@ -2431,6 +2441,8 @@ class SecurityDashboard {
             this.showAlert(`File analysis failed: ${message}`, 'danger');
         } finally {
             this.runningFileAnalyses.delete(fileId);
+            const progressElDone = document.getElementById('analysis-progress');
+            if (progressElDone) progressElDone.classList.remove('show');
             this.showLoadingModal(false);
             this.loadStatistics();
             if (this.activeTab === 'files') {
@@ -3100,11 +3112,23 @@ class SecurityDashboard {
 
             this.sessionAnalysisProgress.set(sessionId, job);
             const status = String(job.jobStatus || '').toLowerCase();
+
+            // Update progress toast fill bar
+            const counts = job.counts || {};
+            const total = Number(counts.total) || 0;
+            const done = (Number(counts.completed) || 0) + (Number(counts.failed) || 0) + (Number(counts.cancelled) || 0);
+            const pct = total > 0 ? (done / total) * 100 : 0;
+            const fill = document.getElementById('toast-progress-fill');
+            if (fill) fill.style.width = Math.min(pct, 100) + '%';
+
             if (status === 'queued' || status === 'running' || status === 'cancelling') {
                 this.runningSessionAnalyses.add(sessionId);
             } else {
                 this.runningSessionAnalyses.delete(sessionId);
                 this.stopSessionProgressPolling(sessionId);
+                // Hide progress toast on terminal state
+                const progressEl = document.getElementById('analysis-progress');
+                if (progressEl) progressEl.classList.remove('show');
 
                 if (!this.sessionCompletionNotified.has(sessionId)) {
                     const summary = job.summary || {};
@@ -3143,6 +3167,8 @@ class SecurityDashboard {
             }
             this.runningSessionAnalyses.delete(sessionId);
             this.stopSessionProgressPolling(sessionId);
+            const progressEl = document.getElementById('analysis-progress');
+            if (progressEl) progressEl.classList.remove('show');
         } finally {
             this.sessionPollingInFlight.delete(sessionId);
         }
