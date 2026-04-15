@@ -253,51 +253,31 @@ small, .small { color: var(--text-secondary); }
 .btn-lg { padding: 12px 20px; font-size: 0.9375rem; border-radius: 10px; }
 .btn-sm { padding: 4px 10px; font-size: 0.8125rem; border-radius: 6px; }
 
+/* ── Filter + Bulk Action Bars ────────────────────────────── */
 .bulk-actions-container {
-    background: #f8fafc;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 10px 14px;
 }
-
-.bulk-actions-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    flex-wrap: wrap;
-}
-
-.bulk-actions-left {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.bulk-actions-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.row-select {
-    transform: scale(1.15);
-    cursor: pointer;
-    margin-right: 8px;
-}
+.bulk-actions-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.bulk-actions-left  { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bulk-actions-right { display: flex; align-items: center; gap: 8px; }
+.row-select { transform: scale(1.15); cursor: pointer; margin-right: 8px; }
 
 .list-filter-bar {
-    background: #f8fafc;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 10px 14px;
 }
-
 .list-filter-bar .form-label {
-    color: #4b5563;
-    font-size: 0.8rem;
-    font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
 }
 
 /* Results styling */
