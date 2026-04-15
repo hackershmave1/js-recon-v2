@@ -1602,7 +1602,7 @@ class SecurityDashboard {
             const extractorBadges = this.renderExtractorBadges(endpoint);
 
             return `
-                <div class="result-item">
+                <div class="result-item list-stagger-item">
                     <div class="result-header">
                         <div>
                             <h6 class="mb-1">
@@ -1647,7 +1647,7 @@ class SecurityDashboard {
             const extractorBadges = this.renderExtractorBadges(secret);
             
             return `
-                <div class="result-item">
+                <div class="result-item list-stagger-item">
                     <div class="result-header">
                         <div>
                             <h6 class="mb-2">
@@ -1692,7 +1692,7 @@ class SecurityDashboard {
         }
 
         container.innerHTML = dependencies.map(dep => `
-            <div class="result-item">
+            <div class="result-item list-stagger-item">
                 <div class="dependency-item">
                     <i class="fas fa-cube me-2"></i>
                     <strong>${this.escapeHtml(dep.name || dep.url || dep.dep_url || 'Unknown')}</strong>
@@ -1966,7 +1966,7 @@ class SecurityDashboard {
                 const failurePanel = this.renderFailurePanel(failureInfo);
 
                 return `
-                <div class="result-item" data-file-id="${file.id}" data-file-processing="${isProcessing ? 'true' : 'false'}">
+                <div class="result-item list-stagger-item" data-file-id="${file.id}" data-file-processing="${isProcessing ? 'true' : 'false'}">
                     <div class="result-header">
                         <div>
                             <h6 class="mb-1">
@@ -2585,7 +2585,7 @@ class SecurityDashboard {
                        <span class="badge bg-danger me-2">Failed ${analysisFailed}</span>`
                     : '<span class="badge bg-secondary me-2">No analysis yet</span>';
                 return `
-                <div class="result-item" data-session-id="${session.id}">
+                <div class="result-item list-stagger-item" data-session-id="${session.id}">
                     <div class="result-header">
                         <div>
                             <h6 class="mb-2">
