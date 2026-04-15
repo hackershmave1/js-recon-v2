@@ -497,18 +497,31 @@ small, .small { color: var(--text-secondary); }
 /* table-sm padding */
 .table-sm > :not(caption) > * > * { padding: 6px 12px; }
 
-/* Status indicators */
-.status-indicator {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    display: inline-block;
-    margin-right: 8px;
+/* ── Status Dots ──────────────────────────────────────────── */
+.status-indicator { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.status-connected    { background: var(--status-live); }
+.status-disconnected { background: var(--status-error); }
+.status-loading      { background: var(--status-processing); animation: pulse-proc 1.2s ease infinite; }
+@keyframes pulse-proc {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
 }
 
-.status-connected { background-color: var(--success-color); }
-.status-disconnected { background-color: var(--danger-color); }
-.status-loading { background-color: var(--warning-color); }
+/* ── Badge Chips ──────────────────────────────────────────── */
+.badge {
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 5px;
+  letter-spacing: 0.02em;
+}
+.badge.bg-primary   { background: var(--accent-subtle) !important; color: var(--accent) !important; border: 1px solid rgba(94,106,210,0.25); }
+.badge.bg-success   { background: rgba(48,209,88,0.12) !important;  color: var(--severity-low) !important;      border: 1px solid rgba(48,209,88,0.25); }
+.badge.bg-danger    { background: rgba(255,59,48,0.12) !important;   color: var(--severity-critical) !important; border: 1px solid rgba(255,59,48,0.25); }
+.badge.bg-warning   { background: rgba(255,159,10,0.12) !important;  color: var(--severity-high) !important;     border: 1px solid rgba(255,159,10,0.25); }
+.badge.bg-info      { background: rgba(168,218,255,0.12) !important; color: var(--text-mono) !important;         border: 1px solid rgba(168,218,255,0.25); }
+.badge.bg-secondary { background: var(--bg-elevated) !important; color: var(--text-secondary) !important; border: 1px solid var(--border-default); }
 
 /* Export button styling */
 .export-menu {
