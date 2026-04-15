@@ -485,43 +485,25 @@ pre code { background: none; padding: 0; }
 .badge.bg-info      { background: rgba(168,218,255,0.12) !important; color: var(--text-mono) !important;         border: 1px solid rgba(168,218,255,0.25); }
 .badge.bg-secondary { background: var(--bg-elevated) !important; color: var(--text-secondary) !important; border: 1px solid var(--border-default); }
 
-/* Export button styling */
-.export-menu {
-    position: relative;
-    display: inline-block;
-}
-
+/* ── Export Dropdown ──────────────────────────────────────── */
+.export-menu { position: relative; display: inline-block; }
 .export-dropdown {
-    position: absolute;
-    right: 0;
-    top: 100%;
-    background: white;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    min-width: 150px;
-    z-index: 1000;
-    display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  min-width: 160px;
+  z-index: 1000;
+  display: none;
+  overflow: hidden;
 }
-
-.export-dropdown.show {
-    display: block;
-}
-
-.export-option {
-    padding: 10px 15px;
-    cursor: pointer;
-    border-bottom: 1px solid var(--border-color);
-    transition: background-color 0.2s ease;
-}
-
-.export-option:hover {
-    background-color: var(--light-gray);
-}
-
-.export-option:last-child {
-    border-bottom: none;
-}
+.export-dropdown.show { display: block; animation: tab-enter 200ms var(--ease-spring) both; }
+.export-option { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--border-subtle); color: var(--text-primary); font-size: 0.875rem; transition: background var(--dur-fast) ease; }
+.export-option:hover { background: var(--bg-overlay); }
+.export-option:last-child { border-bottom: none; }
 
 /* Empty state styling */
 .empty-state {
@@ -578,52 +560,37 @@ pre code { background: none; padding: 0; }
   transition: width 400ms var(--ease-spring);
 }
 
+/* ── Session Name Edit ────────────────────────────────────── */
 .session-name-display {
-    display: inline-block;
-    min-width: 140px;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    cursor: text;
-    line-height: 1.2;
-    padding: 2px 6px;
-    margin-left: -6px;
-    vertical-align: middle;
+  display: inline-block;
+  min-width: 140px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: text;
+  line-height: 1.2;
+  padding: 2px 6px;
+  margin-left: -6px;
+  vertical-align: middle;
+  color: var(--text-primary);
+  transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease;
 }
-
-.session-name-display:hover {
-    border-color: var(--border-color);
-    background: #fff;
-}
-
-.session-name-display.is-editing {
-    border-color: var(--primary-color);
-    background: #fff;
-    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.12);
-    outline: none;
-}
-
-.session-name-display.is-saving {
-    opacity: 0.7;
-}
-
+.session-name-display:hover { border-color: var(--border-default); background: var(--bg-elevated); }
+.session-name-display.is-editing { border-color: var(--accent); background: var(--bg-elevated); box-shadow: 0 0 0 3px var(--accent-glow); outline: none; }
+.session-name-display.is-saving  { opacity: 0.7; }
 .session-name-edit-trigger {
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    color: #6c757d;
-    cursor: pointer;
-    font-size: 0.8rem;
-    line-height: 1;
-    margin-left: 4px;
-    padding: 3px 5px;
-    vertical-align: middle;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  margin-left: 4px;
+  padding: 3px 5px;
+  vertical-align: middle;
+  transition: color var(--dur-fast) ease, background var(--dur-fast) ease;
 }
-
-.session-name-edit-trigger:hover {
-    background: #fff;
-    border-color: var(--border-color);
-    color: var(--dark-color);
-}
+.session-name-edit-trigger:hover { background: var(--bg-elevated); border-color: var(--border-default); color: var(--text-primary); }
 
 #sessionAnalyzeConfigModal .modal-header {
     align-items: flex-start;
