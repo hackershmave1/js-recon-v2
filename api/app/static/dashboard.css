@@ -505,18 +505,19 @@ pre code { background: none; padding: 0; }
 .export-option:hover { background: var(--bg-overlay); }
 .export-option:last-child { border-bottom: none; }
 
-/* Empty state styling */
+/* ── Empty States ─────────────────────────────────────────── */
 .empty-state {
-    text-align: center;
-    padding: 40px;
-    color: #6c757d;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 64px 24px;
+  gap: 10px;
 }
-
-.empty-state i {
-    font-size: 3rem;
-    margin-bottom: 15px;
-    opacity: 0.5;
-}
+.empty-state i { font-size: 2.5rem; margin-bottom: 6px; opacity: 0.25; color: var(--text-secondary); }
+.empty-state-title { font-size: 0.9375rem; font-weight: 600; color: var(--text-secondary); margin: 0; }
+.empty-state-body  { font-size: 0.8125rem; color: var(--text-tertiary); max-width: 260px; line-height: 1.5; margin: 0; }
 
 /* ── Progress Toast ───────────────────────────────────────── */
 .analysis-progress {
