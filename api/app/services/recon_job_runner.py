@@ -67,6 +67,8 @@ class ReconRunnerOptions:
     timeout_seconds: int = 20
     max_response_bytes: int = 12 * 1024 * 1024
     ingest_batch_size: int = 5
+    vespasian_binary: str = "vespasian"
+    vespasian_timeout_seconds: int = 600
 
 
 class ReconJobRunner:
@@ -141,7 +143,7 @@ class ReconJobRunner:
 
     async def _discover_target(self, target_url: str) -> None:
         engine = str(self.options.discovery_engine or "headless").strip().lower()
-        if engine not in {"headless", "katana", "hybrid"}:
+        if engine not in {"headless", "katana", "hybrid", "vespasian"}:
             engine = "headless"
 
         if engine in {"headless", "hybrid"}:
@@ -152,6 +154,11 @@ class ReconJobRunner:
         if engine in {"katana", "hybrid"}:
             katana_urls = await self._discover_with_katana(target_url)
             for url in katana_urls:
+                self._register_candidate(url, target_url, "katana", 0)
+
+        if engine == "vespasian":
+            vespasian_urls = await self._discover_with_vespasian(target_url)
+            for url in vespasian_urls:
                 self._register_candidate(url, target_url, "katana", 0)
 
         page_queue: list[tuple[str, int]] = [(target_url, 0)]
@@ -342,6 +349,7 @@ class ReconJobRunner:
                     url=url,
                     contentHash=content_hash,
                     sessionId=self.options.session_id,
+                    targetUrl=asset.get("targetUrl"),
                     capturedAt=self._now_iso(),
                     contentType=content_type or "application/javascript",
                     contentEncoding=(fetch_result.get("headers") or {}).get("content-encoding"),
@@ -631,6 +639,66 @@ class ReconJobRunner:
             maybe_add(response.get("url"))
 
         return list(dict.fromkeys(urls))
+
+    async def _discover_with_vespasian(self, target_url: str) -> set[str]:
+        """
+        Discover JS URLs using the Vespasian CLI.
+        Returns an empty set when the binary is unavailable or the scan fails.
+        """
+        binary = (self.options.vespasian_binary or "vespasian").strip() or "vespasian"
+        if not shutil.which(binary):
+            logger.warning("Vespasian binary '%s' not found. Skipping vespasian discovery.", binary)
+            return set()
+
+        timeout_seconds = max(10, int(self.options.vespasian_timeout_seconds))
+        command = [binary, target_url]
+
+        discovered: set[str] = set()
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Vespasian discovery timed out for %s", target_url)
+            return set()
+        except Exception as exc:
+            logger.warning("Vespasian discovery failed for %s: %s", target_url, exc)
+            return set()
+
+        stdout_text = (stdout or b"").decode("utf-8", errors="ignore")
+        stderr_text = (stderr or b"").decode("utf-8", errors="ignore").strip()
+        if process.returncode not in (0,):
+            logger.warning(
+                "Vespasian exited non-zero for %s (code=%s): %s",
+                target_url,
+                process.returncode,
+                stderr_text[:400],
+            )
+
+        for raw_line in stdout_text.splitlines():
+            line = (raw_line or "").strip()
+            if not line:
+                continue
+            try:
+                normalized = self._canonical_url(line)
+                if not normalized:
+                    continue
+                parsed = urlparse(normalized)
+                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                    continue
+                if not self._looks_like_js_url(normalized):
+                    continue
+                discovered.add(normalized)
+            except Exception as exc:
+                logger.debug("Failed to process vespasian candidate URL '%s': %s", line[:100], exc)
+
+        return discovered
 
     async def _fetch_text(self, url: str) -> dict[str, Any]:
         cached = self.fetch_cache.get(url)

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from ...db import get_db
 from ...models import Session as DbSession
+from ...services.binary_locator import resolve_binary_path
 from ...services.recon_job_runner import ReconJobRunner, ReconRunnerOptions
 from ...services.security_utils import SecurityValidator
 
@@ -318,12 +319,23 @@ def start_recon_job(request: ReconJobStartRequest, db: Session = Depends(get_db)
             raise HTTPException(status_code=422, detail=f"Invalid target URL '{target}': {exc}")
 
     discovery_engine = str(request.discoveryEngine or "headless").strip().lower()
-    if discovery_engine not in {"headless", "katana", "hybrid"}:
-        raise HTTPException(status_code=422, detail="Invalid discoveryEngine. Use headless, katana, or hybrid")
-    if discovery_engine == "katana" and not shutil.which("katana"):
+    if discovery_engine not in {"headless", "katana", "hybrid", "vespasian"}:
+        raise HTTPException(status_code=422, detail="Invalid discoveryEngine. Use headless, katana, hybrid, or vespasian")
+    katana_binary = resolve_binary_path("katana", env_var="KATANA_BINARY")
+    if discovery_engine == "katana" and not katana_binary:
         raise HTTPException(
             status_code=422,
-            detail="Katana engine requested but katana binary is not available in the API container. Install katana or use headless/hybrid.",
+            detail="Katana engine requested but katana binary is not available in the current API runtime. Install katana or use headless/hybrid.",
+        )
+    vespasian_binary = resolve_binary_path("vespasian", env_var="VESPASIAN_BINARY")
+    if discovery_engine == "vespasian" and not vespasian_binary:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Vespasian engine requested but the vespasian binary is not available. "
+                "Install from https://github.com/praetorian-inc/vespasian or set "
+                "the VESPASIAN_BINARY environment variable."
+            ),
         )
 
     raw_session_id = request.sessionId or str(uuid.uuid4())
@@ -357,6 +369,8 @@ def start_recon_job(request: ReconJobStartRequest, db: Session = Depends(get_db)
         max_assets=request.maxAssets,
         max_depth=request.maxDepth,
         discovery_engine=discovery_engine,
+        katana_binary=katana_binary or "katana",
+        vespasian_binary=vespasian_binary or "vespasian",
         include_sourcemaps=request.includeSourceMaps,
         perform_analysis=request.performAnalysis,
         wait_after_load_ms=request.waitAfterLoadMs,
