@@ -417,19 +417,23 @@ pre code { background: none; padding: 0; }
   }
 }
 
-/* Responsive adjustments */
+/* ── Responsive ───────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .app-sidebar { width: 200px; }
+}
 @media (max-width: 768px) {
-    .container-fluid {
-        padding: 10px;
-    }
-    
-    .col-md-3, .col-md-9 {
-        margin-bottom: 20px;
-    }
-    
-    .card-body {
-        padding: 15px;
-    }
+  .app-sidebar { width: 56px; padding: 16px 4px; }
+  .nav-item .nav-label { display: none; }
+  .nav-section-label  { display: none; }
+  .stat-bento         { display: none; }
+  .app-main           { padding: 16px 12px; padding-bottom: 52px; }
+  .analysis-context-grid { grid-template-columns: 1fr; }
+  .card-body { padding: 16px; }
+  .stat-num  { font-size: 1.25rem; }
+}
+@media (max-width: 480px) {
+  .app-sidebar { display: none; }
+  .app-main    { padding: 10px 8px; padding-bottom: 52px; }
 }
 
 /* ── Data Tables ──────────────────────────────────────────── */
@@ -721,12 +725,6 @@ pre code { background: none; padding: 0; }
     max-width: 520px;
     overflow-wrap: anywhere;
     word-break: break-word;
-}
-
-@media (max-width: 768px) {
-    .analysis-context-grid {
-        grid-template-columns: 1fr;
-    }
 }
 
 /* ── Titlebar ─────────────────────────────────────────────── */
