@@ -461,33 +461,41 @@ small, .small { color: var(--text-secondary); }
     }
 }
 
-/* File table styling */
-.file-table {
-    font-size: 0.9rem;
-}
+/* ── Data Tables ──────────────────────────────────────────── */
+.table { color: var(--text-primary); --bs-table-bg: transparent; --bs-table-border-color: var(--border-subtle); }
+.table > :not(caption) > * > * { background-color: transparent; border-color: var(--border-subtle); color: var(--text-primary); }
+.table-hover > tbody > tr:hover > * { background-color: var(--bg-elevated); --bs-table-accent-bg: var(--bg-elevated); }
+.table-striped > tbody > tr:nth-of-type(odd) > * { --bs-table-accent-bg: transparent; background-color: transparent; }
+.table thead th { border-bottom: 1px solid var(--border-default) !important; }
 
+.file-table { font-size: 0.875rem; }
 .file-table th {
-    background: var(--light-gray);
-    border-top: none;
-    font-weight: 600;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  background: transparent;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 8px 12px;
+  white-space: nowrap;
 }
-
-.file-table td {
-    vertical-align: middle;
-}
-
+.file-table td { vertical-align: middle; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); }
+.file-table tbody tr:last-child td { border-bottom: none; }
 .file-url {
-    font-family: monospace;
-    max-width: 300px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-mono);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
 }
+.file-size { font-family: var(--font-mono); color: var(--text-secondary); font-size: 0.75rem; }
 
-.file-size {
-    font-family: monospace;
-    color: #6c757d;
-}
+/* table-sm padding */
+.table-sm > :not(caption) > * > * { padding: 6px 12px; }
 
 /* Status indicators */
 .status-indicator {
