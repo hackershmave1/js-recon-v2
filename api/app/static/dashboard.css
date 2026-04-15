@@ -528,6 +528,30 @@ pre code { background: none; padding: 0; }
 .empty-state-title { font-size: 0.9375rem; font-weight: 600; color: var(--text-secondary); margin: 0; }
 .empty-state-body  { font-size: 0.8125rem; color: var(--text-tertiary); max-width: 260px; line-height: 1.5; margin: 0; }
 
+/* ── Bottom Status Bar ────────────────────────────────────── */
+.app-statusbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 28px;
+  background: rgba(13,14,17,0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 20px;
+  z-index: 90;
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+.sb-item { display: flex; align-items: center; gap: 5px; }
+.sb-item span { color: var(--text-secondary); }
+
 /* ── Progress Toast ───────────────────────────────────────── */
 .analysis-progress {
   position: fixed;

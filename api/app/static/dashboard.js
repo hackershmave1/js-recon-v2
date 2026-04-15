@@ -1139,6 +1139,13 @@ class SecurityDashboard {
             document.getElementById('total-files').textContent = String(totalFiles);
             document.getElementById('total-sessions').textContent = String(totalSessions);
             document.getElementById('total-endpoints').textContent = '-';
+
+            // Status bar (bottom bar)
+            const sbMap = { 'sb-files': totalFiles, 'sb-sessions': totalSessions, 'sb-endpoints': null, 'sb-secrets': null };
+            Object.entries(sbMap).forEach(([id, val]) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = val != null ? val : '—';
+            });
         } catch (error) {
             console.error('Statistics Error:', error);
             document.getElementById('total-files').textContent = '-';
