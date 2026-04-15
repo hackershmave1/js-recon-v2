@@ -773,39 +773,49 @@ pre code { background: none; padding: 0; }
     margin-top: 4px;
 }
 
+/* ── Sourcemap Pipeline ───────────────────────────────────── */
+.pipeline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 8px 0;
+  font-size: 0.75rem;
+}
+.pipeline-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.pipeline-step.done   { color: var(--severity-low); }
+.pipeline-step.active { color: var(--severity-high); }
+.pipeline-step.failed { color: var(--severity-critical); }
+.pipeline-step .p-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.pipeline-step.active .p-dot { animation: pulse-proc 1s ease infinite; }
+.pipeline-arrow { width: 20px; height: 1px; background: var(--border-subtle); margin: 0 4px; }
+.pipeline-step.done ~ .pipeline-arrow { background: rgba(48,209,88,0.35); }
+
+/* Sourcemap validation summary dark */
 .sourcemap-validation-summary {
-    background: #f8fafc;
-    border: 1px solid #d7dee6;
-    border-radius: 10px;
-    padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 10px 14px;
 }
+.sourcemap-validation-title   { color: var(--text-primary); font-size: 0.875rem; font-weight: 600; margin-bottom: 6px; }
+.sourcemap-validation-badges  { display: flex; flex-wrap: wrap; gap: 6px; }
+.sourcemap-validation-reasons { color: var(--text-secondary); font-size: 0.8rem; margin-top: 8px; overflow-wrap: anywhere; }
+.sourcemap-lifecycle-line     { color: var(--text-secondary); font-size: 0.775rem; margin-top: 6px; overflow-wrap: anywhere; }
 
-.sourcemap-validation-title {
-    font-size: 0.9rem;
-    font-weight: 700;
-    color: #1f2937;
-    margin-bottom: 6px;
-}
-
-.sourcemap-validation-badges {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-}
-
-.sourcemap-validation-reasons {
-    color: #4b5563;
-    font-size: 0.82rem;
-    margin-top: 8px;
-    overflow-wrap: anywhere;
-}
-
-.sourcemap-lifecycle-line {
-    color: #4b5563;
-    font-size: 0.8rem;
-    margin-top: 6px;
-    overflow-wrap: anywhere;
-}
+/* Sourcemap file tree dark */
+.sourcemap-file { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; margin-bottom: 8px; overflow: hidden; transition: border-color var(--dur-fast) ease; }
+.sourcemap-file:hover { border-color: var(--border-default); }
+.sourcemap-file-header { background: var(--bg-overlay); padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; color: var(--text-secondary); font-size: 0.875rem; transition: color var(--dur-fast) ease; }
+.sourcemap-file-header:hover { color: var(--text-primary); }
+.sourcemap-file-content { padding: 14px; max-height: 400px; overflow-y: auto; }
 
 .summary-wrap {
     max-width: 520px;
