@@ -732,63 +732,43 @@ class ReconJobRunner:
 
     async def _discover_with_vespasian(self, target_url: str) -> set[str]:
         """
-        Discover JS URLs using the Vespasian CLI.
-        Returns an empty set when the binary is unavailable or the scan fails.
+        Runs Katana (for JS file collection) and Vespasian (for OpenAPI generation)
+        concurrently against the same target URL.
+
+        Returns the JS URL set from Katana — these feed the existing ingestion
+        pipeline. Vespasian's output (openapi.yaml) is a side-channel artifact
+        written to storage/sessions/{id}/openapi.yaml.
+
+        Vespasian failure is non-fatal: a WARNING is logged and the method
+        returns whatever Katana found (which may be an empty set if Katana
+        also failed).
+
+        asyncio.gather docs: https://docs.python.org/3/library/asyncio-task.html#asyncio.gather
         """
-        binary = (self.options.vespasian_binary or "vespasian").strip() or "vespasian"
-        if not shutil.which(binary):
-            logger.warning("Vespasian binary '%s' not found. Skipping vespasian discovery.", binary)
-            return set()
+        katana_task    = asyncio.create_task(self._discover_with_katana(target_url))
+        vespasian_task = asyncio.create_task(self._run_vespasian_scan(target_url))
 
-        timeout_seconds = max(10, int(self.options.vespasian_timeout_seconds))
-        command = [binary, target_url]
+        results = await asyncio.gather(katana_task, vespasian_task, return_exceptions=True)
 
-        discovered: set[str] = set()
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=timeout_seconds,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("Vespasian discovery timed out for %s", target_url)
-            return set()
-        except Exception as exc:
-            logger.warning("Vespasian discovery failed for %s: %s", target_url, exc)
-            return set()
+        katana_result    = results[0]
+        vespasian_result = results[1]
 
-        stdout_text = (stdout or b"").decode("utf-8", errors="ignore")
-        stderr_text = (stderr or b"").decode("utf-8", errors="ignore").strip()
-        if process.returncode not in (0,):
+        if isinstance(vespasian_result, Exception):
             logger.warning(
-                "Vespasian exited non-zero for %s (code=%s): %s",
+                "Vespasian scan failed for %s (non-fatal, session continues): %s",
                 target_url,
-                process.returncode,
-                stderr_text[:400],
+                vespasian_result,
             )
 
-        for raw_line in stdout_text.splitlines():
-            line = (raw_line or "").strip()
-            if not line:
-                continue
-            try:
-                normalized = self._canonical_url(line)
-                if not normalized:
-                    continue
-                parsed = urlparse(normalized)
-                if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-                    continue
-                if not self._looks_like_js_url(normalized):
-                    continue
-                discovered.add(normalized)
-            except Exception as exc:
-                logger.debug("Failed to process vespasian candidate URL '%s': %s", line[:100], exc)
+        if isinstance(katana_result, Exception):
+            logger.warning(
+                "Katana discovery failed for %s in vespasian mode: %s",
+                target_url,
+                katana_result,
+            )
+            return set()
 
-        return discovered
+        return katana_result if isinstance(katana_result, set) else set()
 
     async def _fetch_text(self, url: str) -> dict[str, Any]:
         cached = self.fetch_cache.get(url)

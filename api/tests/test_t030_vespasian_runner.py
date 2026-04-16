@@ -243,3 +243,63 @@ class TestRunVespasianScan:
                            side_effect=lambda *a, **k: next(procs)):
                     with pytest.raises(RuntimeError, match="generate failed"):
                         await runner._run_vespasian_scan("https://example.com")
+
+
+@pytest.mark.asyncio
+class TestDiscoverWithVespasian:
+    """Tests for ReconJobRunner._discover_with_vespasian().
+
+    _discover_with_katana and _run_vespasian_scan are patched so no
+    subprocess or network activity occurs.
+    """
+
+    async def test_returns_katana_urls(self):
+        """Katana URLs are returned; vespasian result (None) is discarded."""
+        runner = make_runner()
+        expected_urls = {"https://example.com/app.js", "https://example.com/vendor.js"}
+
+        with patch.object(runner, "_discover_with_katana",
+                          new=AsyncMock(return_value=expected_urls)):
+            with patch.object(runner, "_run_vespasian_scan",
+                              new=AsyncMock(return_value=None)):
+                result = await runner._discover_with_vespasian("https://example.com")
+
+        assert result == expected_urls
+
+    async def test_vespasian_failure_is_nonfatal(self):
+        """If _run_vespasian_scan raises, the method still returns Katana URLs."""
+        runner = make_runner()
+        katana_urls = {"https://example.com/main.js"}
+
+        with patch.object(runner, "_discover_with_katana",
+                          new=AsyncMock(return_value=katana_urls)):
+            with patch.object(runner, "_run_vespasian_scan",
+                              new=AsyncMock(side_effect=RuntimeError("crawl failed"))):
+                result = await runner._discover_with_vespasian("https://example.com")
+
+        assert result == katana_urls
+
+    async def test_katana_failure_returns_empty_set(self):
+        """If Katana raises, an empty set is returned (Vespasian may still succeed)."""
+        runner = make_runner()
+
+        with patch.object(runner, "_discover_with_katana",
+                          new=AsyncMock(side_effect=RuntimeError("katana gone"))):
+            with patch.object(runner, "_run_vespasian_scan",
+                              new=AsyncMock(return_value=None)):
+                result = await runner._discover_with_vespasian("https://example.com")
+
+        assert result == set()
+
+    async def test_both_tasks_run_concurrently(self):
+        """Both _discover_with_katana and _run_vespasian_scan are awaited."""
+        runner = make_runner()
+        katana_mock = AsyncMock(return_value=set())
+        vespa_mock  = AsyncMock(return_value=None)
+
+        with patch.object(runner, "_discover_with_katana", new=katana_mock):
+            with patch.object(runner, "_run_vespasian_scan", new=vespa_mock):
+                await runner._discover_with_vespasian("https://example.com")
+
+        katana_mock.assert_awaited_once_with("https://example.com")
+        vespa_mock.assert_awaited_once_with("https://example.com")
