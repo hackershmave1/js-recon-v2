@@ -1,6 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import os
 import shutil
 import threading
@@ -1225,3 +1226,95 @@ def get_session_analysis_summary(session_id: str, db: Session = Depends(get_db))
         "summary": summary,
         "secrets_rollup": secret_rollup_result["secrets"]
     }
+
+
+def normalize_endpoint_identity(endpoint: dict[str, Any]) -> str | None:
+    if not isinstance(endpoint, dict):
+        return None
+
+    raw_url = str(endpoint.get("url") or endpoint.get("endpoint") or "").strip()
+    if not raw_url:
+        return None
+
+    try:
+        parts = urlsplit(raw_url)
+        query_pairs = parse_qsl(parts.query, keep_blank_values=True)
+        normalized_query = urlencode(sorted(query_pairs))
+        normalized_url = urlunsplit((
+            parts.scheme.lower(),
+            parts.netloc.lower(),
+            parts.path,
+            normalized_query,
+            "",
+        ))
+    except Exception:
+        normalized_url = raw_url
+
+    method = str(endpoint.get("method") or "").strip().upper()
+    endpoint_type = str(endpoint.get("type") or "").strip().lower()
+    return f"{method}|{endpoint_type}|{normalized_url}"
+
+
+def summarize_endpoint_rollup(file_analyses: list[dict[str, Any]]) -> dict[str, int]:
+    unique_identities: set[str] = set()
+    total_occurrences = 0
+
+    for analysis in file_analyses:
+        endpoints = analysis.get("analysis", {}).get("endpoints", [])
+        if not isinstance(endpoints, list):
+            continue
+        for endpoint in endpoints:
+            identity = normalize_endpoint_identity(endpoint)
+            if not identity:
+                continue
+            unique_identities.add(identity)
+            total_occurrences += 1
+
+    return {
+        "total_unique_endpoints": len(unique_identities),
+        "total_occurrences": total_occurrences,
+    }
+
+
+def compute_global_stats(db: Session) -> dict[str, int]:
+    session_count = int(db.query(func.count(DbSession.id)).scalar() or 0)
+    file_count = int(db.query(func.count(DbFile.id)).scalar() or 0)
+    analyses = (
+        db.query(DbFileAnalysis)
+        .join(DbFile, DbFileAnalysis.file_id == DbFile.id)
+        .filter(DbFileAnalysis.status == "completed")
+        .all()
+    )
+
+    analysis_data = []
+    for analysis in analyses:
+        file_info = analysis.file
+        analysis_data.append(
+            {
+                "id": str(analysis.file_id),
+                "file": {
+                    "url": file_info.url if file_info else "unknown",
+                    "content_hash": file_info.content_hash if file_info else None,
+                },
+                "analysis": analysis.analysis or {},
+            }
+        )
+
+    endpoint_summary = summarize_endpoint_rollup(analysis_data)
+    secret_summary = (
+        SecretRollupService().rollup_secrets(analysis_data)["summary"]
+        if analysis_data
+        else {"total_unique_secrets": 0}
+    )
+
+    return {
+        "sessions": session_count,
+        "files": file_count,
+        "endpoints": int(endpoint_summary["total_unique_endpoints"]),
+        "secrets": int(secret_summary["total_unique_secrets"]),
+    }
+
+
+@router.get("/api/stats")
+def get_global_stats(db: Session = Depends(get_db)):
+    return compute_global_stats(db)

@@ -19,9 +19,14 @@ class SecurityDashboard {
         this.fileStatusSnapshot = new Map();
         this.activeFilesSessionId = null;
         this.activeFilesSessionName = null;
+        this.filesGlobalLoadRequested = false;
+        this.filesDiagnosticsOpen = false;
+        this.filesCache = new Map();
+        this.lastFilesDataset = [];
         this.filesFilter = {
             query: '',
             status: 'all',
+            showAll: false,
         };
         this.sessionsFilter = {
             query: '',
@@ -108,9 +113,11 @@ class SecurityDashboard {
         if (tabName === 'files' && sessionId) {
             this.activeFilesSessionId = sessionId;
             this.activeFilesSessionName = sessionName || `Session ${this.shortId(sessionId)}`;
+            this.filesGlobalLoadRequested = false;
         } else if (tabName !== 'files') {
             this.activeFilesSessionId = null;
             this.activeFilesSessionName = null;
+            this.filesGlobalLoadRequested = false;
         }
 
         this.switchTab(tabName, { pushHistory: false });
@@ -157,6 +164,7 @@ class SecurityDashboard {
         const filesQuery = document.getElementById('files-filter-query');
         const filesStatus = document.getElementById('files-filter-status');
         const filesClear = document.getElementById('files-filter-clear');
+        const filesShowAll = document.getElementById('files-filter-show-all');
         if (filesQuery) {
             filesQuery.addEventListener('input', () => {
                 this.filesFilter.query = filesQuery.value || '';
@@ -171,6 +179,12 @@ class SecurityDashboard {
         }
         if (filesClear) {
             filesClear.addEventListener('click', () => this.clearFilesFilters());
+        }
+        if (filesShowAll) {
+            filesShowAll.addEventListener('change', () => {
+                this.filesFilter.showAll = filesShowAll.checked === true;
+                this.scheduleFilesFilterApply();
+            });
         }
 
         const sessionsQuery = document.getElementById('sessions-filter-query');
@@ -272,7 +286,7 @@ class SecurityDashboard {
         this.filesFilterDebounce = window.setTimeout(() => {
             this.filesFilterDebounce = null;
             if (this.activeTab === 'files') {
-                this.loadFiles();
+                this.renderFilesDataset(this.lastFilesDataset, { preserveContent: true });
             }
         }, 180);
     }
@@ -290,13 +304,15 @@ class SecurityDashboard {
     }
 
     clearFilesFilters() {
-        this.filesFilter = { query: '', status: 'all' };
+        this.filesFilter = { query: '', status: 'all', showAll: false };
         const filesQuery = document.getElementById('files-filter-query');
         const filesStatus = document.getElementById('files-filter-status');
+        const filesShowAll = document.getElementById('files-filter-show-all');
         if (filesQuery) filesQuery.value = '';
         if (filesStatus) filesStatus.value = 'all';
+        if (filesShowAll) filesShowAll.checked = false;
         if (this.activeTab === 'files') {
-            this.loadFiles();
+            this.renderFilesDataset(this.lastFilesDataset, { preserveContent: true });
         }
     }
 
@@ -996,24 +1012,32 @@ class SecurityDashboard {
     }
 
     isFilesFilterActive() {
-        return Boolean((this.filesFilter.query || '').trim()) || (this.filesFilter.status && this.filesFilter.status !== 'all');
+        return Boolean((this.filesFilter.query || '').trim())
+            || (this.filesFilter.status && this.filesFilter.status !== 'all')
+            || this.filesFilter.showAll === true;
     }
 
     applyFileFilters(files) {
         const query = (this.filesFilter.query || '').trim().toLowerCase();
         const statusFilter = (this.filesFilter.status || 'all').toLowerCase();
+        const showAll = this.filesFilter.showAll === true;
 
         return (files || []).filter((file) => {
             const effectiveStatus = this.runningFileAnalyses.has(file.id)
                 ? 'analyzing'
                 : String(file.analysisStatus || 'not_analyzed').toLowerCase();
+            const priorityTier = String(file.priorityTier || 'medium').toLowerCase();
 
             if (statusFilter !== 'all' && effectiveStatus !== statusFilter) {
                 return false;
             }
 
+            if (!showAll && priorityTier === 'low') {
+                return false;
+            }
+
             if (!query) return true;
-            const haystack = `${file.url || ''} ${file.contentHash || ''} ${file.sessionId || ''}`.toLowerCase();
+            const haystack = `${file.url || ''} ${file.contentHash || ''} ${file.sessionId || ''} ${file.priorityTier || ''} ${file.bundleRole || ''} ${(file.priorityReasons || []).join(' ')}`.toLowerCase();
             return haystack.includes(query);
         });
     }
@@ -1133,21 +1157,33 @@ class SecurityDashboard {
 
     async loadStatistics() {
         try {
-            const response = await axios.get(`${this.apiBase}/api/sessions`);
-            const sessions = Array.isArray(response.data) ? response.data : [];
+            let totalSessions = 0;
+            let totalFiles = 0;
+            let totalEndpoints = 0;
+            let totalSecrets = 0;
 
-            const totalSessions = sessions.length;
-            const totalFiles = sessions.reduce((sum, session) => {
-                const fileCount = Number(session.fileCount) || 0;
-                return sum + fileCount;
-            }, 0);
+            try {
+                const statsResponse = await axios.get(`${this.apiBase}/api/stats`);
+                const stats = statsResponse?.data || {};
+                totalSessions = Number(stats.sessions) || 0;
+                totalFiles = Number(stats.files) || 0;
+                totalEndpoints = Number(stats.endpoints) || 0;
+                totalSecrets = Number(stats.secrets) || 0;
+            } catch (_error) {
+                const response = await axios.get(`${this.apiBase}/api/sessions`);
+                const sessions = Array.isArray(response.data) ? response.data : [];
+                totalSessions = sessions.length;
+                totalFiles = sessions.reduce((sum, session) => sum + (Number(session.fileCount) || 0), 0);
+            }
 
             document.getElementById('total-files').textContent = String(totalFiles);
             document.getElementById('total-sessions').textContent = String(totalSessions);
-            document.getElementById('total-endpoints').textContent = '-';
+            document.getElementById('total-endpoints').textContent = String(totalEndpoints);
+            const secretsNode = document.getElementById('total-secrets');
+            if (secretsNode) secretsNode.textContent = String(totalSecrets);
 
             // Status bar (bottom bar)
-            const sbMap = { 'sb-files': totalFiles, 'sb-sessions': totalSessions, 'sb-endpoints': null, 'sb-secrets': null };
+            const sbMap = { 'sb-files': totalFiles, 'sb-sessions': totalSessions, 'sb-endpoints': totalEndpoints, 'sb-secrets': totalSecrets };
             Object.entries(sbMap).forEach(([id, val]) => {
                 const el = document.getElementById(id);
                 if (el) el.textContent = val != null ? val : '—';
@@ -1157,6 +1193,8 @@ class SecurityDashboard {
             document.getElementById('total-files').textContent = '-';
             document.getElementById('total-sessions').textContent = '-';
             document.getElementById('total-endpoints').textContent = '-';
+            const secretsNode = document.getElementById('total-secrets');
+            if (secretsNode) secretsNode.textContent = '-';
         }
     }
 
@@ -1569,6 +1607,30 @@ class SecurityDashboard {
         }
     }
 
+    renderLinkedText(value, options = {}) {
+        const text = String(value || '').trim();
+        if (!text) return '';
+        const href = this.safeExternalHref(text);
+        const className = options.className ? ` class="${this.escapeHtml(options.className)}"` : '';
+        if (!href) {
+            return `${options.prefix || ''}${this.escapeHtml(text)}`;
+        }
+        const target = options.newTab === false ? '' : ' target="_blank" rel="noopener noreferrer"';
+        return `${options.prefix || ''}<a href="${this.escapeHtml(href)}"${className}${target}>${this.escapeHtml(text)}</a>`;
+    }
+
+    renderContextText(value) {
+        const text = String(value || '').trim();
+        if (!text) return '';
+        const unquoted = text.replace(/^['"`](.*)['"`]$/s, '$1').trim();
+        const linked = this.renderLinkedText(unquoted);
+        if (linked && linked !== this.escapeHtml(unquoted)) {
+            const quote = text !== unquoted ? text[0] : '';
+            return quote ? `${this.escapeHtml(quote)}${linked}${this.escapeHtml(quote)}` : linked;
+        }
+        return this.escapeHtml(text);
+    }
+
     deriveFailureInfo(file) {
         if (this.failureUtils && typeof this.failureUtils.deriveFileFailure === 'function') {
             return this.failureUtils.deriveFileFailure(file);
@@ -1586,11 +1648,14 @@ class SecurityDashboard {
 
     renderFailurePanel(failureInfo) {
         if (!failureInfo) return '';
+        const title = String(failureInfo.source || '').toLowerCase() === 'analysis'
+            ? 'Analysis failed'
+            : `${failureInfo.label} failure`;
         return `
             <div class="failure-panel mt-2">
                 <div class="failure-panel-title">
                     <i class="fas fa-triangle-exclamation me-1"></i>
-                    ${this.escapeHtml(failureInfo.label)} failure
+                    ${this.escapeHtml(title)}
                 </div>
                 <div class="failure-panel-details">${this.escapeHtml(failureInfo.details)}</div>
                 <div class="failure-panel-guidance"><strong>Next step:</strong> ${this.escapeHtml(failureInfo.guidance)}</div>
@@ -1620,7 +1685,7 @@ class SecurityDashboard {
                         <div>
                             <h6 class="mb-1">
                                 <i class="fas fa-link me-2"></i>
-                                <span class="result-url">${this.escapeHtml(endpoint.url || endpoint.endpoint || 'Unknown URL')}</span>
+                                <span class="result-url">${this.renderLinkedText(endpoint.url || endpoint.endpoint || 'Unknown URL')}</span>
                             </h6>
                             <div class="mb-1">
                                 <span class="badge ${confidenceClass} confidence-badge me-2">${endpoint.confidence || 'medium'}</span>
@@ -1634,7 +1699,7 @@ class SecurityDashboard {
                     ${endpoint.context ? `
                         <div class="result-context">
                             <strong>Context:</strong><br>
-                            ${this.escapeHtml(endpoint.context)}
+                            ${this.renderContextText(endpoint.context)}
                         </div>
                     ` : ''}
                 </div>
@@ -1708,12 +1773,12 @@ class SecurityDashboard {
             <div class="result-item list-stagger-item">
                 <div class="dependency-item">
                     <i class="fas fa-cube me-2"></i>
-                    <strong>${this.escapeHtml(dep.name || dep.url || dep.dep_url || 'Unknown')}</strong>
+                    <strong>${this.renderLinkedText(dep.name || dep.url || dep.dep_url || 'Unknown')}</strong>
                     ${dep.version ? `<span class="badge bg-info ms-2">v${dep.version}</span>` : ''}
                     ${dep.type ? `<span class="badge bg-secondary ms-2">${dep.type}</span>` : ''}
                     ${dep.resolvedUrl || dep.resolved_url ? `
                         <div class="mt-2 text-muted">
-                            <small><i class="fas fa-arrow-right me-1"></i>${dep.resolvedUrl || dep.resolved_url}</small>
+                            <small>${this.renderLinkedText(dep.resolvedUrl || dep.resolved_url, { prefix: '<i class="fas fa-arrow-right me-1"></i>' })}</small>
                         </div>
                     ` : ''}
                 </div>
@@ -1881,105 +1946,89 @@ class SecurityDashboard {
         }
     }
 
-    async loadFiles() {
-        const container = document.getElementById('files-content');
-        container.innerHTML = '<p class="text-center text-muted">Loading files...</p>';
-        this.updateFilesScopeUI();
-        
-        try {
-            let files = [];
+    getFilesScopeCacheKey() {
+        if (this.activeFilesSessionId) {
+            return `session:${this.activeFilesSessionId}`;
+        }
+        if (this.filesGlobalLoadRequested) {
+            return 'all-sessions';
+        }
+        return 'chooser';
+    }
 
-            if (this.activeFilesSessionId) {
-                try {
-                    const filesResponse = await axios.get(`${this.apiBase}/api/sessions/${this.activeFilesSessionId}/files`, {
-                        params: { dedupe: true }
-                    });
-                    const sessionFiles = Array.isArray(filesResponse.data) ? filesResponse.data : [];
-                    files = sessionFiles.map((file) => ({ ...file, sessionId: this.activeFilesSessionId }));
-                } catch (error) {
-                    if (error?.response?.status === 404) {
-                        this.showAlert('Selected session no longer exists. Showing all sessions.', 'warning');
-                        this.clearFilesSessionFilter(false);
-                        return this.loadFiles();
-                    }
-                    throw error;
-                }
-            } else {
-                const sessionsResponse = await axios.get(`${this.apiBase}/api/sessions`);
-                const sessions = Array.isArray(sessionsResponse.data) ? sessionsResponse.data : [];
+    getCachedFilesForCurrentScope() {
+        const key = this.getFilesScopeCacheKey();
+        const cached = this.filesCache.get(key);
+        return Array.isArray(cached) ? cached.map((file) => ({ ...file })) : null;
+    }
 
-                if (sessions.length === 0) {
-                    this.visibleFileIds = [];
-                    this.selectedFileIds.clear();
-                    this.fileStatusSnapshot.clear();
-                    this.renderFilesBulkActions();
-                    container.innerHTML = this.getEmptyState('No files found. Upload some JavaScript files for analysis.', 'folder');
-                    return;
-                }
+    setCachedFilesForCurrentScope(files) {
+        const key = this.getFilesScopeCacheKey();
+        if (key === 'chooser') return;
+        this.filesCache.set(key, Array.isArray(files) ? files.map((file) => ({ ...file })) : []);
+    }
 
-                const fileResponses = await Promise.all(
-                    sessions.map(async (session) => {
-                        const filesResponse = await axios.get(`${this.apiBase}/api/sessions/${session.id}/files`, {
-                            params: { dedupe: true }
-                        });
-                        const filesForSession = Array.isArray(filesResponse.data) ? filesResponse.data : [];
-                        return filesForSession.map((file) => ({ ...file, sessionId: session.id }));
-                    })
-                );
+    async fetchFilesForScope() {
+        let files = [];
 
-                files = fileResponses.flat();
+        if (this.activeFilesSessionId) {
+            const filesResponse = await axios.get(`${this.apiBase}/api/sessions/${this.activeFilesSessionId}/files`, {
+                params: { dedupe: true }
+            });
+            const sessionFiles = Array.isArray(filesResponse.data) ? filesResponse.data : [];
+            files = sessionFiles.map((file) => ({ ...file, sessionId: this.activeFilesSessionId }));
+        } else if (this.filesGlobalLoadRequested) {
+            const sessionsResponse = await axios.get(`${this.apiBase}/api/sessions`);
+            const sessions = Array.isArray(sessionsResponse.data) ? sessionsResponse.data : [];
+            for (const session of sessions) {
+                const filesResponse = await axios.get(`${this.apiBase}/api/sessions/${session.id}/files`, {
+                    params: { dedupe: true }
+                });
+                const filesForSession = Array.isArray(filesResponse.data) ? filesResponse.data : [];
+                files.push(...filesForSession.map((file) => ({ ...file, sessionId: session.id })));
             }
+        }
 
-            files = this.dedupeDisplayedFiles(files);
-            files = files.sort((a, b) => new Date(b.capturedAt || 0) - new Date(a.capturedAt || 0));
-            const totalBeforeFilters = files.length;
-            files = this.applyFileFilters(files);
+        files = this.dedupeDisplayedFiles(files);
+        files = files.sort((a, b) => new Date(b.capturedAt || 0) - new Date(a.capturedAt || 0));
+        this.setCachedFilesForCurrentScope(files);
+        return files;
+    }
 
-            if (files.length === 0) {
-                this.visibleFileIds = [];
-                this.selectedFileIds.clear();
-                this.fileStatusSnapshot.clear();
-                this.renderFilesBulkActions();
-                this.renderSourcemapValidationSummary([]);
-                const emptyText = totalBeforeFilters === 0
-                    ? (this.activeFilesSessionId
-                        ? 'No files captured in this session.'
-                        : 'No files found. Upload some JavaScript files for analysis.')
-                    : 'No files match the current filters.';
-                container.innerHTML = this.getEmptyState(emptyText, 'folder');
-                return;
-            }
+    updateFilesDiagnosticsVisibility() {
+        const panel = document.getElementById('files-diagnostics-panel');
+        if (!panel) return;
+        panel.classList.toggle('d-none', !this.filesDiagnosticsOpen);
+    }
 
-            this.visibleFileIds = files.map((file) => file.id);
-            this.selectedFileIds = new Set(
-                Array.from(this.selectedFileIds).filter((id) => this.visibleFileIds.includes(id))
-            );
-            this.renderFilesBulkActions();
-            await this.renderSourcemapValidationSummary(files);
+    toggleFilesDiagnostics() {
+        this.filesDiagnosticsOpen = !this.filesDiagnosticsOpen;
+        this.updateFilesDiagnosticsVisibility();
+    }
 
-            container.innerHTML = files.map(file => {
-                const status = this.runningFileAnalyses.has(file.id) ? 'analyzing' : (file.analysisStatus || 'not_analyzed');
-                const isBusy = status === 'analyzing';
-                const isSelected = this.selectedFileIds.has(file.id);
-                const failureInfo = this.deriveFailureInfo(file);
-                const statusBadge = this.renderAnalysisStatusBadge(status, file.analysisError, failureInfo);
-                const primaryLabel = status === 'completed' ? 'Reanalyze' : 'Analyze';
-                const canViewResults = status === 'completed';
-                const isProcessing = this.isFileStillProcessing({ ...file, analysisStatus: status });
-                const retryButton = status === 'failed'
-                    ? `<button class="btn btn-outline-danger btn-sm ms-2" ${isBusy ? 'disabled' : ''} onclick="dashboard.retryStoredFile('${file.id}')"><i class="fas fa-rotate-right me-1"></i>Retry</button>`
-                    : '';
-                const resultsButton = canViewResults
-                    ? `<button class="btn btn-outline-primary btn-sm ms-2" onclick="dashboard.viewStoredAnalysis('${file.id}')"><i class="fas fa-chart-bar me-1"></i>View Results</button>`
-                    : '';
-                const sourcesButton = this.renderReconstructedSourcesButton(file.sourceMap);
-                const analysisOverview = this.renderFileAnalysisOverview(file);
-                const sourcemapBadge = this.renderSourcemapStatusBadge(file.sourceMap);
-                const sourcemapLifecycle = this.renderSourcemapLifecycleLine(file.sourceMap);
-                const failurePanel = this.renderFailurePanel(failureInfo);
+    buildFilesListMarkup(files) {
+        return files.map(file => {
+            const status = this.runningFileAnalyses.has(file.id) ? 'analyzing' : (file.analysisStatus || 'not_analyzed');
+            const isBusy = status === 'analyzing';
+            const isSelected = this.selectedFileIds.has(file.id);
+            const failureInfo = this.deriveFailureInfo(file);
+            const statusBadge = this.renderAnalysisStatusBadge(status, file.analysisError, failureInfo);
+            const primaryLabel = status === 'completed' ? 'Reanalyze' : 'Analyze';
+            const canViewResults = status === 'completed';
+            const isProcessing = this.isFileStillProcessing({ ...file, analysisStatus: status });
+            const retryButton = status === 'failed'
+                ? `<button class="btn btn-outline-danger btn-sm ms-2" ${isBusy ? 'disabled' : ''} onclick="dashboard.retryStoredFile('${file.id}')"><i class="fas fa-rotate-right me-1"></i>Retry</button>`
+                : '';
+            const resultsButton = canViewResults
+                ? `<button class="btn btn-outline-primary btn-sm ms-2" onclick="dashboard.viewStoredAnalysis('${file.id}')"><i class="fas fa-chart-bar me-1"></i>View Results</button>`
+                : '';
+            const sourcesButton = this.renderReconstructedSourcesButton(file.sourceMap);
+            const analysisOverview = this.renderFileAnalysisOverview(file);
+            const sourcemapBadge = this.renderSourcemapStatusBadge(file.sourceMap);
+            const failurePanel = this.renderFailurePanel(failureInfo);
 
-                return `
-                <div class="result-item list-stagger-item" data-file-id="${file.id}" data-file-processing="${isProcessing ? 'true' : 'false'}">
+            return `
+                <div class="result-item" data-file-id="${file.id}" data-file-processing="${isProcessing ? 'true' : 'false'}">
                     <div class="result-header">
                         <div>
                             <h6 class="mb-1">
@@ -1996,7 +2045,6 @@ class SecurityDashboard {
                                 <span data-file-sourcemap-id="${file.id}">${sourcemapBadge}</span>
                                 <span data-file-status-id="${file.id}">${statusBadge}</span>
                             </div>
-                            <div data-file-lifecycle-id="${file.id}">${sourcemapLifecycle}</div>
                             <div data-file-overview-id="${file.id}">${analysisOverview}</div>
                             <div data-file-failure-id="${file.id}">${failurePanel}</div>
                         </div>
@@ -2014,8 +2062,78 @@ class SecurityDashboard {
                     </div>
                 </div>
             `;
-            }).join('');
-            this.captureFileStatusSnapshot(files);
+        }).join('');
+    }
+
+    async renderFilesDataset(files, options = {}) {
+        const { preserveContent = false } = options;
+        const container = document.getElementById('files-content');
+        if (!container) return;
+
+        const totalBeforeFilters = (files || []).length;
+        const filteredFiles = this.applyFileFilters(files || []);
+        this.lastFilesDataset = Array.isArray(files) ? files.map((file) => ({ ...file })) : [];
+        this.updateFilesScopeUI();
+        this.updateFilesDiagnosticsVisibility();
+
+        if (filteredFiles.length === 0) {
+            this.visibleFileIds = [];
+            this.selectedFileIds.clear();
+            this.fileStatusSnapshot.clear();
+            this.renderFilesBulkActions();
+            await this.renderSourcemapValidationSummary([]);
+            const emptyText = totalBeforeFilters === 0
+                ? (this.activeFilesSessionId
+                    ? 'No files captured in this session.'
+                    : this.filesGlobalLoadRequested
+                        ? 'No stored files were found across any session.'
+                        : 'Choose a session to browse files, or load all sessions explicitly.')
+                : 'No files match the current filters.';
+            container.innerHTML = !this.activeFilesSessionId && !this.filesGlobalLoadRequested && totalBeforeFilters === 0
+                ? this.renderFilesChooserState()
+                : this.getEmptyState(emptyText, 'folder');
+            return;
+        }
+
+        this.visibleFileIds = filteredFiles.map((file) => file.id);
+        this.selectedFileIds = new Set(
+            Array.from(this.selectedFileIds).filter((id) => this.visibleFileIds.includes(id))
+        );
+        this.renderFilesBulkActions();
+        await this.renderSourcemapValidationSummary(filteredFiles);
+
+        const nextMarkup = this.buildFilesListMarkup(filteredFiles);
+        if (!preserveContent || container.innerHTML !== nextMarkup) {
+            container.innerHTML = nextMarkup;
+        }
+        this.captureFileStatusSnapshot(filteredFiles);
+    }
+
+    async loadFiles() {
+        const container = document.getElementById('files-content');
+        this.updateFilesScopeUI();
+
+        if (!this.activeFilesSessionId && !this.filesGlobalLoadRequested) {
+            this.visibleFileIds = [];
+            this.selectedFileIds.clear();
+            this.fileStatusSnapshot.clear();
+            this.renderFilesBulkActions();
+            await this.renderSourcemapValidationSummary([]);
+            this.updateFilesDiagnosticsVisibility();
+            container.innerHTML = this.renderFilesChooserState();
+            return;
+        }
+
+        const cachedFiles = this.getCachedFilesForCurrentScope();
+        if (cachedFiles && cachedFiles.length > 0) {
+            await this.renderFilesDataset(cachedFiles, { preserveContent: true });
+        } else if (!container.innerHTML.trim()) {
+            container.innerHTML = '<p class="text-center text-muted">Loading files...</p>';
+        }
+
+        try {
+            const files = await this.fetchFilesForScope();
+            await this.renderFilesDataset(files, { preserveContent: true });
         } catch (error) {
             this.visibleFileIds = [];
             this.selectedFileIds.clear();
@@ -2093,34 +2211,7 @@ class SecurityDashboard {
     }
 
     async fetchFilesForPolling() {
-        let files = [];
-        if (this.activeFilesSessionId) {
-            const filesResponse = await axios.get(`${this.apiBase}/api/sessions/${this.activeFilesSessionId}/files`, {
-                params: { dedupe: true }
-            });
-            const sessionFiles = Array.isArray(filesResponse.data) ? filesResponse.data : [];
-            files = sessionFiles.map((file) => ({ ...file, sessionId: this.activeFilesSessionId }));
-        } else {
-            const sessionsResponse = await axios.get(`${this.apiBase}/api/sessions`);
-            const sessions = Array.isArray(sessionsResponse.data) ? sessionsResponse.data : [];
-            if (sessions.length === 0) {
-                return [];
-            }
-
-            const fileResponses = await Promise.all(
-                sessions.map(async (session) => {
-                    const filesResponse = await axios.get(`${this.apiBase}/api/sessions/${session.id}/files`, {
-                        params: { dedupe: true }
-                    });
-                    const filesForSession = Array.isArray(filesResponse.data) ? filesResponse.data : [];
-                    return filesForSession.map((file) => ({ ...file, sessionId: session.id }));
-                })
-            );
-            files = fileResponses.flat();
-        }
-
-        files = this.dedupeDisplayedFiles(files);
-        return files.sort((a, b) => new Date(b.capturedAt || 0) - new Date(a.capturedAt || 0));
+        return this.fetchFilesForScope();
     }
 
     patchStoredFileRow(file) {
@@ -2136,7 +2227,6 @@ class SecurityDashboard {
 
         const statusNode = row.querySelector(`[data-file-status-id="${fileId}"]`);
         const sourceMapNode = row.querySelector(`[data-file-sourcemap-id="${fileId}"]`);
-        const lifecycleNode = row.querySelector(`[data-file-lifecycle-id="${fileId}"]`);
         const overviewNode = row.querySelector(`[data-file-overview-id="${fileId}"]`);
         const failureNode = row.querySelector(`[data-file-failure-id="${fileId}"]`);
         const analyzeButton = row.querySelector(`[data-file-analyze-id="${fileId}"]`);
@@ -2145,13 +2235,12 @@ class SecurityDashboard {
         const sourcesNode = row.querySelector(`[data-file-sources-id="${fileId}"]`);
         const retryNode = row.querySelector(`[data-file-retry-id="${fileId}"]`);
 
-        if (!statusNode || !sourceMapNode || !lifecycleNode || !overviewNode || !failureNode || !analyzeButton || !deleteButton || !viewNode || !sourcesNode || !retryNode) {
+        if (!statusNode || !sourceMapNode || !overviewNode || !failureNode || !analyzeButton || !deleteButton || !viewNode || !sourcesNode || !retryNode) {
             return false;
         }
 
         statusNode.innerHTML = this.renderAnalysisStatusBadge(status, file.analysisError, failureInfo);
         sourceMapNode.innerHTML = this.renderSourcemapStatusBadge(file.sourceMap);
-        lifecycleNode.innerHTML = this.renderSourcemapLifecycleLine(file.sourceMap);
         overviewNode.innerHTML = this.renderFileAnalysisOverview(file);
         failureNode.innerHTML = this.renderFailurePanel(failureInfo);
 
@@ -2182,8 +2271,10 @@ class SecurityDashboard {
         this.fileStatusPollingInFlight = true;
         try {
             const files = await this.fetchFilesForPolling();
-            const filesById = new Map((files || []).map((file) => [file.id, file]));
-            let requiresReload = files.length !== this.visibleFileIds.length;
+            const filteredFiles = this.applyFileFilters(files || []);
+            const filesById = new Map(filteredFiles.map((file) => [file.id, file]));
+            const nextVisibleIds = filteredFiles.map((file) => file.id);
+            let requiresReload = nextVisibleIds.length !== this.visibleFileIds.length;
 
             for (const fileId of this.visibleFileIds) {
                 const latest = filesById.get(fileId);
@@ -2204,9 +2295,8 @@ class SecurityDashboard {
             }
 
             if (requiresReload) {
-                await this.loadFiles();
+                await this.renderFilesDataset(files, { preserveContent: true });
             } else {
-                const filteredFiles = this.applyFileFilters(files || []);
                 await this.renderSourcemapValidationSummary(filteredFiles);
             }
         } catch (error) {
@@ -2370,6 +2460,8 @@ class SecurityDashboard {
     updateFilesScopeUI() {
         const label = document.getElementById('files-scope-label');
         const clearButton = document.getElementById('clear-files-filter-btn');
+        const diagnosticsToggle = document.getElementById('files-diagnostics-toggle');
+        const loadAllButton = document.getElementById('files-load-all-btn');
         if (!label || !clearButton) return;
 
         if (this.activeFilesSessionId) {
@@ -2377,9 +2469,14 @@ class SecurityDashboard {
             const displayName = this.activeFilesSessionName || fallbackName;
             label.textContent = `Scope: ${displayName}`;
             clearButton.style.display = 'inline-block';
+            if (loadAllButton) loadAllButton.style.display = 'none';
+            if (diagnosticsToggle) diagnosticsToggle.style.display = 'inline-block';
         } else {
-            label.textContent = 'Scope: All Sessions';
+            label.textContent = this.filesGlobalLoadRequested ? 'Scope: All Sessions' : 'Scope: Choose a Session';
             clearButton.style.display = 'none';
+            if (loadAllButton) loadAllButton.style.display = 'inline-block';
+            if (diagnosticsToggle) diagnosticsToggle.style.display = this.filesGlobalLoadRequested ? 'inline-block' : 'none';
+            this.filesDiagnosticsOpen = false;
         }
     }
 
@@ -2388,12 +2485,14 @@ class SecurityDashboard {
         const decodedName = encodedName ? decodeURIComponent(encodedName) : '';
         this.activeFilesSessionId = sessionId;
         this.activeFilesSessionName = decodedName || `Session ${this.shortId(sessionId)}`;
+        this.filesGlobalLoadRequested = false;
         this.switchTab('files');
     }
 
     clearFilesSessionFilter(reload = true) {
         this.activeFilesSessionId = null;
         this.activeFilesSessionName = null;
+        this.filesGlobalLoadRequested = false;
         this.updateFilesScopeUI();
         this.updateBrowserRoute(this.activeTab === 'files' ? 'files' : this.activeTab, {
             replace: this.activeTab === 'files',
@@ -2402,6 +2501,33 @@ class SecurityDashboard {
         if (reload && this.activeTab === 'files') {
             this.loadFiles();
         }
+    }
+
+    async loadAllFilesAcrossSessions() {
+        this.activeFilesSessionId = null;
+        this.activeFilesSessionName = null;
+        this.filesGlobalLoadRequested = true;
+        this.updateFilesScopeUI();
+        this.updateBrowserRoute('files', { query: {} });
+        await this.loadFiles();
+    }
+
+    renderFilesChooserState() {
+        return `
+            <div class="empty-state">
+                <div class="empty-state-icon"><i class="fas fa-layer-group"></i></div>
+                <h5>Pick a session first</h5>
+                <p>Loading every stored file across all sessions can make the UI sluggish. Open files from a specific session for the fastest workflow, or explicitly load everything if you need the global view.</p>
+                <div class="d-flex gap-2 justify-content-center flex-wrap">
+                    <button class="btn btn-primary" onclick="dashboard.switchTab('sessions')">
+                        <i class="fas fa-history me-1"></i>Browse Sessions
+                    </button>
+                    <button class="btn btn-outline-secondary" onclick="dashboard.loadAllFilesAcrossSessions()">
+                        <i class="fas fa-layer-group me-1"></i>Load All Files Anyway
+                    </button>
+                </div>
+            </div>
+        `;
     }
 
     async analyzeStoredFile(fileId) {
@@ -4074,6 +4200,14 @@ function refreshFiles() {
 
 function clearSessionFilesFilter() {
     window.dashboard.clearFilesSessionFilter();
+}
+
+function loadAllFilesAcrossSessions() {
+    window.dashboard.loadAllFilesAcrossSessions();
+}
+
+function toggleFilesDiagnostics() {
+    window.dashboard.toggleFilesDiagnostics();
 }
 
 function exportResults() {
