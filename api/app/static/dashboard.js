@@ -1992,7 +1992,7 @@ class SecurityDashboard {
                             <div>
                                 <span class="badge bg-secondary me-2">${this.formatFileSize(file.contentLength || 0)}</span>
                                 <span class="badge bg-info me-2">${this.escapeHtml(this.shortId(file.sessionId))}</span>
-                                <span class="badge bg-dark">${this.escapeHtml(this.formatDateTime(file.capturedAt))}</span>
+                                <span class="badge bg-secondary">${this.escapeHtml(this.formatDateTime(file.capturedAt))}</span>
                                 <span data-file-sourcemap-id="${file.id}">${sourcemapBadge}</span>
                                 <span data-file-status-id="${file.id}">${statusBadge}</span>
                             </div>
@@ -2242,7 +2242,7 @@ class SecurityDashboard {
         node.innerHTML = `
             <div class="bulk-actions-bar">
                 <div class="bulk-actions-left">
-                    <span class="badge bg-dark">${selectedCount} selected</span>
+                    <span class="badge bg-secondary">${selectedCount} selected</span>
                     <button class="btn btn-outline-secondary btn-sm" onclick="dashboard.toggleSelectAllFiles()">
                         <i class="fas fa-check-double me-1"></i>${allSelected ? 'Unselect All' : 'Select All'}
                     </button>
@@ -2630,7 +2630,7 @@ class SecurityDashboard {
                             </h6>
                             <div>
                                 <span class="badge bg-primary me-2">${Number(session.fileCount) || 0} files</span>
-                                <span class="badge bg-dark">${this.escapeHtml(this.formatDateTime(session.createdAt))}</span>
+                                <span class="badge bg-secondary">${this.escapeHtml(this.formatDateTime(session.createdAt))}</span>
                                 ${analysisStatusBadge}
                                 ${captureCoverageBadges}
                                 <span data-session-progress-id="${session.id}">${progressBadges}</span>
@@ -2638,27 +2638,27 @@ class SecurityDashboard {
                                 ${session.hasOpenApiSpec ? '<span class="badge bg-success me-2">OpenAPI</span>' : ''}
                             </div>
                         </div>
-                        <div>
+                        <div class="d-flex align-items-center flex-wrap gap-2" style="flex-shrink:0">
                             <button class="btn btn-success btn-sm" data-session-analyze-id="${session.id}" ${analysisBusy ? 'disabled' : ''} onclick="dashboard.analyzeSession('${session.id}')">
                                 <i class="fas fa-bolt me-1"></i>${analysisBusy ? (stopping ? 'Stopping...' : 'Analyzing...') : 'Analyze All'}
                             </button>
-                            <button class="btn btn-warning btn-sm ms-2 ${analysisBusy ? '' : 'd-none'}" data-session-stop-id="${session.id}" ${stopping ? 'disabled' : ''} onclick="dashboard.stopSessionAnalysis('${session.id}')">
+                            <button class="btn btn-warning btn-sm ${analysisBusy ? '' : 'd-none'}" data-session-stop-id="${session.id}" ${stopping ? 'disabled' : ''} onclick="dashboard.stopSessionAnalysis('${session.id}')">
                                 <i class="fas fa-stop me-1"></i>${stopping ? 'Stopping...' : 'Stop'}
                             </button>
-                            <button class="btn btn-primary btn-sm ms-2" onclick="dashboard.openSessionFiles('${session.id}', '${encodedName}')">
+                            <button class="btn btn-primary btn-sm" onclick="dashboard.openSessionFiles('${session.id}', '${encodedName}')">
                                 <i class="fas fa-folder-open me-1"></i>Open Session
                             </button>
-                            <button class="btn btn-outline-primary btn-sm ms-2" ${analysisPerformed ? '' : 'disabled'} onclick="dashboard.showSessionSummary('${session.id}', '${encodedName}')">
+                            <button class="btn btn-outline-primary btn-sm" ${analysisPerformed ? '' : 'disabled'} onclick="dashboard.showSessionSummary('${session.id}', '${encodedName}')">
                                 <i class="fas fa-list-check me-1"></i>View Summary
                             </button>
                             ${session.hasOpenApiSpec ? `
-                            <a class="btn btn-outline-secondary btn-sm ms-2"
+                            <a class="btn btn-outline-secondary btn-sm"
                                href="/api/sessions/${session.id}/openapi"
                                download="openapi-${session.id.slice(0, 8)}.yaml"
                                title="Download OpenAPI 3.0 spec">
                                 <i class="fas fa-file-code me-1"></i>OpenAPI
                             </a>` : ''}
-                            <button class="btn btn-outline-danger btn-sm ms-2" data-session-delete-id="${session.id}" ${rowBusy ? 'disabled' : ''} onclick="dashboard.deleteSession('${session.id}')">
+                            <button class="btn btn-outline-danger btn-sm" data-session-delete-id="${session.id}" ${rowBusy ? 'disabled' : ''} onclick="dashboard.deleteSession('${session.id}')">
                                 <i class="fas fa-trash me-1"></i>Delete
                             </button>
                         </div>
@@ -2840,7 +2840,7 @@ class SecurityDashboard {
         node.innerHTML = `
             <div class="bulk-actions-bar">
                 <div class="bulk-actions-left">
-                    <span class="badge bg-dark">${selectedCount} selected</span>
+                    <span class="badge bg-secondary">${selectedCount} selected</span>
                     <button class="btn btn-outline-secondary btn-sm" onclick="dashboard.toggleSelectAllSessions()">
                         <i class="fas fa-check-double me-1"></i>${allSelected ? 'Unselect All' : 'Select All'}
                     </button>
