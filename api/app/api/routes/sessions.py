@@ -1,6 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+import os
 import shutil
 import threading
 import copy
@@ -367,9 +368,43 @@ def list_sessions(db: Session = Depends(get_db)):
                 "performed": (int(analysis_completed or 0) + int(analysis_failed or 0)) > 0,
             },
             "captureCoverage": get_latest_session_capture_coverage(str(session.id)),
+            "hasOpenApiSpec": (
+                Path(os.environ.get("STORAGE_PATH", "storage"))
+                / "sessions"
+                / str(session.id)
+                / "openapi.yaml"
+            ).exists(),
         }
         for session, file_count, analysis_completed, analysis_failed in rows
     ]
+
+
+@router.get("/api/sessions/{session_id}/openapi")
+def download_session_openapi(session_id: str):
+    """
+    Stream the Vespasian-generated OpenAPI 3.0 YAML spec for a session.
+
+    Returns 404 if no spec has been generated.
+
+    FastAPI FileResponse: https://fastapi.tiangolo.com/advanced/custom-response/#fileresponse
+    """
+    from fastapi.responses import FileResponse
+
+    spec_path = (
+        Path(os.environ.get("STORAGE_PATH", "storage"))
+        / "sessions"
+        / session_id
+        / "openapi.yaml"
+    )
+    if not spec_path.exists():
+        raise HTTPException(status_code=404, detail="No OpenAPI spec for this session.")
+
+    short_id = session_id[:8] if len(session_id) >= 8 else session_id
+    return FileResponse(
+        path=str(spec_path),
+        media_type="application/yaml",
+        filename=f"openapi-{short_id}.yaml",
+    )
 
 
 @router.get("/api/sessions/{session_id}/files")
