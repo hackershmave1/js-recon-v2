@@ -6,8 +6,10 @@ import json
 import logging
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urljoin, urlparse
 
@@ -639,6 +641,94 @@ class ReconJobRunner:
             maybe_add(response.get("url"))
 
         return list(dict.fromkeys(urls))
+
+    async def _run_vespasian_scan(self, target_url: str) -> None:
+        """
+        Runs ``vespasian crawl`` then ``vespasian generate rest`` in a temporary
+        working directory and copies the resulting OpenAPI YAML to the session's
+        storage directory.
+
+        This method raises RuntimeError on any failure so that the caller
+        (_discover_with_vespasian) can catch it as a non-fatal error.
+
+        Vespasian CLI reference: https://github.com/praetorian-inc/vespasian
+        OpenAPI 3.0 output spec: https://spec.openapis.org/oas/v3.0.3
+        asyncio subprocess: https://docs.python.org/3/library/asyncio-subprocess.html
+        """
+        import os
+
+        binary = (self.options.vespasian_binary or "vespasian").strip()
+        timeout = max(1, int(self.options.vespasian_timeout_seconds))
+        depth = max(0, int(self.options.max_depth))
+        session_id = self.options.session_id
+
+        storage_base = Path(os.environ.get("STORAGE_PATH", "storage"))
+        session_dir = storage_base / "sessions" / session_id
+        openapi_dest = session_dir / "openapi.yaml"
+
+        with tempfile.TemporaryDirectory(prefix=f"vespasian-{session_id[:8]}-") as tmpdir:
+            capture_path = Path(tmpdir) / "capture.json"
+            spec_path = Path(tmpdir) / "openapi.yaml"
+
+            # ── Step 1: crawl ──────────────────────────────────────────────
+            crawl_cmd = [
+                binary, "crawl", target_url,
+                "--depth", str(depth),
+                "--timeout", f"{timeout}s",
+                "--scope", "same-origin",
+                "-o", str(capture_path),
+            ]
+            logger.info("vespasian crawl: %s", " ".join(crawl_cmd))
+            crawl_proc = await asyncio.create_subprocess_exec(
+                *crawl_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                _, crawl_stderr = await asyncio.wait_for(
+                    crawl_proc.communicate(), timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                crawl_proc.kill()
+                raise RuntimeError(
+                    f"Vespasian crawl timed out after {timeout}s for {target_url}"
+                )
+
+            if crawl_proc.returncode != 0 or not capture_path.exists():
+                stderr_text = (crawl_stderr or b"").decode("utf-8", errors="replace")[:400]
+                raise RuntimeError(
+                    f"Vespasian crawl failed (exit {crawl_proc.returncode}): {stderr_text}"
+                )
+
+            # ── Step 2: generate OpenAPI 3.0 YAML ─────────────────────────
+            gen_cmd = [
+                binary, "generate", "rest",
+                str(capture_path),
+                "-o", str(spec_path),
+            ]
+            logger.info("vespasian generate: %s", " ".join(gen_cmd))
+            gen_proc = await asyncio.create_subprocess_exec(
+                *gen_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                _, gen_stderr = await asyncio.wait_for(
+                    gen_proc.communicate(), timeout=120
+                )
+            except asyncio.TimeoutError:
+                gen_proc.kill()
+                raise RuntimeError("Vespasian generate timed out after 120s")
+
+            if gen_proc.returncode != 0 or not spec_path.exists():
+                stderr_text = (gen_stderr or b"").decode("utf-8", errors="replace")[:400]
+                raise RuntimeError(
+                    f"Vespasian generate failed (exit {gen_proc.returncode}): {stderr_text}"
+                )
+
+            session_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(spec_path, openapi_dest)
+            logger.info("OpenAPI spec saved to %s", openapi_dest)
 
     async def _discover_with_vespasian(self, target_url: str) -> set[str]:
         """
