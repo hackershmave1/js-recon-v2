@@ -2635,6 +2635,7 @@ class SecurityDashboard {
                                 ${captureCoverageBadges}
                                 <span data-session-progress-id="${session.id}">${progressBadges}</span>
                                 <span data-session-recon-id="${session.id}">${reconBadges}</span>
+                                ${session.hasOpenApiSpec ? '<span class="badge bg-success me-2">OpenAPI</span>' : ''}
                             </div>
                         </div>
                         <div>
@@ -2650,6 +2651,13 @@ class SecurityDashboard {
                             <button class="btn btn-outline-primary btn-sm ms-2" ${analysisPerformed ? '' : 'disabled'} onclick="dashboard.showSessionSummary('${session.id}', '${encodedName}')">
                                 <i class="fas fa-list-check me-1"></i>View Summary
                             </button>
+                            ${session.hasOpenApiSpec ? `
+                            <a class="btn btn-outline-secondary btn-sm ms-2"
+                               href="/api/sessions/${session.id}/openapi"
+                               download="openapi-${session.id.slice(0, 8)}.yaml"
+                               title="Download OpenAPI 3.0 spec">
+                                <i class="fas fa-file-code me-1"></i>OpenAPI
+                            </a>` : ''}
                             <button class="btn btn-outline-danger btn-sm ms-2" data-session-delete-id="${session.id}" ${rowBusy ? 'disabled' : ''} onclick="dashboard.deleteSession('${session.id}')">
                                 <i class="fas fa-trash me-1"></i>Delete
                             </button>
