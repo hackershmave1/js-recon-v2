@@ -87,22 +87,24 @@ def test_job_session_id_is_indexed():
 
 @pytest.fixture(scope="module")
 def sqlite_session():
-    """In-memory SQLite session for constructor tests."""
-    # Import here so failure is captured in the test that uses this fixture
-    from app.db import Base
-    # Must import Job so it registers with Base metadata
-    from app.models.job import Job  # noqa: F401
+    """In-memory SQLite session for constructor tests.
+
+    Creates only the 'jobs' table to avoid JSONB incompatibility in other
+    models (file.py uses JSONB which SQLite can't render).
+    """
+    from app.models.job import Job
 
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
     )
-    Base.metadata.create_all(bind=engine)
+    # Create only the jobs table — avoid JSONB columns in other models
+    Job.__table__.create(bind=engine)
     Session = sessionmaker(bind=engine)
     sess = Session()
     yield sess
     sess.close()
-    Base.metadata.drop_all(bind=engine)
+    Job.__table__.drop(bind=engine)
 
 
 def test_job_recon_construction(sqlite_session):
