@@ -4,7 +4,7 @@
 **Code:** JSE
 **Status:** In Progress
 **Last Activity:** 2026-04-19
-**Current Position:** Phase 1, Plan 02 (01-01 complete)
+**Current Position:** Phase 1, Plan 03 (01-02 complete)
 
 ## Active Milestone
 
@@ -14,7 +14,7 @@
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 1 | Backend Tech Debt | In Progress (1/? plans complete) |
+| 1 | Backend Tech Debt | In Progress (2/? plans complete) |
 | 2 | UI Polish | Planning |
 
 ## Decisions
@@ -24,13 +24,18 @@
 - UI audit written to .planning/UI-REVIEW.md on 2026-04-19 (score 16/24).
 - [01-01] Celery task files retained on disk after removing celery/redis from requirements — Beat worker installs celery separately when deployed.
 - [01-01] Dependency removals documented inline in requirements.txt with date, rationale, and CVE-2024-33664 reference.
+- [01-02] Used Boolean for cancel_requested (not String "0"/"1") — consistent with file.py/source_map.py existing pattern.
+- [01-02] state_json uses sqlalchemy.types.JSON (cross-dialect) not JSONB — ensures SQLite test compatibility.
+- [01-02] No FK from Job.session_id to Session.id — avoids cascade complexity with recon jobs referencing uncommitted sessions.
 
 ## Performance Metrics
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
 | 01-backend-tech-debt | 01 | 5min | 2 | 2 |
+| 01-backend-tech-debt | 02 | 3min | 2 | 3 |
 
 ## Session Log
 
 - 2026-04-19T19:38:00Z — Completed 01-01-PLAN.md (remove dead dependencies). Stopped at: None.
+- 2026-04-19T19:39:40Z — Completed 01-02-PLAN.md (create Job ORM model). Stopped at: None.
