@@ -956,6 +956,63 @@ class SecurityDashboard {
         this.reconSessionProgress.delete(sessionId);
     }
 
+    async continueCrawl(sessionId) {
+        if (!sessionId) return;
+        const reconState = this.reconSessionProgress.get(sessionId) || null;
+        if (!reconState) return;
+        const reconStatus = String(reconState.status || '').toLowerCase();
+        if (['queued', 'running', 'cancelling'].includes(reconStatus)) return;
+
+        const url = reconState.targets?.[0];
+        if (!url) {
+            this.showAlert('Cannot resume: no target URL recorded for this session.', 'warning');
+            return;
+        }
+
+        const btn = document.querySelector(`[data-session-continue-id="${sessionId}"]`);
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Starting...';
+        }
+
+        try {
+            const payload = {
+                sessionId,
+                url,
+                resume: true,
+                discoveryEngine: reconState.options?.discoveryEngine || 'katana',
+                sameOriginOnly: reconState.options?.sameOriginOnly ?? true,
+                includeSourceMaps: reconState.options?.includeSourceMaps ?? true,
+                performAnalysis: reconState.options?.performAnalysis ?? true,
+                maxAssets: reconState.options?.maxAssets || 500,
+                maxDepth: reconState.options?.maxDepth ?? 3,
+                timeoutSeconds: reconState.options?.timeoutSeconds || 20,
+                waitAfterLoadMs: reconState.options?.waitAfterLoadMs ?? 2500,
+                maxResponseBytes: reconState.options?.maxResponseBytes || (12 * 1024 * 1024),
+            };
+
+            const response = await axios.post(`${this.apiBase}/api/recon/jobs/start`, payload);
+            const data = response.data || {};
+            const jobId = data.jobId;
+            const job = data.job || null;
+            if (job && sessionId) {
+                this.reconSessionProgress.set(sessionId, job);
+            }
+            if (jobId) {
+                this.startReconJobPolling(jobId, sessionId);
+            }
+            this.showAlert('Crawl resumed for session ' + this.shortId(sessionId) + '.', 'success');
+        } catch (error) {
+            const detail = error?.response?.data?.detail;
+            const message = typeof detail === 'string' ? detail : (detail?.message || error.message);
+            this.showAlert('Failed to resume crawl: ' + message, 'danger');
+        } finally {
+            if (this.activeTab === 'sessions') {
+                await this.loadSessions();
+            }
+        }
+    }
+
     openFileAnalyzeConfig(fileId) {
         if (!fileId) return;
         if (this.runningFileAnalyses.has(fileId)) {
