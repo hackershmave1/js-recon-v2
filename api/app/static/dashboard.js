@@ -1321,6 +1321,77 @@ class SecurityDashboard {
         document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
     }
 
+    getDefaultAnalysisOptions() {
+        return {
+            analysis_type: 'comprehensive',
+            include_sourcemap: true,
+            resolve_urls: true,
+            use_rep_endpoints: true,
+            use_rep_secrets: true,
+            use_jsluice_endpoints: false,
+            use_jsluice_secrets: false,
+        };
+    }
+
+    resetAnalysisResultsView() {
+        const resultsSection = document.getElementById('results-section');
+        const processingTime = document.getElementById('processing-time');
+        const endpointsContent = document.getElementById('endpoints-content');
+        const secretsContent = document.getElementById('secrets-content');
+        const dependenciesContent = document.getElementById('dependencies-content');
+        const sourcemapContent = document.getElementById('sourcemap-content');
+        const endpointsCount = document.getElementById('endpoints-count');
+        const secretsCount = document.getElementById('secrets-count');
+        const depsCount = document.getElementById('deps-count');
+        const sourcemapCount = document.getElementById('sourcemap-count');
+
+        if (resultsSection) resultsSection.style.display = 'none';
+        if (processingTime) processingTime.textContent = '';
+        if (endpointsCount) endpointsCount.textContent = '0';
+        if (secretsCount) secretsCount.textContent = '0';
+        if (depsCount) depsCount.textContent = '0';
+        if (sourcemapCount) sourcemapCount.textContent = '0';
+        if (endpointsContent) endpointsContent.innerHTML = '';
+        if (secretsContent) secretsContent.innerHTML = '';
+        if (dependenciesContent) dependenciesContent.innerHTML = '';
+        if (sourcemapContent) sourcemapContent.innerHTML = '';
+    }
+
+    createNewScan() {
+        const form = document.getElementById('analysis-form');
+        const analysisContextCard = document.getElementById('analysis-context-card');
+        const backButton = document.getElementById('analysis-context-back-btn');
+        const resultsContextNode = document.getElementById('results-context');
+
+        this.currentResults = null;
+        this.resultsContext = null;
+        if (form) {
+            form.reset();
+        }
+        this.populateAnalysisInputs('', '');
+        this.applyAnalysisOptionsToForm(this.getDefaultAnalysisOptions());
+        this.resetAnalysisResultsView();
+        if (analysisContextCard) {
+            analysisContextCard.classList.add('d-none');
+        }
+        if (backButton) {
+            backButton.classList.add('d-none');
+        }
+        if (resultsContextNode) {
+            resultsContextNode.textContent = 'No analysis context selected.';
+            resultsContextNode.title = '';
+        }
+        this.updateResultsContextUI();
+        this.updateAnalysisContextCard(null);
+        this.switchTab('analysis', { pushHistory: false });
+        this.updateBrowserRoute('analysis', { replace: true, query: {} });
+        const urlInput = document.getElementById('js-url');
+        if (urlInput) {
+            urlInput.focus();
+        }
+        this.validateInput();
+    }
+
     populateAnalysisInputs(url, content) {
         const urlInput = document.getElementById('js-url');
         const contentInput = document.getElementById('js-content');
@@ -4180,6 +4251,10 @@ class SecurityDashboard {
 // Global functions for onclick handlers
 function showAnalysisTab() {
     window.dashboard.switchTab('analysis');
+}
+
+function createNewScan() {
+    window.dashboard.createNewScan();
 }
 
 function showFilesTab() {

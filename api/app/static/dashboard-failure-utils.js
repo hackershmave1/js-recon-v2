@@ -53,8 +53,9 @@
         const sourceMapStatus = normalizeText(sourceMap.processingStatus).toLowerCase();
         const sourceMapError = normalizeText(sourceMap.processingError);
 
-        const hasFailure = analysisStatus === 'failed' || sourceMapStatus === 'failed';
-        if (!hasFailure) return null;
+        if (analysisStatus !== 'failed') {
+            return null;
+        }
 
         const source = inferFailureSource(analysisError, sourceMapStatus, sourceMapError);
         const details = analysisError || sourceMapError || 'No detailed error message was stored.';
