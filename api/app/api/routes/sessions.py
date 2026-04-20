@@ -20,6 +20,7 @@ from ...models import File as DbFile
 from ...models import FileAnalysis as DbFileAnalysis
 from ...models import SourceMap as DbSourceMap
 from ...models import Dependency as DbDependency
+from ...models import Job as DbJob
 from ...services.comprehensive_extractor import ComprehensiveExtractor
 from ...services.secret_rollup import SecretRollupService
 from ...services.sourcemap_validation import derive_validation_state, summarize_validation
@@ -27,8 +28,10 @@ from .recon import get_latest_session_capture_coverage
 
 
 router = APIRouter()
-SESSION_ANALYSIS_JOBS: dict[str, dict[str, Any]] = {}
-SESSION_ANALYSIS_LOCK = threading.Lock()
+
+# Stop events are in-process signals — not persisted, not shared across workers.
+SESSION_ANALYSIS_STOP_EVENTS: dict[str, threading.Event] = {}
+SESSION_ANALYSIS_LOCK = threading.Lock()  # guards SESSION_ANALYSIS_STOP_EVENTS only
 
 
 class SessionAnalyzeRequest(BaseModel):
@@ -257,69 +260,112 @@ def recalculate_job_counts(job: dict[str, Any]) -> None:
     job["counts"] = counts
 
 
-def update_job_file_status(session_id: str, file_id: str, status: str, error: str | None = None) -> None:
-    with SESSION_ANALYSIS_LOCK:
-        job = SESSION_ANALYSIS_JOBS.get(session_id)
-        if not job:
-            return
-        for file_entry in job.get("files", []):
-            if file_entry.get("fileId") == file_id:
-                file_entry["status"] = status
-                file_entry["error"] = error
-                file_entry["updatedAt"] = now_iso()
-                break
-        recalculate_job_counts(job)
+def get_job_snapshot(session_id: str, db_session) -> dict[str, Any] | None:
+    row = (
+        db_session.query(DbJob)
+        .filter(DbJob.job_type == "session_analysis", DbJob.session_id == session_id)
+        .order_by(DbJob.created_at.desc())
+        .first()
+    )
+    if not row:
+        return None
+    return dict(row.state_json or {})
 
 
-def finalize_job(session_id: str, result: dict[str, Any], status: str = "completed", error: str | None = None) -> None:
-    with SESSION_ANALYSIS_LOCK:
-        job = SESSION_ANALYSIS_JOBS.get(session_id)
-        if not job:
-            return
-        recalculate_job_counts(job)
-        job["jobStatus"] = status
-        if status == "cancelled":
-            job["cancelledAt"] = now_iso()
-        job["finishedAt"] = now_iso()
-        job["summary"] = {
-            "analyzed": int(result.get("analyzed") or 0),
-            "failed": int(result.get("failed") or 0),
-            "cancelled": int(result.get("cancelledFiles") or 0),
-            "failures": result.get("failures") or [],
-        }
-        if error:
-            job["error"] = error
+def update_job_file_status(session_id: str, file_id: str, status: str, error: str | None = None, db_session=None) -> None:
+    if db_session is None:
+        return
+    row = (
+        db_session.query(DbJob)
+        .filter(DbJob.job_type == "session_analysis", DbJob.session_id == session_id)
+        .order_by(DbJob.created_at.desc())
+        .first()
+    )
+    if not row:
+        return
+    state = dict(row.state_json or {})
+    for file_entry in state.get("files", []):
+        if file_entry.get("fileId") == file_id:
+            file_entry["status"] = status
+            file_entry["error"] = error
+            file_entry["updatedAt"] = now_iso()
+            break
+    recalculate_job_counts(state)
+    row.state_json = state
+    db_session.commit()
 
 
-def get_job_snapshot(session_id: str) -> dict[str, Any] | None:
-    with SESSION_ANALYSIS_LOCK:
-        job = SESSION_ANALYSIS_JOBS.get(session_id)
-        if not job:
-            return None
-        return copy.deepcopy(job)
+def finalize_job(session_id: str, result: dict[str, Any], status: str = "completed", error: str | None = None, db_session=None) -> None:
+    if db_session is None:
+        return
+    row = (
+        db_session.query(DbJob)
+        .filter(DbJob.job_type == "session_analysis", DbJob.session_id == session_id)
+        .order_by(DbJob.created_at.desc())
+        .first()
+    )
+    if not row:
+        return
+    state = dict(row.state_json or {})
+    recalculate_job_counts(state)
+    state["jobStatus"] = status
+    if status == "cancelled":
+        state["cancelledAt"] = now_iso()
+    state["finishedAt"] = now_iso()
+    state["summary"] = {
+        "analyzed": int(result.get("analyzed") or 0),
+        "failed": int(result.get("failed") or 0),
+        "cancelled": int(result.get("cancelledFiles") or 0),
+        "failures": result.get("failures") or [],
+    }
+    if error:
+        state["error"] = error
+    row.status = status
+    row.finished_at = datetime.utcnow()
+    row.error = error
+    row.state_json = state
+    db_session.commit()
 
 
-def is_job_cancellation_requested(session_id: str) -> bool:
-    with SESSION_ANALYSIS_LOCK:
-        job = SESSION_ANALYSIS_JOBS.get(session_id)
-        if not job:
-            return False
-        return bool(job.get("cancelRequested"))
+def is_job_cancellation_requested(session_id: str, db_session=None) -> bool:
+    if db_session is None:
+        # Fall back to stop event check only
+        with SESSION_ANALYSIS_LOCK:
+            ev = SESSION_ANALYSIS_STOP_EVENTS.get(session_id)
+            return ev.is_set() if ev else False
+    row = (
+        db_session.query(DbJob)
+        .filter(DbJob.job_type == "session_analysis", DbJob.session_id == session_id)
+        .order_by(DbJob.created_at.desc())
+        .first()
+    )
+    if not row:
+        return False
+    return bool(row.cancel_requested)
 
 
-def mark_queued_files_as_cancelled(session_id: str) -> int:
+def mark_queued_files_as_cancelled(session_id: str, db_session=None) -> int:
+    if db_session is None:
+        return 0
+    row = (
+        db_session.query(DbJob)
+        .filter(DbJob.job_type == "session_analysis", DbJob.session_id == session_id)
+        .order_by(DbJob.created_at.desc())
+        .first()
+    )
+    if not row:
+        return 0
+    state = dict(row.state_json or {})
     cancelled = 0
-    with SESSION_ANALYSIS_LOCK:
-        job = SESSION_ANALYSIS_JOBS.get(session_id)
-        if not job:
-            return 0
-        for file_entry in job.get("files", []):
-            if str(file_entry.get("status") or "").lower() == "queued":
-                file_entry["status"] = "cancelled"
-                file_entry["error"] = "Analysis stopped by user"
-                file_entry["updatedAt"] = now_iso()
-                cancelled += 1
-        recalculate_job_counts(job)
+    for file_entry in state.get("files", []):
+        if file_entry.get("status") == "queued":
+            file_entry["status"] = "cancelled"
+            file_entry["error"] = "Analysis stopped by user"
+            file_entry["updatedAt"] = now_iso()
+            cancelled += 1
+    recalculate_job_counts(state)
+    row.state_json = state
+    db_session.commit()
     return cancelled
 
 
@@ -368,7 +414,7 @@ def list_sessions(db: Session = Depends(get_db)):
                 "failed": int(analysis_failed or 0),
                 "performed": (int(analysis_completed or 0) + int(analysis_failed or 0)) > 0,
             },
-            "captureCoverage": get_latest_session_capture_coverage(str(session.id)),
+            "captureCoverage": get_latest_session_capture_coverage(str(session.id), db),
             "hasOpenApiSpec": (
                 Path(os.environ.get("STORAGE_PATH", "storage"))
                 / "sessions"
@@ -654,25 +700,35 @@ def start_session_analysis(session_id: str, request: SessionAnalyzeRequest, db: 
     files = apply_session_file_limit(get_session_files_for_analysis(db, session_uuid), options)
     session_id_str = str(session_uuid)
 
-    with SESSION_ANALYSIS_LOCK:
-        existing = SESSION_ANALYSIS_JOBS.get(session_id_str)
-        if existing and existing.get("jobStatus") in {"queued", "running", "cancelling"}:
-            snapshot = copy.deepcopy(existing)
-            return {
-                "success": True,
-                "started": False,
-                "message": "Session analysis is already running",
-                "job": snapshot,
-            }
-
-        SESSION_ANALYSIS_JOBS[session_id_str] = build_session_job_state(session_id_str, files, options=options)
-        snapshot = copy.deepcopy(SESSION_ANALYSIS_JOBS[session_id_str])
-
-    worker_session_factory = sessionmaker(
-        autocommit=False,
-        autoflush=False,
-        bind=db.bind,
+    # Check for already-running job
+    existing_row = (
+        db.query(DbJob)
+        .filter(DbJob.job_type == "session_analysis", DbJob.session_id == session_id_str)
+        .order_by(DbJob.created_at.desc())
+        .first()
     )
+    if existing_row and existing_row.status in {"queued", "running", "cancelling"}:
+        return {
+            "success": True,
+            "started": False,
+            "message": "Session analysis is already running",
+            "job": dict(existing_row.state_json or {}),
+        }
+
+    initial_state = build_session_job_state(session_id_str, files, options=options)
+    db_job = DbJob(
+        job_type="session_analysis",
+        session_id=session_id_str,
+        status="queued",
+        state_json=initial_state,
+    )
+    db.add(db_job)
+    with SESSION_ANALYSIS_LOCK:
+        SESSION_ANALYSIS_STOP_EVENTS[session_id_str] = threading.Event()
+    db.commit()
+    snapshot = dict(db_job.state_json)
+
+    worker_session_factory = sessionmaker(autocommit=False, autoflush=False, bind=db.bind)
     thread = threading.Thread(
         target=run_session_analysis_worker,
         args=(session_uuid, options, worker_session_factory),
@@ -694,38 +750,48 @@ def stop_session_analysis(session_id: str, db: Session = Depends(get_db)):
     session = db.query(DbSession).filter(DbSession.id == session_uuid).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-
     session_id_str = str(session_uuid)
+
+    row = (
+        db.query(DbJob)
+        .filter(DbJob.job_type == "session_analysis", DbJob.session_id == session_id_str)
+        .order_by(DbJob.created_at.desc())
+        .first()
+    )
+    if not row:
+        return {
+            "success": True,
+            "stopRequested": False,
+            "message": "No active session analysis job found",
+            "job": None,
+        }
+    if row.status in {"completed", "failed", "cancelled", "idle"}:
+        return {
+            "success": True,
+            "stopRequested": False,
+            "message": f"Session analysis already finished with status '{row.status}'",
+            "job": dict(row.state_json or {}),
+        }
+
+    state = dict(row.state_json or {})
+    state["cancelRequested"] = True
+    if not state.get("cancelRequestedAt"):
+        state["cancelRequestedAt"] = now_iso()
+    state["jobStatus"] = "cancelling"
+    row.cancel_requested = True
+    row.cancel_requested_at = datetime.utcnow()
+    row.status = "cancelling"
+    row.state_json = state
+    db.commit()
     with SESSION_ANALYSIS_LOCK:
-        job = SESSION_ANALYSIS_JOBS.get(session_id_str)
-        if not job:
-            return {
-                "success": True,
-                "stopRequested": False,
-                "message": "No active session analysis job found",
-                "job": None,
-            }
-
-        status = str(job.get("jobStatus") or "").lower()
-        if status in {"completed", "failed", "cancelled", "idle"}:
-            return {
-                "success": True,
-                "stopRequested": False,
-                "message": f"Session analysis already finished with status '{status}'",
-                "job": copy.deepcopy(job),
-            }
-
-        job["cancelRequested"] = True
-        if not job.get("cancelRequestedAt"):
-            job["cancelRequestedAt"] = now_iso()
-        job["jobStatus"] = "cancelling"
-        snapshot = copy.deepcopy(job)
-
+        ev = SESSION_ANALYSIS_STOP_EVENTS.get(session_id_str)
+        if ev:
+            ev.set()
     return {
         "success": True,
         "stopRequested": True,
         "message": "Stop requested. Session analysis will halt after the current file.",
-        "job": snapshot,
+        "job": dict(state),
     }
 
 
@@ -737,7 +803,7 @@ def get_session_analysis_progress(session_id: str, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail="Session not found")
 
     session_id_str = str(session_uuid)
-    snapshot = get_job_snapshot(session_id_str)
+    snapshot = get_job_snapshot(session_id_str, db)
     if snapshot:
         return {
             "success": True,
@@ -964,55 +1030,56 @@ def run_session_analysis_worker(
     worker_session_factory: sessionmaker,
 ) -> None:
     session_id_str = str(session_uuid)
-    with SESSION_ANALYSIS_LOCK:
-        job = SESSION_ANALYSIS_JOBS.get(session_id_str)
-        if job:
-            if job.get("cancelRequested"):
-                job["jobStatus"] = "cancelling"
-            else:
-                job["jobStatus"] = "running"
-            job["startedAt"] = job.get("startedAt") or now_iso()
-
-    if is_job_cancellation_requested(session_id_str):
-        cancelled_files = mark_queued_files_as_cancelled(session_id_str)
-        finalize_job(
-            session_id_str,
-            {
-                "analyzed": 0,
-                "failed": 0,
-                "cancelledFiles": cancelled_files,
-                "failures": [],
-            },
-            status="cancelled",
-        )
-        return
-
     db = worker_session_factory()
     try:
+        row = (
+            db.query(DbJob)
+            .filter(DbJob.job_type == "session_analysis", DbJob.session_id == session_id_str)
+            .order_by(DbJob.created_at.desc())
+            .first()
+        )
+        if row:
+            state = dict(row.state_json or {})
+            if row.cancel_requested:
+                state["jobStatus"] = "cancelling"
+            else:
+                state["jobStatus"] = "running"
+            state["startedAt"] = state.get("startedAt") or now_iso()
+            row.status = state["jobStatus"]
+            row.started_at = datetime.utcnow()
+            row.state_json = state
+            db.commit()
+
+        if is_job_cancellation_requested(session_id_str, db):
+            cancelled_files = mark_queued_files_as_cancelled(session_id_str, db)
+            finalize_job(
+                session_id_str,
+                {"analyzed": 0, "failed": 0, "cancelledFiles": cancelled_files, "failures": []},
+                status="cancelled",
+                db_session=db,
+            )
+            return
+
         result = execute_session_analysis(
             db=db,
             session_uuid=session_uuid,
             options=options,
             progress_callback=lambda file, status, error: update_job_file_status(
-                session_id_str,
-                str(file.id),
-                status,
-                error,
+                session_id_str, str(file.id), status, error, db
             ),
-            should_cancel=lambda: is_job_cancellation_requested(session_id_str),
-            on_cancel=lambda: mark_queued_files_as_cancelled(session_id_str),
+            should_cancel=lambda: is_job_cancellation_requested(session_id_str, db),
+            on_cancel=lambda: mark_queued_files_as_cancelled(session_id_str, db),
         )
-        if result.get("cancelled"):
-            finalize_job(session_id_str, result, status="cancelled")
-        else:
-            finalize_job(session_id_str, result, status="completed")
+        status = "cancelled" if result.get("cancelled") else "completed"
+        finalize_job(session_id_str, result, status=status, db_session=db)
     except HTTPException as exc:
-        if is_job_cancellation_requested(session_id_str):
-            cancelled_files = mark_queued_files_as_cancelled(session_id_str)
+        if is_job_cancellation_requested(session_id_str, db):
+            cancelled = mark_queued_files_as_cancelled(session_id_str, db)
             finalize_job(
                 session_id_str,
-                {"analyzed": 0, "failed": 0, "cancelledFiles": cancelled_files, "failures": []},
+                {"analyzed": 0, "failed": 0, "cancelledFiles": cancelled, "failures": []},
                 status="cancelled",
+                db_session=db,
             )
         else:
             finalize_job(
@@ -1020,14 +1087,16 @@ def run_session_analysis_worker(
                 {"analyzed": 0, "failed": 0, "cancelledFiles": 0, "failures": []},
                 status="failed",
                 error=str(exc.detail),
+                db_session=db,
             )
     except Exception as exc:
-        if is_job_cancellation_requested(session_id_str):
-            cancelled_files = mark_queued_files_as_cancelled(session_id_str)
+        if is_job_cancellation_requested(session_id_str, db):
+            cancelled = mark_queued_files_as_cancelled(session_id_str, db)
             finalize_job(
                 session_id_str,
-                {"analyzed": 0, "failed": 0, "cancelledFiles": cancelled_files, "failures": []},
+                {"analyzed": 0, "failed": 0, "cancelledFiles": cancelled, "failures": []},
                 status="cancelled",
+                db_session=db,
             )
         else:
             finalize_job(
@@ -1035,6 +1104,7 @@ def run_session_analysis_worker(
                 {"analyzed": 0, "failed": 0, "cancelledFiles": 0, "failures": []},
                 status="failed",
                 error=str(exc),
+                db_session=db,
             )
     finally:
         db.close()
@@ -1131,7 +1201,7 @@ def get_session_analysis_summary(session_id: str, db: Session = Depends(get_db))
     session = db.query(DbSession).filter(DbSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     # Get all file analyses for this session
     analyses = (
         db.query(DbFileAnalysis)
@@ -1140,7 +1210,7 @@ def get_session_analysis_summary(session_id: str, db: Session = Depends(get_db))
         .filter(DbFileAnalysis.status == "completed")
         .all()
     )
-    
+
     if not analyses:
         return {
             "session_id": session_id,
@@ -1172,15 +1242,15 @@ def get_session_analysis_summary(session_id: str, db: Session = Depends(get_db))
             },
             "secrets_rollup": []
         }
-    
+
     # Get file information for each analysis
     file_map = {analysis.file_id: analysis.file for analysis in analyses}
-    
+
     # Prepare data for rollup service
     analysis_data = []
     total_endpoints = 0
     total_dependencies = 0
-    
+
     for analysis in analyses:
         file_info = file_map.get(analysis.file_id)
         analysis_dict = {
@@ -1192,20 +1262,20 @@ def get_session_analysis_summary(session_id: str, db: Session = Depends(get_db))
             "analysis": analysis.analysis or {}
         }
         analysis_data.append(analysis_dict)
-        
+
         # Count endpoints and dependencies for summary
         endpoints = analysis.analysis.get("endpoints", []) if analysis.analysis else []
         dependencies = analysis.analysis.get("dependencies", []) if analysis.analysis else []
         total_endpoints += len(endpoints)
         total_dependencies += len(dependencies)
-    
+
     # Use rollup service to deduplicate secrets
     rollup_service = SecretRollupService()
     secret_rollup_result = rollup_service.rollup_secrets(analysis_data)
-    
+
     # Build comprehensive summary
     total_files = db.query(DbFile).filter(DbFile.session_id == session_id).count()
-    
+
     summary = {
         "total_files": total_files,
         "analyzed_files": len(analyses),
@@ -1218,7 +1288,7 @@ def get_session_analysis_summary(session_id: str, db: Session = Depends(get_db))
             "total_dependencies": total_dependencies
         }
     }
-    
+
     return {
         "session_id": session_id,
         "session_name": session.name,
