@@ -3495,6 +3495,7 @@ class SecurityDashboard {
         if (!sessionId) return false;
         const reconNode = document.querySelector(`[data-session-recon-id="${sessionId}"]`);
         const deleteButton = document.querySelector(`[data-session-delete-id="${sessionId}"]`);
+        const continueButton = document.querySelector(`[data-session-continue-id="${sessionId}"]`);
         if (!reconNode) return false;
 
         reconNode.innerHTML = this.renderReconProgressBadges(reconState);
@@ -3504,6 +3505,10 @@ class SecurityDashboard {
             if (reconBusy) {
                 deleteButton.disabled = true;
             }
+        }
+        if (continueButton) {
+            continueButton.disabled = reconBusy;
+            continueButton.classList.toggle('d-none', reconBusy);
         }
         return true;
     }
