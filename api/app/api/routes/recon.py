@@ -179,7 +179,11 @@ def build_job_state(job_id: str, request: ReconJobStartRequest, targets: list[st
 
 def get_public_job_snapshot(job_id: str, db_session) -> dict[str, Any] | None:
     """Read job from DB and return the public snapshot dict."""
-    row = db_session.query(DbJob).filter(DbJob.id == job_id).first()
+    try:
+        job_uuid = uuid.UUID(job_id) if isinstance(job_id, str) else job_id
+    except (ValueError, AttributeError):
+        return None
+    row = db_session.query(DbJob).filter(DbJob.id == job_uuid).first()
     if not row:
         return None
     payload = dict(row.state_json or {})
@@ -192,7 +196,8 @@ def get_public_job_snapshot(job_id: str, db_session) -> dict[str, Any] | None:
 
 def update_job_asset(job_id: str, asset: dict[str, Any], db_session) -> None:
     with RECON_LOCK:
-        row = db_session.query(DbJob).filter(DbJob.id == job_id).first()
+        job_uuid = uuid.UUID(job_id) if isinstance(job_id, str) else job_id
+        row = db_session.query(DbJob).filter(DbJob.id == job_uuid).first()
         if not row:
             return
         url = asset.get("url")
@@ -269,7 +274,8 @@ def recompute_job_coverage_from_assets(assets_by_url: dict[str, Any]) -> dict[st
 def finalize_job(job_id: str, status: str, result: dict[str, Any] | None, error: str | None = None, db_session=None) -> None:
     if db_session is None:
         return
-    row = db_session.query(DbJob).filter(DbJob.id == job_id).first()
+    job_uuid = uuid.UUID(job_id) if isinstance(job_id, str) else job_id
+    row = db_session.query(DbJob).filter(DbJob.id == job_uuid).first()
     if not row:
         return
     state = dict(row.state_json or {})
@@ -297,9 +303,10 @@ def run_recon_job_worker(
     worker_session_factory: sessionmaker,
 ) -> None:
     db = worker_session_factory()
+    job_uuid = uuid.UUID(job_id) if isinstance(job_id, str) else job_id
     try:
         # Mark running
-        row = db.query(DbJob).filter(DbJob.id == job_id).first()
+        row = db.query(DbJob).filter(DbJob.id == job_uuid).first()
         if not row:
             return
         state = dict(row.state_json or {})
@@ -470,7 +477,11 @@ def get_recon_job(job_id: str, db: Session = Depends(get_db)):
 
 @router.post("/api/recon/jobs/{job_id}/stop")
 def stop_recon_job(job_id: str, db: Session = Depends(get_db)):
-    row = db.query(DbJob).filter(DbJob.id == job_id).first()
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=404, detail="Recon job not found")
+    row = db.query(DbJob).filter(DbJob.id == job_uuid).first()
     if not row:
         raise HTTPException(status_code=404, detail="Recon job not found")
     status = str(row.status or "").lower()
