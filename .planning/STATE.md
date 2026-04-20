@@ -4,7 +4,7 @@
 **Code:** JSE
 **Status:** In Progress
 **Last Activity:** 2026-04-20
-**Current Position:** Phase 1, Plan 05 (01-04 complete)
+**Current Position:** Phase 1, Plan 06 (01-05 complete)
 
 ## Active Milestone
 
@@ -14,7 +14,7 @@
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 1 | Backend Tech Debt | In Progress (4/? plans complete) |
+| 1 | Backend Tech Debt | In Progress (5/? plans complete) |
 | 2 | UI Polish | Planning |
 
 ## Decisions
@@ -32,6 +32,7 @@
 - [01-04] alembic.ini sqlalchemy.url is a placeholder — env.py wires _sync_engine directly; avoids double DB-URL config.
 - [01-04] Migration 0001 authored manually — no live PostgreSQL in dev/CI environment for autogenerate.
 - [01-04] on_startup uses subprocess [alembic, upgrade, head]; returncode checked; RuntimeError raised on failure.
+- [01-05] Removed total_endpoints accumulator entirely; summarize_endpoint_rollup() provides both total_unique_endpoints and total_occurrences in one call.
 
 ## Performance Metrics
 
@@ -41,6 +42,7 @@
 | 01-backend-tech-debt | 02 | 3min | 2 | 3 |
 | 01-backend-tech-debt | 03 | 35min | 2 | 3 |
 | 01-backend-tech-debt | 04 | 15min | 2 | 6 |
+| 01-backend-tech-debt | 05 | 5min | 1 | 1 |
 
 ## Session Log
 
@@ -48,3 +50,4 @@
 - 2026-04-19T19:39:40Z — Completed 01-02-PLAN.md (create Job ORM model). Stopped at: None.
 - 2026-04-19T23:00:00Z — Completed 01-03-PLAN.md (replace in-memory job dicts with DB). Stopped at: None.
 - 2026-04-20T07:50:00Z — Completed 01-04-PLAN.md (initialize Alembic migrations). Stopped at: None.
+- 2026-04-20T08:05:00Z — Completed 01-05-PLAN.md (fix hardcoded 0 endpoint rollup). Stopped at: None.
