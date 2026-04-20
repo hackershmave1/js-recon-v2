@@ -2834,6 +2834,7 @@ class SecurityDashboard {
                 const reconStatus = String(reconState?.status || '').toLowerCase();
                 const reconBusy = ['queued', 'running', 'cancelling'].includes(reconStatus);
                 const rowBusy = analysisBusy || reconBusy;
+                const showContinueCrawl = (Number(session.fileCount) > 0) && Boolean(reconState) && !reconBusy;
                 const isSelected = this.selectedSessionIds.has(session.id);
                 const defaultName = `Session ${this.shortId(session.id)}`;
                 const displayName = (session.name && session.name.trim()) ? session.name.trim() : defaultName;
@@ -2894,6 +2895,14 @@ class SecurityDashboard {
                             <button class="btn btn-warning btn-sm ${analysisBusy ? '' : 'd-none'}" data-session-stop-id="${session.id}" ${stopping ? 'disabled' : ''} onclick="dashboard.stopSessionAnalysis('${session.id}')">
                                 <i class="fas fa-stop me-1"></i>${stopping ? 'Stopping...' : 'Stop'}
                             </button>
+                            ${showContinueCrawl ? `
+                            <button class="btn btn-outline-info btn-sm"
+                                    data-session-continue-id="${session.id}"
+                                    ${rowBusy ? 'disabled' : ''}
+                                    onclick="dashboard.continueCrawl('${session.id}')"
+                                    title="Resume this crawl using the original URL and options">
+                                <i class="fas fa-redo me-1"></i>Continue Crawl
+                            </button>` : ''}
                             <button class="btn btn-primary btn-sm" onclick="dashboard.openSessionFiles('${session.id}', '${encodedName}')">
                                 <i class="fas fa-folder-open me-1"></i>Open Session
                             </button>
