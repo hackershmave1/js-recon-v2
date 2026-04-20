@@ -1,10 +1,11 @@
+import subprocess
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
-from sqlalchemy import inspect, text
 
-from .db import Base, engine
 from . import models  # noqa: F401
 from .api.routes.ingestion import router as ingestion_router
 from .api.routes.sessions import router as sessions_router
@@ -42,8 +43,17 @@ app.mount("/static", StaticFiles(directory=str(app_dir / "static")), name="stati
 
 @app.on_event("startup")
 def on_startup():
-    Base.metadata.create_all(bind=engine)
-    ensure_runtime_schema_updates()
+    # Run pending Alembic migrations on startup.
+    # alembic.ini is at the project root (two levels above this file: api/app/main.py).
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    result = subprocess.run(
+        ["alembic", "upgrade", "head"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Alembic upgrade head failed:\n{result.stderr}")
 
 @app.get("/api")
 async def api_root():
@@ -90,67 +100,3 @@ app.include_router(recon_router)
 app.include_router(asset_graph_router)
 
 
-def ensure_runtime_schema_updates():
-    with engine.begin() as conn:
-        inspector = inspect(conn)
-        dialect = conn.dialect.name
-        bool_false_literal = "false" if dialect == "postgresql" else "0"
-        tables = set(inspector.get_table_names())
-        if "sessions" not in tables:
-            return
-
-        session_columns = {column["name"] for column in inspector.get_columns("sessions")}
-        if "name" not in session_columns:
-            conn.execute(text("ALTER TABLE sessions ADD COLUMN name VARCHAR"))
-
-        if "files" in tables:
-            file_columns = {column["name"] for column in inspector.get_columns("files")}
-            if "content_purged" not in file_columns:
-                conn.execute(text(f"ALTER TABLE files ADD COLUMN content_purged BOOLEAN DEFAULT {bool_false_literal}"))
-            if "content_purged_at" not in file_columns:
-                conn.execute(text("ALTER TABLE files ADD COLUMN content_purged_at TIMESTAMP"))
-            if "purge_reason" not in file_columns:
-                conn.execute(text("ALTER TABLE files ADD COLUMN purge_reason TEXT"))
-            conn.execute(text(f"UPDATE files SET content_purged = {bool_false_literal} WHERE content_purged IS NULL"))
-            if dialect == "postgresql":
-                conn.execute(text("ALTER TABLE files ALTER COLUMN content_purged SET DEFAULT false"))
-                conn.execute(text("ALTER TABLE files ALTER COLUMN content_purged SET NOT NULL"))
-
-        if "source_maps" not in tables:
-            return
-
-        source_map_columns = {column["name"] for column in inspector.get_columns("source_maps")}
-        if "detected_map_url" not in source_map_columns:
-            conn.execute(text("ALTER TABLE source_maps ADD COLUMN detected_map_url TEXT"))
-        if "processing_status" not in source_map_columns:
-            conn.execute(text("ALTER TABLE source_maps ADD COLUMN processing_status VARCHAR"))
-            conn.execute(text("UPDATE source_maps SET processing_status = 'pending' WHERE processing_status IS NULL"))
-        if "processing_error" not in source_map_columns:
-            conn.execute(text("ALTER TABLE source_maps ADD COLUMN processing_error TEXT"))
-        if "reconstructed_files_count" not in source_map_columns:
-            conn.execute(text("ALTER TABLE source_maps ADD COLUMN reconstructed_files_count INTEGER"))
-            conn.execute(text("UPDATE source_maps SET reconstructed_files_count = 0 WHERE reconstructed_files_count IS NULL"))
-        if "processed_at" not in source_map_columns:
-            conn.execute(text("ALTER TABLE source_maps ADD COLUMN processed_at TIMESTAMP"))
-        if "validation_state" not in source_map_columns:
-            if dialect == "postgresql":
-                conn.execute(text("ALTER TABLE source_maps ADD COLUMN validation_state JSONB"))
-            else:
-                conn.execute(text("ALTER TABLE source_maps ADD COLUMN validation_state TEXT"))
-        if "content_purged" not in source_map_columns:
-            conn.execute(text(f"ALTER TABLE source_maps ADD COLUMN content_purged BOOLEAN DEFAULT {bool_false_literal}"))
-        if "content_purged_at" not in source_map_columns:
-            conn.execute(text("ALTER TABLE source_maps ADD COLUMN content_purged_at TIMESTAMP"))
-        if "purge_reason" not in source_map_columns:
-            conn.execute(text("ALTER TABLE source_maps ADD COLUMN purge_reason TEXT"))
-
-        conn.execute(text("UPDATE source_maps SET processing_status = 'pending' WHERE processing_status IS NULL"))
-        conn.execute(text("UPDATE source_maps SET reconstructed_files_count = 0 WHERE reconstructed_files_count IS NULL"))
-        conn.execute(text(f"UPDATE source_maps SET content_purged = {bool_false_literal} WHERE content_purged IS NULL"))
-        if dialect == "postgresql":
-            conn.execute(text("ALTER TABLE source_maps ALTER COLUMN processing_status SET DEFAULT 'pending'"))
-            conn.execute(text("ALTER TABLE source_maps ALTER COLUMN reconstructed_files_count SET DEFAULT 0"))
-            conn.execute(text("ALTER TABLE source_maps ALTER COLUMN processing_status SET NOT NULL"))
-            conn.execute(text("ALTER TABLE source_maps ALTER COLUMN reconstructed_files_count SET NOT NULL"))
-            conn.execute(text("ALTER TABLE source_maps ALTER COLUMN content_purged SET DEFAULT false"))
-            conn.execute(text("ALTER TABLE source_maps ALTER COLUMN content_purged SET NOT NULL"))
