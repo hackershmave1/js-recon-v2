@@ -2,9 +2,9 @@
 
 **Project:** js-security-extractor
 **Code:** JSE
-**Status:** In Progress
+**Status:** Ready for Milestone Completion
 **Last Activity:** 2026-04-20
-**Current Position:** Phase 1, Plan 06 (01-05 complete)
+**Current Position:** Phase 2 complete (verification passed)
 
 ## Active Milestone
 
@@ -14,8 +14,8 @@
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 1 | Backend Tech Debt | In Progress (5/? plans complete) |
-| 2 | UI Polish | Planning |
+| 1 | Backend Tech Debt | Complete |
+| 2 | UI Polish | Complete |
 
 ## Decisions
 
@@ -33,6 +33,10 @@
 - [01-04] Migration 0001 authored manually — no live PostgreSQL in dev/CI environment for autogenerate.
 - [01-04] on_startup uses subprocess [alembic, upgrade, head]; returncode checked; RuntimeError raised on failure.
 - [01-05] Removed total_endpoints accumulator entirely; summarize_endpoint_rollup() provides both total_unique_endpoints and total_occurrences in one call.
+- [02-01] Extension surfaces use dashboard-aligned accent tokens (#356AE6 / #2B5DCC); secondary popup actions stay neutral so the accent remains reserved for primary actions.
+- [02-02] Dashboard typography now flows through five named tokens (--text-xs through --text-lg); body/stat/icon exceptions remain literal by design.
+- [02-03] Empty-state rendering standard is title + body + icon, with contextual guidance copy instead of single-line placeholders.
+- [02-04] Dashboard destructive actions use a Bootstrap confirm modal; extension destructive actions use two-click guards instead of native confirm dialogs.
 
 ## Performance Metrics
 
@@ -43,6 +47,10 @@
 | 01-backend-tech-debt | 03 | 35min | 2 | 3 |
 | 01-backend-tech-debt | 04 | 15min | 2 | 6 |
 | 01-backend-tech-debt | 05 | 5min | 1 | 1 |
+| 02-ui-polish | 01 | 10min | 2 | 2 |
+| 02-ui-polish | 02 | 15min | 2 | 1 |
+| 02-ui-polish | 03 | 10min | 2 | 1 |
+| 02-ui-polish | 04 | 25min | 3 | 7 |
 
 ## Session Log
 
@@ -51,3 +59,7 @@
 - 2026-04-19T23:00:00Z — Completed 01-03-PLAN.md (replace in-memory job dicts with DB). Stopped at: None.
 - 2026-04-20T07:50:00Z — Completed 01-04-PLAN.md (initialize Alembic migrations). Stopped at: None.
 - 2026-04-20T08:05:00Z — Completed 01-05-PLAN.md (fix hardcoded 0 endpoint rollup). Stopped at: None.
+- 2026-04-20T08:39:39Z — Completed 02-01-PLAN.md (align extension accent tokens). Stopped at: None.
+- 2026-04-20T08:39:39Z — Completed 02-02-PLAN.md (tokenize dashboard typography scale). Stopped at: None.
+- 2026-04-20T08:39:39Z — Completed 02-03-PLAN.md (rewrite empty-state rendering). Stopped at: None.
+- 2026-04-20T08:39:39Z — Completed 02-04-PLAN.md (finish minor dashboard + extension polish). Stopped at: None.
