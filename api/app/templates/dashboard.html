@@ -203,7 +203,7 @@
                             <div class="card-header d-flex justify-content-between align-items-center">
                                 <div>
                                     <h5 class="mb-1"><i class="fas fa-chart-line"></i> Analysis Results</h5>
-                                    <small class="text-muted" id="results-context">No analysis context selected.</small>
+                                    <small class="text-muted" id="results-context"></small>
                                 </div>
                                 <div>
                                     <span id="processing-time" class="badge bg-info me-2"></span>
@@ -724,6 +724,25 @@
     <div class="analysis-progress" id="analysis-progress">
         <div class="toast-progress-track">
             <div class="toast-progress-fill" id="toast-progress-fill"></div>
+        </div>
+    </div>
+
+    <!-- Confirm Dialog Modal -->
+    <div class="modal fade" id="confirmModal" tabindex="-1" aria-labelledby="confirmModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="confirmModalLabel">Confirm Action</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="confirmModalBody">
+                    Are you sure?
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal" id="confirmModalCancel">Cancel</button>
+                    <button type="button" class="btn btn-danger btn-sm" id="confirmModalOk">Delete</button>
+                </div>
+            </div>
         </div>
     </div>
 

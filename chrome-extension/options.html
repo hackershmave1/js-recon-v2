@@ -11,10 +11,17 @@
       --text: #0b0b0d;
       --muted: #6b6f76;
       --line: #e2e5ea;
-      --accent: #0a84ff;
+      --accent: #356AE6;
+      --accent-hover: #2B5DCC;
       --accent-2: #111315;
       --success: #39c26b;
       --danger: #ff3b30;
+      --success-ink: #1d5b35;
+      --success-border: #b9e4c8;
+      --success-bg: #ecf9f1;
+      --error-ink: #7a1f1f;
+      --error-border: #f3c3c3;
+      --error-bg: #fdecec;
       --shadow: 0 12px 30px rgba(0,0,0,0.12);
       --radius: 14px;
     }
@@ -103,7 +110,7 @@
     }
     
     .btn-primary {
-      background: var(--accent-2);
+      background: var(--accent);
       color: white;
     }
     
@@ -134,15 +141,15 @@
     }
     
     #status.success {
-      color: #1d5b35;
-      border: 1px solid #b9e4c8;
-      background: #ecf9f1;
+      color: var(--success-ink);
+      border: 1px solid var(--success-border);
+      background: var(--success-bg);
     }
     
     #status.error {
-      color: #7a1f1f;
-      border: 1px solid #f3c3c3;
-      background: #fdecec;
+      color: var(--error-ink);
+      border: 1px solid var(--error-border);
+      background: var(--error-bg);
     }
   </style>
 </head>
@@ -280,8 +287,8 @@
     </div>
   </div>
   
-  <button id="save" class="btn-primary">💾 Save Settings</button>
-  <button id="reset" class="btn-secondary">🔄 Reset to Defaults</button>
+  <button id="save" class="btn-primary">Save Settings</button>
+  <button id="reset" class="btn-secondary">Reset to Defaults</button>
   
   <div id="status"></div>
   

@@ -11,6 +11,48 @@ document.addEventListener('DOMContentLoaded', async () => {
   const queueCount = document.getElementById('queueCount');
   const fileList = document.getElementById('fileList');
   const performAnalysisOnUploadToggle = document.getElementById('performAnalysisOnUploadToggle');
+  let clearPending = false;
+  let clearPendingTimer = null;
+
+  function setCaptureUi(isCapturing, uploader = {}) {
+    if (isCapturing) {
+      statusIndicator.classList.add('active');
+      statusText.textContent = 'Capturing...';
+      startBtn.style.display = 'none';
+      stopBtn.style.display = 'block';
+      return;
+    }
+
+    statusIndicator.classList.remove('active');
+    if (uploader.lastError) {
+      statusText.textContent = 'Stopped (upload error)';
+    } else if (uploader.pendingQueueLength > 0) {
+      statusText.textContent = 'Stopped (upload pending)';
+    } else {
+      statusText.textContent = 'Stopped';
+    }
+    startBtn.style.display = 'block';
+    stopBtn.style.display = 'none';
+  }
+
+  function formatDiagText(processing = {}) {
+    const processed = processing.processedFiles || 0;
+    const failed = processing.failedFiles || 0;
+    const reason = processing.lastFailureReason ? ` | Last: ${processing.lastFailureReason}` : '';
+    if (processed === 0 && failed === 0) {
+      return 'No files processed yet';
+    }
+    return `Processed: ${processed} | Failed: ${failed}${reason}`;
+  }
+
+  function resetClearButtonLabel() {
+    clearPending = false;
+    clearBtn.textContent = 'Clear All';
+    if (clearPendingTimer) {
+      clearTimeout(clearPendingTimer);
+      clearPendingTimer = null;
+    }
+  }
 
   function getObjectUrlFactory() {
     if (window.URL && typeof window.URL.createObjectURL === 'function') {
@@ -52,31 +94,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const uploader = response.uploader || {};
     const processing = response.processingStats || {};
     
-    if (response.isCapturing) {
-      statusIndicator.classList.add('active');
-      statusText.textContent = 'Capturing...';
-      startBtn.style.display = 'none';
-      stopBtn.style.display = 'block';
-    } else {
-      statusIndicator.classList.remove('active');
-      if (uploader.lastError) {
-        statusText.textContent = 'Stopped (upload error)';
-      } else if (uploader.pendingQueueLength > 0) {
-        statusText.textContent = 'Stopped (upload pending)';
-      } else {
-        statusText.textContent = 'Stopped';
-      }
-      startBtn.style.display = 'block';
-      stopBtn.style.display = 'none';
-    }
+    setCaptureUi(Boolean(response.isCapturing), uploader);
     
     fileCount.textContent = response.fileCount || 0;
     queueCount.textContent = response.queueLength || 0;
     queueCount.title = `Processing queue: ${response.queueLength || 0} | Upload queue: ${uploader.pendingQueueLength || 0}`;
-    const processed = processing.processedFiles || 0;
-    const failed = processing.failedFiles || 0;
-    const reason = processing.lastFailureReason ? ` | Last: ${processing.lastFailureReason}` : '';
-    diagText.textContent = `Processed: ${processed} | Failed: ${failed}${reason}`;
+    diagText.textContent = formatDiagText(processing);
     diagText.title = processing.lastFailureMessage || '';
     if (performAnalysisOnUploadToggle) {
       performAnalysisOnUploadToggle.checked = response?.settings?.performAnalysisOnUpload === true;
@@ -124,11 +147,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   startBtn.addEventListener('click', async () => {
+    setCaptureUi(true);
+    statusText.textContent = 'Starting...';
     await chrome.runtime.sendMessage({ action: 'startCapture' });
     await updateStatus();
   });
 
   stopBtn.addEventListener('click', async () => {
+    setCaptureUi(false);
+    statusText.textContent = 'Stopping...';
     const result = await chrome.runtime.sendMessage({ action: 'stopCapture' });
     if (result?.uploader?.lastError) {
       alert(`Upload flush encountered an error: ${result.uploader.lastError}`);
@@ -159,11 +186,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   clearBtn.addEventListener('click', async () => {
-    if (confirm('Clear all captured files?')) {
-      await chrome.runtime.sendMessage({ action: 'clearFiles' });
-      await updateStatus();
-      await updateFileList();
+    if (!clearPending) {
+      clearPending = true;
+      clearBtn.textContent = 'Tap again to clear';
+      clearPendingTimer = setTimeout(resetClearButtonLabel, 3000);
+      return;
     }
+
+    resetClearButtonLabel();
+    await chrome.runtime.sendMessage({ action: 'clearFiles' });
+    await updateStatus();
+    await updateFileList();
   });
 
   settingsBtn.addEventListener('click', () => {

@@ -11,7 +11,8 @@
       --text: #0b0b0d;
       --muted: #6b6f76;
       --line: #e2e5ea;
-      --accent: #0a84ff;
+      --accent: #356AE6;
+      --accent-hover: #2B5DCC;
       --accent-2: #111315;
       --success: #39c26b;
       --danger: #ff3b30;
@@ -76,7 +77,7 @@
       width: 12px;
       height: 12px;
       border-radius: 50%;
-      background: #cfd3d9;
+      background: var(--muted);
     }
     
     .status-indicator.active {
@@ -159,7 +160,7 @@
     }
     
     .btn-primary {
-      background: var(--accent-2);
+      background: var(--accent);
       color: white;
     }
     
@@ -169,8 +170,9 @@
     }
     
     .btn-secondary {
-      background: var(--accent);
-      color: white;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--line);
     }
     
     .btn-light {
@@ -233,7 +235,7 @@
 <body>
   <div class="header">
     <h2>JS Security Extractor</h2>
-    <svg class="settings-icon" id="settingsBtn" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+    <svg class="settings-icon" id="settingsBtn" role="button" aria-label="Open Settings" viewBox="0 0 24 24" fill="none" stroke="currentColor">
       <circle cx="12" cy="12" r="3"></circle>
       <path d="M12 1v6m0 6v6m9-7h-6m-6 0H3m15.364 9.364l-4.243-4.243m0 0L9.88 14.88m8.486-8.486L14.12 10.64"></path>
     </svg>
@@ -244,7 +246,7 @@
       <div class="status-indicator" id="statusIndicator"></div>
       <span id="statusText">Stopped</span>
     </div>
-    <div class="diag-text" id="diagText">Processed: 0 | Failed: 0</div>
+    <div class="diag-text" id="diagText">No files processed yet</div>
   </div>
   
   <div class="stats">

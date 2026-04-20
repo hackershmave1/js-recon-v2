@@ -788,11 +788,6 @@ class SecurityDashboard {
             return;
         }
 
-        const targetInput = document.getElementById('create-session-target-url');
-        if (targetInput && !targetInput.value.trim()) {
-            targetInput.value = 'https://wishandwash.co.il';
-        }
-
         if (!this.createSessionModal) {
             this.createSessionModal = new bootstrap.Modal(modalElement);
         }
@@ -1378,7 +1373,7 @@ class SecurityDashboard {
             backButton.classList.add('d-none');
         }
         if (resultsContextNode) {
-            resultsContextNode.textContent = 'No analysis context selected.';
+            resultsContextNode.textContent = '';
             resultsContextNode.title = '';
         }
         this.updateResultsContextUI();
@@ -1516,7 +1511,7 @@ class SecurityDashboard {
         if (!node) return;
         const context = this.resultsContext || {};
         if (!context.sourceUrl && !context.fileId) {
-            node.textContent = 'No analysis context selected.';
+            node.textContent = '';
             node.title = '';
             return;
         }
@@ -1741,7 +1736,7 @@ class SecurityDashboard {
         count.textContent = endpoints.length;
         
         if (endpoints.length === 0) {
-            container.innerHTML = this.getEmptyState('No endpoints found', 'globe');
+            container.innerHTML = this.getEmptyState('No endpoints found', 'Run an analysis to populate endpoint results.', 'globe');
             return;
         }
 
@@ -1785,7 +1780,7 @@ class SecurityDashboard {
         count.textContent = secrets.length;
         
         if (secrets.length === 0) {
-            container.innerHTML = this.getEmptyState('No secrets found', 'key');
+            container.innerHTML = this.getEmptyState('No secrets found', 'Run an analysis to scan for secrets and API keys.', 'key');
             return;
         }
 
@@ -1836,7 +1831,7 @@ class SecurityDashboard {
         count.textContent = dependencies.length;
         
         if (dependencies.length === 0) {
-            container.innerHTML = this.getEmptyState('No dependencies found', 'sitemap');
+            container.innerHTML = this.getEmptyState('No dependencies found', 'Run an analysis to detect JS dependencies.', 'sitemap');
             return;
         }
 
@@ -1889,7 +1884,7 @@ class SecurityDashboard {
         count.textContent = fileCount;
         
         if (fileCount === 0 && !content) {
-            container.innerHTML = this.getEmptyState('No source maps found', 'map');
+            container.innerHTML = this.getEmptyState('No source maps found', 'Source maps are detected automatically during analysis.', 'map');
         } else {
             container.innerHTML = content;
         }
@@ -2162,7 +2157,7 @@ class SecurityDashboard {
                 : 'No files match the current filters.';
             container.innerHTML = !this.activeFilesSessionId && !this.filesGlobalLoadRequested && totalBeforeFilters === 0
                 ? this.renderFilesChooserState()
-                : this.getEmptyState(emptyText, 'folder');
+                : this.getEmptyState(emptyText, 'Select a session above to browse its captured files.', 'folder');
             return;
         }
 
@@ -2456,7 +2451,7 @@ class SecurityDashboard {
     async bulkDeleteSelectedFiles() {
         const fileIds = Array.from(this.selectedFileIds);
         if (fileIds.length === 0) return;
-        if (!window.confirm(`Delete ${fileIds.length} selected file(s)? This cannot be undone.`)) {
+        if (!await this.showConfirm(`Delete ${fileIds.length} selected file(s)? This cannot be undone.`)) {
             return;
         }
 
@@ -2723,7 +2718,7 @@ class SecurityDashboard {
 
     async deleteStoredFile(fileId) {
         if (!fileId) return;
-        if (!window.confirm('Delete this file and its stored analysis results? This cannot be undone.')) {
+        if (!await this.showConfirm('Delete this file and its stored analysis results? This cannot be undone.')) {
             return;
         }
 
@@ -2762,7 +2757,7 @@ class SecurityDashboard {
                 const emptyText = sessionsRaw.length === 0
                     ? 'No sessions found. Start an analysis to create your first session.'
                     : 'No sessions match the current filters.';
-                container.innerHTML = this.getEmptyState(emptyText, 'history');
+                container.innerHTML = this.getEmptyState(emptyText, 'Create a session to start capturing and analyzing JavaScript.', 'history');
                 return;
             }
 
@@ -3090,7 +3085,7 @@ class SecurityDashboard {
     async bulkDeleteSelectedSessions() {
         const sessionIds = Array.from(this.selectedSessionIds);
         if (sessionIds.length === 0) return;
-        if (!window.confirm(`Delete ${sessionIds.length} selected session(s) and all files inside? This cannot be undone.`)) {
+        if (!await this.showConfirm(`Delete ${sessionIds.length} selected session(s) and all files inside? This cannot be undone.`)) {
             return;
         }
 
@@ -3508,7 +3503,7 @@ class SecurityDashboard {
 
     async deleteSession(sessionId) {
         if (!sessionId) return;
-        if (!window.confirm('Delete this entire session and all files in it? This cannot be undone.')) {
+        if (!await this.showConfirm('Delete this entire session and all files in it? This cannot be undone.')) {
             return;
         }
 
@@ -3558,7 +3553,7 @@ class SecurityDashboard {
         // Create alert element
         const alertDiv = document.createElement('div');
         alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
-        alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+        alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 1060; min-width: 300px;';
         alertDiv.innerHTML = `
             ${message}
             <button type="button" class="btn-close" onclick="this.parentElement.remove()"></button>
@@ -3572,6 +3567,49 @@ class SecurityDashboard {
                 alertDiv.remove();
             }
         }, 5000);
+    }
+
+    showConfirm(message, okLabel = 'Delete') {
+        return new Promise((resolve) => {
+            const modalEl = document.getElementById('confirmModal');
+            const bodyEl = document.getElementById('confirmModalBody');
+            const okBtn = document.getElementById('confirmModalOk');
+            const cancelBtn = document.getElementById('confirmModalCancel');
+            if (!modalEl || !bodyEl || !okBtn || !cancelBtn || typeof bootstrap === 'undefined') {
+                resolve(false);
+                return;
+            }
+
+            bodyEl.textContent = message;
+            okBtn.textContent = okLabel;
+            const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+            let settled = false;
+
+            const cleanup = () => {
+                okBtn.removeEventListener('click', onOk);
+                cancelBtn.removeEventListener('click', onCancel);
+                modalEl.removeEventListener('hidden.bs.modal', onHide);
+            };
+
+            const finish = (value, shouldHide = false) => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                resolve(value);
+                if (shouldHide) {
+                    modal.hide();
+                }
+            };
+
+            const onOk = () => finish(true, true);
+            const onCancel = () => finish(false, true);
+            const onHide = () => finish(false, false);
+
+            okBtn.addEventListener('click', onOk);
+            cancelBtn.addEventListener('click', onCancel);
+            modalEl.addEventListener('hidden.bs.modal', onHide);
+            modal.show();
+        });
     }
 
     exportResults() {
@@ -3589,11 +3627,12 @@ class SecurityDashboard {
         link.click();
     }
 
-    getEmptyState(message, icon) {
+    getEmptyState(title, body, icon) {
         return `
             <div class="empty-state">
-                <i class="fas fa-${icon}"></i>
-                <p>${message}</p>
+                <i class="fas fa-${icon} mb-2 fa-2x text-muted"></i>
+                <p class="empty-state-title">${title}</p>
+                <p class="empty-state-body">${body}</p>
             </div>
         `;
     }

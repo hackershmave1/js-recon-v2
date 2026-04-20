@@ -16,6 +16,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const saveBtn = document.getElementById('save');
   const resetBtn = document.getElementById('reset');
   const status = document.getElementById('status');
+  let confirmPending = false;
+  let confirmPendingTimer = null;
 
   async function loadSettings() {
     const result = await chrome.storage.local.get([
@@ -83,25 +85,43 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  function resetSettings() {
-    if (confirm('Reset all settings to defaults?')) {
-      useDomainScope.checked = false;
-      domainScopes.value = '';
-      useLocalApi.checked = true;
-      apiEndpoint.value = 'http://localhost:3000/api/save-files';
-      autoStart.checked = false;
-      performAnalysisOnUpload.checked = false;
-      captureSourceMaps.checked = true;
-      allowSourceMapFallback.checked = false;
-      captureAuthContext.checked = true;
-      authContextDomains.value = '';
-      resolveDependencies.checked = true;
-      importRepPlusSignals.checked = false;
-      repPlusExtensionId.value = '';
-      exportIncludeContent.checked = false;
-      
-      saveSettings();
+  function resetResetButtonState() {
+    confirmPending = false;
+    resetBtn.textContent = 'Reset to Defaults';
+    if (confirmPendingTimer) {
+      clearTimeout(confirmPendingTimer);
+      confirmPendingTimer = null;
     }
+  }
+
+  function applyDefaults() {
+    useDomainScope.checked = false;
+    domainScopes.value = '';
+    useLocalApi.checked = true;
+    apiEndpoint.value = 'http://localhost:3000/api/save-files';
+    autoStart.checked = false;
+    performAnalysisOnUpload.checked = false;
+    captureSourceMaps.checked = true;
+    allowSourceMapFallback.checked = false;
+    captureAuthContext.checked = true;
+    authContextDomains.value = '';
+    resolveDependencies.checked = true;
+    importRepPlusSignals.checked = false;
+    repPlusExtensionId.value = '';
+    exportIncludeContent.checked = false;
+  }
+
+  function resetSettings() {
+    if (!confirmPending) {
+      confirmPending = true;
+      resetBtn.textContent = 'Click again to confirm reset';
+      confirmPendingTimer = setTimeout(resetResetButtonState, 3000);
+      return;
+    }
+
+    resetResetButtonState();
+    applyDefaults();
+    saveSettings();
   }
 
   function showStatus(message, type) {
