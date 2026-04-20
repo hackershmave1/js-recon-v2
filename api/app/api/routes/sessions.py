@@ -1248,7 +1248,6 @@ def get_session_analysis_summary(session_id: str, db: Session = Depends(get_db))
 
     # Prepare data for rollup service
     analysis_data = []
-    total_endpoints = 0
     total_dependencies = 0
 
     for analysis in analyses:
@@ -1263,15 +1262,14 @@ def get_session_analysis_summary(session_id: str, db: Session = Depends(get_db))
         }
         analysis_data.append(analysis_dict)
 
-        # Count endpoints and dependencies for summary
-        endpoints = analysis.analysis.get("endpoints", []) if analysis.analysis else []
+        # Count dependencies for summary
         dependencies = analysis.analysis.get("dependencies", []) if analysis.analysis else []
-        total_endpoints += len(endpoints)
         total_dependencies += len(dependencies)
 
     # Use rollup service to deduplicate secrets
     rollup_service = SecretRollupService()
     secret_rollup_result = rollup_service.rollup_secrets(analysis_data)
+    endpoint_rollup = summarize_endpoint_rollup(analysis_data)
 
     # Build comprehensive summary
     total_files = db.query(DbFile).filter(DbFile.session_id == session_id).count()
@@ -1280,10 +1278,7 @@ def get_session_analysis_summary(session_id: str, db: Session = Depends(get_db))
         "total_files": total_files,
         "analyzed_files": len(analyses),
         "secrets": secret_rollup_result["summary"],
-        "endpoints": {
-            "total_unique_endpoints": 0,  # TODO: Implement endpoint rollup in future task
-            "total_occurrences": total_endpoints
-        },
+        "endpoints": endpoint_rollup,
         "dependencies": {
             "total_dependencies": total_dependencies
         }
