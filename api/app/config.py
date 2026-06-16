@@ -3,7 +3,6 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     database_url: str = "postgresql://jsextractor:changeme123@localhost:5432/js_extractor"
-    redis_url: str = "redis://localhost:6379/0"
     storage_path: str = "/var/lib/js-extractor/storage"
     sourcemap_processing_timeout_seconds: int = 30
     sourcemap_max_size_bytes: int = 50 * 1024 * 1024

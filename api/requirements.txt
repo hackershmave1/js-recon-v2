@@ -1,9 +1,8 @@
 # Removed dependencies (2026-04-19):
 #   python-jose[cryptography] — JWT library, no active auth routes; CVE-2024-33664
 #   passlib[bcrypt]           — Password hashing, no active auth routes
-#   celery                    — Tasks in api/app/tasks/ are retained but require
-#                               celery installed separately when running the Beat worker
-#   redis                     — Only needed when running Celery Beat worker
+#   celery                    — Legacy task queue removed; API uses in-process background work
+#   redis                     — No active runtime dependency after Celery removal
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 sqlalchemy==2.0.23

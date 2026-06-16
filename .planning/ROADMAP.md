@@ -58,3 +58,16 @@ _Security concerns excluded from this milestone. See .planning/CONCERNS.md for s
 
 Plans:
 - [x] 03-01-PLAN.md — Wire Continue Crawl button, continueCrawl method, and polling sync into dashboard.js
+
+---
+
+## Phase 4: Runtime Currency and Repository Cleanup
+
+**Goal:** Make the checked-in runtime, docs, and cleanup surface match the application that actually runs today.
+
+**Scope**
+- Remove active Celery/Redis drift from imports, Compose, and docs.
+- Fix Alembic startup reliability and legacy `0002` compatibility.
+- Canonicalize duplicate jsluice/sourcemap implementations.
+- Add startup recovery for orphaned DB-backed jobs.
+- Consolidate markdown into maintained docs and delete generated one-off archives that no longer guide maintenance.

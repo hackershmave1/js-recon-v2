@@ -12,19 +12,10 @@ services:
     networks:
       - js-extractor-network
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - js-extractor-network
-
   api:
     build:
-      context: .
-      dockerfile: Dockerfile.enhanced
+      context: ..
+      dockerfile: api/Dockerfile.enhanced
     command: uv run uvicorn app.main:app --host 0.0.0.0 --port 3000 --reload
     ports:
       - "3000:3000"
@@ -33,59 +24,9 @@ services:
       - ./storage:/var/lib/js-extractor/storage
     environment:
       - DATABASE_URL=postgresql://jsextractor:changeme123@postgres:5432/js_extractor
-      - REDIS_URL=redis://redis:6379/0
       - STORAGE_PATH=/var/lib/js-extractor/storage
     depends_on:
       - postgres
-      - redis
-    networks:
-      - js-extractor-network
-
-  celery_worker:
-    build:
-      context: .
-      dockerfile: Dockerfile.enhanced
-    command: uv run celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4
-    volumes:
-      - ./app:/app/app
-      - ./storage:/var/lib/js-extractor/storage
-    environment:
-      - DATABASE_URL=postgresql://jsextractor:changeme123@postgres:5432/js_extractor
-      - REDIS_URL=redis://redis:6379/0
-      - STORAGE_PATH=/var/lib/js-extractor/storage
-    depends_on:
-      - postgres
-      - redis
-    healthcheck:
-      test: ["CMD-SHELL", "uv run celery -A app.tasks.celery_app status > /dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    networks:
-      - js-extractor-network
-
-  celery_beat:
-    build:
-      context: .
-      dockerfile: Dockerfile.enhanced
-    command: uv run celery -A app.tasks.celery_app beat --loglevel=info
-    volumes:
-      - ./app:/app/app
-      - ./storage:/var/lib/js-extractor/storage
-    environment:
-      - DATABASE_URL=postgresql://jsextractor:changeme123@postgres:5432/js_extractor
-      - REDIS_URL=redis://redis:6379/0
-      - STORAGE_PATH=/var/lib/js-extractor/storage
-    depends_on:
-      - postgres
-      - redis
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import pathlib,sys; c=pathlib.Path('/proc/1/cmdline').read_text(); sys.exit(0 if 'celery' in c and 'beat' in c else 1)\""]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
     networks:
       - js-extractor-network
 
@@ -95,4 +36,3 @@ networks:
 
 volumes:
   postgres_data:
-  redis_data:

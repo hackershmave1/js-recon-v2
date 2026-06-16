@@ -3,13 +3,13 @@ _Last updated: 2026-04-19_
 
 ## Summary
 
-JS Security Extractor is a security-focused JavaScript reconnaissance tool composed of two primary components: a Chrome extension that intercepts network traffic and uploads JS files, and a FastAPI backend that stores, analyzes, and presents security findings. The backend follows a layered monolith pattern (routes → services → models/DB) with a supplementary Celery/Redis async task queue for background processing. A headless recon subsystem can autonomously discover and ingest JavaScript assets from target URLs using multiple discovery engines (Playwright headless, Katana, Vespasian).
+JS Security Extractor is a security-focused JavaScript reconnaissance tool composed of two primary components: a Chrome extension that intercepts network traffic and uploads JS files, and a FastAPI backend that stores, analyzes, and presents security findings. The backend follows a layered monolith pattern (routes -> services -> models/DB). Background work is handled by FastAPI background tasks, background threads for long job runners, and DB-backed job records. A headless recon subsystem can autonomously discover and ingest JavaScript assets from target URLs using multiple discovery engines (Playwright headless, Katana, Vespasian).
 
 ---
 
 ## Overall Pattern
 
-**Layered monolith** with optional async background processing.
+**Layered monolith** with API-process background work and persistent job records.
 
 ```
 Chrome Extension  ──POST /api/save-files──►  FastAPI API Layer
@@ -23,8 +23,8 @@ Chrome Extension  ──POST /api/save-files──►  FastAPI API Layer
                                                     │
                                   ┌─────────────────┼──────────────────┐
                                   ▼                 ▼                  ▼
-                            PostgreSQL         File Storage        Redis/Celery
-                           (SQLAlchemy)       (local disk)         (async tasks)
+                            PostgreSQL         File Storage        Job Recovery
+                           (SQLAlchemy)       (local disk)         (startup)
 ```
 
 ---
@@ -56,12 +56,12 @@ Chrome Extension  ──POST /api/save-files──►  FastAPI API Layer
 |------|---------|
 | `comprehensive_extractor.py` | Orchestrates all extractors (REP, jsluice, sourcemap, parameter) into a single `extract_all()` result |
 | `recon_job_runner.py` | Drives headless/Katana/Vespasian discovery, fetches JS assets, feeds ingestion pipeline |
-| `jsluice_extractor.py` | Shells out to `jsluice` binary for URL and secret extraction |
-| `jsluice_extractor_secure.py` | Hardened variant with stricter subprocess sandboxing |
+| `jsluice_extractor_secure.py` | Canonical hardened wrapper that shells out to `jsluice` for URL and secret extraction |
 | `rep_endpoints_extractor.py` | Regex-pattern endpoint extraction (REP-style) |
 | `rep_secrets_extractor.py` | Regex-pattern secret extraction using Kingfisher YAML rules |
 | `native_sourcemap_processor.py` | Parses and reconstructs sources from `.map` files |
-| `sourcemap_processor.py` | Alternate sourcemap processor |
+| `sourcemap_processor.py` | Compatibility alias for `native_sourcemap_processor.py` |
+| `job_recovery.py` | Startup recovery for orphaned queued/running/cancelling DB jobs |
 | `sourcemap_validation.py` | Builds validation state objects tracking sourcemap fetch/parse outcomes |
 | `parameter_extractor.py` | Extracts URL and function parameters from JS |
 | `sensitive_file_detector.py` | Identifies references to sensitive files in JS content |
@@ -98,19 +98,16 @@ Chrome Extension  ──POST /api/save-files──►  FastAPI API Layer
 
 - Engine: PostgreSQL 15 (primary target); SQLite also accepted (dialect-conditional SQL in `main.py`)
 - ORM: SQLAlchemy 2.0 with `SessionLocal` / `get_db()` generator
-- Schema management: Mix of `Base.metadata.create_all()` at startup + runtime `ALTER TABLE` migrations in `main.py:ensure_runtime_schema_updates()` + SQL migration files in `api/migrations/`
+- Schema management: Alembic revisions at repository root; startup locates `alembic.ini` and runs `python -m alembic upgrade head`
 - JSONB columns used on PostgreSQL for `file_metadata`, `validation_state`, `asset_metadata`
 
-### Async Task Layer
+### Background Work Layer
 
-- Purpose: Background and scheduled work decoupled from request lifecycle
-- Location: `api/app/tasks/`
-- Broker/Backend: Redis (via `settings.redis_url`)
-- Scheduler: Celery Beat — runs `retention_cleanup` daily at 03:00 UTC
-- Tasks:
-  - `enhanced_processing.process_file_comprehensive` — wraps `ComprehensiveExtractor.extract_all()`
-  - `enhanced_processing.process_sourcemap_task` — standalone sourcemap processing
-  - `retention_cleanup` — TTL-based content purge
+- Purpose: Keep long work observable without requiring Celery/Redis.
+- Session analysis and recon jobs persist status in the `jobs` table and execute in API-process background threads.
+- Batch analysis endpoints use FastAPI `BackgroundTasks`.
+- Startup runs `services/job_recovery.py` after Alembic migrations and marks orphaned `queued`, `running`, or `cancelling` jobs as `failed` or `cancelled`.
+- TTL cleanup is implemented by `services/retention_cleanup.py`; it is no longer scheduled by Celery Beat in the supported Compose stack.
 
 ### Dashboard / Frontend
 
@@ -196,7 +193,7 @@ Search order: env var → `PATH` → `api/.tools/bin/` → `~/.local/bin/` → `
 
 **Security validation:** `SecurityValidator` in `services/security_utils.py` validates URLs (max 2048 chars), JS content (max 10MB), blocks shell metacharacters before subprocess calls.
 
-**Content TTL/retention:** `retention_cleanup.py` purges disk content (sets `content_purged=true`, deletes file) after `file_content_ttl_days` / `sourcemap_content_ttl_days`. Celery Beat schedules this daily.
+**Content TTL/retention:** `retention_cleanup.py` purges disk content (sets `content_purged=true`, deletes file) after `file_content_ttl_days` / `sourcemap_content_ttl_days`. No Celery Beat scheduler is part of the active runtime.
 
 **CORS:** Allows `localhost:3000/8000` and Chrome extension origins (`chrome-extension://[a-p]{32}`).
 
@@ -208,7 +205,6 @@ Search order: env var → `PATH` → `api/.tools/bin/` → `~/.local/bin/` → `
 
 ## Gaps / Unknowns
 
-- `tasks/celery_app.py` registers Celery tasks but the recon and session analysis paths use `threading.Thread` directly — Celery is used for retention cleanup and is available but not the primary concurrency mechanism
-- `jsluice_extractor_secure.py` exists alongside `jsluice_extractor.py` — unclear which is the canonical path used in production; `comprehensive_extractor.py` imports the non-secure variant
+- Long-running jobs are persisted, but API-process execution means multi-replica deployment still needs explicit job ownership/locking before use.
 - `api/app/services/rules/` contains hundreds of YAML files (Kingfisher secret rules) — exact load/merge behavior not fully traced
 - No API authentication on the backend endpoints (the `api_key` config setting exists but is not enforced in any route)

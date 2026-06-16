@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 from .async_utils import run_coroutine_sync
-from .jsluice_extractor import JSluiceExtractor
+from .jsluice_extractor_secure import SecureJSluiceExtractor
 from .native_sourcemap_processor import NativeSourceMapProcessor
 from .parameter_extractor import ParameterExtractor
 from .rep_endpoints_extractor import RepEndpointsExtractor
@@ -27,8 +27,8 @@ class ComprehensiveExtractor:
         self.parameter_extractor = ParameterExtractor()
 
         try:
-            self.jsluice = JSluiceExtractor()
-        except (FileNotFoundError, PermissionError) as exc:
+            self.jsluice = SecureJSluiceExtractor()
+        except (FileNotFoundError, PermissionError, RuntimeError, ValueError) as exc:
             logger.warning("jsluice not available: %s", exc)
             self.jsluice = None
 

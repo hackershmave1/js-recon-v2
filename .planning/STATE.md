@@ -2,24 +2,24 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Ready for Milestone Completion
-last_updated: "2026-04-20T14:07:07.557Z"
-last_activity: 2026-04-20
+status: Active Backlog Ready
+last_updated: "2026-06-16T15:45:18+03:00"
+last_activity: 2026-06-16
 progress:
   total_phases: 3
   completed_phases: 3
   total_plans: 10
   completed_plans: 10
-  percent: 100
+  percent: 80
 ---
 
 # Project State
 
 **Project:** js-security-extractor
 **Code:** JSE
-**Status:** Ready for Milestone Completion
-**Last Activity:** 2026-04-20
-**Current Position:** Phase 3 complete (verification passed)
+**Status:** Active Backlog Ready
+**Last Activity:** 2026-06-16
+**Current Position:** Runtime cleanup complete; `AGENTS.md` is the session-start guide.
 
 ## Active Milestone
 
@@ -38,7 +38,7 @@ progress:
 - Security concerns (auth, SSRF, jsluice secure extractor, contentHash path traversal, default password) are tracked separately and excluded from this milestone.
 - Codebase map written to .planning/codebase/ on 2026-04-19.
 - UI audit written to .planning/UI-REVIEW.md on 2026-04-19 (score 16/24).
-- [01-01] Celery task files retained on disk after removing celery/redis from requirements — Beat worker installs celery separately when deployed.
+- [01-01] Superseded by cleanup: Celery task files and worker services were removed from the active runtime.
 - [01-01] Dependency removals documented inline in requirements.txt with date, rationale, and CVE-2024-33664 reference.
 - [01-02] Used Boolean for cancel_requested (not String "0"/"1") — consistent with file.py/source_map.py existing pattern.
 - [01-02] state_json uses sqlalchemy.types.JSON (cross-dialect) not JSONB — ensures SQLite test compatibility.
@@ -48,6 +48,11 @@ progress:
 - [01-04] alembic.ini sqlalchemy.url is a placeholder — env.py wires _sync_engine directly; avoids double DB-URL config.
 - [01-04] Migration 0001 authored manually — no live PostgreSQL in dev/CI environment for autogenerate.
 - [01-04] on_startup uses subprocess [alembic, upgrade, head]; returncode checked; RuntimeError raised on failure.
+- [cleanup] Active Celery/Redis runtime was removed; supported Compose services are now `postgres` and `api`.
+- [cleanup] Startup now invokes `[sys.executable, -m, alembic, upgrade, head]` from the discovered Alembic root and includes a no-op `0002` compatibility revision for existing dev DBs.
+- [cleanup] `SecureJSluiceExtractor` is canonical; legacy `jsluice_extractor.py` was removed and `sourcemap_processor.py` is now a compatibility alias.
+- [cleanup] Startup recovery marks orphaned `queued`, `running`, and `cancelling` job rows terminal.
+- [docs] `AGENTS.md` is the first file agents should read; `TODO.md` is active-work queue only.
 - [01-05] Removed total_endpoints accumulator entirely; summarize_endpoint_rollup() provides both total_unique_endpoints and total_occurrences in one call.
 - [02-01] Extension surfaces use dashboard-aligned accent tokens (#356AE6 / #2B5DCC); secondary popup actions stay neutral so the accent remains reserved for primary actions.
 - [02-02] Dashboard typography now flows through five named tokens (--text-xs through --text-lg); body/stat/icon exceptions remain literal by design.

@@ -20,8 +20,9 @@ A comprehensive security analysis platform for **passive JavaScript reconnaissan
 ### 1. **Start the Backend**
 ```bash
 cd api
-docker-compose up -d
+docker compose up -d
 ```
+The supported Compose stack is PostgreSQL + FastAPI API. Celery/Redis worker services were removed; expensive work now uses FastAPI background tasks and DB-backed job records.
 
 ### 2. **Verify Installation**
 ```bash
@@ -50,6 +51,11 @@ curl -X POST http://localhost:3000/api/analyze-comprehensive \
 - Domain: `https://wishandwash.co.il`
 - For sourcemap/capture/ingestion validation, use JS and MAP URLs from this domain and record exact URLs in task validation notes.
 - Do not use `example.com` or legacy HoneyBook targets for new testing.
+
+### Runtime Notes
+- Startup runs `python -m alembic upgrade head` from the repository Alembic root.
+- Existing dev databases stamped with legacy revision `0002` are supported by a no-op compatibility revision.
+- On API startup, orphaned `queued`, `running`, or `cancelling` DB jobs from a previous process are marked terminal so old work does not remain visibly active forever.
 
 ### 5. **Configure Extension**
 1. Click extension icon → Settings
@@ -320,6 +326,7 @@ POST /api/recon/jobs/{job_id}/stop
 
 ```
 js-security-extractor/
+├── AGENTS.md                          # Agent/session-start guidance
 ├── api/                              # FastAPI Backend
 │   ├── app/
 │   │   ├── api/routes/              # API endpoints
@@ -373,23 +380,18 @@ js-security-extractor/
 ### **Production Deployment**
 ```bash
 # Start all services
-docker-compose up -d
+docker compose up -d
 
 # Check service status  
-docker-compose ps
+docker compose ps
 
 # View logs
-docker-compose logs api --tail 20
-
-# Scale workers
-docker-compose up -d --scale worker=3
+docker compose logs api --tail 20
 ```
 
 ### **Available Services**
 - **api**: FastAPI server (port 3000)
 - **postgres**: Database (port 5432)
-- **redis**: Task queue (port 6379) 
-- **worker**: Background processing (Celery)
 
 ### **Service Health Checks**
 ```bash
@@ -464,9 +466,6 @@ python run_tests.py --type performance
 ```bash
 # Database
 DATABASE_URL=postgresql://user:pass@localhost:5432/js_extractor
-
-# Redis  
-REDIS_URL=redis://localhost:6379/0
 
 # Storage
 STORAGE_PATH=/app/storage

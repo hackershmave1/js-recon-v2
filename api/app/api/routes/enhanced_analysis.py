@@ -12,7 +12,6 @@ from ...models import File as DbFile, Session as DbSession
 from ...services.comprehensive_extractor import ComprehensiveExtractor
 from ...services.security_utils import SecurityValidator
 from ...services.http_fetcher import robust_fetcher
-from ...tasks.enhanced_processing import process_file_comprehensive
 
 logger = logging.getLogger(__name__)
 
@@ -458,9 +457,10 @@ async def batch_analyze(
                     'quick_analysis': quick_result
                 })
                 
-                # Queue comprehensive analysis in background
+                # Schedule a best-effort background pass without requiring a
+                # separate task queue runtime.
                 background_tasks.add_task(
-                    process_file_comprehensive,
+                    process_file_comprehensive_background,
                     file_request.content,
                     metadata,
                     options
@@ -493,6 +493,25 @@ async def batch_analyze(
         raise HTTPException(status_code=500, detail=f"Batch analysis failed: {str(e)}")
 
 # Helper functions
+
+
+def process_file_comprehensive_background(content: str, metadata: Dict[str, Any], options: Dict[str, Any] | None = None) -> None:
+    """Run a background comprehensive analysis pass for batch requests."""
+    start_time = datetime.utcnow()
+    try:
+        extractor = ComprehensiveExtractor()
+        result = extractor.extract_all(content, metadata, options=options or {})
+        processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+        stats = result.get("stats", {})
+        logger.info(
+            "Background comprehensive analysis completed for %s: %s endpoints, %s secrets in %sms",
+            metadata.get("url", "unknown"),
+            stats.get("total_endpoints", 0),
+            stats.get("total_secrets", 0),
+            processing_time,
+        )
+    except Exception as exc:
+        logger.error("Background comprehensive analysis failed for %s: %s", metadata.get("url", "unknown"), exc)
 
 async def analyze_reconstructed_files(files: List[Dict[str, Any]]):
     """Background task to analyze reconstructed source files"""

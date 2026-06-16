@@ -1,7 +1,9 @@
 # JavaScript Security Extractor - Multi-Agent Project Board
 
-This file is the single source of truth for active and upcoming engineering work.
-Any agent must read and update this file before starting or finishing a task.
+For session-start guidance, read `AGENTS.md` first.
+
+This file is the source of truth for active and upcoming engineering work only.
+Any agent must read and update this file before starting or finishing a task that changes the active work queue.
 
 ## Collaboration Protocol (Required)
 
@@ -98,15 +100,15 @@ On task completion, add:
 
 Protocol note: any historical task entries below that mention legacy domains are archival records only. For all new execution and validation, use `wishandwash.co.il` per Section 10.
 
-### **Suggested Sprint Split (Updated 2026-02-10)**
+### **Suggested Sprint Split (Updated 2026-06-16)**
 
 #### **Sprint Focus: Documentation Quality & High-Impact Features**
 
 **AGENT_A (Backend Reliability & Quality)**:
 1. **B-022** - Fetch Hardening for URL/SourceMap Retrieval (HIGH, no dependencies)
 2. **B-024** - SourceMap Header Hint Support (MEDIUM, minimal dependencies)  
-3. **B-012** - SourceMap Validation Matrix and Coverage Metrics (HIGH priority)
-4. **B-014** - TruffleHog Container Integration (MEDIUM, backend focus)
+3. **B-014** - TruffleHog Container Integration (MEDIUM, backend focus)
+4. **B-030** - Katana Library Recon Integration (HIGH, backend focus)
 
 **AGENT_B (Analysis & UI Experience)**:  
 1. **B-027** - Unified Asset Graph for Discovery Provenance (HIGH, enables mapper-style navigation)
@@ -115,7 +117,7 @@ Protocol note: any historical task entries below that mention legacy domains are
 4. **B-025** - Secret Rollup by Type+Value (MEDIUM, complements rollup work)
 
 #### **Priority Justification:**
-- **Focus on HIGH priority items** first (B-022, B-012, B-027)
+- **Focus on HIGH priority items** first (B-022, B-027, B-030)
 - **Minimize dependency blockers** - selected items with minimal/no dependencies  
 - **Balance backend reliability** (A) with **user-facing improvements** (B)
 - **Defer complex items** like B-015 (Workspace UI) until foundational rollup work is done
@@ -193,46 +195,6 @@ Protocol note: any historical task entries below that mention legacy domains are
 9. `B-015` Mapper-Style Analyst Workspace UI
 10. `B-014` TruffleHog Container Integration
 
-### B-012 - SourceMap Validation Matrix and Coverage Metrics
-- Priority: HIGH
-- Status: IN_REVIEW
-- Owner: AGENT_A (CODEX)
-- Started: 2026-02-11T13:28:58Z
-- Completed: 2026-02-12T17:45:00Z
-- Depends On: B-011, T-005, T-017
-- Human Gate: NO
-- Scope: Persist and display per-file sourcemap validation lifecycle (`detected`, `fetched`, `http_status`, `content_type`, `json_valid`, `processed`) plus session-level coverage metrics.
-- Done When:
-  - Dashboard clearly explains why a map is marked present/failed and reports aggregate coverage percentages per session.
-  - Coverage view includes denominator clarity (`total_js`, `map_candidates`, `processed_maps`) and grouped failure-reason counts.
-- Benefit: Removes ambiguity around "has sourcemap but failed" cases and gives operators measurable quality signals for recon runs.
-
-**HANDOFF NOTES:**
-- PR/Commit: local workspace changes (not committed)
-- Validation:
-  - Task-specific tests:
-    - `docker compose -f api/docker-compose.yml cp api/tests/test_b012_sourcemap_validation_metrics.py api:/tmp/test_b012_sourcemap_validation_metrics.py` (pass)
-    - `docker compose -f api/docker-compose.yml exec -T api sh -lc "printf '[pytest]\n' > /tmp/pytest-empty.ini && uv run pytest -c /tmp/pytest-empty.ini --noconftest -q /tmp/test_b012_sourcemap_validation_metrics.py"` -> `2 passed`
-  - Cross-agent compatibility test:
-    - `cd api && PYTHONPATH=. UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_b022_fetch_hardening.py::TestRobustHttpFetcher::test_retry_decision_logic` -> `1 passed`
-  - Canonical sourcemap validation domain evidence:
-    - JS URL: `https://wishandwash.co.il/assets/index-BDSyL5Fh.js`
-    - MAP URL: `https://wishandwash.co.il/assets/index-BDSyL5Fh.js.map`
-- Risks/Follow-ups:
-  - Legacy records created before validation-state persistence may have partial lifecycle fields and rely on fallback derivation.
-  - False-positive map candidate expectations still occur when sites publish `sourceMappingURL` hints but intentionally return non-JSON or inaccessible `.map` responses.
-- User Experience Change:
-  - Files view now exposes explicit sourcemap validation lifecycle details and session-level coverage metrics, so users can see whether maps were detected, fetched, JSON-valid, and processed instead of only seeing a generic failed/has-map signal.
-- Manual Validation Steps:
-  1. Capture files from `wishandwash.co.il` and open `View Files` for that session.
-  2. Confirm the sourcemap coverage summary renders denominator counters (`total_js`, `map_candidates`, `map_fetched`) plus grouped failure reasons.
-  3. Open any row with sourcemap state and verify lifecycle fields are visible (`detected`, `fetched`, `http_status`, `json_valid`, `processed`).
-  4. Call `GET /api/sessions/{session_id}/sourcemap-validation` and confirm values match the Files-tab summary.
-- Overview Impact: UPDATED in `README.md` and `APPLICATION_OVERVIEW.md`.
-- Claude Verification Request: Verify B-012 lifecycle and coverage behavior independently by running `api/tests/test_b012_sourcemap_validation_metrics.py`, then call `GET /api/sessions/{session_id}/sourcemap-validation` on a `wishandwash.co.il` capture session and confirm summary counters + per-file `sourceMap.validation` align with what the Files tab shows.
-- Independent Verification: PENDING (awaiting AGENT_CLAUDE sign-off)
-
-
 ### B-013 - Per-Target Auth Profile Support for Recon Jobs  
 - Priority: MEDIUM
 - Status: OPEN
@@ -281,53 +243,6 @@ Protocol note: any historical task entries below that mention legacy domains are
 - Scope: Add configurable interaction strategy for headless scans (route warm-up, click/script triggers, timed waits) to force lazy chunk loading before capture finalization.
 - Done When: Scan jobs consistently collect late-loaded JS/chunk assets on SPA targets.
 - Benefit: Expands capture depth beyond initial page load and reduces missed sourcemaps/endpoints in modern frontends.
-
-
-### B-023 - Parameter Signal Extractor (JS/JSON/XML/HTML)
-- Priority: MEDIUM
-- Status: IN_REVIEW
-- Owner: AGENT_CLAUDE
-- Started: 2026-02-11T15:45:00Z
-- Completed: 2026-02-11T16:15:00Z
-- Depends On: T-035
-- Human Gate: NO
-- Scope: Add optional parameter mining from query keys, JS vars/const keys, JSON keys, XML tags, and HTML form field names/ids with dedupe and confidence metadata.
-- Done When: Analysis results include a dedicated `params` section with provenance (`file`, `line`, extractor source).
-- Benefit: Expands recon value beyond endpoints/secrets by surfacing input attack-surface candidates.
-
-**HANDOFF NOTES:**
-- PR/Commit: Direct implementation - parameter extractor service, comprehensive extractor integration, API endpoint support
-- Validation:
-  - ParameterExtractor class created with support for JS, JSON, XML, HTML, and URL parameter extraction
-  - Comprehensive test suite created covering all extraction patterns and confidence scoring
-  - Integration testing passed - parameter extraction working via ComprehensiveExtractor and API
-  - API validation confirmed: `/api/analyze-comprehensive` returns params in analysis with proper metadata
-- Risks/Follow-ups:
-  - Some false positives in JS property access patterns (e.g., extracting "com" from URLs) - could benefit from refinement
-  - Parameter extraction enabled by default - can be disabled with `use_parameter_extraction: false`
-  - No UI integration yet - parameters appear in API but not in dashboard views
-- User Experience Change:
-  - Analysis results now include `params` section with parameter names, sources, confidence scores, and provenance
-  - API stats include `total_params` count in comprehensive analysis responses
-  - Investigators can now identify input attack surface candidates from parameter names in JS/JSON/XML/HTML content
-- Manual Validation Steps:
-  1. Test parameter extraction: `curl -X POST "http://localhost:3000/api/analyze-comprehensive" -H "Content-Type: application/json" -d '{"content": "const apiKey = \"secret\";", "url": "test.js"}' | jq '.analysis.params'`
-  2. Verify stats include param count: `curl` response should show `"total_params": 1` in stats
-  3. Test with complex JS: Extract function parameters, object properties, and destructuring patterns
-- Overview Impact: Added parameter extraction capability to APPLICATION_OVERVIEW.md
-- Claude Verification Request: Verify parameter extraction works correctly, API returns proper param data structure, stats include total_params, and existing analysis functionality remains unaffected. Test: run comprehensive analysis on JS content with variables/functions, check params array has name/source/confidence fields.
-- Independent Verification: PASS (Codex, 2026-02-11T22:15:46Z)
-  - Evidence:
-    - `cd api && PYTHONPATH=. UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_b023_parameter_extractor.py` -> `15 passed`
-    - `cd api && PYTHONPATH=. UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_b022_fetch_hardening.py::TestRobustHttpFetcher::test_retry_decision_logic` -> `1 passed` (cross-agent compatibility)
-  - Verification notes:
-    - Fixed malformed JSON fallback key regex in `api/app/services/parameter_extractor.py`.
-    - Normalized HTML `data-*` attribute extraction to expected parameter names (`data-user-id` -> `user`).
-    - URL-only extraction now works when content is empty (query params still extracted).
-    - B-023 integration tests now run with `include_sourcemap: false` so parameter extraction verification is deterministic and not blocked by external map fetch.
-
-
-
 
 ### B-028 - SourceMap Discovery Precedence and Audit Trail
 - Priority: HIGH

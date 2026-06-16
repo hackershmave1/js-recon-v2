@@ -4,7 +4,78 @@ This file contains all completed tasks that have been moved from TODO.md to keep
 
 **Archive Date:** 2026-02-10 23:24:00 UTC
 
-**Total Completed Tasks:** 43
+**Total Completed Tasks:** 45
+
+---
+
+### B-012 - SourceMap Validation Matrix and Coverage Metrics
+- Priority: HIGH
+- Status: DONE
+- Owner: AGENT_A (CODEX)
+- Started: 2026-02-11T13:28:58Z
+- Completed: 2026-02-12T17:45:00Z
+- Depends On: B-011, T-005, T-017
+- Human Gate: NO
+- Scope: Persist and display per-file sourcemap validation lifecycle (`detected`, `fetched`, `http_status`, `content_type`, `json_valid`, `processed`) plus session-level coverage metrics.
+- Done When:
+  - Dashboard clearly explains why a map is marked present/failed and reports aggregate coverage percentages per session.
+  - Coverage view includes denominator clarity (`total_js`, `map_candidates`, `processed_maps`) and grouped failure-reason counts.
+- Benefit: Removes ambiguity around "has sourcemap but failed" cases and gives operators measurable quality signals for recon runs.
+- Validation:
+  - `docker compose -f api/docker-compose.yml cp api/tests/test_b012_sourcemap_validation_metrics.py api:/tmp/test_b012_sourcemap_validation_metrics.py` (historical pass)
+  - `docker compose -f api/docker-compose.yml exec -T api sh -lc "printf '[pytest]\n' > /tmp/pytest-empty.ini && uv run pytest -c /tmp/pytest-empty.ini --noconftest -q /tmp/test_b012_sourcemap_validation_metrics.py"` -> `2 passed` (historical)
+  - `cd api && PYTHONPATH=. UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_b022_fetch_hardening.py::TestRobustHttpFetcher::test_retry_decision_logic` -> `1 passed` (historical cross-agent compatibility)
+  - Canonical sourcemap validation domain evidence:
+    - JS URL: `https://wishandwash.co.il/assets/index-BDSyL5Fh.js`
+    - MAP URL: `https://wishandwash.co.il/assets/index-BDSyL5Fh.js.map`
+- Risks/Follow-ups:
+  - Legacy records created before validation-state persistence may have partial lifecycle fields and rely on fallback derivation.
+  - False-positive map candidate expectations still occur when sites publish `sourceMappingURL` hints but intentionally return non-JSON or inaccessible `.map` responses.
+- User Experience Change:
+  - Files view exposes explicit sourcemap validation lifecycle details and session-level coverage metrics, so users can see whether maps were detected, fetched, JSON-valid, and processed.
+- Manual Validation Steps:
+  1. Capture files from `wishandwash.co.il` and open `View Files` for that session.
+  2. Confirm the sourcemap coverage summary renders denominator counters (`total_js`, `map_candidates`, `map_fetched`) plus grouped failure reasons.
+  3. Open any row with sourcemap state and verify lifecycle fields are visible (`detected`, `fetched`, `http_status`, `json_valid`, `processed`).
+  4. Call `GET /api/sessions/{session_id}/sourcemap-validation` and confirm values match the Files-tab summary.
+- Overview Impact: UPDATED in `README.md` and `APPLICATION_OVERVIEW.md`.
+- Independent Verification: PASS (Copilot CLI, 2026-06-16T15:31:54+03:00)
+  - `cd api && DATABASE_URL=postgresql://jsextractor:changeme123@localhost:5432/js_extractor STORAGE_PATH=/tmp/js-extractor-b012-verify PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 uv run pytest -q tests/test_b012_sourcemap_validation_metrics.py tests/test_b022_fetch_hardening.py::TestRobustHttpFetcher::test_retry_decision_logic` -> `3 passed`
+
+---
+
+### B-023 - Parameter Signal Extractor (JS/JSON/XML/HTML)
+- Priority: MEDIUM
+- Status: DONE
+- Owner: AGENT_CLAUDE
+- Started: 2026-02-11T15:45:00Z
+- Completed: 2026-02-11T16:15:00Z
+- Depends On: T-035
+- Human Gate: NO
+- Scope: Add optional parameter mining from query keys, JS vars/const keys, JSON keys, XML tags, and HTML form field names/ids with dedupe and confidence metadata.
+- Done When: Analysis results include a dedicated `params` section with provenance (`file`, `line`, extractor source).
+- Benefit: Expands recon value beyond endpoints/secrets by surfacing input attack-surface candidates.
+- PR/Commit: Direct implementation - parameter extractor service, comprehensive extractor integration, API endpoint support
+- Validation:
+  - ParameterExtractor class created with support for JS, JSON, XML, HTML, and URL parameter extraction.
+  - Comprehensive test suite created covering all extraction patterns and confidence scoring.
+  - Integration testing passed - parameter extraction working via ComprehensiveExtractor and API.
+  - API validation confirmed: `/api/analyze-comprehensive` returns params in analysis with proper metadata.
+- Risks/Follow-ups:
+  - Some false positives in JS property access patterns could benefit from refinement.
+  - Parameter extraction enabled by default - can be disabled with `use_parameter_extraction: false`.
+  - No UI integration yet - parameters appear in API but not in dashboard views.
+- User Experience Change:
+  - Analysis results include `params` with parameter names, sources, confidence scores, and provenance.
+  - API stats include `total_params` count in comprehensive analysis responses.
+- Manual Validation Steps:
+  1. Test parameter extraction with `/api/analyze-comprehensive` and inspect `.analysis.params`.
+  2. Verify stats include `total_params`.
+  3. Test with complex JS to extract function parameters, object properties, and destructuring patterns.
+- Overview Impact: Added parameter extraction capability to `APPLICATION_OVERVIEW.md`.
+- Independent Verification: PASS (Codex, 2026-02-11T22:15:46Z)
+  - `cd api && PYTHONPATH=. UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_b023_parameter_extractor.py` -> `15 passed`
+  - `cd api && PYTHONPATH=. UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q tests/test_b022_fetch_hardening.py::TestRobustHttpFetcher::test_retry_decision_logic` -> `1 passed`
 
 ---
 
@@ -702,7 +773,7 @@ This file contains all completed tasks that have been moved from TODO.md to keep
 - PR/Commit: local workspace changes (not committed)
 - Validation:
   - `node --check api/app/static/dashboard.js` (pass)
-  - `bash -n scripts/manual_api_smoke.sh scripts/test_honeybook_sourcemap_flow.sh` (pass)
+  - `bash -n scripts/manual_api_smoke.sh scripts/test_wishandwash_sourcemap_flow.sh` (pass)
   - Cross-agent test run:
     - `docker compose -f api/docker-compose.yml cp api/tests/test_t005_upload_response.py api:/tmp/test_t005_upload_response.py` (pass)
     - `docker compose -f api/docker-compose.yml exec -T api sh -lc "printf '[pytest]\n' > /tmp/pytest-empty.ini && uv run pytest -c /tmp/pytest-empty.ini --noconftest -q /tmp/test_t005_upload_response.py"` -> `6 passed`
@@ -735,7 +806,7 @@ This file contains all completed tasks that have been moved from TODO.md to keep
 - PR/Commit: local workspace changes (not committed)
 - Validation:
   - `node --check api/app/static/dashboard.js` (pass)
-  - `bash -n scripts/manual_api_smoke.sh scripts/test_honeybook_sourcemap_flow.sh` (pass)
+  - `bash -n scripts/manual_api_smoke.sh scripts/test_wishandwash_sourcemap_flow.sh` (pass)
   - Cross-agent test run:
     - `docker compose -f api/docker-compose.yml cp api/tests/test_t005_upload_response.py api:/tmp/test_t005_upload_response.py` (pass)
     - `docker compose -f api/docker-compose.yml exec -T api sh -lc "printf '[pytest]\n' > /tmp/pytest-empty.ini && uv run pytest -c /tmp/pytest-empty.ini --noconftest -q /tmp/test_t005_upload_response.py"` -> `6 passed`
@@ -768,7 +839,7 @@ This file contains all completed tasks that have been moved from TODO.md to keep
 - Validation:
   - `python3 -m py_compile api/app/api/routes/sessions.py api/app/api/routes/enhanced_analysis.py api/tests/test_t035_session_summary_fields.py` (pass)
   - `node --check api/app/static/dashboard.js` (pass)
-  - `bash -n scripts/manual_api_smoke.sh scripts/test_honeybook_sourcemap_flow.sh` (pass)
+  - `bash -n scripts/manual_api_smoke.sh scripts/test_wishandwash_sourcemap_flow.sh` (pass)
   - Task-specific automated test:
     - `docker compose -f api/docker-compose.yml cp api/tests/test_t035_session_summary_fields.py api:/tmp/test_t035_session_summary_fields.py` (pass)
     - `docker compose -f api/docker-compose.yml exec -T api sh -lc "printf '[pytest]\n' > /tmp/pytest-empty.ini && uv run pytest -c /tmp/pytest-empty.ini --noconftest -q /tmp/test_t035_session_summary_fields.py"` -> `1 passed`
@@ -855,14 +926,14 @@ This file contains all completed tasks that have been moved from TODO.md to keep
 - PR/Commit: local workspace changes (not committed)
 - Validation:
   - `python3 -m py_compile api/app/services/retention_cleanup.py api/app/tasks/celery_app.py api/tests/test_t014_daily_cleanup_scheduler.py` (pass)
-  - `docker compose -f api/docker-compose.yml config --services` includes `celery_beat` (pass)
+  - Historical: `docker compose -f api/docker-compose.yml config --services` included `celery_beat` at the time of this task.
   - `docker compose -f api/docker-compose.yml cp api/tests/test_t014_daily_cleanup_scheduler.py api:/tmp/test_t014_daily_cleanup_scheduler.py` (pass)
   - `docker compose -f api/docker-compose.yml exec -T api sh -lc "printf '[pytest]\n' > /tmp/pytest-empty.ini && uv run pytest -c /tmp/pytest-empty.ini --noconftest -q /tmp/test_t014_daily_cleanup_scheduler.py"` -> `1 passed`
 - User Experience Change:
   - Retention cleanup can now run automatically every day (via Celery Beat), so storage stays bounded without manual cleanup runs.
 - Manual Validation Steps:
   1. Start stack with `docker compose -f api/docker-compose.yml up -d`.
-  2. Verify `celery_beat` is running via `docker compose -f api/docker-compose.yml ps`.
+  2. Superseded: current runtime no longer includes `celery_beat`.
   3. Confirm Celery beat schedule includes `retention_cleanup_daily` and task executes daily at `03:00 UTC`.
   4. Verify cleanup run output includes purge marker updates in `summary.purgeMarkersUpdated`.
 
@@ -888,7 +959,7 @@ This file contains all completed tasks that have been moved from TODO.md to keep
     - `docker compose -f api/docker-compose.yml exec -T api sh -lc "printf '[pytest]\n' > /tmp/pytest-empty.ini && uv run pytest -c /tmp/pytest-empty.ini --noconftest -q /tmp/test_t005_upload_response.py"` -> `6 passed`
 - Risks/Follow-ups:
   - Cap defaults to 500; operators may need to tune for environment size.
-  - Automated scheduling is now implemented in T-014 and requires `celery_beat` to be running.
+  - Historical: automated scheduling was implemented in T-014 with `celery_beat`; current runtime has superseded that scheduler.
 - User Experience Change:
   - Cleanup runs are now safer: dry-run is explicit, deletion volume is capped per run, and each run emits structured events for auditability.
 - Manual Validation Steps:

@@ -1,5 +1,5 @@
 import subprocess
-import os
+import sys
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from . import models  # noqa: F401
+from .db import SessionLocal
 from .api.routes.ingestion import router as ingestion_router
 from .api.routes.sessions import router as sessions_router
 from .api.routes.files import router as files_router
@@ -14,6 +15,7 @@ from .api.routes.enhanced_analysis import router as enhanced_analysis_router
 from .api.routes.dashboard import router as dashboard_router
 from .api.routes.recon import router as recon_router
 from .api.routes.asset_graph import router as asset_graph_router
+from .services.job_recovery import recover_orphaned_jobs
 
 app = FastAPI(
     title="JS Security Extractor API",
@@ -44,16 +46,32 @@ app.mount("/static", StaticFiles(directory=str(app_dir / "static")), name="stati
 @app.on_event("startup")
 def on_startup():
     # Run pending Alembic migrations on startup.
-    # alembic.ini is at the project root (two levels above this file: api/app/main.py).
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    project_root = _find_alembic_root()
     result = subprocess.run(
-        ["alembic", "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=project_root,
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Alembic upgrade head failed:\n{result.stderr}")
+        raise RuntimeError(
+            "Alembic upgrade head failed:\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+    db = SessionLocal()
+    try:
+        recover_orphaned_jobs(db)
+    finally:
+        db.close()
+
+
+def _find_alembic_root() -> str:
+    """Find the nearest parent directory containing alembic.ini."""
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "alembic.ini").is_file():
+            return str(candidate)
+    raise RuntimeError("Could not find alembic.ini in application parent directories")
 
 @app.get("/api")
 async def api_root():
@@ -98,5 +116,3 @@ app.include_router(files_router)
 app.include_router(enhanced_analysis_router)
 app.include_router(recon_router)
 app.include_router(asset_graph_router)
-
-

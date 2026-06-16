@@ -76,7 +76,7 @@ logger = logging.getLogger(__name__)
 
 **Style is inconsistent** — both f-string and `%`-style are used:
 - Newer files (`comprehensive_extractor.py`): `logger.error("REP endpoint extraction failed: %s", exc)` — **preferred**
-- Older files (`jsluice_extractor.py`): `logger.error(f"jsluice urls failed: {result.stderr}")` — legacy, avoid in new code
+- Legacy f-string logging existed in deleted/superseded modules; avoid adding it in new code.
 
 **Use `%`-style lazy interpolation for all new log calls.**
 

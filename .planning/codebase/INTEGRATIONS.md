@@ -2,7 +2,7 @@
 _Last updated: 2026-04-19_
 
 ## Summary
-JS Security Extractor integrates with two infrastructure services (PostgreSQL and Redis) and three external CLI tools (jsluice, sourcemapper, katana) that are called via subprocess. The Chrome extension optionally integrates with the "rep+" Chrome extension via the browser's cross-extension messaging API. There are no third-party SaaS API calls from the backend — all processing is self-contained.
+JS Security Extractor integrates with PostgreSQL and three external CLI tools (jsluice, sourcemapper, katana) that are called via subprocess. The Chrome extension optionally integrates with the "rep+" Chrome extension via the browser's cross-extension messaging API. There are no third-party SaaS API calls from the backend — all processing is self-contained.
 
 ---
 
@@ -14,8 +14,8 @@ JS Security Extractor integrates with two infrastructure services (PostgreSQL an
   - Default: `postgresql://jsextractor:changeme123@postgres:5432/js_extractor`
   - ORM client: SQLAlchemy 2.0.23 (`api/app/db.py`)
   - Schema tables: `sessions`, `files`, `source_maps`, `asset_nodes`, `asset_edges` (see `api/app/models/`)
-  - Migrations: Raw SQL scripts in `api/migrations/` (not Alembic-managed; Alembic is declared in deps but not actively used for migration scripts)
-  - Runtime schema patching: `api/app/main.py:ensure_runtime_schema_updates()` applies `ALTER TABLE` on startup for missing columns
+  - Migrations: Alembic revisions at repository root; startup runs `python -m alembic upgrade head`
+  - Legacy raw SQL migrations under `api/migrations/` remain historical references for earlier schema work
 
 **File Storage:**
 - Local filesystem only
@@ -25,11 +25,8 @@ JS Security Extractor integrates with two infrastructure services (PostgreSQL an
   - Docker volume: `./storage:/var/lib/js-extractor/storage` (host-mounted in `docker-compose.yml`)
 
 **Caching / Task Queue:**
-- Redis 7 (Alpine)
-  - Connection env var: `REDIS_URL`
-  - Default: `redis://redis:6379/0`
-  - Used as: Celery broker AND Celery result backend (`api/app/tasks/celery_app.py`)
-  - No application-level caching (Redis is Celery-only)
+- No Redis/Celery service is part of the active supported runtime.
+- Background work is API-process based and persisted in PostgreSQL job rows.
 
 ---
 
@@ -39,14 +36,14 @@ All tool invocations are subprocess calls. Binary paths resolved by `api/app/ser
 
 **jsluice** (`github.com/BishopFox/jsluice`)
 - Purpose: Extract URLs and secrets from JavaScript source
-- Called from: `api/app/services/jsluice_extractor.py` and `api/app/services/jsluice_extractor_secure.py`
+- Called from: `api/app/services/jsluice_extractor_secure.py`
 - Invocation: `jsluice urls --unique --include-source [--resolve-paths <base_url>] <tempfile.js>`
 - Binary location: `/usr/local/bin/jsluice` (default), resolvable via env var or PATH
 - Fallback: Regex-based extraction if binary not found
 
 **sourcemapper** (`github.com/denandz/sourcemapper`)
 - Purpose: Reconstruct original source files from JavaScript source maps
-- Called from: `api/app/services/sourcemap_processor.py`
+- Called from: `api/app/services/native_sourcemap_processor.py`
 - Binary location: `/usr/local/bin/sourcemapper` (default)
 - Limits enforced: max source map size 50MB (`SOURCEMAP_MAX_SIZE_BYTES`), max reconstructed files 1000 (`SOURCEMAP_MAX_RECONSTRUCTED_FILES`)
 
@@ -100,7 +97,7 @@ All tool invocations are subprocess calls. Binary paths resolved by `api/app/ser
 **API Authentication:**
 - No active authentication middleware on any API routes
 - `api_key: str | None = None` declared in `api/app/config.py` — not currently enforced
-- `python-jose` and `passlib[bcrypt]` are declared dependencies but no JWT or session auth is wired to any route
+- JWT/session auth libraries are not active route guards; `API_KEY` remains declared but unenforced
 
 **CORS:**
 - Configured in `api/app/main.py`
@@ -116,13 +113,12 @@ All tool invocations are subprocess calls. Binary paths resolved by `api/app/ser
 
 **Logging:**
 - Standard Python `logging` module throughout all services
-- Log level set via Uvicorn/Celery CLI flags (`--loglevel=info`)
+- Log level set via Uvicorn CLI flags (`--loglevel=info`)
 - No structured log shipping
 
 **Health Check:**
 - HTTP: `GET /health` returns `{"status": "healthy"}`
 - Docker: `HEALTHCHECK` via `curl -f http://localhost:3000/health` (in `Dockerfile.enhanced`)
-- Celery: `celery -A app.tasks.celery_app status` (in `docker-compose.yml` healthcheck)
 
 ---
 

@@ -79,7 +79,7 @@ SOURCEMAP_RESP="$TMP_DIR/sourcemap_resp.json"
 RECON_RESP="$TMP_DIR/reconstructed_resp.json"
 
 line
-printf 'Wishandwash sourcemap flow test\n'
+printf 'WishAndWash sourcemap flow test\n'
 printf 'API_BASE=%s\n' "$API_BASE"
 printf 'JS_URL=%s\n' "$JS_URL"
 printf 'EXPECTED_MAP_URL=%s\n' "$EXPECTED_MAP_URL"

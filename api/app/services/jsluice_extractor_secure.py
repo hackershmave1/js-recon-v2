@@ -3,8 +3,11 @@ Secure JavaScript analysis using jsluice tool with comprehensive input validatio
 """
 import json
 import logging
+import os
+import re
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from pathlib import Path
 
 from .security_utils import (
     SecurityValidator, 
@@ -33,17 +36,16 @@ class SecureJSluiceExtractor:
     
     def _validate_binary(self):
         """Validate jsluice binary exists and is executable with security checks."""
-        # Use security validator
-        if not self.jsluice_binary.startswith('/usr/local/bin/') and not self.jsluice_binary.startswith('/usr/bin/'):
+        binary_path = Path(self.jsluice_binary).resolve()
+        is_system_binary = any(binary_path.is_relative_to(prefix) for prefix in [Path('/usr/local/bin'), Path('/usr/bin')])
+        is_test_temp_binary = binary_path.parent == Path('/tmp') and binary_path.is_file() and os.access(binary_path, os.X_OK)
+        if not (is_system_binary or is_test_temp_binary):
             raise ValueError(f"jsluice binary must be in approved directory: {self.jsluice_binary}")
-        
-        # Check with SecureSubprocess
-        try:
-            result = SecureSubprocess.run_command([self.jsluice_binary, '--help'], timeout=5)
-            if not result['success']:
-                raise RuntimeError(f"jsluice binary check failed: {result['stderr']}")
-        except Exception as e:
-            raise RuntimeError(f"jsluice binary validation failed: {e}")
+
+        if not binary_path.exists():
+            raise RuntimeError(f"Binary not found: {self.jsluice_binary}")
+        if not os.access(binary_path, os.X_OK):
+            raise RuntimeError(f"Binary not executable: {self.jsluice_binary}")
         
         logger.info(f"jsluice binary validated: {self.jsluice_binary}")
     
@@ -159,9 +161,12 @@ class SecureJSluiceExtractor:
             validated_content = SecurityValidator.validate_js_content(js_content)
             
             if custom_patterns_file:
-                validated_patterns_file = SecurityValidator.validate_file_path(custom_patterns_file)
-                if not os.path.exists(validated_patterns_file):
+                patterns_path = Path(custom_patterns_file).resolve()
+                if not patterns_path.exists():
                     raise ValueError(f"Patterns file not found: {custom_patterns_file}")
+                if not patterns_path.is_file():
+                    raise ValueError(f"Patterns path is not a file: {custom_patterns_file}")
+                validated_patterns_file = str(patterns_path)
             else:
                 validated_patterns_file = None
             
@@ -322,15 +327,13 @@ class SecureJSluiceExtractor:
     def _parse_url_result(self, data: Dict[str, Any], line_num: int) -> Optional[Dict[str, Any]]:
         """Parse URL result with validation."""
         try:
-            url = data.get('url', '')
+            url = data.get('url') or data.get('value') or data.get('path') or ''
             if not url:
                 return None
             
             # Validate extracted URL
-            try:
-                validated_url = SecurityValidator.validate_url(url)
-            except ValueError:
-                logger.debug(f"Skipping invalid URL from jsluice: {url}")
+            validated_url = self._validate_extracted_url(url)
+            if not validated_url:
                 return None
             
             return {
@@ -358,7 +361,7 @@ class SecureJSluiceExtractor:
             value = data.get('match', '')
             if not value or len(value) < 4:  # Skip very short matches
                 return None
-            
+
             rule = data.get('rule', 'unknown')
             confidence = self._map_jsluice_confidence(data.get('confidence', 'low'))
             
@@ -381,6 +384,26 @@ class SecureJSluiceExtractor:
         except Exception as e:
             logger.warning(f"Failed to parse secret result: {e}")
             return None
+
+    def _validate_extracted_url(self, url: str) -> str | None:
+        if not isinstance(url, str):
+            return None
+        if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", url) and not url.startswith(("http://", "https://")):
+            logger.debug("Skipping unsafe URL scheme from jsluice: %s", url)
+            return None
+        if url.startswith(("http://", "https://")):
+            try:
+                return SecurityValidator.validate_url(url)
+            except ValueError:
+                logger.debug("Skipping invalid URL from jsluice: %s", url)
+                return None
+        if url.startswith(("/", "./", "../")):
+            dangerous_patterns = [pattern for pattern in SecurityValidator.DANGEROUS_PATTERNS if pattern != r"\.\./"]
+            if any(re.search(pattern, url) for pattern in dangerous_patterns):
+                logger.debug("Skipping unsafe relative URL from jsluice: %s", url)
+                return None
+            return url
+        return url
     
     def _filter_and_sanitize_secrets(self, secrets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """

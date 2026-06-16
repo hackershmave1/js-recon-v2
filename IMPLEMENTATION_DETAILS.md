@@ -1,7 +1,8 @@
 # JavaScript Security Extractor - Implementation Details
 
-This document is mandatory for all agents.
-It is the design-and-planning companion to `TODO.md` and must be updated before code changes start.
+For session-start guidance, read `AGENTS.md` first.
+
+This document is the design-and-planning companion to `TODO.md`. Update it before implementation work that requires a planned design entry.
 
 ## Rules
 1. Before implementation, create/update an entry with `Status: PLANNED`.
@@ -1750,7 +1751,7 @@ It is the design-and-planning companion to `TODO.md` and must be updated before 
   - Unit tests:
     - `node --check api/app/static/dashboard.js` (pass)
   - Integration/smoke tests:
-    - `bash -n scripts/manual_api_smoke.sh scripts/test_honeybook_sourcemap_flow.sh` (pass)
+    - `bash -n scripts/manual_api_smoke.sh scripts/test_wishandwash_sourcemap_flow.sh` (pass)
     - Manual browser validation of Files and Sessions filter combinations (pending user browser confirmation).
   - Cross-agent test run (required before moving to next task):
     - `docker compose -f api/docker-compose.yml cp api/tests/test_t005_upload_response.py api:/tmp/test_t005_upload_response.py` (pass)
@@ -1801,7 +1802,7 @@ It is the design-and-planning companion to `TODO.md` and must be updated before 
   - Unit tests:
     - `node --check api/app/static/dashboard.js` (pass)
   - Integration/smoke tests:
-    - `bash -n scripts/manual_api_smoke.sh scripts/test_honeybook_sourcemap_flow.sh` (pass)
+    - `bash -n scripts/manual_api_smoke.sh scripts/test_wishandwash_sourcemap_flow.sh` (pass)
     - Manual flow: View Files -> View Results -> Back to Session Files (pending user browser confirmation).
   - Cross-agent test run (required before moving to next task):
     - `docker compose -f api/docker-compose.yml cp api/tests/test_t005_upload_response.py api:/tmp/test_t005_upload_response.py` (pass)
@@ -1859,7 +1860,7 @@ It is the design-and-planning companion to `TODO.md` and must be updated before 
     - `python3 -m py_compile api/app/api/routes/sessions.py api/app/api/routes/enhanced_analysis.py api/tests/test_t035_session_summary_fields.py` (pass)
     - `node --check api/app/static/dashboard.js` (pass)
   - Integration/smoke tests:
-    - `bash -n scripts/manual_api_smoke.sh scripts/test_honeybook_sourcemap_flow.sh` (pass)
+    - `bash -n scripts/manual_api_smoke.sh scripts/test_wishandwash_sourcemap_flow.sh` (pass)
     - `docker compose -f api/docker-compose.yml cp api/tests/test_t035_session_summary_fields.py api:/tmp/test_t035_session_summary_fields.py` (pass)
     - `docker compose -f api/docker-compose.yml exec -T api sh -lc "printf '[pytest]\n' > /tmp/pytest-empty.ini && uv run pytest -c /tmp/pytest-empty.ini --noconftest -q /tmp/test_t035_session_summary_fields.py"` -> `1 passed`
     - Manual browser flow for Sessions badge + View Summary modal (pending user confirmation).
@@ -1973,11 +1974,11 @@ It is the design-and-planning companion to `TODO.md` and must be updated before 
 - Status: DONE
 - Created: 2026-02-09T16:38:29Z
 - Last Updated: 2026-02-09T16:50:18Z
-- Summary: Implement automatic daily TTL cleanup scheduling and DB purge-marker updates when deletion occurs.
+- Summary: Implement automatic daily TTL cleanup scheduling and DB purge-marker updates when deletion occurs. Superseded by runtime cleanup: Celery/Redis scheduler services were removed from the supported runtime; `RetentionCleanupService` remains and is tested directly.
 - Scope:
   - Update cleanup service to mark corresponding DB rows when content/map files are removed.
-  - Add Celery beat daily schedule for retention cleanup.
-  - Add `celery_beat` service in Docker compose.
+  - Historical: added Celery beat daily schedule for retention cleanup.
+  - Historical: added `celery_beat` service in Docker compose.
 - Out of Scope:
   - Multi-instance leader election for schedulers.
 - Planned File Changes:
@@ -2003,8 +2004,8 @@ It is the design-and-planning companion to `TODO.md` and must be updated before 
 - User Experience Change:
   - TTL cleanup can run automatically every day when `celery_beat` is up, reducing manual storage maintenance.
 - Manual Validation Steps:
-  1. Start `celery_beat` and verify schedule registration.
-  2. Confirm cleanup runs log both file deletions and purge marker update counters.
+  1. Superseded historical instruction: do not start `celery_beat` in the current supported runtime.
+  2. Run the direct retention cleanup service tests and any documented operator cleanup command when one is added.
 
 ## ID: IMP-B019
 - Task ID: B-019

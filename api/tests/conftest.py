@@ -218,14 +218,14 @@ def mock_jsluice_binary():
     exit 1
     '''
     
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
+    fd, path = tempfile.mkstemp(suffix='.sh')
+    with os.fdopen(fd, 'w') as f:
         f.write(script_content)
-        f.flush()
-        os.chmod(f.name, 0o755)
-        yield f.name
+    os.chmod(path, 0o755)
+    yield path
     
     try:
-        os.unlink(f.name)
+        os.unlink(path)
     except:
         pass
 

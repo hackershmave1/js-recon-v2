@@ -12,7 +12,7 @@
 - **Frontend**: Bootstrap 5 + Vanilla JavaScript
 - **Deployment**: Docker + Docker Compose
 - **Security Tools**: jsluice, sourcemapper (external binaries)
-- **Task Processing**: Celery (optional background processing)
+- **Task Processing**: FastAPI background tasks, background threads for long job runners, and DB-backed job records
 
 ### Core Components
 
@@ -72,11 +72,11 @@
 - Temporary file management with secure cleanup
 - Security configuration and logging sanitization
 
-**JSluice Integration** (`services/jsluice_extractor.py`)
+**JSluice Integration** (`services/jsluice_extractor_secure.py`)
 - Secure wrapper around jsluice binary for URL/secret extraction
 - Process isolation and output validation
 
-**SourceMap Processor** (`services/sourcemap_processor.py`)
+**SourceMap Processor** (`services/native_sourcemap_processor.py`)
 - Source map parsing and original file reconstruction
 - Integration with sourcemapper tool
 
@@ -264,12 +264,14 @@ The application is designed to work with a Chrome extension for passive JavaScri
 
 **Docker Compose** (`docker-compose.yml`):
 - PostgreSQL database with persistence
-- Redis for Celery task queue (optional)
+- FastAPI API service built from `Dockerfile.enhanced`
 - Health checks and networking
 - Environment-based configuration
 
 ### Environment Configuration
 - Database connection settings
+- Startup Alembic migration behavior (`python -m alembic upgrade head`)
+- Startup recovery for orphaned `queued`/`running`/`cancelling` job rows
 - External tool paths and configuration
 - Security limits and timeouts
 - CORS and API configuration
@@ -312,8 +314,8 @@ The application is designed to work with a Chrome extension for passive JavaScri
 - Each task requires test coverage and documented test execution.
 - Each agent must run at least one other agent's relevant test suite before task completion and before claiming the next task.
 - Canonical sourcemap smoke target for relevant tasks:
-  - `https://finance.honeybook.com/_next/static/chunks/webpack-130dd072d1ab1095.js`
-  - `https://finance.honeybook.com/_next/static/chunks/webpack-130dd072d1ab1095.js.map`
+  - `https://wishandwash.co.il`
+  - Record exact JS and MAP URLs discovered during validation.
 - `APPLICATION_OVERVIEW.md` must be updated when model/API/architecture/process behavior changes.
 
 ## Security Considerations
@@ -367,7 +369,7 @@ The ComprehensiveExtractor is designed for easy extension:
 ### Deployment Flexibility
 - Docker-based deployment with configuration options
 - Health check endpoints for monitoring
-- Horizontal scaling support through stateless design
+- Horizontal scaling requires explicit job ownership/locking validation because current long-running jobs are DB-backed but still executed by API processes.
 - External tool integration through configurable paths
 
 This application represents a production-ready platform for JavaScript security analysis with comprehensive features, robust security measures, and extensive testing coverage.

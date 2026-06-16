@@ -3,7 +3,7 @@ _Last updated: 2026-04-19_
 
 ## Summary
 
-The codebase is a security-focused JavaScript analysis tool with good foundational security hygiene (URL validation, secure subprocess wrappers, chunked regex processing). The most significant structural risks are: the complete absence of API authentication enforcement, in-process in-memory job state that leaks across restarts and prevents horizontal scaling, and a dead `SecureJSluiceExtractor` class that exists but is never used in production code paths. Several dependency packages are included but serve no active runtime purpose.
+The codebase is a security-focused JavaScript analysis tool with good foundational security hygiene (URL validation, secure subprocess wrappers, chunked regex processing). The most significant structural risks are: the complete absence of API authentication enforcement, remaining API-process job execution constraints for horizontal scaling, and partially migrated schema history that still carries legacy raw SQL context.
 
 ---
 
@@ -61,26 +61,19 @@ The codebase is a security-focused JavaScript analysis tool with good foundation
 - **Impact**: Startup time penalty on every boot; logic is fragile when run concurrently (no advisory lock); incompatible with multi-replica deployments; Alembic history is out of sync with the actual schema.
 - **Fix approach**: Convert the startup mutations into proper Alembic migration files and invoke `alembic upgrade head` as part of the deployment step rather than at runtime.
 
-### Dual jsluice Extractor Classes — Insecure One Used in Production
+### API-Process Job Execution Still Limits Horizontal Scaling
 
-- **Issue**: Two implementations exist: `api/app/services/jsluice_extractor.py` (original, uses bare `subprocess.run` with no path validation, calls it via temp-file pass-by-path with no `shell=False` enforcement) and `api/app/services/jsluice_extractor_secure.py` (`SecureJSluiceExtractor`, uses `SecureSubprocess`, validates the binary path prefix). Only the insecure version is imported in production: `api/app/services/comprehensive_extractor.py:7` imports from `jsluice_extractor`, not `jsluice_extractor_secure`.
-- **Files**: `api/app/services/jsluice_extractor.py`, `api/app/services/jsluice_extractor_secure.py`, `api/app/services/comprehensive_extractor.py:7`
-- **Impact**: The security hardening investment in `jsluice_extractor_secure.py` is wasted; the actual code path uses the unvalidated extractor.
-- **Fix approach**: Update `comprehensive_extractor.py` to import `SecureJSluiceExtractor` from `jsluice_extractor_secure`, then delete or archive `jsluice_extractor.py`.
+- **Issue**: Job state is persisted in PostgreSQL and startup recovery marks orphaned active rows terminal, but actual work still runs in API-process background threads/events.
+- **Files**: `api/app/api/routes/sessions.py`, `api/app/api/routes/recon.py`, `api/app/services/job_recovery.py`
+- **Impact**: A restart no longer leaves old jobs `running`, but multiple API replicas still need explicit worker ownership/locking before they are safe for production horizontal scaling.
+- **Fix approach**: Add owner/heartbeat fields and claim semantics, or move job execution into a single supported worker system with documented ownership guarantees.
 
-### In-Memory Job State Prevents Horizontal Scaling and Leaks Memory
+### Legacy Celery References Were Removed From Active Runtime
 
-- **Issue**: `SESSION_ANALYSIS_JOBS: dict[str, dict]` in `api/app/api/routes/sessions.py:30` and `RECON_JOBS: dict[str, dict]` in `api/app/api/routes/recon.py:24` are plain module-level dicts. Neither dict is ever cleaned up: there are no `pop`, `del`, or eviction calls. Jobs accumulate for the process lifetime.
-- **Files**: `api/app/api/routes/sessions.py:30-31`, `api/app/api/routes/recon.py:24`
-- **Impact**: Memory grows unbounded over time; job state is lost on restart; multiple uvicorn workers cannot share state; Celery is declared as a dependency (presumably intended for this) but never wired to these routes.
-- **Fix approach**: Either persist job state to the existing PostgreSQL DB, or use the Redis instance (already configured) as a shared job store. Add a TTL-based cleanup path.
-
-### Celery Task Infrastructure Is Dead Code
-
-- **Issue**: `api/app/tasks/` contains `celery_app.py`, `enhanced_processing.py`, `process_file.py`, and `retention_cleanup.py`. These tasks define `@celery_app.task` handlers but are never dispatched anywhere in `api/app/api/`. No route calls `.delay()` or `.apply_async()`. Celery and Redis are nonetheless in `requirements.txt` and `pyproject.toml`, adding ~30 MB to the install footprint and requiring a running Redis broker that is never actually used.
-- **Files**: `api/app/tasks/`, `api/requirements.txt`, `api/pyproject.toml`
-- **Impact**: Dead infrastructure; misleading architecture; Redis dependency is a false requirement at runtime.
-- **Fix approach**: Either wire Celery into the analysis/recon dispatch paths (replacing the thread-based approach), or remove the tasks directory and drop `celery` and `redis` from requirements.
+- **Issue**: The active imports, Docker services, and docs no longer require Celery/Redis. Watch for old references in historical archives only.
+- **Files**: `api/app/tasks/`, `api/docker-compose.yml`, `api/README.md`, `.planning/codebase/*`
+- **Impact**: Misleading references can cause developers to attempt unsupported worker startup.
+- **Fix approach**: Keep historical references out of active docs; if scheduled cleanup is required later, add a documented non-Celery command or restore a supported worker intentionally.
 
 ### `python-jose` and `passlib` Are Unused
 
@@ -135,8 +128,6 @@ The codebase is a security-focused JavaScript analysis tool with good foundation
 | `fastapi` | `0.104.1` | Over 18 months behind current (0.115+); `@app.on_event` deprecated |
 | `python-jose` | `3.3.0` | Known algorithm confusion CVE (CVE-2024-33664); not actively used — remove |
 | `passlib` | `1.7.4` | Last release 2022; `bcrypt` backend has a known silent truncation bug at 72 bytes; not used — remove |
-| `celery` | `5.3.4` | Not wired to any route; unnecessary dependency |
-| `redis` | `5.0.1` | Only needed if Celery is used; currently unused at runtime |
 | `httpx` | `0.25.2` | Multiple releases behind; later versions improved SSRF-related redirect behaviour |
 | `pydantic` | `2.5.0` | ~1.5 years behind 2.10+ |
 | `uvicorn` | `0.24.0` | Behind current; security-relevant fixes in 0.27+ |

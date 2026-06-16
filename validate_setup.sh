@@ -32,7 +32,7 @@ check_result "Docker Compose accessible"
 # Check individual services
 echo ""
 echo "🐳 Service Status:"
-docker-compose ps | grep -E "(postgres|redis|api|celery_worker)" | while read line; do
+docker-compose ps | grep -E "(postgres|api)" | while read line; do
     if echo "$line" | grep -q "Up"; then
         service=$(echo "$line" | awk '{print $1}')
         echo -e "${GREEN}✅ $service running${NC}"
@@ -79,7 +79,7 @@ echo "🧪 Functional Tests..."
 echo "----------------------"
 
 # Test comprehensive analysis endpoint
-test_payload='{"content": "fetch(\"/api/users\"); const key = \"sk_live_123\";", "url": "https://example.com/test.js"}'
+test_payload='{"content": "fetch(\"/api/users\"); const key = \"sk_live_123\";", "url": "https://wishandwash.co.il/test.js"}'
 response=$(curl -s -w "%{http_code}" -X POST http://localhost:3000/api/analyze-comprehensive \
     -H "Content-Type: application/json" \
     -d "$test_payload" \
@@ -97,7 +97,7 @@ else
 fi
 
 # Test file ingestion
-ingestion_payload='{"metadata": {"sessionId": "test-session-123"}, "files": [{"url": "https://example.com/test.js", "contentHash": "test123", "sessionId": "test-session-123", "contentType": "application/javascript", "contentLength": 50, "content": "console.log(\"test\");"}]}'
+ingestion_payload='{"metadata": {"sessionId": "test-session-123"}, "files": [{"url": "https://wishandwash.co.il/test.js", "contentHash": "test123", "sessionId": "test-session-123", "contentType": "application/javascript", "contentLength": 20, "content": "console.log(\"test\");"}]}'
 response=$(curl -s -w "%{http_code}" -X POST http://localhost:3000/api/save-files \
     -H "Content-Type: application/json" \
     -d "$ingestion_payload" \

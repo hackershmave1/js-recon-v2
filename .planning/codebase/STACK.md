@@ -9,7 +9,7 @@ JS Security Extractor is a security reconnaissance tool with two main components
 ## Languages
 
 **Primary:**
-- Python 3.11 — entire backend API, all services and task workers
+- Python 3.11 — entire backend API and services
 - JavaScript (ES Modules) — Chrome extension (no transpile step, native browser ESM)
 
 **Secondary:**
@@ -45,10 +45,10 @@ JS Security Extractor is a security reconnaissance tool with two main components
 - Pydantic 2.5.0 — request/response validation models throughout routes
 - pydantic-settings 2.1.0 — settings loaded from env vars (`api/app/config.py`)
 
-**Async Task Queue:**
-- Celery 5.3.4 — background task worker (`api/app/tasks/celery_app.py`)
-  - Three services: `celery_worker`, `celery_beat` (scheduled tasks), `api`
-  - Beat schedule: `retention_cleanup` task runs daily at 03:00 UTC
+**Background work:**
+- FastAPI `BackgroundTasks` for request-triggered background work
+- API-process threads for recon and session analysis jobs
+- PostgreSQL `jobs` table for persisted job state and startup recovery
 
 **Testing:**
 - pytest 7.4.3
@@ -100,7 +100,6 @@ Binary paths are resolved at runtime via `api/app/services/binary_locator.py`, c
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `DATABASE_URL` | `postgresql://jsextractor:changeme123@localhost:5432/js_extractor` | PostgreSQL connection |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection (Celery broker + backend) |
 | `STORAGE_PATH` | `/var/lib/js-extractor/storage` | Local file storage root |
 | `API_KEY` | `None` | Optional API key (declared, not enforced in routes) |
 | `FILE_CONTENT_TTL_DAYS` | `30` | Retention for JS file content |
@@ -117,7 +116,7 @@ No `.env` file found in the repository root.
 - `api/requirements.txt` — legacy pip-compatible list (used by simple `Dockerfile`)
 - `api/Dockerfile` — pip-based image (no binary tools)
 - `api/Dockerfile.enhanced` — uv-based image with Go binaries compiled in
-- `api/docker-compose.yml` — full stack: postgres, redis, api, celery_worker, celery_beat
+- `api/docker-compose.yml` — supported local stack: postgres and api
 
 ---
 
@@ -126,14 +125,14 @@ No `.env` file found in the repository root.
 **Development:**
 - Python >= 3.11
 - `uv` package manager recommended
-- PostgreSQL 15 and Redis 7 (via Docker Compose)
+- PostgreSQL 15 (via Docker Compose)
 - Optional: Go 1.21.5+ if building binaries locally
 - Optional: Playwright + Chromium for headless JS discovery
 
 **Production / Container:**
 - `Dockerfile.enhanced` is the production image
 - All Go binaries compiled during image build (no Go runtime required at runtime)
-- Ports: API on 3000, Postgres on 5432, Redis on 6379
+- Ports: API on 3000, Postgres on 5432
 
 **Chrome Extension:**
 - Manifest V3 — Chrome/Chromium only

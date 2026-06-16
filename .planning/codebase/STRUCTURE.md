@@ -11,7 +11,7 @@ The repository is split into three top-level areas: `api/` (Python FastAPI backe
 
 ```
 js-security-extractor/
-├── api/                          # Python backend (FastAPI + Celery)
+├── api/                          # Python backend (FastAPI + PostgreSQL)
 │   ├── app/                      # Application package
 │   │   ├── main.py               # FastAPI app factory, startup hook, router wiring
 │   │   ├── config.py             # Settings via pydantic-settings (env vars)
@@ -38,12 +38,11 @@ js-security-extractor/
 │   │   ├── services/             # Business logic layer
 │   │   │   ├── comprehensive_extractor.py  # Main analysis orchestrator
 │   │   │   ├── recon_job_runner.py         # Autonomous JS discovery runner
-│   │   │   ├── jsluice_extractor.py        # jsluice binary wrapper
-│   │   │   ├── jsluice_extractor_secure.py # Hardened jsluice wrapper
+│   │   │   ├── jsluice_extractor_secure.py # Canonical hardened jsluice wrapper
 │   │   │   ├── rep_endpoints_extractor.py  # Regex endpoint extraction
 │   │   │   ├── rep_secrets_extractor.py    # Kingfisher-rule secret extraction
 │   │   │   ├── native_sourcemap_processor.py  # Sourcemap parse/reconstruct
-│   │   │   ├── sourcemap_processor.py      # Alternate sourcemap processor
+│   │   │   ├── sourcemap_processor.py      # Compatibility alias for native processor
 │   │   │   ├── sourcemap_validation.py     # Sourcemap fetch/state tracking
 │   │   │   ├── parameter_extractor.py      # URL/function parameter extraction
 │   │   │   ├── sensitive_file_detector.py  # Sensitive file reference detection
@@ -58,6 +57,7 @@ js-security-extractor/
 │   │   │   ├── security_utils.py           # Input validation, shell safety
 │   │   │   ├── binary_locator.py           # External binary path resolution
 │   │   │   ├── retention_cleanup.py        # TTL-based content purge
+│   │   │   ├── job_recovery.py             # Startup recovery for orphaned jobs
 │   │   │   ├── kingfisher_rules_loader.py  # Loads YAML rules from rules/
 │   │   │   ├── storage.py                  # StorageService: disk write helpers
 │   │   │   ├── async_utils.py              # run_coroutine_sync() bridge
@@ -66,11 +66,6 @@ js-security-extractor/
 │   │   │       ├── aws.yaml
 │   │   │       ├── anthropic.yaml
 │   │   │       └── ... (200+ provider YAML files)
-│   │   ├── tasks/                # Celery async tasks
-│   │   │   ├── celery_app.py     # Celery app + Beat schedule definition
-│   │   │   ├── enhanced_processing.py  # process_file_comprehensive task
-│   │   │   ├── process_file.py   # Legacy process_file task stub
-│   │   │   └── retention_cleanup.py    # Celery-wrapped retention cleanup task
 │   │   ├── static/               # Served at /static
 │   │   │   ├── dashboard.js      # SPA frontend (~4300 lines, vanilla JS)
 │   │   │   ├── dashboard.css     # Dashboard styles
@@ -134,13 +129,12 @@ js-security-extractor/
 
 **Entry Points:**
 - `api/app/main.py` — FastAPI app creation, router registration, startup hook
-- `api/app/tasks/celery_app.py` — Celery app + Beat schedule
 - `chrome-extension/background.js` — Extension service worker (main logic)
 - `chrome-extension/manifest.json` — Extension entry point declarations
 
 **Configuration:**
 - `api/app/config.py` — All settings via `pydantic-settings`; reads env vars without prefix
-- `api/docker-compose.yml` — Dev environment: postgres, redis, api, celery_worker, celery_beat
+- `api/docker-compose.yml` — Dev environment: postgres and api
 - `api/pyproject.toml` — Python dependencies (managed with `uv`)
 
 **Core Logic:**
@@ -202,10 +196,6 @@ js-security-extractor/
 - Create `api/app/models/{name}.py`
 - Add to `api/app/models/__init__.py` for `create_all` registration
 
-**New Celery task:**
-- Add to `api/app/tasks/enhanced_processing.py` or create a new file in `api/app/tasks/`
-- Import it in `api/app/tasks/celery_app.py` so it registers
-
 **New secret detection rules:**
 - Add a `{provider}.yaml` YAML file to `api/app/services/rules/` following Kingfisher format
 - Rules auto-loaded by `kingfisher_rules_loader.py`
@@ -249,4 +239,4 @@ js-security-extractor/
 - `api/tests/` has both `test_t023_dashboard_failure_utils.mjs` (ES module test) and `analyze_wishandwash.py` / `check_todo_hygiene.sh` — these appear to be utility scripts mixed into the test directory
 - `chrome-extension/lib/` contents not inspected — likely vendored dependencies
 - `scripts/` and `docs/` directories not fully explored
-- `api/app/services/sourcemap_processor.py` and `api/app/services/native_sourcemap_processor.py` appear to be two implementations of sourcemap processing — which one is primary is unclear from file names alone
+- `api/app/services/native_sourcemap_processor.py` is the canonical sourcemap processor; `sourcemap_processor.py` is retained only as a compatibility alias.

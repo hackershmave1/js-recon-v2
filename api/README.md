@@ -7,8 +7,9 @@ FastAPI backend for the JavaScript Security Extractor platform.
 ### Using Docker (Recommended)
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
+This starts the supported local stack: `postgres` and `api`. Celery/Redis worker services are no longer part of the active runtime.
 
 ### Manual Setup
 
@@ -21,11 +22,8 @@ source .venv/bin/activate
 uv sync
 
 # Start services
-docker-compose up -d postgres redis
+docker compose up -d postgres
 uvicorn app.main:app --reload --port 3000
-
-# In another terminal, start Celery worker
-celery -A app.tasks.celery_app worker --loglevel=info
 ```
 
 ## API Endpoints
@@ -65,7 +63,6 @@ Create `.env` file:
 
 ```env
 DATABASE_URL=postgresql://user:pass@localhost:5432/js_extractor
-REDIS_URL=redis://localhost:6379/0
 STORAGE_PATH=/var/lib/js-extractor/storage
 FILE_CONTENT_TTL_DAYS=30
 SOURCEMAP_CONTENT_TTL_DAYS=30
@@ -82,9 +79,10 @@ TTL values apply to stored content artifacts only (`storage/sessions/*/files` an
 
 - **FastAPI**: REST API framework
 - **PostgreSQL**: Metadata storage
-- **Redis**: Task queue broker
-- **Celery**: Background task processing
+- **Background work**: FastAPI background tasks and DB-backed job records
 - **File Storage**: Local or S3
+- **Migrations**: startup runs `python -m alembic upgrade head`
+- **Job recovery**: startup marks orphaned queued/running/cancelling jobs terminal
 
 ## Development
 
@@ -107,18 +105,13 @@ Note: tests require `DATABASE_URL` to be set and a reachable database.
 2. Configure HTTPS/SSL
 3. Set up monitoring (Prometheus/Grafana)
 4. Configure backups
-5. Scale workers: `docker-compose up -d --scale celery_worker=4`
+5. Run multiple API replicas behind a process manager/load balancer only after validating job ownership semantics
 
 ## Troubleshooting
 
 ### Database connection error
 ```bash
 docker-compose logs postgres
-```
-
-### Celery not processing
-```bash
-docker-compose logs celery_worker
 ```
 
 ### Storage issues
