@@ -30,7 +30,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from recon.db.base import Base
-from recon.domain import JobState, QueueName, RunStage, RunState
+from recon.domain import FindingType, JobState, QueueName, RunStage, RunState
 
 _UUID_PK = {
     "primary_key": True,
@@ -211,6 +211,86 @@ class RunEvent(Base):
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
 
+class Finding(Base):
+    """A content-addressed finding — one row per (run, finding_hash) (REQ-D3, A3).
+
+    ``finding_hash`` is the stable identity from ``recon.findings.normalize``
+    (sha256 over type + normalized value + normalized source path). Mutable
+    per-sighting detail lives on :class:`FindingOccurrence` so a normalization
+    merge is visible and countable, never silently dropped (REQ-C2)."""
+
+    __tablename__ = "finding"
+    __table_args__ = (
+        # Per-run, NOT global: a finding recurs with the same hash across runs so
+        # REQ-D5 can diff hash sets; this keys the REQ-A3 exactly-once outbox.
+        UniqueConstraint("run_id", "finding_hash", name="uq_finding_run_hash"),
+        CheckConstraint(_enum_check("type", FindingType), name="ck_finding_type"),
+        Index("ix_finding_run", "tenant_id", "run_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("run.id", ondelete="CASCADE"), nullable=False
+    )
+    finding_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    type: Mapped[str] = mapped_column(String(20), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str | None] = mapped_column(String(16))
+    # Type-specific display extras (method/provider/location/name); not identity.
+    attributes: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    first_stage: Mapped[str | None] = mapped_column(String(20))
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+
+    occurrences: Mapped[list["FindingOccurrence"]] = relationship(
+        back_populates="finding", cascade="all, delete-orphan"
+    )
+
+
+class FindingOccurrence(Base):
+    """One sighting of a finding (REQ-C2 honesty, REQ-A3 append-idempotent).
+
+    A finding may have many occurrences — distinct call sites / raw URLs that
+    normalized to the same identity, or the same secret at different offsets.
+    ``occurrence_hash`` (over the identifying volatile subset) dedupes retries."""
+
+    __tablename__ = "finding_occurrence"
+    __table_args__ = (
+        UniqueConstraint(
+            "finding_id", "occurrence_hash", name="uq_occurrence_finding_hash"
+        ),
+        Index("ix_occurrence_finding", "tenant_id", "finding_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    finding_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("finding.id", ondelete="CASCADE"), nullable=False
+    )
+    occurrence_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    host: Mapped[str | None] = mapped_column(Text)  # occurrence-only, never hashed (C1)
+    raw_url: Mapped[str | None] = mapped_column(Text)
+    source_path: Mapped[str | None] = mapped_column(Text)
+    line: Mapped[int | None] = mapped_column(Integer)
+    col: Mapped[int | None] = mapped_column(Integer)
+    offset_start: Mapped[int | None] = mapped_column(Integer)
+    offset_end: Mapped[int | None] = mapped_column(Integer)
+    evidence: Mapped[str | None] = mapped_column(Text)
+    engine: Mapped[str | None] = mapped_column(String(32))
+    confidence: Mapped[str | None] = mapped_column(String(16))
+    verified: Mapped[bool | None] = mapped_column(Boolean)
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+
+    finding: Mapped["Finding"] = relationship(back_populates="occurrences")
+
+
 # Tables carrying a tenant_id get FORCE RLS in the migration.
 TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "app_user",
@@ -218,4 +298,11 @@ TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "run",
     "job",
     "run_event",
+)
+
+# Slice-2 additions, RLS-enabled by migration 0002 (kept separate so 0001's RLS
+# loop stays exactly what shipped and the two migrations never double-apply).
+FINDINGS_TABLES: tuple[str, ...] = (
+    "finding",
+    "finding_occurrence",
 )

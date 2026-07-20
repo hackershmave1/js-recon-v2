@@ -61,6 +61,15 @@ class JobState(StrEnum):
     CANCELLED = "cancelled"
 
 
+class FindingType(StrEnum):
+    """The content-addressed finding kinds (REQ-D3). Extended in later slices
+    (source_map, post_message, storage) as new extractors land."""
+
+    ENDPOINT = "endpoint"
+    SECRET = "secret"
+    PARAM = "param"
+
+
 # The stages in execution order — used to know what comes next and to resume.
 STAGE_ORDER: tuple[RunStage, ...] = (
     RunStage.DISCOVERING,
