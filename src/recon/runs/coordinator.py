@@ -8,10 +8,12 @@ one place means the API and the worker never hand-wire queues themselves.
 from __future__ import annotations
 
 from redis import Redis
+from sqlalchemy import update
 
+from recon import storage
 from recon.config import get_settings
 from recon.db.base import tenant_session
-from recon.db.models import Job
+from recon.db.models import Job, Run
 from recon.domain import JobState, QueueName, RunStage, RunState
 from recon.queue import streams
 from recon.runs import service, state_machine as sm
@@ -85,6 +87,26 @@ def start_run(
         target=target,
         input_ref=input_ref,
     )
+    enqueue_stage(redis, tenant_id=tenant_id, run_id=view.id, stage=RunStage.DISCOVERING)
+    return view
+
+
+def start_run_with_input(
+    redis: Redis,
+    *,
+    tenant_id: str,
+    session_id: str,
+    js_source: str | bytes,
+    target: str | None = None,
+) -> RunView:
+    """Create a run, store its JS input as a blob, point the run at it, then
+    enqueue the first stage. The analyze stage reads that blob (REQ-D2)."""
+    content = js_source.encode("utf-8") if isinstance(js_source, str) else js_source
+    view = service.create_run(redis, tenant_id=tenant_id, session_id=session_id, target=target)
+    key = storage.put_blob(tenant_id, view.id, "input", content)
+    # Set input_ref before enqueue so the analyze stage always sees it.
+    with tenant_session(tenant_id) as session:
+        session.execute(update(Run).where(Run.id == view.id).values(input_ref=key))
     enqueue_stage(redis, tenant_id=tenant_id, run_id=view.id, stage=RunStage.DISCOVERING)
     return view
 

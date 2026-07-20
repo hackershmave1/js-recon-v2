@@ -15,6 +15,7 @@ from redis import Redis
 
 from recon.config import get_settings
 from recon.domain import JobState, QueueName, RunStage, RunState
+from recon.findings import analyze
 from recon.observability import bind_run, get_logger
 from recon.progress import heartbeat as progress
 from recon.queue import retry, streams
@@ -129,6 +130,10 @@ def process_message(redis: Redis, queue: QueueName, msg_id: str, message: dict) 
                     done=step,
                     total=STUB_STEPS,
                 )
+            # Real work: the analyze stage extracts findings from the JS input and
+            # writes them through the outbox. A failure here routes to retry/DLQ.
+            if stage == RunStage.ANALYZING:
+                analyze.analyze_run(redis, tenant_id=tenant_id, run_id=run_id)
         except Exception as exc:  # noqa: BLE001 - failure routing is intentional
             return _handle_failure(
                 redis, queue, msg_id, message, exc,
