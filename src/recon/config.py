@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     database_admin_url: str = "postgresql+psycopg2://recon:recon@localhost:5432/recon"
     redis_url: str = "redis://localhost:6379/0"
 
+    # Largest JS upload the API will store per run. Bounds worker memory (REQ-Q5),
+    # since the analyze stage reads the whole blob into memory. This is an
+    # application cap, not an ingress body limit — see runs_router upload NOTE.
+    max_upload_bytes: int = 10 * 1024 * 1024  # 10 MiB
+
     # Object storage — blobs are referenced by key, never stored in a row (REQ-D2).
     s3_endpoint_url: str | None = None
     s3_access_key: str | None = None

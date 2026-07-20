@@ -7,12 +7,23 @@ import json
 import time
 from typing import Iterator
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from redis import Redis
 
 from recon.api.deps import get_redis, get_tenant_id
+from recon.config import get_settings
 from recon.domain import TERMINAL_STATES
 from recon.events import stream
 from recon.runs import coordinator, queries, service
@@ -45,6 +56,51 @@ def start_run(
         )
     view = coordinator.start_run(
         redis, tenant_id=tenant_id, session_id=body.session_id, target=body.target
+    )
+    return {"run_id": view.id, "state": view.state}
+
+
+@router.post("/runs/upload", status_code=202)
+def start_run_from_upload(
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+    target: str | None = Form(default=None),
+    tenant_id: str = Depends(get_tenant_id),
+    redis: Redis = Depends(get_redis),
+) -> dict:
+    """Start a run from an uploaded JS bundle (``multipart/form-data``), the
+    HTTP driver for the "one JS file -> findings" slice (REQ-A1, REQ-D2).
+
+    Unlike the pure-enqueue ``POST /runs``, this writes the bundle to object
+    storage before returning, so it carries its own latency budget (a blob PUT) —
+    not REQ-A1's thin-tier 200ms.
+
+    NOTE (follow-up, DoS hardening): ``max_upload_bytes`` bounds what we read into
+    memory and store, but Starlette has already received and spooled the multipart
+    body by the time this runs. A hard request-body limit that rejects an
+    upload-flood *before* buffering belongs at the ingress (reverse-proxy
+    ``client_max_body_size`` or an ASGI body-size middleware); deferred.
+    """
+    session = sessions_service.get_session(tenant_id, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if not session.authorization_ack:
+        raise HTTPException(status_code=403, detail="session is not authorized for recon")
+
+    cap = get_settings().max_upload_bytes
+    # Read at most cap+1 bytes so an oversized upload can't balloon memory here.
+    content = file.file.read(cap + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="uploaded file is empty")
+    if len(content) > cap:
+        raise HTTPException(status_code=413, detail=f"uploaded file exceeds {cap} bytes")
+
+    view = coordinator.start_run_with_input(
+        redis,
+        tenant_id=tenant_id,
+        session_id=session_id,
+        js_source=content,
+        target=target,
     )
     return {"run_id": view.id, "state": view.state}
 
