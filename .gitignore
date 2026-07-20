@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.env
+dist/
+build/
+.ruff_cache/
+
+# Local-only, per-developer / per-session artifacts (not shared)
+.claude/settings.local.json
+HANDOFF-*.md
