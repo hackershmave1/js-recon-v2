@@ -43,10 +43,13 @@ content-addressed findings through a transactional outbox.
 - Finding identity `finding_hash = sha256(type + normalized value + source path)` — spec in `docs/req-d3-finding-hash-normalization.md` (REQ-D3)
 - Exactly-once findings via an outbox (REQ-A3); a normalization merge surfaces as occurrences, never a silent drop (REQ-C2)
 - `finding`/`finding_occurrence` tables under row-level security (migration `0002`)
-- Drive it: `coordinator.start_run_with_input(...)` stores the JS blob and enqueues the run
+- Drive it over HTTP: `POST /runs/upload` (multipart `file=@bundle.js` + `session_id`)
+  stores the JS blob and enqueues a run; `GET /runs/{run_id}/findings` reads back the
+  findings (each with its occurrences). Service-level `coordinator.start_run_with_input(...)`
+  does the same without HTTP.
 
 Still to come this slice: out-of-process engines (Kingfisher secrets, Sourcemapper
-source maps), the egress sandbox + real fetch stage, and an HTTP upload path.
+source maps) and the egress sandbox + real fetch stage.
 
 ## Run in Docker (full stack)
 
