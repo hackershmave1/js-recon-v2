@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #0B0D13; }
+  ::selection { background: rgba(205,235,69,0.28); color: #fff; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #232b3b; border-radius: 6px; border: 2px solid #0B0D13; }
+  ::-webkit-scrollbar-thumb:hover { background: #313b50; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes dropin { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes flowdash { to { stroke-dashoffset: -16; } }
+  select option { background: #0c0f16; color: #ECEFF6; }
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #0B0D13; color: #ECEFF6; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 14px; -webkit-font-smoothing: antialiased;">
+  <div style="max-width: 1080px; margin: 0 auto; padding: 30px 32px 80px;">
+
+    <!-- header -->
+    <div style="display: flex; align-items: flex-start; gap: 16px; margin-bottom: 8px;">
+      <div style="width: 40px; height: 40px; border-radius: 11px; background: #CDEB45; display: flex; align-items: center; justify-content: center; flex: 0 0 40px; box-shadow: 0 0 22px rgba(205,235,69,0.3);">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0B0D13" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2"></circle><circle cx="5" cy="18" r="2"></circle><circle cx="19" cy="12" r="2"></circle><path d="M7 7l10 4M7 17l10-5"></path></svg>
+      </div>
+      <div style="flex: 1;">
+        <h1 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 24px; margin: 0; letter-spacing: -0.5px;">Threat Model Orchestration</h1>
+        <p style="color: #AAB4C9; font-size: 13.5px; margin: 5px 0 0; line-height: 1.5; max-width: 720px;">Configure how the AI agent reaches your model providers and how it orchestrates analysis over the recon data you’ve collected. Everything the agent asserts is traced back to deterministic evidence.</p>
+      </div>
+      <button onClick="{{ save }}" style="display: flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 10px; border: none; background: #CDEB45; color: #0B0D13; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 700;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"></path><path d="M17 21v-8H7v8M7 3v5h8"></path></svg>Save config
+      </button>
+    </div>
+
+    <!-- section tabs -->
+    <div style="display: flex; gap: 4px; margin: 22px 0 22px; border-bottom: 1px solid #1c2230;">
+      <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="4">
+        <button onClick="{{ t.go }}" style="padding: 10px 16px; border: none; background: none; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 600; color: {{ t.fg }}; border-bottom: 2px solid {{ t.bd }}; margin-bottom: -1px;">{{ t.label }}</button>
+      </sc-for>
+    </div>
+
+    <!-- ============ PROVIDERS ============ -->
+    <sc-if value="{{ isProviders }}" hint-placeholder-val="{{ true }}">
+    <div style="animation: dropin .2s ease;">
+      <div style="display: flex; align-items: center; gap: 9px; padding: 11px 14px; background: rgba(91,214,192,0.06); border: 1px solid rgba(91,214,192,0.2); border-radius: 10px; margin-bottom: 20px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5BD6C0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 16px;"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+        <span style="font-size: 12px; color: #A7E4D8; line-height: 1.5;">Keys are <b style="color:#CDEB45;">AES-256-GCM encrypted at rest</b> and used only to call the provider directly from your machine. No key or model content is proxied through our servers or logged.</span>
+      </div>
+
+      <div style="font-size: 11px; color: #AAB4C9; font-weight: 700; letter-spacing: 0.8px; margin-bottom: 12px;">MODEL PROVIDERS</div>
+      <div style="display: flex; flex-direction: column; gap: 11px;">
+        <sc-for list="{{ providers }}" as="p" hint-placeholder-count="4">
+          <div style="background: #11141d; border: 1px solid {{ p.border }}; border-radius: 13px; padding: 16px 18px;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <span style="width: 34px; height: 34px; border-radius: 9px; background: {{ p.iconbg }}; color: {{ p.iconc }}; display: flex; align-items: center; justify-content: center; flex: 0 0 34px; font-family: 'Space Grotesk'; font-weight: 700; font-size: 15px;">{{ p.glyph }}</span>
+              <div onClick="{{ p.expand }}" style="flex: 1; min-width: 0; cursor: pointer;">
+                <div style="display: flex; align-items: center; gap: 9px;">
+                  <span style="font-weight: 600; font-size: 14.5px;">{{ p.name }}</span>
+                  <span style="font-size: 9.5px; font-weight: 700; letter-spacing: 0.4px; color: {{ p.statusc }}; background: {{ p.statusbg }}; padding: 2px 8px; border-radius: 20px;">{{ p.statusLabel }}</span>
+                </div>
+                <div style="font-size: 11.5px; color: #AAB4C9; margin-top: 2px;">{{ p.models }}</div>
+              </div>
+              <button onClick="{{ p.toggle }}" style="width: 44px; height: 25px; border-radius: 20px; background: {{ p.switchBg }}; border: none; position: relative; cursor: pointer; flex: 0 0 44px; transition: background .15s;">
+                <span style="position: absolute; top: 3px; left: {{ p.knobX }}px; width: 19px; height: 19px; border-radius: 50%; background: {{ p.knobC }}; transition: left .15s;"></span>
+              </button>
+            </div>
+            <sc-if value="{{ p.expanded }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #1c2230;">
+                <sc-if value="{{ p.hasAuthModes }}" hint-placeholder-val="{{ false }}">
+                  <label style="display: block; font-size: 10.5px; color: #B8C1D4; font-weight: 700; letter-spacing: 0.4px; margin-bottom: 7px;">AUTH METHOD</label>
+                  <div style="display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap;">
+                    <sc-for list="{{ p.authModes }}" as="am" hint-placeholder-count="2">
+                      <button onClick="{{ am.pick }}" style="padding: 7px 13px; border-radius: 8px; border: 1px solid {{ am.bd }}; background: {{ am.bg }}; color: {{ am.fg }}; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600;">{{ am.label }}</button>
+                    </sc-for>
+                  </div>
+                </sc-if>
+
+                <div style="display: flex; flex-wrap: wrap; gap: 12px;">
+                  <sc-for list="{{ p.fields }}" as="fld" hint-placeholder-count="2">
+                    <div style="flex: {{ fld.grow }}; min-width: {{ fld.min }};">
+                      <label style="display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: #B8C1D4; font-weight: 700; letter-spacing: 0.4px; margin-bottom: 6px;">
+                        {{ fld.label }}
+                        <sc-if value="{{ fld.required }}" hint-placeholder-val="{{ false }}"><span style="color: #CDEB45;">*</span></sc-if>
+                        <sc-if value="{{ fld.optional }}" hint-placeholder-val="{{ false }}"><span style="color: #7E8AA3; font-weight: 500; letter-spacing: 0;">optional</span></sc-if>
+                      </label>
+                      <sc-if value="{{ fld.isSelect }}" hint-placeholder-val="{{ false }}">
+                        <div style="position: relative;">
+                          <select value="{{ fld.value }}" onChange="{{ fld.set }}" style="width: 100%; appearance: none; background: #0c0f16; border: 1px solid #232b3b; border-radius: 9px; color: #ECEFF6; font-family: 'JetBrains Mono'; font-size: 12px; padding: 10px 28px 10px 12px; outline: none; cursor: pointer;">
+                            <sc-for list="{{ fld.options }}" as="o" hint-placeholder-count="2"><option value="{{ o }}">{{ o }}</option></sc-for>
+                          </select>
+                          <svg style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); pointer-events: none;" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8B95AC" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"></path></svg>
+                        </div>
+                      </sc-if>
+                      <sc-if value="{{ fld.isInput }}" hint-placeholder-val="{{ true }}">
+                        <div style="display: flex; align-items: center; gap: 8px; background: #0c0f16; border: 1px solid #232b3b; border-radius: 9px; padding: 0 12px;">
+                          <sc-if value="{{ fld.secure }}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8B95AC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 14px;"><circle cx="12" cy="16" r="1"></circle><rect x="3" y="10" width="18" height="12" rx="2"></rect><path d="M7 10V7a5 5 0 0 1 10 0v3"></path></svg></sc-if>
+                          <input value="{{ fld.value }}" onInput="{{ fld.set }}" placeholder="{{ fld.placeholder }}" style="flex: 1; min-width: 0; background: none; border: none; outline: none; color: #ECEFF6; font-family: 'JetBrains Mono'; font-size: 12px; padding: 10px 0;" />
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+
+                <div style="display: flex; align-items: center; gap: 10px; margin-top: 14px;">
+                  <button onClick="{{ p.test }}" style="display: flex; align-items: center; gap: 7px; padding: 9px 15px; border-radius: 9px; border: 1px solid #2a3243; background: #161b26; color: #C7D0E0; cursor: pointer; font-family: inherit; font-size: 12.5px; font-weight: 600;">
+                    <span style="width: 13px; height: 13px; display: inline-flex;"><sc-if value="{{ p.testing }}" hint-placeholder-val="{{ false }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" style="animation: spin 1s linear infinite;"><path d="M21 12a9 9 0 1 1-6.2-8.5"></path></svg></sc-if><sc-if value="{{ p.testing }}" hint-placeholder-val="{{ true }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0zM12 17v5"></path></svg></sc-if></span>{{ p.testLabel }}
+                  </button>
+                  <span style="font-size: 11px; color: #8B95AC; font-family: 'JetBrains Mono';">{{ p.testHint }}</span>
+                </div>
+
+                <button onClick="{{ p.toggleAdvanced }}" style="display: flex; align-items: center; gap: 7px; margin-top: 16px; padding: 0; border: none; background: none; color: #B8C1D4; cursor: pointer; font-family: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0.4px;">
+                  <span style="display: inline-flex; transform: rotate({{ p.advChevron }}deg); transition: transform .15s;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"></path></svg></span>
+                  REQUEST &amp; ORCHESTRATION LIMITS
+                </button>
+                <sc-if value="{{ p.advOpen }}" hint-placeholder-val="{{ false }}">
+                  <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px;">
+                    <sc-for list="{{ p.advFields }}" as="af" hint-placeholder-count="4">
+                      <div style="flex: 1; min-width: 150px;">
+                        <label style="display: block; font-size: 10px; color: #8B95AC; font-weight: 700; letter-spacing: 0.4px; margin-bottom: 6px;">{{ af.label }}</label>
+                        <div style="display: flex; align-items: center; background: #0c0f16; border: 1px solid #232b3b; border-radius: 8px; padding: 0 11px;">
+                          <input value="{{ af.value }}" onInput="{{ af.set }}" placeholder="{{ af.placeholder }}" style="flex: 1; min-width: 0; background: none; border: none; outline: none; color: #ECEFF6; font-family: 'JetBrains Mono'; font-size: 12px; padding: 9px 0;" />
+                          <sc-if value="{{ af.unit }}" hint-placeholder-val="{{ false }}"><span style="font-size: 10.5px; color: #8B95AC; font-family: 'JetBrains Mono'; flex: 0 0 auto;">{{ af.unit }}</span></sc-if>
+                        </div>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ============ MODEL ROUTING ============ -->
+    <sc-if value="{{ isRouting }}" hint-placeholder-val="{{ false }}">
+    <div style="animation: dropin .2s ease;">
+      <div style="font-size: 11px; color: #AAB4C9; font-weight: 700; letter-spacing: 0.8px; margin-bottom: 6px;">TWO-TIER ROUTING</div>
+      <p style="font-size: 12.5px; color: #AAB4C9; margin: 0 0 18px; line-height: 1.55; max-width: 760px;">A frontier <b style="color:#C7D0E0;">planner</b> decomposes the architecture and synthesizes the final model; a cheaper <b style="color:#C7D0E0;">worker</b> runs the per-component agent fan-out in parallel. This keeps cost and latency down without losing reasoning depth on the hard steps.</p>
+
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 22px;">
+        <sc-for list="{{ roles }}" as="r" hint-placeholder-count="3">
+          <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 13px; padding: 16px;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+              <span style="width: 24px; height: 24px; border-radius: 7px; background: {{ r.iconbg }}; color: {{ r.iconc }}; display: inline-flex; align-items: center; justify-content: center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ r.icon }}"></path></svg></span>
+              <span style="font-weight: 600; font-size: 13.5px;">{{ r.role }}</span>
+            </div>
+            <div style="font-size: 11px; color: #AAB4C9; line-height: 1.45; margin-bottom: 12px; min-height: 32px;">{{ r.desc }}</div>
+            <label style="display: block; font-size: 10px; color: #AAB4C9; font-weight: 700; letter-spacing: 0.4px; margin-bottom: 6px;">MODEL</label>
+            <div style="position: relative;">
+              <select value="{{ r.model }}" onChange="{{ r.setModel }}" style="width: 100%; appearance: none; background: #0c0f16; border: 1px solid #232b3b; border-radius: 8px; color: #ECEFF6; font-family: 'JetBrains Mono'; font-size: 11.5px; padding: 9px 28px 9px 11px; outline: none; cursor: pointer;">
+                <sc-for list="{{ r.options }}" as="o" hint-placeholder-count="3"><option value="{{ o }}">{{ o }}</option></sc-for>
+              </select>
+              <svg style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); pointer-events: none;" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#AAB4C9" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"></path></svg>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 13px; padding: 18px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+          <span style="font-weight: 600; font-size: 13.5px;">Reasoning effort</span>
+          <span style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; font-weight: 600;">{{ effortLabel }}</span>
+        </div>
+        <div style="font-size: 11.5px; color: #AAB4C9; margin-bottom: 14px;">Higher effort = deeper chains &amp; more thinking tokens (slower, costlier). Maps to Bedrock effort levels / OpenAI reasoning effort.</div>
+        <div style="display: flex; gap: 6px;">
+          <sc-for list="{{ effortLevels }}" as="e" hint-placeholder-count="5">
+            <button onClick="{{ e.set }}" style="flex: 1; padding: 9px; border-radius: 8px; border: 1px solid {{ e.bd }}; background: {{ e.bg }}; color: {{ e.fg }}; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600;">{{ e.label }}</button>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ============ ORCHESTRATION ============ -->
+    <sc-if value="{{ isPipeline }}" hint-placeholder-val="{{ false }}">
+    <div style="animation: dropin .2s ease;">
+      <div style="font-size: 11px; color: #AAB4C9; font-weight: 700; letter-spacing: 0.8px; margin-bottom: 6px;">AGENTIC PIPELINE</div>
+      <p style="font-size: 12.5px; color: #AAB4C9; margin: 0 0 18px; line-height: 1.55; max-width: 780px;">The orchestrator reads your recon evidence, reconstructs a data-flow graph, then fans out to specialist agents <b style="color:#C7D0E0;">per component type</b>. Results are de-duplicated, correlated across agents, risk-scored, and assembled into the model.</p>
+
+      <!-- pipeline stages -->
+      <div style="display: flex; align-items: stretch; gap: 0; margin-bottom: 24px; overflow-x: auto; padding-bottom: 4px;">
+        <sc-for list="{{ pipeline }}" as="st" hint-placeholder-count="5">
+          <div style="display: flex; align-items: center; flex: 0 0 auto;">
+            <div style="width: 150px; background: #11141d; border: 1px solid {{ st.border }}; border-radius: 12px; padding: 13px 14px;">
+              <span style="width: 26px; height: 26px; border-radius: 7px; background: {{ st.iconbg }}; color: {{ st.iconc }}; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 9px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ st.icon }}"></path></svg></span>
+              <div style="font-weight: 600; font-size: 12.5px; margin-bottom: 3px;">{{ st.title }}</div>
+              <div style="font-size: 10.5px; color: #AAB4C9; line-height: 1.4;">{{ st.desc }}</div>
+            </div>
+            <sc-if value="{{ st.arrow }}" hint-placeholder-val="{{ true }}">
+              <svg width="26" height="20" viewBox="0 0 26 20" style="flex: 0 0 26px;"><path d="M2 10h20m0 0-5-5m5 5-5 5" stroke="#CDEB45" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- agent packs -->
+      <div style="font-size: 11px; color: #AAB4C9; font-weight: 700; letter-spacing: 0.8px; margin-bottom: 12px;">AGENT PACKS · toggle what runs</div>
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <sc-for list="{{ agentPacks }}" as="pk" hint-placeholder-count="3">
+          <div style="background: #11141d; border: 1px solid {{ pk.border }}; border-radius: 13px; padding: 16px 18px;">
+            <div style="display: flex; align-items: center; gap: 11px; margin-bottom: 12px;">
+              <span style="width: 30px; height: 30px; border-radius: 8px; background: {{ pk.iconbg }}; color: {{ pk.iconc }}; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ pk.icon }}"></path></svg></span>0 0 30px;" innerHTML="{{ pk.icon }}"></span>
+              <div style="flex: 1;">
+                <div style="font-weight: 600; font-size: 14px;">{{ pk.name }}</div>
+                <div style="font-size: 11.5px; color: #AAB4C9; margin-top: 1px;">{{ pk.sub }}</div>
+              </div>
+              <button onClick="{{ pk.toggle }}" style="width: 44px; height: 25px; border-radius: 20px; background: {{ pk.switchBg }}; border: none; position: relative; cursor: pointer; flex: 0 0 44px;">
+                <span style="position: absolute; top: 3px; left: {{ pk.knobX }}px; width: 19px; height: 19px; border-radius: 50%; background: {{ pk.knobC }};"></span>
+              </button>
+            </div>
+            <div style="display: flex; gap: 7px; flex-wrap: wrap;">
+              <sc-for list="{{ pk.agents }}" as="a" hint-placeholder-count="6">
+                <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-family: 'JetBrains Mono'; color: {{ a.fg }}; background: {{ a.bg }}; border: 1px solid {{ a.bd }}; padding: 4px 9px; border-radius: 7px;"><span style="font-weight: 700; color: {{ pk.iconc }};">{{ a.key }}</span>{{ a.label }}</span>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- component routing -->
+      <div style="font-size: 11px; color: #AAB4C9; font-weight: 700; letter-spacing: 0.8px; margin: 24px 0 12px;">COMPONENT → AGENT ROUTING</div>
+      <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 13px; overflow: hidden;">
+        <sc-for list="{{ routing }}" as="rt" hint-placeholder-count="4">
+          <div style="display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid #161b26;">
+            <span style="width: 9px; height: 9px; border-radius: {{ rt.shape }}; background: {{ rt.c }}; flex: 0 0 9px;"></span>
+            <span style="flex: 0 0 160px; font-size: 12.5px; font-weight: 600; color: #C7D0E0;">{{ rt.component }}</span>
+            <span style="flex: 1; font-family: 'JetBrains Mono'; font-size: 11.5px; color: #B8C1D4;">{{ rt.agents }}</span>
+            <span style="font-size: 10.5px; color: #AAB4C9; font-family: 'JetBrains Mono';">{{ rt.example }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ============ DATA SOURCES ============ -->
+    <sc-if value="{{ isData }}" hint-placeholder-val="{{ false }}">
+    <div style="animation: dropin .2s ease;">
+      <div style="font-size: 11px; color: #AAB4C9; font-weight: 700; letter-spacing: 0.8px; margin-bottom: 6px;">EVIDENCE THE AGENT CONSUMES</div>
+      <p style="font-size: 12.5px; color: #AAB4C9; margin: 0 0 18px; line-height: 1.55; max-width: 780px;">The orchestrator grounds every threat in these sources. Internal recon data is deterministic ground truth; external databases add known-threat context; Spaces inject your org’s own knowledge.</p>
+
+      <div style="font-size: 11px; color: #B8C1D4; font-weight: 700; letter-spacing: 0.4px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;"><span style="width: 7px; height: 7px; border-radius: 50%; background: #CDEB45;"></span>INTERNAL — this session’s recon (ground truth)</div>
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 22px;">
+        <sc-for list="{{ internalSources }}" as="s" hint-placeholder-count="4">
+          <button onClick="{{ s.toggle }}" style="text-align: left; display: flex; align-items: center; gap: 12px; background: #11141d; border: 1px solid {{ s.border }}; border-radius: 12px; padding: 14px 15px; cursor: pointer; font-family: inherit;">
+            <span style="width: 30px; height: 30px; border-radius: 8px; background: {{ s.iconbg }}; color: {{ s.iconc }}; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ s.icon }}"></path></svg></span>
+            <span style="flex: 1; min-width: 0;">
+              <span style="display: flex; align-items: center; gap: 8px;"><span style="font-weight: 600; font-size: 13px; color: #ECEFF6;">{{ s.name }}</span><sc-if value="{{ s.primary }}" hint-placeholder-val="{{ false }}"><span style="font-size: 8.5px; font-weight: 700; letter-spacing: 0.5px; color: #0B0D13; background: #CDEB45; padding: 2px 7px; border-radius: 20px;">PRIMARY</span></sc-if></span>
+              <span style="display: block; font-size: 11px; color: #AAB4C9; margin-top: 1px;">{{ s.detail }}</span>
+            </span>
+            <span style="width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid {{ s.checkBd }}; background: {{ s.checkBg }}; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 17px;"><sc-if value="{{ s.checked }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#0B0D13" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></sc-if></span>
+          </button>
+        </sc-for>
+      </div>
+
+      <div style="font-size: 11px; color: #B8C1D4; font-weight: 700; letter-spacing: 0.4px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;"><span style="width: 7px; height: 7px; border-radius: 50%; background: #6BA8FF;"></span>EXTERNAL — known-threat enrichment databases</div>
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 22px;">
+        <sc-for list="{{ externalSources }}" as="s" hint-placeholder-count="6">
+          <button onClick="{{ s.toggle }}" style="text-align: left; display: flex; align-items: center; gap: 12px; background: #11141d; border: 1px solid {{ s.border }}; border-radius: 12px; padding: 14px 15px; cursor: pointer; font-family: inherit;">
+            <span style="width: 30px; height: 30px; border-radius: 8px; background: {{ s.iconbg }}; color: {{ s.iconc }}; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px; font-family: 'JetBrains Mono'; font-weight: 700; font-size: 9px;">{{ s.glyph }}</span>
+            <span style="flex: 1; min-width: 0;">
+              <span style="display: block; font-weight: 600; font-size: 13px; color: #ECEFF6;">{{ s.name }}</span>
+              <span style="display: block; font-size: 11px; color: #AAB4C9; margin-top: 1px;">{{ s.detail }}</span>
+            </span>
+            <span style="width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid {{ s.checkBd }}; background: {{ s.checkBg }}; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 17px;"><sc-if value="{{ s.checked }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#0B0D13" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></sc-if></span>
+          </button>
+        </sc-for>
+      </div>
+
+      <div style="font-size: 11px; color: #B8C1D4; font-weight: 700; letter-spacing: 0.4px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;"><span style="width: 7px; height: 7px; border-radius: 50%; background: #C792EA;"></span>SPACES — your organization’s knowledge base</div>
+      <div style="background: #11141d; border: 1px dashed #2a3243; border-radius: 12px; padding: 20px; display: flex; align-items: center; gap: 14px;">
+        <span style="width: 38px; height: 38px; border-radius: 10px; background: rgba(199,146,234,0.12); color: #C792EA; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 38px;">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"></path></svg>
+        </span>
+        <div style="flex: 1;">
+          <div style="font-weight: 600; font-size: 13.5px;">Attach runbooks, policies &amp; past models</div>
+          <div style="font-size: 11.5px; color: #AAB4C9; margin-top: 2px;">RAG-indexed so the agent applies your standards, prior decisions, and internal architecture context.</div>
+        </div>
+        <button onClick="{{ addSpace }}" style="flex: 0 0 auto; display: flex; align-items: center; gap: 7px; padding: 9px 15px; border-radius: 9px; border: 1px solid #2a3243; background: #161b26; color: #C7D0E0; cursor: pointer; font-family: inherit; font-size: 12.5px; font-weight: 600;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>Add source
+        </button>
+      </div>
+
+      <!-- grounding note -->
+      <div style="display: flex; align-items: flex-start; gap: 10px; padding: 13px 15px; background: rgba(205,235,69,0.05); border: 1px solid rgba(205,235,69,0.18); border-radius: 10px; margin-top: 20px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#CDEB45" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 16px; margin-top: 1px;"><path d="M9 12l2 2 4-4"></path><circle cx="12" cy="12" r="9"></circle></svg>
+        <span style="font-size: 12px; color: #C7D0E0; line-height: 1.55;"><b>Grounding contract:</b> every generated threat carries a source attribution — the recon finding(s) and framework IDs it derives from. Threats the model infers without evidence are labelled <span style="color:#C792EA; font-weight:600;">AI inference</span> and ranked separately, never mixed with confirmed findings.</span>
+      </div>
+    </div>
+    </sc-if>
+
+  </div>
+
+  <!-- toast -->
+  <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+  <div style="position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 10px; background: #161b26; border: 1px solid #2a3243; border-radius: 11px; padding: 12px 18px; box-shadow: 0 16px 40px rgba(0,0,0,0.5); animation: dropin .2s ease;">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#CDEB45" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>
+    <span style="font-size: 13px; color: #ECEFF6; font-weight: 500;">{{ toast }}</span>
+  </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1120,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = {
+    tab: 'providers',
+    provExpanded: 'anthropic',
+    providers: {
+      anthropic: { on:true, status:'connected', mode:null, advOpen:false, vals:{ key:'sk-ant-api03-••••••••••••••x9Fq', version:'2023-06-01' }, adv:{ maxTokens:'8192', timeout:'120', concurrency:'6', rpm:'50' } },
+      openai:    { on:true, status:'connected', mode:null, advOpen:false, vals:{ key:'sk-proj-••••••••••••aB2z' }, adv:{ maxTokens:'8192', timeout:'120', concurrency:'6', rpm:'50' } },
+      google:    { on:false, status:'off', mode:'vertex', advOpen:false, vals:{ location:'us-central1' }, adv:{ maxTokens:'8192', timeout:'120', concurrency:'4', rpm:'30' } },
+      bedrock:   { on:false, status:'off', mode:'keys', advOpen:false, vals:{ region:'us-east-1' }, adv:{ maxTokens:'8192', timeout:'120', concurrency:'4', rpm:'30' } },
+      local:     { on:false, status:'off', mode:null, advOpen:false, vals:{ baseUrl:'http://localhost:11434' }, adv:{ maxTokens:'8192', timeout:'300', concurrency:'2', rpm:'0' } },
+    },
+    planner:'claude-opus-4.6', worker:'claude-haiku-4.5', synth:'claude-sonnet-4.5',
+    effort:'high',
+    packs:{ stride:true, llm:true, agentic:false },
+    internal:{ spec:true, secrets:true, hosts:true, sources:true },
+    external:{ attack:true, atlas:true, owaspllm:true, owaspasi:false, cwe:true, nvd:true },
+    testing:null,
+    toast:null,
+  };
+  ic(p){ return p; }
+  chk(){ return 'M20 6 9 17l-5-5'; }
+  toastMsg(m){ this.setState({toast:m}); clearTimeout(this._t); this._t=setTimeout(()=>this.setState({toast:null}),2400); }
+
+  testProvider(k){
+    this.setState({ testing:k });
+    clearTimeout(this._tt);
+    this._tt=setTimeout(()=>{
+      const p={...this.state.providers}; p[k]={...p[k], status:'connected'};
+      this.setState({ providers:p, testing:null }); this.toastMsg('Connection OK — '+this.PROV[k].name);
+    }, 1100);
+  }
+
+  PROV={
+    anthropic:{ name:'Anthropic', glyph:'A\\', iconbg:'rgba(205,235,69,0.12)', iconc:'#CDEB45', models:'Claude Opus 4.6 · Sonnet 4.5 · Haiku 4.5', testHint:'Verifies key + model access',
+      fields:[
+        { id:'key', label:'API key', secure:true, required:true, placeholder:'sk-ant-api03-…' },
+        { id:'baseUrl', label:'Base URL', optional:true, half:true, placeholder:'https://api.anthropic.com (or gateway)' },
+        { id:'version', label:'anthropic-version', half:true, placeholder:'2023-06-01' },
+      ] },
+    openai:{ name:'OpenAI', glyph:'AI', iconbg:'rgba(91,214,192,0.12)', iconc:'#5BD6C0', models:'GPT-5.4 · GPT-5 Mini', testHint:'Verifies key + org/project scope',
+      fields:[
+        { id:'key', label:'API key', secure:true, required:true, placeholder:'sk-proj-…' },
+        { id:'org', label:'Organization ID', optional:true, half:true, placeholder:'org-…' },
+        { id:'project', label:'Project ID', optional:true, half:true, placeholder:'proj_…' },
+        { id:'baseUrl', label:'Base URL', optional:true, placeholder:'https://api.openai.com/v1  ·  Azure / compatible endpoint' },
+      ] },
+    google:{ name:'Google Vertex AI', glyph:'G', iconbg:'rgba(107,168,255,0.12)', iconc:'#6BA8FF', models:'Gemini 2.5 Pro · Flash', testHint:'Vertex validates project + IAM',
+      authModes:[
+        { id:'vertex', label:'Vertex AI (service account)', fields:[
+          { id:'project', label:'GCP project ID', required:true, half:true, placeholder:'my-project-123' },
+          { id:'location', label:'Location', required:true, half:true, select:['us-central1','us-east5','europe-west1','asia-northeast1','global'] },
+          { id:'sa', label:'Service account JSON', secure:true, required:true, placeholder:'paste service-account key JSON (roles/aiplatform.user)' },
+        ] },
+        { id:'aistudio', label:'AI Studio (API key)', fields:[
+          { id:'key', label:'API key', secure:true, required:true, placeholder:'AIza…' },
+        ] },
+      ] },
+    bedrock:{ name:'Amazon Bedrock', glyph:'aws', iconbg:'rgba(255,138,71,0.12)', iconc:'#FF8A47', models:'Claude via Bedrock · IAM auth', testHint:'Assumes creds → invokes profile',
+      authModes:[
+        { id:'keys', label:'Access keys', fields:[
+          { id:'accessKey', label:'Access key ID', required:true, half:true, placeholder:'AKIA…' },
+          { id:'secret', label:'Secret access key', secure:true, required:true, half:true, placeholder:'••••••••' },
+          { id:'sessionToken', label:'Session token', secure:true, optional:true, placeholder:'for temporary / SSO credentials' },
+          { id:'region', label:'Region', required:true, half:true, select:['us-east-1','us-west-2','eu-central-1','ap-southeast-2'] },
+          { id:'profileId', label:'Inference profile ID', required:true, half:true, placeholder:'us.anthropic.claude-opus-4-6-v1:0' },
+          { id:'guardrail', label:'Guardrail ID', optional:true, placeholder:'guardrail id : version' },
+        ] },
+        { id:'role', label:'IAM role', fields:[
+          { id:'roleArn', label:'Role ARN', required:true, placeholder:'arn:aws:iam::123456789012:role/threat-model' },
+          { id:'region', label:'Region', required:true, half:true, select:['us-east-1','us-west-2','eu-central-1','ap-southeast-2'] },
+          { id:'profileId', label:'Inference profile ID', required:true, half:true, placeholder:'us.anthropic.claude-opus-4-6-v1:0' },
+        ] },
+      ] },
+    local:{ name:'Local (Ollama / LM Studio)', glyph:'</>', iconbg:'rgba(126,138,163,0.12)', iconc:'#B8C1D4', models:'Any local model · fully offline', testHint:'Pings base URL, no auth',
+      fields:[
+        { id:'baseUrl', label:'Base URL', required:true, half:true, placeholder:'http://localhost:11434' },
+        { id:'model', label:'Model name', required:true, half:true, placeholder:'llama3.1:70b · qwen2.5-coder' },
+        { id:'context', label:'Context window', optional:true, half:true, placeholder:'128000' },
+      ] },
+  };
+  ADV=[
+    { id:'maxTokens', label:'MAX OUTPUT TOKENS', placeholder:'8192' },
+    { id:'timeout', label:'REQUEST TIMEOUT', placeholder:'120', unit:'s' },
+    { id:'concurrency', label:'MAX PARALLEL AGENTS', placeholder:'6' },
+    { id:'rpm', label:'RATE LIMIT', placeholder:'50', unit:'rpm' },
+  ];
+
+  renderVals(){
+    const st=this.state;
+    const tabs=[['providers','Providers'],['routing','Model routing'],['pipeline','Orchestration'],['data','Data sources']].map(([k,l])=>({
+      label:l, go:()=>this.setState({tab:k}), fg: st.tab===k?'#ECEFF6':'#AAB4C9', bd: st.tab===k?'#CDEB45':'transparent' }));
+
+    const SW=(on)=>({ switchBg:on?'#CDEB45':'#232b3b', knobC:on?'#0B0D13':'#AAB4C9', knobX:on?22:3 });
+    const STAT={ connected:{label:'CONNECTED',c:'#CDEB45',bg:'rgba(205,235,69,0.13)'}, off:{label:'NOT SET',c:'#AAB4C9',bg:'rgba(126,138,163,0.13)'} };
+    const providers=Object.keys(this.PROV).map(k=>{
+      const d=st.providers[k], meta=this.PROV[k], expanded=st.provExpanded===k, testing=st.testing===k;
+      const stt=STAT[d.status]||STAT.off;
+      const hasModes=!!meta.authModes;
+      const activeMode = hasModes ? (meta.authModes.find(m=>m.id===d.mode)||meta.authModes[0]) : null;
+      const fieldDefs = hasModes ? activeMode.fields : meta.fields;
+      const setVal=(fid)=>(e)=>{ const p={...st.providers}; p[k]={...p[k], vals:{...p[k].vals, [fid]:e.target.value}}; this.setState({providers:p}); };
+      const fields=fieldDefs.map(f=>({
+        label:f.label, required:!!f.required, optional:!!f.optional, secure:!!f.secure,
+        placeholder:f.placeholder, value:(d.vals||{})[f.id]||'',
+        isSelect:!!f.select, isInput:!f.select, options:f.select||[],
+        set:setVal(f.id), grow: f.half?'1 1 240px':'1 1 100%', min: f.half?'200px':'100%' })); 
+      const authModes = hasModes ? meta.authModes.map(m=>{ const on=activeMode.id===m.id; return {
+        label:m.label, pick:()=>{ const p={...st.providers}; p[k]={...p[k], mode:m.id}; this.setState({providers:p}); },
+        bd:on?'#CDEB45':'#232b3b', bg:on?'rgba(205,235,69,0.1)':'transparent', fg:on?'#CDEB45':'#B8C1D4' }; }) : [];
+      const setAdv=(fid)=>(e)=>{ const p={...st.providers}; p[k]={...p[k], adv:{...p[k].adv, [fid]:e.target.value}}; this.setState({providers:p}); };
+      const advFields=this.ADV.map(a=>({ label:a.label, unit:a.unit||'', placeholder:a.placeholder, value:(d.adv||{})[a.id]||'', set:setAdv(a.id) }));
+      return { key:k, name:meta.name, glyph:meta.glyph, iconbg:meta.iconbg, iconc:meta.iconc, models:meta.models,
+        border: expanded?'#2a3243':'#1c2230', statusLabel:stt.label, statusc:stt.c, statusbg:stt.bg,
+        ...SW(d.on), toggle:()=>{ const p={...st.providers}; p[k]={...p[k], on:!d.on}; this.setState({providers:p, provExpanded:k}); },
+        expanded, hasAuthModes:hasModes, authModes, fields, advFields,
+        expand:()=>this.setState({provExpanded: expanded?null:k}),
+        advOpen:!!d.advOpen, advChevron: d.advOpen?90:0, toggleAdvanced:()=>{ const p={...st.providers}; p[k]={...p[k], advOpen:!d.advOpen}; this.setState({providers:p}); },
+        test:()=>this.testProvider(k), testLabel:testing?'Testing…':'Test connection', testHint:testing?'':meta.testHint, testing:testing,
+        testIcon:testing?'<svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" style="animation:spin 1s linear infinite;"><path d="M21 12a9 9 0 1 1-6.2-8.5" stroke-linecap="round"></path></svg>':this.ic('<path d="M5 12h14M13 6l6 6-6 6"></path>') };
+    });
+
+    // routing
+    const anthropicModels=['claude-opus-4.6','claude-sonnet-4.5','claude-haiku-4.5'];
+    const roles=[
+      { role:'Planner', icon:'M12 2v4M12 18v4M2 12h4M18 12h4M8 12a4 4 0 1 0 8 0 4 4 0 1 0-8 0', iconbg:'rgba(205,235,69,0.12)', iconc:'#CDEB45', desc:'Decomposes architecture into components + data flows; writes the final synthesis.', model:st.planner, setModel:(e)=>this.setState({planner:e.target.value}), options:anthropicModels },
+      { role:'Worker', icon:'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z', iconbg:'rgba(107,168,255,0.12)', iconc:'#6BA8FF', desc:'Runs the per-component agent fan-out in parallel. Cost-optimized.', model:st.worker, setModel:(e)=>this.setState({worker:e.target.value}), options:['claude-haiku-4.5','gpt-5-mini','gemini-2.5-flash'] },
+      { role:'Synthesis / correlation', icon:'M4 12a8 8 0 1 0 16 0 8 8 0 1 0-16 0M12 6v6l4 2', iconbg:'rgba(199,146,234,0.12)', iconc:'#C792EA', desc:'De-dupes and correlates agent findings; scores risk.', model:st.synth, setModel:(e)=>this.setState({synth:e.target.value}), options:anthropicModels },
+    ];
+    const effortLevels=['none','low','medium','high','max'].map(k=>({ label:k.charAt(0).toUpperCase()+k.slice(1), set:()=>this.setState({effort:k}), bd: st.effort===k?'#CDEB45':'#232b3b', bg: st.effort===k?'rgba(205,235,69,0.1)':'transparent', fg: st.effort===k?'#CDEB45':'#B8C1D4' }));
+
+    // pipeline
+    const pipeline=[
+      { title:'Ingest evidence', desc:'Pull spec, secrets, hosts, sources', icon:'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3', iconbg:'rgba(91,214,192,0.12)', iconc:'#5BD6C0', border:'#1c2230', arrow:true },
+      { title:'Build DFD', desc:'Spec-first: endpoints → flows & boundaries', icon:'M7 7l10 4M7 17l10-5M3 4a2 2 0 1 0 4 0 2 2 0 1 0-4 0M3 16a2 2 0 1 0 4 0 2 2 0 1 0-4 0M17 10a2 2 0 1 0 4 0 2 2 0 1 0-4 0', iconbg:'rgba(107,168,255,0.12)', iconc:'#6BA8FF', border:'#1c2230', arrow:true },
+      { title:'Agent fan-out', desc:'STRIDE / LLM / Agentic per node', icon:'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z', iconbg:'rgba(205,235,69,0.12)', iconc:'#CDEB45', border:'rgba(205,235,69,0.3)', arrow:true },
+      { title:'Correlate', desc:'De-dupe + cross-agent links', icon:'M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8', iconbg:'rgba(199,146,234,0.12)', iconc:'#C792EA', border:'#1c2230', arrow:true },
+      { title:'Score + report', desc:'Risk rank, treatments, export', icon:'M3 3v18h18M7 14l4-4 3 3 5-6', iconbg:'rgba(255,138,71,0.12)', iconc:'#FF8A47', border:'#1c2230', arrow:false },
+    ];
+    const mkAgents=(arr,c)=>arr.map(([key,label])=>({ key, label, fg:'#C7D0E0', bg:'#0c0f16', bd:'#232b3b' }));
+    const agentPacks=[
+      { id:'stride', name:'STRIDE core', sub:'6 classic threat agents', icon:'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z', iconbg:'rgba(205,235,69,0.12)', iconc:'#CDEB45', on:st.packs.stride, ...SW(st.packs.stride), toggle:()=>this.setState({packs:{...st.packs,stride:!st.packs.stride}}),
+        agents:mkAgents([['S','Spoofing'],['T','Tampering'],['R','Repudiation'],['I','Info disclosure'],['D','DoS'],['E','Elev. of priv.']]) },
+      { id:'llm', name:'LLM Top-10 pack', sub:'For AI-backed endpoints (OWASP LLM)', icon:'M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1h6c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z', iconbg:'rgba(107,168,255,0.12)', iconc:'#6BA8FF', on:st.packs.llm, ...SW(st.packs.llm), toggle:()=>this.setState({packs:{...st.packs,llm:!st.packs.llm}}),
+        agents:mkAgents([['P','Prompt injection'],['O','Insecure output'],['D','Data poisoning'],['S','Sensitive disclosure'],['E','Excessive agency']]) },
+      { id:'agentic', name:'Agentic pack', sub:'For tool-using agents (OWASP ASI)', icon:'M8 8h8v8H8zM9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3', iconbg:'rgba(199,146,234,0.12)', iconc:'#C792EA', on:st.packs.agentic, ...SW(st.packs.agentic), toggle:()=>this.setState({packs:{...st.packs,agentic:!st.packs.agentic}}),
+        agents:mkAgents([['M','Memory poisoning'],['T','Tool misuse'],['I','Identity abuse']]) },
+    ];
+    const routing=[
+      { component:'External entity', c:'#AAB4C9', shape:'50%', agents:'Spoofing, Repudiation', example:'unauth attacker, 3rd-party host' },
+      { component:'Process', c:'#CDEB45', shape:'3px', agents:'S, T, R, I, D, E (full STRIDE)', example:'API route, lambda' },
+      { component:'Data store', c:'#6BA8FF', shape:'2px', agents:'Tampering, Info disclosure, DoS', example:'DB, S3, cache' },
+      { component:'Data flow', c:'#5BD6C0', shape:'1px', agents:'Tampering, Info disclosure, DoS', example:'request/response, queue' },
+      { component:'AI / LLM node', c:'#C792EA', shape:'50%', agents:'+ LLM & Agentic packs', example:'model call, tool-using agent' },
+    ];
+
+    // data sources
+    const mkCheck=(on)=>({ checkBd:on?'#CDEB45':'#3d465c', checkBg:on?'#CDEB45':'transparent', checked:on, border:on?'#2a3243':'#1c2230' });
+    const internalSources=[
+      { id:'spec', primary:true, name:'OpenAPI spec', detail:'38 endpoints · params · methods · primary DFD input', icon:'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7', iconbg:'rgba(124,140,255,0.12)', iconc:'#7C8CFF' },
+      { id:'secrets', name:'Secrets findings', detail:'8 detected · credential exposure', icon:'M3 15.5a4.5 4.5 0 1 0 9 0 4.5 4.5 0 1 0-9 0M10.7 12.3l8.3-8.3M17 5l3 3', iconbg:'rgba(255,107,138,0.12)', iconc:'#FF6B8A' },
+      { id:'hosts', name:'Attack surface / hosts', detail:'6 hosts · trust boundaries', icon:'M4 12a8 8 0 1 0 16 0 8 8 0 1 0-16 0M4 12h16M12 4a13 13 0 0 1 0 16M12 4a13 13 0 0 0 0 16', iconbg:'rgba(91,214,192,0.12)', iconc:'#5BD6C0' },
+      { id:'sources', name:'Reconstructed sources', detail:'131 files · process internals', icon:'M16 18l6-6-6-6M8 6l-6 6 6 6', iconbg:'rgba(205,235,69,0.12)', iconc:'#CDEB45' },
+    ].map(s=>({ ...s, ...mkCheck(st.internal[s.id]), toggle:()=>this.setState({internal:{...st.internal,[s.id]:!st.internal[s.id]}}) }));
+    const externalSources=[
+      { id:'attack', name:'MITRE ATT&CK', detail:'adversary techniques', glyph:'ATT' },
+      { id:'atlas', name:'MITRE ATLAS', detail:'AI/ML adversary tactics', glyph:'ATL' },
+      { id:'owaspllm', name:'OWASP LLM Top 10', detail:'LLM-app risk catalog', glyph:'LLM' },
+      { id:'owaspasi', name:'OWASP Agentic (ASI)', detail:'agent-specific threats', glyph:'ASI' },
+      { id:'cwe', name:'CWE', detail:'weakness taxonomy', glyph:'CWE' },
+      { id:'nvd', name:'NVD / CVE + EPSS', detail:'live CVE lookup + exploit prob.', glyph:'CVE' },
+    ].map(s=>({ ...s, iconbg:'rgba(107,168,255,0.1)', iconc:'#6BA8FF', ...mkCheck(st.external[s.id]), toggle:()=>this.setState({external:{...st.external,[s.id]:!st.external[s.id]}}) }));
+
+    return {
+      tabs, isProviders:st.tab==='providers', isRouting:st.tab==='routing', isPipeline:st.tab==='pipeline', isData:st.tab==='data',
+      providers,
+      roles, effortLevels, effortLabel:st.effort.charAt(0).toUpperCase()+st.effort.slice(1),
+      pipeline, agentPacks, routing,
+      internalSources, externalSources,
+      addSpace:()=>this.toastMsg('Space upload — connect a knowledge base'),
+      save:()=>this.toastMsg('Orchestration config saved'),
+      toast:st.toast,
+    };
+  }
+}
+</script>
+</body>
+</html>

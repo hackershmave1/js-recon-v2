@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #0B0D13; }
+  html { scroll-behavior: smooth; }
+  ::selection { background: rgba(205,235,69,0.28); color: #fff; }
+  ::-webkit-scrollbar { width: 11px; height: 11px; }
+  ::-webkit-scrollbar-track { background: #0B0D13; }
+  ::-webkit-scrollbar-thumb { background: #232b3b; border-radius: 6px; border: 2px solid #0B0D13; }
+  @keyframes dropin { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #0B0D13; color: #ECEFF6; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 14px; -webkit-font-smoothing: antialiased; line-height: 1.6;">
+
+  <!-- sticky nav -->
+  <div style="position: sticky; top: 0; z-index: 20; background: rgba(11,13,19,0.85); backdrop-filter: blur(10px); border-bottom: 1px solid #1c2230;">
+    <div style="max-width: 1020px; margin: 0 auto; padding: 13px 32px; display: flex; align-items: center; gap: 14px;">
+      <div style="width: 26px; height: 26px; border-radius: 7px; background: #CDEB45; display: flex; align-items: center; justify-content: center; flex: 0 0 26px;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0B0D13" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"></path></svg>
+      </div>
+      <span style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 14px;">Recon Workspace — Engineering Requirements</span>
+      <span style="font-family: 'JetBrains Mono'; font-size: 10.5px; color: #5C6680; border: 1px solid #232b3b; padding: 2px 8px; border-radius: 20px;">v2 · RED-TEAMED</span>
+      <div style="margin-left: auto; display: flex; gap: 2px;">
+        <sc-for list="{{ toc }}" as="s" hint-placeholder-count="7">
+          <a href="{{ s.href }}" style="padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; color: #98A2B8; text-decoration: none;">{{ s.label }}</a>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width: 1020px; margin: 0 auto; padding: 0 32px 100px;">
+
+    <!-- HERO -->
+    <div style="padding: 50px 0 30px; border-bottom: 1px solid #1c2230; animation: dropin .3s ease;">
+      <div style="display: inline-flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono'; font-size: 11px; color: #CDEB45; background: rgba(205,235,69,0.08); border: 1px solid rgba(205,235,69,0.2); padding: 5px 12px; border-radius: 20px; margin-bottom: 20px;">
+        ENGINEERING SPEC · BACKEND & PLATFORM
+      </div>
+      <h1 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 38px; line-height: 1.1; letter-spacing: -1.1px; margin: 0 0 16px; max-width: 780px;">What it takes to run recon at scale</h1>
+      <p style="font-size: 16px; color: #98A2B8; max-width: 760px; margin: 0 0 26px; line-height: 1.6;">The workspace is I/O- and compute-heavy: it crawls, fetches hundreds of assets, parses ASTs, calls LLMs, and probes live targets — all work that must run <b style="color:#ECEFF6;">off the request thread</b>. This spec defines the async pipeline, queues, data stores, realtime/polling model, and LLM orchestration the product depends on, with traceable requirement IDs for the build.</p>
+      <div style="display: flex; gap: 26px; flex-wrap: wrap;">
+        <sc-for list="{{ heroStats }}" as="h" hint-placeholder-count="4">
+          <div>
+            <div style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 24px; color: {{ h.c }}; letter-spacing: -0.5px;">{{ h.n }}</div>
+            <div style="font-size: 12px; color: #7E8AA3;">{{ h.label }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- RED-TEAM RESOLUTIONS -->
+    <div style="margin: 24px 0 4px;">
+      <div style="display:flex; align-items:center; gap:9px; margin-bottom:12px;">
+        <span style="width:22px;height:22px;border-radius:6px;background:rgba(255,77,94,0.14);color:#FF4D5E;display:inline-flex;align-items:center;justify-content:center;flex:0 0 22px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v6c0 5 3.5 8 9 9 5.5-1 9-4 9-9V7z"></path></svg></span>
+        <span style="font-family:'Space Grotesk'; font-weight:700; font-size:15px;">Resolved from the red-team pass — 4 blockers closed in-spec</span>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px;">
+        <sc-for list="{{ decisions }}" as="d" hint-placeholder-count="4">
+          <div style="background:#11141d; border:1px solid #1c2230; border-left:3px solid #CDEB45; border-radius:11px; padding:13px 15px;">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+              <span style="font-family:'JetBrains Mono'; font-size:10px; font-weight:700; color:#0B0D13; background:#CDEB45; padding:2px 7px; border-radius:5px;">{{ d.ref }}</span>
+              <span style="font-weight:600; font-size:13px; color:#ECEFF6;">{{ d.title }}</span>
+            </div>
+            <div style="font-size:12px; color:#8A94AC; line-height:1.5;">{{ d.text }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- 01 PRINCIPLES -->
+    <div id="principles" style="padding: 40px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">01 · PRINCIPLES</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 16px;">Design tenets the backend must honor</h2>
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+        <sc-for list="{{ tenets }}" as="t" hint-placeholder-count="6">
+          <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 12px; padding: 15px 17px; display: flex; gap: 13px;">
+            <span style="width: 30px; height: 30px; border-radius: 8px; background: {{ t.bg }}; color: {{ t.c }}; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.iconD }}"></path></svg></span>
+            <div>
+              <div style="font-weight: 600; font-size: 14px; margin-bottom: 2px;">{{ t.title }}</div>
+              <div style="font-size: 12.5px; color: #8A94AC; line-height: 1.5;">{{ t.desc }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- 02 ARCHITECTURE -->
+    <div id="architecture" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">02 · ARCHITECTURE</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 8px;">System topology</h2>
+      <p style="font-size: 14px; color: #98A2B8; max-width: 760px; margin: 0 0 22px;">A thin API tier accepts work and returns immediately; a broker fans jobs to specialized worker pools; results land in Postgres + object storage and stream back to the client over SSE. Recommended stack in parentheses — swap-friendly, but the shape is the requirement.</p>
+
+      <div style="background: #0e1119; border: 1px solid #1c2230; border-radius: 14px; padding: 22px; display: flex; flex-direction: column; gap: 14px;">
+        <sc-for list="{{ archRows }}" as="row" hint-placeholder-count="5">
+          <div>
+            <div style="font-size: 10px; color: #5C6680; font-weight: 700; letter-spacing: 0.8px; margin-bottom: 8px;">{{ row.tier }}</div>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+              <sc-for list="{{ row.boxes }}" as="b" hint-placeholder-count="4">
+                <div style="flex: 1; min-width: 150px; background: {{ b.bg }}; border: 1px solid {{ b.bd }}; border-radius: 11px; padding: 13px 14px;">
+                  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                    <span style="width: 22px; height: 22px; border-radius: 6px; background: {{ b.ibg }}; color: {{ b.c }}; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 22px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ b.iconD }}"></path></svg></span>
+                    <span style="font-weight: 600; font-size: 13px; color: #ECEFF6;">{{ b.name }}</span>
+                  </div>
+                  <div style="font-size: 11px; color: #7E8AA3; line-height: 1.45;">{{ b.desc }}</div>
+                  <div style="font-family: 'JetBrains Mono'; font-size: 10px; color: {{ b.c }}; margin-top: 6px;">{{ b.tech }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <sc-if value="{{ row.arrow }}" hint-placeholder-val="{{ true }}">
+            <div style="display: flex; justify-content: center; color: #2e374b;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></div>
+          </sc-if>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- 03 TOOLING -->
+    <div id="tooling" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">03 · EXTERNAL ENGINES</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 8px;">The analysis pool is not one Python process</h2>
+      <p style="font-size: 14px; color: #98A2B8; max-width: 820px; margin: 0 0 16px;">The named engines are separate open-source projects in three languages. Only one (Vespasian) is importable Python; the rest are compiled Go/Rust binaries the workers <b style="color:#ECEFF6;">shell out to</b> and parse &mdash; and several make their own outbound requests, so they belong in the scoped egress sandbox, not the internal analyze queue. Each row is what the GitHub source actually requires.</p>
+
+      <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:16px;">
+        <sc-for list="{{ integModes }}" as="m" hint-placeholder-count="3">
+          <span style="display:flex; align-items:center; gap:7px; font-size:11.5px; color:#B8C1D4;"><span style="width:9px;height:9px;border-radius:2px;background:{{ m.c }};"></span>{{ m.label }}</span>
+        </sc-for>
+      </div>
+
+      <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:12px;">
+        <sc-for list="{{ engines }}" as="e" hint-placeholder-count="6">
+          <div style="background:#11141d; border:1px solid #1c2230; border-left:3px solid {{ e.c }}; border-radius:12px; padding:16px 17px;">
+            <div style="display:flex; align-items:center; gap:9px; margin-bottom:3px;">
+              <span style="font-family:'Space Grotesk'; font-weight:700; font-size:15px; color:#ECEFF6;">{{ e.name }}</span>
+              <span style="font-family:'JetBrains Mono'; font-size:9.5px; font-weight:700; color:{{ e.c }}; background:{{ e.bg }}; padding:2px 8px; border-radius:5px;">{{ e.mode }}</span>
+            </div>
+            <div style="font-size:11.5px; color:#7E8AA3; margin-bottom:11px;">{{ e.role }} &middot; <span style="font-family:'JetBrains Mono'; color:#98A2B8;">{{ e.repo }}</span></div>
+            <div style="display:flex; flex-direction:column; gap:7px;">
+              <sc-for list="{{ e.rows }}" as="r" hint-placeholder-count="4">
+                <div style="display:flex; gap:10px; font-size:12px; line-height:1.45;">
+                  <span style="flex:0 0 78px; font-family:'JetBrains Mono'; font-size:10px; color:#5C6680; letter-spacing:0.4px; padding-top:1px;">{{ r.k }}</span>
+                  <span style="flex:1; color:#C7D0E0;">{{ r.v }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="background:rgba(255,138,71,0.07); border:1px solid rgba(255,138,71,0.25); border-radius:12px; padding:14px 16px; margin-top:14px; display:flex; gap:11px;">
+        <span style="width:22px;height:22px;flex:0 0 22px;color:#FF8A47;margin-top:1px;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"></path></svg></span>
+        <div style="font-size:12.5px; color:#C7D0E0; line-height:1.55;"><b style="color:#ECEFF6;">Sandbox rule of thumb:</b> any engine with a NET row runs in the scoped egress sandbox under the run's host allow-list &mdash; never on the internal <span style="font-family:'JetBrains Mono';color:#5BD6C0;">analyze</span> queue. Sourcemapper will fetch whatever URL a hostile bundle points it at (SSRF), and Kingfisher's validators call live provider APIs; both must be host-scoped and throttled.</div>
+      </div>
+    </div>
+
+    <!-- 04 JOB LIFECYCLE -->
+    <div id="pipeline" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">04 · ASYNC PIPELINE</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 8px;">Recon-run lifecycle &amp; job stages</h2>
+      <p style="font-size: 14px; color: #98A2B8; max-width: 760px; margin: 0 0 22px;">A run is a state machine. Each stage is a distinct job type on its own queue with its own concurrency and retry policy; every transition emits a progress event so the client always knows what it is waiting on.</p>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin-bottom: 16px;">
+        <sc-for list="{{ stages }}" as="s" hint-placeholder-count="7">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="background: #11141d; border: 1px solid {{ s.bd }}; border-radius: 11px; padding: 11px 13px; min-width: 122px;">
+              <div style="display: flex; align-items: center; gap: 7px; margin-bottom: 5px;">
+                <span style="width: 20px; height: 20px; border-radius: 6px; background: {{ s.ibg }}; color: {{ s.c }}; display: inline-flex; align-items: center; justify-content: center;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ s.iconD }}"></path></svg></span>
+                <span style="font-family: 'JetBrains Mono'; font-size: 11.5px; font-weight: 700; color: {{ s.c }};">{{ s.key }}</span>
+              </div>
+              <div style="font-size: 11px; color: #8A94AC; line-height: 1.4;">{{ s.desc }}</div>
+              <div style="font-family: 'JetBrains Mono'; font-size: 9.5px; color: #5C6680; margin-top: 6px;">{{ s.worker }}</div>
+            </div>
+            <sc-if value="{{ s.arrow }}" hint-placeholder-val="{{ true }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2e374b" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 15px;"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></sc-if>
+          </div>
+        </sc-for>
+      </div>
+      <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+        <sc-for list="{{ terminalStates }}" as="ts" hint-placeholder-count="3">
+          <span style="display: flex; align-items: center; gap: 7px; font-size: 11.5px; font-family: 'JetBrains Mono'; color: {{ ts.c }}; background: {{ ts.bg }}; padding: 5px 11px; border-radius: 7px;"><span style="width: 7px; height: 7px; border-radius: 50%; background: {{ ts.c }};"></span>{{ ts.label }}</span>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- 04 QUEUES -->
+    <div id="queues" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">05 · QUEUES &amp; CONCURRENCY</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 8px;">Queue topology</h2>
+      <p style="font-size: 14px; color: #98A2B8; max-width: 760px; margin: 0 0 20px;">Separate queues so a slow LLM call never blocks a fast fetch, and so each resource gets its own rate limit and scaling knob. Every queue has bounded retries with exponential backoff + jitter and a dead-letter queue (DLQ) for poison messages.</p>
+      <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 13px; overflow: hidden;">
+        <div style="display: flex; padding: 10px 16px; border-bottom: 1px solid #1c2230; font-size: 10px; color: #5C6680; font-weight: 700; letter-spacing: 0.6px;">
+          <span style="flex: 0 0 150px;">QUEUE</span><span style="flex: 1;">WORK</span><span style="flex: 0 0 130px;">CONCURRENCY</span><span style="flex: 0 0 140px;">RATE LIMIT</span>
+        </div>
+        <sc-for list="{{ queues }}" as="q" hint-placeholder-count="6">
+          <div style="display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid #161b26; font-size: 12.5px;">
+            <span style="flex: 0 0 150px; font-family: 'JetBrains Mono'; font-size: 11.5px; color: {{ q.c }}; font-weight: 600;">{{ q.name }}</span>
+            <span style="flex: 1; color: #B8C1D4;">{{ q.work }}</span>
+            <span style="flex: 0 0 130px; font-family: 'JetBrains Mono'; font-size: 11px; color: #98A2B8;">{{ q.conc }}</span>
+            <span style="flex: 0 0 140px; font-family: 'JetBrains Mono'; font-size: 11px; color: #98A2B8;">{{ q.rate }}</span>
+          </div>
+        </sc-for>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px;">
+        <sc-for list="{{ queuePolicies }}" as="p" hint-placeholder-count="3">
+          <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 11px; padding: 14px 15px;">
+            <div style="font-weight: 600; font-size: 13px; margin-bottom: 4px; color: {{ p.c }};">{{ p.title }}</div>
+            <div style="font-size: 12px; color: #8A94AC; line-height: 1.5;">{{ p.desc }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- 05 POLLING / REALTIME -->
+    <div id="realtime" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">06 · POLLING &amp; REALTIME</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 8px;">Solving “am I waiting or is it lagging?”</h2>
+      <p style="font-size: 14px; color: #98A2B8; max-width: 760px; margin: 0 0 20px;">Every job publishes a typed progress record. The client subscribes over SSE for push updates and falls back to interval polling; a heartbeat proves liveness so a stalled worker is never mistaken for slow work.</p>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+        <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 13px; padding: 18px;">
+          <div style="font-weight: 600; font-size: 14px; margin-bottom: 12px;">Progress record (per job)</div>
+          <div style="background: #0c0f16; border: 1px solid #232b3b; border-radius: 10px; padding: 14px; font-family: 'JetBrains Mono'; font-size: 11.5px; line-height: 1.7; color: #B8C1D4;">
+            <sc-for list="{{ progressFields }}" as="p" hint-placeholder-count="7">
+              <div><span style="color: #7C8CFF;">{{ p.k }}</span><span style="color: #5C6680;">: </span><span style="color: #CDEB45;">{{ p.v }}</span></div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <sc-for list="{{ realtimeReqs }}" as="r" hint-placeholder-count="4">
+            <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 12px; padding: 14px 16px;">
+              <div style="display: flex; align-items: center; gap: 9px; margin-bottom: 4px;">
+                <span style="width: 24px; height: 24px; border-radius: 7px; background: {{ r.bg }}; color: {{ r.c }}; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 24px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ r.iconD }}"></path></svg></span>
+                <span style="font-weight: 600; font-size: 13.5px;">{{ r.title }}</span>
+              </div>
+              <div style="font-size: 12px; color: #8A94AC; line-height: 1.5;">{{ r.desc }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <!-- 06 DATA -->
+    <div id="data" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">07 · DATA STORES</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 20px;">Persistence by shape of data</h2>
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+        <sc-for list="{{ stores }}" as="s" hint-placeholder-count="5">
+          <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 13px; padding: 16px 18px;">
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+              <span style="width: 30px; height: 30px; border-radius: 8px; background: {{ s.bg }}; color: {{ s.c }}; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ s.iconD }}"></path></svg></span>
+              <div><div style="font-weight: 600; font-size: 14px;">{{ s.name }}</div><div style="font-family: 'JetBrains Mono'; font-size: 10.5px; color: {{ s.c }};">{{ s.tech }}</div></div>
+            </div>
+            <div style="font-size: 12.5px; color: #8A94AC; line-height: 1.5; margin-bottom: 9px;">{{ s.desc }}</div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              <sc-for list="{{ s.holds }}" as="h" hint-placeholder-count="3">
+                <span style="font-family: 'JetBrains Mono'; font-size: 10px; color: #98A2B8; background: #0c0f16; border: 1px solid #232b3b; padding: 2px 8px; border-radius: 5px;">{{ h }}</span>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- 07 LLM -->
+    <div id="llm" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">08 · LLM ORCHESTRATION</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 20px;">Calling models safely, cheaply, deterministically</h2>
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+        <sc-for list="{{ llmReqs }}" as="l" hint-placeholder-count="8">
+          <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 12px; padding: 15px 17px;">
+            <div style="display: flex; align-items: center; gap: 9px; margin-bottom: 5px;">
+              <span style="width: 26px; height: 26px; border-radius: 7px; background: rgba(199,146,234,0.12); color: #C792EA; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 26px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ l.iconD }}"></path></svg></span>
+              <span style="font-weight: 600; font-size: 13.5px;">{{ l.title }}</span>
+            </div>
+            <div style="font-size: 12.5px; color: #8A94AC; line-height: 1.55;">{{ l.desc }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- 08 REQUIREMENTS TABLE -->
+    <div id="requirements" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">09 · REQUIREMENTS</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 8px;">Traceable requirements — {{ reqCount }}</h2>
+      <p style="font-size: 14px; color: #98A2B8; max-width: 760px; margin: 0 0 18px;">Each carries an ID, subsystem, and a MUST / SHOULD priority. Filter by subsystem.</p>
+      <div style="display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap;">
+        <sc-for list="{{ subsystemFilters }}" as="f" hint-placeholder-count="6">
+          <button onClick="{{ f.set }}" style="display: flex; align-items: center; gap: 7px; padding: 7px 13px; border-radius: 9px; border: 1px solid {{ f.bd }}; background: {{ f.bg }}; color: {{ f.fg }}; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600;">{{ f.label }}<span style="font-family: 'JetBrains Mono'; font-size: 10.5px; color: #5C6680;">{{ f.count }}</span></button>
+        </sc-for>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <sc-for list="{{ requirements }}" as="r" hint-placeholder-count="12">
+          <div style="display: flex; align-items: flex-start; gap: 13px; background: #11141d; border: 1px solid #1c2230; border-left: 3px solid {{ r.prioC }}; border-radius: 11px; padding: 13px 16px;">
+            <span style="font-family: 'JetBrains Mono'; font-size: 11px; font-weight: 700; color: #6BA8FF; flex: 0 0 66px; margin-top: 1px;">{{ r.id }}</span>
+            <div style="flex: 1;">
+              <div style="font-size: 13.5px; color: #ECEFF6; line-height: 1.5;">{{ r.text }}</div>
+              <div style="font-family: 'JetBrains Mono'; font-size: 10.5px; color: #5C6680; margin-top: 3px;">{{ r.sub }}</div>
+            </div>
+            <span style="font-size: 9.5px; font-weight: 700; letter-spacing: 0.4px; color: {{ r.prioC }}; background: {{ r.prioBg }}; padding: 3px 9px; border-radius: 5px; flex: 0 0 auto; margin-top: 1px;">{{ r.prio }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- 09 NFR + MILESTONES -->
+    <div id="nfr" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">10 · TARGETS &amp; SEQUENCING</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 20px;">Non-functional targets</h2>
+      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 26px;">
+        <sc-for list="{{ nfrs }}" as="n" hint-placeholder-count="4">
+          <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 12px; padding: 15px 16px;">
+            <div style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 22px; color: {{ n.c }}; letter-spacing: -0.5px;">{{ n.target }}</div>
+            <div style="font-size: 12px; color: #C7D0E0; font-weight: 600; margin-top: 4px;">{{ n.label }}</div>
+            <div style="font-size: 11px; color: #7E8AA3; margin-top: 3px; line-height: 1.4;">{{ n.note }}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 13px;">
+        <sc-for list="{{ milestones }}" as="m" hint-placeholder-count="3">
+          <div style="background: #11141d; border: 1px solid {{ m.border }}; border-radius: 13px; padding: 18px;">
+            <span style="font-size: 11px; font-weight: 700; letter-spacing: 0.5px; color: {{ m.c }}; background: {{ m.bg }}; padding: 3px 10px; border-radius: 20px;">{{ m.tag }}</span>
+            <div style="font-family: 'Space Grotesk'; font-weight: 600; font-size: 15px; margin: 10px 0 4px;">{{ m.title }}</div>
+            <div style="font-size: 12px; color: #7E8AA3; line-height: 1.5; margin-bottom: 12px;">{{ m.goal }}</div>
+            <sc-for list="{{ m.items }}" as="it" hint-placeholder-count="3">
+              <div style="display: flex; gap: 8px; margin-bottom: 6px; align-items: flex-start;">
+                <span style="width: 13px; height: 13px; flex: 0 0 13px; color: {{ m.c }}; margin-top: 2px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>
+                <span style="font-size: 12px; color: #C7D0E0; line-height: 1.45;">{{ it }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1020,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = { sub: 'all' };
+
+  REQS(){
+    return [
+      { id:'REQ-A1', sub:'Async pipeline', prio:'MUST', text:'No request thread performs crawl, fetch, AST parse, LLM, or probe work; the API enqueues a job and returns a run id in <200ms.' },
+      { id:'REQ-A2', sub:'Async pipeline', prio:'MUST', text:'A recon run is a persisted state machine (queued→discovering→fetching→ingesting→analyzing→correlating→done/failed/partial); transitions are atomic and event-emitting.' },
+      { id:'REQ-A3', sub:'Async pipeline', prio:'MUST', text:'Finding writes are exactly-once via a transactional outbox: a stage stages its output in one transaction keyed by a stable finding-hash, commits atomically, and downstream fan-out reads only committed rows — so a partial commit + retry can never double-write. [RT-04]' },
+      { id:'REQ-A4', sub:'Async pipeline', prio:'SHOULD', text:'A run can be cancelled; in-flight jobs observe a cancel flag at safe checkpoints and stop enqueuing downstream work.' },
+      { id:'REQ-C1', sub:'Collect', prio:'SHOULD', text:'Archive collection (Wayback/gau) is scoped to the locked engagement hosts; archive-only hosts discovered off-scope are listed but never live-fetched or probed without extending the scope lock. [RT-14]' },
+      { id:'REQ-C2', sub:'Collect', prio:'SHOULD', text:'Extraction surfaces a per-file un-attributed-call coverage counter (honesty is a MUST); completeness is explicitly NOT guaranteed. Custom wrappers are taught by mapping a call shape; cross-file base URLs are resolved via a manual set-base-URL that re-resolves dependents. [RT-10]' },
+      { id:'REQ-Q1', sub:'Queues', prio:'MUST', text:'Separate queues per work class (discover, fetch, analyze, llm, probe, report) each with independent concurrency and rate limits.' },
+      { id:'REQ-Q2', sub:'Queues', prio:'MUST', text:'Bounded retries with exponential backoff + jitter; exhausted messages land in a per-queue DLQ with the original payload and error.' },
+      { id:'REQ-Q3', sub:'Queues', prio:'MUST', text:'Per-host fetch rate limiting so a single target is never hammered; respects robots/backoff and a global politeness budget.' },
+      { id:'REQ-Q4', sub:'Queues', prio:'SHOULD', text:'Priority lanes: interactive actions (single-endpoint probe, re-analyze one file) preempt bulk batch runs.' },
+      { id:'REQ-Q5', sub:'Queues', prio:'SHOULD', text:'Headless crawl (Chrome) runs in a dedicated, RAM-bounded concurrency lane (N browser slots, queued) decoupled from run concurrency; the per-worker memory budget is a stated NFR. [RT-08]' },
+      { id:'REQ-R1', sub:'Realtime', prio:'MUST', text:'Each job publishes a typed progress record {state, stage, done, total, eta, heartbeat_at}; persisted and query-able.' },
+      { id:'REQ-R2', sub:'Realtime', prio:'MUST', text:'Progress is backed by a durable per-run event log (Redis Streams / append-only table); SSE carries a Last-Event-ID and replays from the last acked offset on reconnect, so a brief disconnect never loses events. Fire-and-forget pub/sub is only an optional fast-path. Interval polling of GET /runs/{id}/status remains the fallback. [RT-05]' },
+      { id:'REQ-R3', sub:'Realtime', prio:'MUST', text:'A heartbeat distinguishes “running slowly” from “stalled”; a job with no heartbeat past threshold is surfaced as stalled, not running.' },
+      { id:'REQ-R4', sub:'Realtime', prio:'SHOULD', text:'Status endpoint supports conditional requests (ETag / If-None-Match) so polling is cheap and returns 304 when unchanged.' },
+      { id:'REQ-D1', sub:'Data', prio:'MUST', text:'Relational store (Postgres) holds sessions, runs, findings, endpoints, params, triage state, users; migrations managed (Alembic).' },
+      { id:'REQ-D2', sub:'Data', prio:'MUST', text:'Large blobs (raw JS, source maps, reconstructed sources, reports) live in object storage (S3/MinIO), referenced by key — never in a row.' },
+      { id:'REQ-D3', sub:'Data', prio:'MUST', text:'Findings are content-addressed over stable fields only (type + value + normalized path), excluding volatile col/evidence, so a retry with slightly different evidence yields the same hash. This hash keys the exactly-once outbox write (REQ-A3). [RT-04]' },
+      { id:'REQ-D4', sub:'Data', prio:'SHOULD', text:'Vector store (pgvector/Qdrant) grounds the threat modeler; retrieved chunks carry provenance + recency weighting, are cited distinctly from live evidence, and stale context is down-weighted or flagged so a wrong prior decision cannot pose as authoritative. [RT-16]' },
+      { id:'REQ-D5', sub:'Data', prio:'SHOULD', text:'Runs are immutable snapshots; diffing is partial-aware — assets not observed in a partial run are marked “unknown,” never “removed.” Only complete-vs-complete runs may assert removals. [RT-13]' },
+      { id:'REQ-D6', sub:'Data', prio:'SHOULD', text:'Data-lifecycle policy: snapshots older than N days roll up to deltas against a periodic baseline and raw blobs age out to cold storage, so continuous monitoring does not grow storage without bound. [RT-15]' },
+      { id:'REQ-L1', sub:'LLM', prio:'MUST', text:'Provider config (keys, model routing, limits) is user-supplied at RUNTIME via the API and read by workers per-run — no server restart to change it. Secrets are envelope-encrypted (KMS) or held by reference in a vault, never a plaintext row and never logged/returned; non-secret config is plain rows. Calls are made by the workers (not the browser) so the async pipeline holds. [RT-01]' },
+      { id:'REQ-L1b', sub:'LLM', prio:'SHOULD', text:'Workers read provider config through a short-TTL Redis read-through cache so many concurrent workers do not all hit Postgres for the same settings; a config change invalidates the cache key so the next run picks it up. [RT-01]' },
+      { id:'REQ-L2', sub:'LLM', prio:'MUST', text:'All model calls run on the llm queue with per-provider rate + token-budget limits and timeout + retry with backoff on 429/5xx.' },
+      { id:'REQ-L3', sub:'LLM', prio:'MUST', text:'Structured outputs validated against a schema; invalid responses are repaired or re-requested, never persisted raw.' },
+      { id:'REQ-L4', sub:'LLM', prio:'MUST', text:'Every generated threat carries source attribution AND passes a verification pass: cited finding ids must resolve to existing records and an automated groundedness check must confirm the evidence supports the claim, else the threat is demoted to “ungrounded inference” and ranked apart. Schema-valid is not accepted as grounded. [RT-06]' },
+      { id:'REQ-L5', sub:'LLM', prio:'SHOULD', text:'Prompt/response cache keyed by (model, prompt hash, evidence hash) to avoid re-billing identical analyses; streamed tokens relayed to client.' },
+      { id:'REQ-L6', sub:'LLM', prio:'SHOULD', text:'Two-tier routing (frontier planner + cheap worker) with a pre-flight cost estimate from node count + effort level and a per-node budget; the meter pauses only at safe node boundaries with a complete-so-far model, never mid-fan-out. The estimate is surfaced before the run starts. [RT-12]' },
+      { id:'REQ-P1', sub:'Probe / active', prio:'MUST', text:'The platform does NOT send automated active/exploit traffic at this stage. It reconstructs the request and hands the user a ready-to-fire artifact (copy-as-request, curl, Burp/Postman/mitmproxy export); the USER runs the probe manually and marks the finding confirmed. [RT-03 decision]' },
+      { id:'REQ-P2', sub:'Probe / active', prio:'MUST', text:'The only outbound traffic the platform itself makes is fetch/crawl/archive. That egress uses a static, pre-declared, DNS-pinned host set; link-local/RFC1918/cloud-metadata IPs (169.254.169.254 et al.) are blocked at the network layer, and scope is NEVER derived from crawled or bundle-referenced URLs — defeating Sourcemapper/katana SSRF. [RT-02]' },
+      { id:'REQ-P3', sub:'Probe / active', prio:'SHOULD', text:'A lightweight authorization acknowledgment + declared in-scope host list precedes fetch/crawl of a target; since exploitation is manual (REQ-P1) no heavy attestation gate is required yet. Revisit if automated probing is added later. [RT-03 decision]' },
+      { id:'REQ-S1', sub:'Platform', prio:'MUST', text:'Multi-tenant isolation: every row and object key is tenant-scoped; authorization enforced at the data layer, not just the API.' },
+      { id:'REQ-S2', sub:'Platform', prio:'MUST', text:'Secrets found in analysis are stored as a one-way hash + location by default — never plaintext; reveal is ephemeral, just-in-time, and audit-logged, so the platform is not a concentrated store of third-party live credentials. [RT-09]' },
+      { id:'REQ-S3', sub:'Platform', prio:'SHOULD', text:'Structured logs + traces across API→queue→worker→LLM with the run_id as correlation id; per-stage metrics exported.' },
+      { id:'REQ-S4', sub:'Platform', prio:'MUST', text:'Explicit retention, purge, and breach-handling policy for any custodied sensitive data (secrets, tokens, reconstructed sources); default TTLs and a tenant-initiated purge path. [RT-09]' },
+      { id:'REQ-T1', sub:'Tooling', prio:'MUST', text:'External engines run as pinned, version-locked binaries/images invoked out-of-process; the worker parses their machine output (JSON/SARIF/JSONL) and never imports Go/Rust internals.' },
+      { id:'REQ-T2', sub:'Tooling', prio:'MUST', text:'Any engine that emits network traffic (katana, gau, Sourcemapper URL fetch, Kingfisher validation) runs only in the scoped egress sandbox under the run’s host allow-list and per-target throttle.' },
+      { id:'REQ-T3', sub:'Tooling', prio:'SHOULD', text:'Runtime prerequisites (headless Chrome, Node+cdxgen, Hyperscan/SIMD, vuln-DB cache) are baked into the worker image and health-checked at boot, not installed per-run.' },
+      { id:'REQ-T4', sub:'Tooling', prio:'MUST', text:'Each external engine has a contract-test suite with golden-output fixtures in CI that fails the build on upstream output-schema drift, so a silent field rename can never drop findings in production. [RT-07]' },
+      { id:'REQ-T5', sub:'Tooling', prio:'SHOULD', text:'A documented monthly upgrade + CVE-triage cadence per pinned binary/image (Kingfisher, Sourcemapper, katana, gau, depscan, Chrome, cdxgen); pins are reviewed, not frozen. [RT-07]' },
+    ];
+  }
+
+  renderVals(){
+    const toc=[['#principles','Principles'],['#architecture','Architecture'],['#tooling','Tooling'],['#pipeline','Pipeline'],['#queues','Queues'],['#realtime','Realtime'],['#data','Data'],['#llm','LLM'],['#requirements','Reqs']].map(([href,label])=>({href,label}));
+    const heroStats=[
+      { n:'6', label:'worker queues', c:'#CDEB45' },
+      { n:'4', label:'data stores', c:'#6BA8FF' },
+      { n:'40', label:'requirements', c:'#C792EA' },
+      { n:'< 4 min', label:'target run SLA', c:'#FF8A47' },
+    ];
+
+    // bare single-d icon paths (arcs stand in for circles)
+    const IC = {
+      bolt:'M13 2 3 14h9l-1 8 10-12h-9l1-8z',
+      clock:'M3 12a9 9 0 1 0 18 0 9 9 0 1 0-18 0M12 7v5l3 2',
+      refresh:'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5',
+      shieldcheck:'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10zM9 12l2 2 4-4',
+      activity:'M3 12h4l3 8 4-16 3 8h4',
+      dollar:'M4 12a8 8 0 1 0 16 0 8 8 0 1 0-16 0M12 7v10M9.5 9.5h4a1.8 1.8 0 0 1 0 3.6H10.5a1.8 1.8 0 0 0 0 3.6h4.5',
+      web:'M2 3h20v14H2zM8 21h8M12 17v4',
+      ext:'M8 12a4 4 0 1 0 8 0 4 4 0 1 0-8 0M12 4v3M12 17v3M4 12h3M17 12h3',
+      gateway:'M4 4h16v6H4zM4 14h16v6H4',
+      sse:'M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16M5 19h.01',
+      broker:'M3 6h18M3 12h18M3 18h18',
+      globe:'M4 12a8 8 0 1 0 16 0 8 8 0 1 0-16 0M4 12h16M12 4a13 13 0 0 1 0 16M12 4a13 13 0 0 0 0 16',
+      code:'M16 18l6-6-6-6M8 6l-6 6 6 6',
+      graph:'M7 7l10 4M7 17l10-5M3 6a2 2 0 1 0 4 0 2 2 0 1 0-4 0M3 18a2 2 0 1 0 4 0 2 2 0 1 0-4 0M17 12a2 2 0 1 0 4 0 2 2 0 1 0-4 0',
+      db:'M3 5a9 3 0 1 0 18 0 9 3 0 1 0-18 0M3 5v14a9 3 0 0 0 18 0V5',
+      folder:'M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z',
+      layers:'M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5',
+      vector:'M9 12a3 3 0 1 0 6 0 3 3 0 1 0-6 0M3 6a2 2 0 1 0 4 0 2 2 0 1 0-4 0M17 6a2 2 0 1 0 4 0 2 2 0 1 0-4 0M3 18a2 2 0 1 0 4 0 2 2 0 1 0-4 0M17 18a2 2 0 1 0 4 0 2 2 0 1 0-4 0',
+      search:'M4 11a7 7 0 1 0 14 0 7 7 0 1 0-14 0M21 21l-4.3-4.3',
+      download:'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3',
+      link:'M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8',
+      lines:'M4 7h16M4 12h16M4 17h10',
+      check:'M20 6 9 17l-5-5',
+      shield:'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
+      grid:'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z',
+      heart:'M22 12h-4l-3 9L9 3l-3 9H2',
+    };
+
+    const tenets=[
+      { title:'Nothing blocks the request', desc:'Web tier only accepts, validates, enqueues, and reads. All heavy work is deferred to workers.', iconD:IC.bolt, bg:'rgba(205,235,69,0.12)', c:'#CDEB45' },
+      { title:'Every wait is legible', desc:'A user must always know whether work is running, queued, stalled, or done — with an ETA.', iconD:IC.clock, bg:'rgba(107,168,255,0.12)', c:'#6BA8FF' },
+      { title:'Idempotent & resumable', desc:'Any job can be retried or replayed without corruption; a crashed run resumes from its last committed stage.', iconD:IC.refresh, bg:'rgba(91,214,192,0.12)', c:'#5BD6C0' },
+      { title:'Provenance over guesses', desc:'Every stored fact links to file:line or a probe result; LLM inference is labeled and never mixed with ground truth.', iconD:IC.shieldcheck, bg:'rgba(199,146,234,0.12)', c:'#C792EA' },
+      { title:'Backpressure by design', desc:'Bounded queues and rate limits protect targets, providers, and the platform from overload.', iconD:IC.activity, bg:'rgba(255,138,71,0.12)', c:'#FF8A47' },
+      { title:'Cost is a first-class limit', desc:'LLM spend is metered per run against a ceiling; the run pauses rather than silently burning budget.', iconD:IC.dollar, bg:'rgba(255,107,138,0.12)', c:'#FF6B8A' },
+    ];
+
+    const tint = { '#CDEB45':['rgba(205,235,69,0.06)','rgba(205,235,69,0.14)'], '#6BA8FF':['rgba(107,168,255,0.06)','rgba(107,168,255,0.14)'], '#C792EA':['rgba(199,146,234,0.06)','rgba(199,146,234,0.14)'], '#5BD6C0':['rgba(91,214,192,0.06)','rgba(91,214,192,0.14)'], '#FF8A47':['rgba(255,138,71,0.06)','rgba(255,138,71,0.14)'] };
+    const B=(name,desc,tech,iconD,c)=>({ name, desc, tech, iconD, c, bg:tint[c][0], bd:'#1c2230', ibg:tint[c][1] });
+    const archRows=[
+      { tier:'CLIENTS', arrow:true, boxes:[
+        B('Web workspace','SPA — findings, spec, threat model','React / SSE client',IC.web,'#6BA8FF'),
+        B('Browser extension','Captures JS + auth context live','MV3 service worker',IC.ext,'#6BA8FF'),
+      ]},
+      { tier:'EDGE / API', arrow:true, boxes:[
+        B('API gateway','Auth, validation, enqueue, read models','FastAPI / Uvicorn',IC.gateway,'#CDEB45'),
+        B('SSE / WS hub','Streams run progress + tokens','Redis pub/sub',IC.sse,'#CDEB45'),
+      ]},
+      { tier:'BROKER', arrow:true, boxes:[
+        B('Message broker','Durable queues, priority lanes, DLQ','Redis Streams / RabbitMQ',IC.broker,'#FF8A47'),
+      ]},
+      { tier:'WORKERS', arrow:true, boxes:[
+        B('Fetch/crawl pool','Pulls JS, maps, historical archives','Async HTTP workers',IC.globe,'#5BD6C0'),
+        B('Analysis pool','tree-sitter AST, secrets, endpoints','Python / Celery',IC.code,'#5BD6C0'),
+        B('LLM / probe pool','Threat model + live verification','Rate-limited workers',IC.graph,'#C792EA'),
+      ]},
+      { tier:'STATE', arrow:false, boxes:[
+        B('Postgres','Relational: runs, findings, triage','+ Alembic',IC.db,'#6BA8FF'),
+        B('Object store','Blobs: JS, sources, reports','S3 / MinIO',IC.folder,'#6BA8FF'),
+        B('Redis','Cache, locks, rate limits, pub/sub','In-memory',IC.layers,'#FF8A47'),
+        B('Vector DB','RAG grounding for Spaces','pgvector / Qdrant',IC.vector,'#C792EA'),
+      ]},
+    ];
+
+    const integModes=[
+      { label:'In-process library (Python)', c:'#5BD6C0' },
+      { label:'Subprocess binary (Go / Rust)', c:'#FF8A47' },
+      { label:'Sidecar / service + toolchain', c:'#C792EA' },
+    ];
+    const ER=(k,v)=>({k,v});
+    const engines=[
+      { name:'Vespasian', role:'Endpoints · params · OpenAPI spec', repo:'js-api-recon (this skill)', mode:'PY LIBRARY', c:'#5BD6C0', bg:'rgba(91,214,192,0.12)', rows:[
+        ER('RUNTIME','Python ≥ 3.10'),
+        ER('INTEGRATE','Import the Analyzer in-process — no subprocess. The one engine that runs natively on the analyze worker.'),
+        ER('REQUIRES','tree-sitter + language-pack, jsbeautifier, openapi-spec-validator (all pip).'),
+        ER('NET','None — pure static analysis. Safe on the internal analyze queue.'),
+      ]},
+      { name:'Kingfisher', role:'Secret detection + live validation', repo:'mongodb/kingfisher · Apache-2.0', mode:'RUST BINARY', c:'#FF8A47', bg:'rgba(255,138,71,0.12)', rows:[
+        ER('RUNTIME','Prebuilt Rust binary'),
+        ER('INTEGRATE','Subprocess → parse JSON/SARIF. Library crates exist but are beta and Rust-only (no Python bindings).'),
+        ER('REQUIRES','Bundles Hyperscan (Intel SIMD) + tree-sitter; pin an x86-64 or arm64 build in the image.'),
+        ER('NET','Validators call provider APIs → egress sandbox. Pass --no-validate for static-only runs.'),
+      ]},
+      { name:'Sourcemapper', role:'Reconstruct source tree from .map', repo:'denandz/sourcemapper · Go', mode:'GO BINARY', c:'#FF8A47', bg:'rgba(255,138,71,0.12)', rows:[
+        ER('RUNTIME','Static Go binary (go install)'),
+        ER('INTEGRATE','Subprocess only — package main, no importable API. Reads -url/-jsurl/-dir, writes a source tree.'),
+        ER('REQUIRES','Zero runtime deps; single binary.'),
+        ER('NET','Fetches any URL a bundle references → SSRF. Host-scope it in the egress sandbox.'),
+      ]},
+      { name:'DepScan', role:'Dependency + CVE / SBOM audit', repo:'owasp-dep-scan/dep-scan · MIT', mode:'PY + TOOLCHAIN', c:'#C792EA', bg:'rgba(199,146,234,0.12)', rows:[
+        ER('RUNTIME','Python (pip install owasp-depscan)'),
+        ER('INTEGRATE','Importable, but shells out to cdxgen for the SBOM. Cleanest as a sidecar — it has a --server /scan mode.'),
+        ER('REQUIRES','Node + @cyclonedx/cdxgen; Java/Maven/Gradle for JVM targets; a cached vuln DB (VDB_HOME).'),
+        ER('NET','Downloads + refreshes the vuln DB and GitHub advisories; the scan itself is local.'),
+      ]},
+      { name:'katana', role:'Live crawl / spider (DISCOVER)', repo:'projectdiscovery/katana · MIT', mode:'GO BINARY', c:'#FF8A47', bg:'rgba(255,138,71,0.12)', rows:[
+        ER('RUNTIME','Go binary (also a Go library — not callable from Python)'),
+        ER('INTEGRATE','Subprocess → JSONL. -jc extracts endpoints from JS files.'),
+        ER('REQUIRES','CGO_ENABLED=1 to build; headless mode needs Chrome/Chromium in the image.'),
+        ER('NET','Actively crawls the target → discover queue, per-host politeness + scope regex.'),
+      ]},
+      { name:'gau', role:'Archive URL enumeration (DISCOVER)', repo:'lc/gau · MIT', mode:'GO BINARY', c:'#FF8A47', bg:'rgba(255,138,71,0.12)', rows:[
+        ER('RUNTIME','Go binary'),
+        ER('INTEGRATE','Subprocess — domain on stdin, URLs on stdout.'),
+        ER('REQUIRES','Single binary; optional ~/.gau.toml.'),
+        ER('NET','Queries Wayback / Common Crawl / OTX / URLScan → discover queue, for historical/orphaned JS.'),
+      ]},
+    ];
+
+    const S=(key,desc,worker,iconD,c,arrow)=>({ key, desc, worker, iconD, c, ibg:tint[c][1], bd:'#1c2230', arrow });
+    const stages=[
+      S('DISCOVER','Crawl + archive for JS urls','fetch pool',IC.search,'#6BA8FF',true),
+      S('FETCH','Download assets + source maps','fetch pool',IC.download,'#6BA8FF',true),
+      S('INGEST','Beautify, reconstruct, store','analysis',IC.folder,'#5BD6C0',true),
+      S('ANALYZE','AST → endpoints, secrets, params','analysis',IC.code,'#5BD6C0',true),
+      S('CORRELATE','Dedupe, diff vs last run, score','analysis',IC.link,'#CDEB45',true),
+      S('MODEL','LLM threat pass (on demand)','llm pool',IC.graph,'#C792EA',false),
+    ];
+    const terminalStates=[
+      { label:'done — all stages committed', c:'#CDEB45', bg:'rgba(205,235,69,0.1)' },
+      { label:'partial — some assets failed, results still valid', c:'#FF8A47', bg:'rgba(255,138,71,0.1)' },
+      { label:'failed — run aborted, DLQ holds cause', c:'#FF4D5E', bg:'rgba(255,77,94,0.1)' },
+    ];
+
+    const Q=(name,work,conc,rate,c)=>({name,work,conc,rate,c});
+    const queues=[
+      Q('discover','Crawl + archive enumeration','low (2–4)','per-host politeness','#6BA8FF'),
+      Q('fetch','Asset + source-map download','high (20–50)','per-host token bucket','#6BA8FF'),
+      Q('analyze','AST parse, secret + endpoint scan','CPU-bound (n-cores)','none (internal)','#5BD6C0'),
+      Q('llm','Threat model + correlation calls','per-provider cap','provider RPM/TPM','#C792EA'),
+      Q('probe','Live verification / BOLA test','low, scoped (2–5)','per-target throttle','#FF8A47'),
+      Q('report','Export + report generation','low (2)','none','#CDEB45'),
+    ];
+    const queuePolicies=[
+      { title:'Retries', c:'#CDEB45', desc:'Exponential backoff + jitter, capped attempts. 429/5xx retry; 4xx (except 429) fail fast.' },
+      { title:'DLQ', c:'#FF8A47', desc:'Poison messages move to a per-queue dead-letter stream with payload + error for manual replay.' },
+      { title:'Backpressure', c:'#6BA8FF', desc:'Bounded queue depth; enqueue returns queued-position so the UI shows honest wait, not a spinner.' },
+    ];
+
+    const progressFields=[
+      { k:'run_id', v:'"run_8f2a"' }, { k:'state', v:'"running"' }, { k:'stage', v:'"analyze"' },
+      { k:'done / total', v:'96 / 142' }, { k:'pct', v:'68' }, { k:'eta_seconds', v:'100' },
+      { k:'heartbeat_at', v:'"…T14:03:12Z"' },
+    ];
+    const realtimeReqs=[
+      { title:'Push first', desc:'SSE stream per run; tokens + stage transitions arrive without polling.', iconD:IC.sse, c:'#CDEB45', bg:'rgba(205,235,69,0.12)' },
+      { title:'Poll fallback', desc:'GET /runs/{id}/status every 2s with ETag; 304 when unchanged keeps it cheap.', iconD:IC.refresh, c:'#6BA8FF', bg:'rgba(107,168,255,0.12)' },
+      { title:'Heartbeat', desc:'No heartbeat past threshold → surfaced as stalled, not “still working”.', iconD:IC.heart, c:'#FF8A47', bg:'rgba(255,138,71,0.12)' },
+    ];
+
+    const stores=[
+      { name:'Relational', tech:'PostgreSQL + Alembic', desc:'Source of truth for structured state and all triage workflow. Row-level tenant scoping.', iconD:IC.db, c:'#6BA8FF', bg:'rgba(107,168,255,0.12)', holds:['sessions','runs','findings','endpoints','triage','users'] },
+      { name:'Object storage', tech:'S3 / MinIO', desc:'Every large or binary artifact, referenced by key from Postgres. Lifecycle + retention policies.', iconD:IC.folder, c:'#CDEB45', bg:'rgba(205,235,69,0.12)', holds:['raw JS','source maps','reconstructed src','reports'] },
+      { name:'Cache / broker', tech:'Redis', desc:'Hot path: rate-limit counters, distributed locks, job broker, SSE event log, LLM result cache + short-TTL provider-config read-through.', iconD:IC.layers, c:'#FF8A47', bg:'rgba(255,138,71,0.12)', holds:['rate limits','locks','queues','event log','config cache'] },
+      { name:'Vector store', tech:'pgvector / Qdrant', desc:'Embeddings for Spaces knowledge + prior findings, retrieved to ground the threat modeler.', iconD:IC.vector, c:'#C792EA', bg:'rgba(199,146,234,0.12)', holds:['Spaces docs','runbooks','past models'] },
+    ];
+
+    const llmReqs=[
+      { title:'Provider gateway', desc:'One interface over Anthropic / OpenAI / Vertex / Bedrock / local; config is user-supplied at runtime (no restart), secrets envelope-encrypted, workers call — never the browser.', iconD:IC.lines },
+      { title:'On the llm queue', desc:'Every call is a rate-limited job with per-provider RPM/TPM caps, timeouts, and retry-with-backoff on 429/5xx.', iconD:IC.broker },
+      { title:'Structured + validated', desc:'Responses parsed against a schema; malformed output repaired or re-requested — never persisted raw.', iconD:IC.check },
+      { title:'Grounded outputs', desc:'Threats cite finding ids + framework ids; ungrounded inference is flagged and ranked apart from evidence.', iconD:IC.shield },
+      { title:'Cache + stream', desc:'Cache keyed by (model, prompt-hash, evidence-hash) avoids re-billing; tokens streamed to the client live.', iconD:IC.bolt },
+      { title:'Two-tier routing', desc:'Frontier planner + cheap worker per component; a per-run cost meter pauses the run at its ceiling.', iconD:IC.grid },
+    ];
+
+    const PR={ MUST:{c:'#FF6B8A',bg:'rgba(255,107,138,0.13)'}, SHOULD:{c:'#FFC73D',bg:'rgba(255,199,61,0.13)'} };
+    const all=this.REQS().map(r=>({ ...r, prioC:PR[r.prio].c, prioBg:PR[r.prio].bg }));
+    const subs=['all','Collect','Async pipeline','Queues','Realtime','Data','LLM','Probe / active','Platform','Tooling'];
+    const shown=this.state.sub==='all'?all:all.filter(r=>r.sub===this.state.sub);
+    const subsystemFilters=subs.map(k=>{ const on=this.state.sub===k; return { label:k==='all'?'All':k, count:k==='all'?all.length:all.filter(r=>r.sub===k).length, set:()=>this.setState({sub:k}), bd:on?'#CDEB45':'#232b3b', bg:on?'rgba(205,235,69,0.06)':'transparent', fg:on?'#ECEFF6':'#98A2B8' }; });
+
+    const nfrs=[
+      { target:'< 4 min', label:'Recon run SLA', note:'bounded input (≤N assets, single host), p50; fetch wall-clock reported apart [RT-11]', c:'#CDEB45' },
+      { target:'< 200 ms', label:'Enqueue latency', note:'API accept → run id, p95', c:'#6BA8FF' },
+      { target:'50+', label:'Concurrent runs', note:'per worker cluster, horizontally scaled', c:'#C792EA' },
+      { target:'99.9%', label:'Job durability', note:'no lost work on worker crash', c:'#FF8A47' },
+    ];
+    const milestones=[
+      { tag:'M1 · FOUNDATION', c:'#CDEB45', bg:'rgba(205,235,69,0.13)', border:'rgba(205,235,69,0.3)', title:'Async spine', goal:'Get all heavy work off the request path with legible status.',
+        items:['Broker + fetch/analyze queues','Run state machine + progress records','SSE + polling fallback','Postgres + object storage + Alembic'] },
+      { tag:'M2 · INTELLIGENCE', c:'#C792EA', bg:'rgba(199,146,234,0.13)', border:'rgba(199,146,234,0.3)', title:'LLM + manual probe', goal:'Add grounded AI and a clean manual-verification handoff.',
+        items:['Runtime provider config + per-run read','Structured output + groundedness check','Manual-probe handoff + mark-confirmed','Prompt/response cache + cost meter'] },
+      { tag:'M3 · SCALE', c:'#6BA8FF', bg:'rgba(107,168,255,0.13)', border:'rgba(107,168,255,0.3)', title:'Continuous + multi-tenant', goal:'Run always-on for many teams.',
+        items:['Run snapshots + diffing','Scheduled re-scans + alerts','Vector store for Spaces/RAG','Tenant isolation + audit + tracing'] },
+    ];
+
+    const decisions=[
+      { ref:'RT-01', title:'Key handling', text:'Provider config is user-supplied at runtime and read by workers per-run (no restart) — secrets envelope-encrypted, non-secret config plain rows, fronted by a short-TTL Redis read-through cache. Workers make the calls, so the async pipeline holds.' },
+      { ref:'RT-02', title:'Egress integrity', text:'The platform’s only outbound traffic (fetch/crawl/archive) uses a statically declared + DNS-pinned scope with metadata/RFC1918 blocked at the network layer; never derived from crawled content, so Sourcemapper/katana SSRF is defeated.' },
+      { ref:'RT-03', title:'Manual probe', text:'No automated active/exploit traffic at this stage — the platform hands the user a ready-to-fire request and the user probes manually, so only a light authorization acknowledgment is needed, not a heavy attestation gate.' },
+      { ref:'RT-04', title:'Exactly-once findings', text:'Dedup moves from stage-level idempotency to a transactional outbox on a stable finding-hash, so retries cannot corrupt the findings table.' },
+    ];
+
+    return { toc, heroStats, tenets, archRows, integModes, engines, stages, decisions, terminalStates, queues, queuePolicies, progressFields, realtimeReqs, stores, llmReqs, requirements:shown, reqCount:all.length, subsystemFilters, nfrs, milestones };
+  }
+}
+</script>
+</body>
+</html>

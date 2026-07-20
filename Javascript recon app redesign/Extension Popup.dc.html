@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes capflow { 0% { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .pp ::-webkit-scrollbar { width: 7px; }
+  .pp ::-webkit-scrollbar-thumb { background: #232b3b; border-radius: 6px; }
+</style>
+</helmet>
+<div style="min-height: 100vh; background: radial-gradient(1200px 500px at 50% -10%, #15202e, #0a0c12 60%); display: flex; align-items: center; justify-content: center; padding: 28px; font-family: 'IBM Plex Sans', system-ui, sans-serif;">
+  <div class="pp" style="width: 384px; background: #0F121A; border: 1px solid #232b3b; border-radius: 18px; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,0.55); color: #ECEFF6;">
+
+    <!-- ============ HOME VIEW ============ -->
+    <sc-if value="{{ isHome }}" hint-placeholder-val="{{ true }}">
+    <!-- header -->
+    <div style="display: flex; align-items: center; gap: 11px; padding: 15px 17px; border-bottom: 1px solid #1c2230;">
+      <div style="width: 28px; height: 28px; border-radius: 8px; background: #CDEB45; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 16px rgba(205,235,69,0.4);">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0B0D13" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
+      </div>
+      <div style="flex: 1; line-height: 1.05;">
+        <div style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 14px; letter-spacing: -0.2px;">RECON Capture</div>
+        <div style="display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: #CDEB45; font-family: 'JetBrains Mono'; margin-top: 1px;">
+          <span style="width: 6px; height: 6px; border-radius: 50%; background: #CDEB45; box-shadow: 0 0 6px #CDEB45;"></span> connected to workspace
+        </div>
+      </div>
+      <button onClick="{{ openSettings }}" style="width: 30px; height: 30px; border-radius: 8px; border: 1px solid #232b3b; background: #161b26; color: #98A2B8; cursor: pointer; display: flex; align-items: center; justify-content: center;" style-hover="color: #ECEFF6; border-color: #2a3243;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"></path></svg>
+      </button>
+    </div>
+
+    <!-- capture target card -->
+    <div style="padding: 15px 17px;">
+      <div style="background: #11141d; border: 1px solid {{ capBorder }}; border-radius: 13px; padding: 14px 15px;">
+        <div style="display: flex; align-items: center; gap: 9px; margin-bottom: 12px;">
+          <span style="position: relative; width: 8px; height: 8px; border-radius: 50%; background: {{ capDot }};"><sc-if value="{{ capturing }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;inset:0;border-radius:50%;background:#CDEB45;animation:pulse 1.1s infinite;"></span></sc-if></span>
+          <span style="flex: 1; min-width: 0;">
+            <span style="display: block; font-family: 'JetBrains Mono'; font-size: 13px; color: #ECEFF6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ host }}</span>
+            <span style="display: block; font-size: 10.5px; color: #5C6680;">session · {{ session }}</span>
+          </span>
+          <span style="font-size: 10px; font-weight: 700; color: {{ capDot }}; background: {{ capBg }}; padding: 3px 9px; border-radius: 20px;">{{ capLabel }}</span>
+        </div>
+        <button onClick="{{ toggleCapture }}" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px; border-radius: 10px; border: none; background: {{ capBtnBg }}; color: {{ capBtnFg }}; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 700;">
+          <span style="width: 15px; height: 15px;"><sc-if value="{{ capturing }}" hint-placeholder-val="{{ true }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg></sc-if><sc-if value="{{ capturingOff }}" hint-placeholder-val="{{ false }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4l14 8-14 8V4z"></path></svg></sc-if></span>{{ capBtnLabel }}
+        </button>
+      </div>
+    </div>
+
+    <!-- scope -->
+    <div style="padding: 0 17px 14px;">
+      <div style="display: flex; align-items: center; gap: 9px; background: #0c0f16; border: 1px solid #232b3b; border-radius: 10px; padding: 9px 12px;">
+        <span style="font-size: 10px; color: #5C6680; font-weight: 700; letter-spacing: 0.6px;">SCOPE</span>
+        <span style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ scope }}</span>
+        <button onClick="{{ toggleSub }}" style="display: flex; align-items: center; gap: 6px; border: none; background: none; cursor: pointer; font-family: inherit;">
+          <span style="font-size: 10.5px; color: #98A2B8;">+ subdomains</span>
+          <span style="width: 30px; height: 17px; border-radius: 20px; background: {{ subTrack }}; position: relative; flex: 0 0 30px;"><span style="position: absolute; top: 2px; left: {{ subX }}px; width: 13px; height: 13px; border-radius: 50%; background: {{ subKnob }};"></span></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- stats -->
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; padding: 0 17px 15px;">
+      <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 11px; padding: 12px;">
+        <div style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 22px; line-height: 1;">{{ stats.js }}</div>
+        <div style="font-size: 10px; color: #5C6680; margin-top: 4px;">scripts</div>
+      </div>
+      <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 11px; padding: 12px;">
+        <div style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 22px; line-height: 1; color: #5BD6C0;">{{ stats.maps }}</div>
+        <div style="font-size: 10px; color: #5C6680; margin-top: 4px;">maps</div>
+      </div>
+      <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 11px; padding: 12px;">
+        <div style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 22px; line-height: 1; color: #FF6B8A;">{{ stats.secrets }}</div>
+        <div style="font-size: 10px; color: #5C6680; margin-top: 4px;">secrets</div>
+      </div>
+    </div>
+
+    <!-- recent captures -->
+    <div style="padding: 0 17px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+        <span style="font-size: 10.5px; color: #5C6680; font-weight: 700; letter-spacing: 0.8px;">RECENT CAPTURES</span>
+        <span style="display: flex; align-items: center; gap: 9px;"><sc-if value="{{ mutedCap }}" hint-placeholder-val="{{ false }}"><button onClick="{{ showAllCaps }}" style="font-size: 10.5px; color: #C792EA; background: none; border: none; cursor: pointer; font-family: 'JetBrains Mono';">{{ mutedCap }} muted</button></sc-if><span style="font-size: 10.5px; color: #7E8AA3; font-family: 'JetBrains Mono';">live</span></span>
+      </div>
+      <div style="max-height: 168px; overflow-y: auto; margin: 0 -2px;">
+        <sc-for list="{{ captures }}" as="c" hint-placeholder-count="5">
+          <div style="display: flex; align-items: center; gap: 9px; padding: 9px 8px; border-radius: 9px; animation: capflow .25s ease;">
+            <span style="position: relative; width: 7px; height: 7px; border-radius: 50%; background: {{ c.dot }}; flex: 0 0 7px;"><sc-if value="{{ c.pulsing }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;inset:0;border-radius:50%;background:#FFC73D;animation:pulse 1s infinite;"></span></sc-if></span>
+            <span style="flex: 1; min-width: 0;">
+              <span style="display: block; font-family: 'JetBrains Mono'; font-size: 11.5px; color: #C7D0E0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ c.name }}</span>
+              <span style="display: block; font-size: 9.5px; color: #5C6680;">{{ c.meta }}</span>
+            </span>
+            <sc-if value="{{ c.third }}" hint-placeholder-val="{{ false }}"><span style="font-size: 8px; font-weight: 700; color: #FF8A47; background: rgba(255,138,71,0.13); padding: 2px 6px; border-radius: 9px; flex: 0 0 auto;">3RD</span></sc-if>
+            <sc-if value="{{ c.showCls }}" hint-placeholder-val="{{ false }}"><span style="font-size: 9px; font-weight: 600; color: {{ c.clsColor }}; flex: 0 0 auto;">{{ c.clsLabel }}</span></sc-if>
+            <sc-if value="{{ c.flag }}" hint-placeholder-val="{{ false }}"><span style="font-size: 9px; font-weight: 700; color: {{ c.flagc }}; background: {{ c.flagbg }}; padding: 2px 7px; border-radius: 10px; flex: 0 0 auto;">{{ c.flag }}</span></sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- settings -->
+    <div style="padding: 13px 17px; border-top: 1px solid #1c2230; margin-top: 13px;">
+      <sc-for list="{{ toggles }}" as="t" hint-placeholder-count="2">
+        <button onClick="{{ t.toggle }}" style="width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 0; border: none; background: none; cursor: pointer; font-family: inherit;">
+          <span style="flex: 1; text-align: left; font-size: 12.5px; color: #C7D0E0;">{{ t.label }}</span>
+          <span style="width: 36px; height: 20px; border-radius: 20px; background: {{ t.trackBg }}; position: relative; transition: background .15s; flex: 0 0 36px;">
+            <span style="position: absolute; top: 2px; left: {{ t.knobX }}px; width: 16px; height: 16px; border-radius: 50%; background: {{ t.knobBg }}; transition: left .15s;"></span>
+          </span>
+        </button>
+      </sc-for>
+    </div>
+
+    <!-- footer -->
+    <div style="display: flex; gap: 9px; padding: 13px 17px; border-top: 1px solid #1c2230;">
+      <button onClick="{{ exportNow }}" style="flex: 0 0 auto; display: flex; align-items: center; gap: 7px; padding: 10px 14px; border-radius: 10px; border: 1px solid #2a3243; background: #161b26; color: #C7D0E0; cursor: pointer; font-family: inherit; font-size: 12.5px; font-weight: 600;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M7 10l5 5 5-5"></path><path d="M12 15V3"></path></svg>Export
+      </button>
+      <button style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 10px; border-radius: 10px; border: none; background: #CDEB45; color: #0B0D13; cursor: pointer; font-family: inherit; font-size: 12.5px; font-weight: 700;">
+        Open Workspace
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+      </button>
+    </div>
+    </sc-if>
+
+    <!-- ============ SETTINGS VIEW ============ -->
+    <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+    <div style="display: flex; align-items: center; gap: 11px; padding: 15px 17px; border-bottom: 1px solid #1c2230;">
+      <button onClick="{{ closeSettings }}" style="width: 30px; height: 30px; border-radius: 8px; border: 1px solid #232b3b; background: #161b26; color: #C7D0E0; cursor: pointer; display: flex; align-items: center; justify-content: center;" style-hover="color: #ECEFF6; border-color: #2a3243;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>
+      </button>
+      <div style="flex: 1; font-family: 'Space Grotesk'; font-weight: 700; font-size: 15px;">Settings</div>
+    </div>
+    <div style="max-height: 560px; overflow-y: auto; padding: 16px 17px 20px;">
+
+      <!-- Connection -->
+      <div style="font-size: 10px; color: #5C6680; font-weight: 700; letter-spacing: 0.9px; margin-bottom: 10px; display: flex; align-items: center; gap: 7px;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5C6680" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"></path></svg>CONNECTION
+      </div>
+      <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 12px; padding: 14px; margin-bottom: 20px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+          <span style="display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: {{ conn.color }}; font-weight: 600;"><span style="position: relative; width: 7px; height: 7px; border-radius: 50%; background: {{ conn.color }};"><sc-if value="{{ connOk }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;inset:0;border-radius:50%;background:{{ conn.color }};animation:pulse 1.1s infinite;"></span></sc-if></span>{{ conn.label }}</span>
+          <span style="font-family: 'JetBrains Mono'; font-size: 10.5px; color: #5C6680;">{{ conn.latency }}</span>
+        </div>
+        <label style="display: block; font-size: 10px; color: #7E8AA3; margin-bottom: 5px;">Workspace URL</label>
+        <input value="{{ wsUrl }}" onInput="{{ setWsUrl }}" placeholder="https://recon.local:8000" style="width: 100%; background: #0c0f16; border: 1px solid #232b3b; border-radius: 8px; color: #ECEFF6; font-family: 'JetBrains Mono'; font-size: 12px; padding: 9px 11px; outline: none; margin-bottom: 11px;" />
+        <label style="display: block; font-size: 10px; color: #7E8AA3; margin-bottom: 5px;">API Key</label>
+        <div style="display: flex; gap: 7px; margin-bottom: 12px;">
+          <input value="{{ apiKeyShown }}" onInput="{{ setApiKey }}" type="{{ apiKeyType }}" placeholder="rk_live_…" style="flex: 1; min-width: 0; background: #0c0f16; border: 1px solid #232b3b; border-radius: 8px; color: #ECEFF6; font-family: 'JetBrains Mono'; font-size: 12px; padding: 9px 11px; outline: none;" />
+          <button onClick="{{ toggleKey }}" style="flex: 0 0 auto; width: 38px; border-radius: 8px; border: 1px solid #232b3b; background: #161b26; color: #98A2B8; cursor: pointer; display: flex; align-items: center; justify-content: center;"><span style="width: 15px; height: 15px;"><sc-if value="{{ showKey }}" hint-placeholder-val="{{ false }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.9 4.2A9.1 9.1 0 0 1 12 4c7 0 10 8 10 8a13.2 13.2 0 0 1-1.7 2.7"></path><path d="M6.6 6.6A13.5 13.5 0 0 0 2 12s3 8 10 8a9 9 0 0 0 5.4-1.6"></path><path d="m2 2 20 20"></path></svg></sc-if><sc-if value="{{ showKey }}" hint-placeholder-val="{{ true }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg></sc-if></span></button>
+        </div>
+        <button onClick="{{ testConn }}" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 9px; border-radius: 9px; border: 1px solid {{ testBorder }}; background: {{ testBg }}; color: {{ testFg }}; cursor: pointer; font-family: inherit; font-size: 12.5px; font-weight: 600;">
+          <span style="width: 14px; height: 14px;"><sc-if value="{{ connTesting }}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite;"><path d="M21 12a9 9 0 1 1-6.2-8.5" stroke-linecap="round"></path></svg></sc-if><sc-if value="{{ connTesting }}" hint-placeholder-val="{{ true }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg></sc-if></span>{{ testLabel }}
+        </button>
+      </div>
+
+      <!-- Capture rules -->
+      <div style="font-size: 10px; color: #5C6680; font-weight: 700; letter-spacing: 0.9px; margin-bottom: 10px; display: flex; align-items: center; gap: 7px;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5C6680" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"></path></svg>CAPTURE RULES
+      </div>
+      <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 12px; padding: 14px; margin-bottom: 20px;">
+        <label style="display: block; font-size: 10px; color: #7E8AA3; margin-bottom: 5px;">Default scope for new sessions</label>
+        <input value="{{ defScope }}" onInput="{{ setDefScope }}" placeholder="auto (active tab domain)" style="width: 100%; background: #0c0f16; border: 1px solid #232b3b; border-radius: 8px; color: #CDEB45; font-family: 'JetBrains Mono'; font-size: 12px; padding: 9px 11px; outline: none; margin-bottom: 13px;" />
+        <button onClick="{{ toggleDefSub }}" style="width: 100%; display: flex; align-items: center; gap: 10px; padding: 4px 0 13px; border: none; background: none; cursor: pointer; font-family: inherit;">
+          <span style="flex: 1; text-align: left; font-size: 12.5px; color: #C7D0E0;">Include subdomains by default</span>
+          <span style="width: 36px; height: 20px; border-radius: 20px; background: {{ defSubTrack }}; position: relative; flex: 0 0 36px;"><span style="position: absolute; top: 2px; left: {{ defSubX }}px; width: 16px; height: 16px; border-radius: 50%; background: {{ defSubKnob }};"></span></span>
+        </button>
+        <label style="display: block; font-size: 10px; color: #7E8AA3; margin-bottom: 8px;">Out-of-scope assets</label>
+        <div style="display: flex; gap: 6px; margin-bottom: 14px;">
+          <sc-for list="{{ oosOpts }}" as="o" hint-placeholder-count="3">
+            <button onClick="{{ o.pick }}" style="flex: 1; padding: 8px; border-radius: 8px; border: 1px solid {{ o.border }}; background: {{ o.bg }}; color: {{ o.fg }}; cursor: pointer; font-family: inherit; font-size: 11.5px; font-weight: 600;">{{ o.label }}</button>
+          </sc-for>
+        </div>
+        <label style="display: block; font-size: 10px; color: #7E8AA3; margin-bottom: 8px;">Max asset size <span style="color: #CDEB45; font-family: 'JetBrains Mono';">{{ maxSize }} MB</span></label>
+        <input type="range" min="1" max="25" step="1" value="{{ maxSizeVal }}" onInput="{{ setMaxSize }}" style="width: 100%; accent-color: #CDEB45;" />
+        <div style="display: flex; justify-content: space-between; font-size: 9.5px; color: #5C6680; font-family: 'JetBrains Mono'; margin-top: 2px;"><span>1 MB</span><span>skip larger files</span><span>25 MB</span></div>
+      </div>
+
+      <!-- Noise denylist -->
+      <div style="font-size: 10px; color: #5C6680; font-weight: 700; letter-spacing: 0.9px; margin-bottom: 10px; display: flex; align-items: center; gap: 7px;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5C6680" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.9 4.2A9.1 9.1 0 0 1 12 4c7 0 10 8 10 8a13.2 13.2 0 0 1-1.7 2.7"></path><path d="M6.6 6.6A13.5 13.5 0 0 0 2 12s3 8 10 8a9 9 0 0 0 5.4-1.6"></path><path d="m2 2 20 20"></path></svg>NOISE DENYLIST
+      </div>
+      <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 12px; padding: 14px; margin-bottom: 20px;">
+        <button onClick="{{ toggleProfile }}" style="width: 100%; display: flex; align-items: center; gap: 10px; padding: 0 0 12px; border: none; background: none; cursor: pointer; font-family: inherit; border-bottom: 1px solid #1c2230; margin-bottom: 12px;">
+          <span style="flex: 1; text-align: left;"><span style="display: block; font-size: 12.5px; color: #ECEFF6; font-weight: 600;">Default profile</span><span style="display: block; font-size: 10.5px; color: #5C6680;">WordPress, analytics, ad &amp; CDN libraries</span></span>
+          <span style="width: 36px; height: 20px; border-radius: 20px; background: {{ profTrack }}; position: relative; flex: 0 0 36px;"><span style="position: absolute; top: 2px; left: {{ profX }}px; width: 16px; height: 16px; border-radius: 50%; background: {{ profKnob }};"></span></span>
+        </button>
+        <sc-for list="{{ denyRules }}" as="r" hint-placeholder-count="4">
+          <div style="display: flex; align-items: center; gap: 9px; padding: 7px 9px; background: #0c0f16; border: 1px solid #1c2230; border-radius: 8px; margin-bottom: 6px;">
+            <span style="font-size: 8.5px; font-weight: 700; color: {{ r.tagc }}; background: {{ r.tagbg }}; padding: 2px 6px; border-radius: 5px; flex: 0 0 auto;">{{ r.tag }}</span>
+            <span style="flex: 1; min-width: 0; font-family: 'JetBrains Mono'; font-size: 11.5px; color: #C7D0E0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ r.pattern }}</span>
+            <button onClick="{{ r.remove }}" style="flex: 0 0 auto; width: 22px; height: 22px; border-radius: 6px; border: none; background: none; color: #5C6680; cursor: pointer; display: flex; align-items: center; justify-content: center;" style-hover="color: #FF6B8A; background: rgba(255,107,138,0.1);"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+          </div>
+        </sc-for>
+        <div style="display: flex; gap: 7px; margin-top: 9px;">
+          <input value="{{ newRule }}" onInput="{{ setNewRule }}" placeholder="*.doubleclick.net  or  /wp-content/*" style="flex: 1; min-width: 0; background: #0c0f16; border: 1px solid #232b3b; border-radius: 8px; color: #ECEFF6; font-family: 'JetBrains Mono'; font-size: 11.5px; padding: 8px 10px; outline: none;" />
+          <button onClick="{{ addRule }}" style="flex: 0 0 auto; padding: 0 13px; border-radius: 8px; border: none; background: #CDEB45; color: #0B0D13; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 700;">Add</button>
+        </div>
+      </div>
+
+      <!-- About -->
+      <div style="font-size: 10px; color: #5C6680; font-weight: 700; letter-spacing: 0.9px; margin-bottom: 10px;">ABOUT</div>
+      <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 12px; padding: 14px;">
+        <div style="display: flex; align-items: center; gap: 11px;">
+          <div style="width: 30px; height: 30px; border-radius: 8px; background: #CDEB45; display: flex; align-items: center; justify-content: center; flex: 0 0 30px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0B0D13" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg></div>
+          <div style="flex: 1;"><div style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 13px;">RECON Capture</div><div style="font-size: 10.5px; color: #5C6680;">JavaScript recon · passive collector</div></div>
+          <span style="font-family: 'JetBrains Mono'; font-size: 11px; color: #CDEB45; background: rgba(205,235,69,0.1); border: 1px solid rgba(205,235,69,0.2); padding: 3px 9px; border-radius: 6px;">v2.4.0</span>
+        </div>
+      </div>
+
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+      <div style="position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); background: #1a1f2c; border: 1px solid #2a3243; border-radius: 9px; padding: 9px 15px; font-size: 11.5px; color: #CDEB45; display: flex; align-items: center; gap: 7px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>{{ toast }}
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:440,&quot;height&quot;:760}}">
+class Component extends DCLogic {
+  state = { view:'home', capturing: true, analyzeUpload: true, captureAuth: false, muteNoise: true, sub: true, toast: null,
+    wsUrl:'https://recon.local:8000', apiKey:'rk_live_EXAMPLE_REDACTED', showKey:false, connState:'ok',
+    defScope:'', defSub:true, oos:'tag', maxSize:8, profileOn:true, newRule:'',
+    deny:[
+      {tag:'CMS', pattern:'/wp-content/plugins/*'},
+      {tag:'CMS', pattern:'/wp-includes/*'},
+      {tag:'TRACK', pattern:'*.google-analytics.com'},
+      {tag:'TRACK', pattern:'*.doubleclick.net'},
+      {tag:'LIB', pattern:'*/jquery*.min.js'},
+    ],
+  };
+
+  ic(p){ return '<svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>'; }
+  toast(m){ this.setState({toast:m}); clearTimeout(this._t); this._t=setTimeout(()=>this.setState({toast:null}),2200); }
+
+  settingsVals(){
+    const CONN={ ok:{label:'Connected',color:'#CDEB45',latency:'42 ms',pulse:'<span style="position:absolute;width:7px;height:7px;border-radius:50%;background:#CDEB45;animation:pulse 1.1s infinite;"></span>'},
+      testing:{label:'Testing…',color:'#FFC73D',latency:'',pulse:''},
+      fail:{label:'Unreachable',color:'#FF6B8A',latency:'timeout',pulse:''} };
+    const cs=this.state.connState;
+    const key=this.state.apiKey;
+    const TAGC={ CMS:{c:'#C792EA',bg:'rgba(199,146,234,0.13)'}, TRACK:{c:'#7E8AA3',bg:'rgba(126,138,163,0.15)'}, LIB:{c:'#6BA8FF',bg:'rgba(107,168,255,0.13)'}, AD:{c:'#FF8A47',bg:'rgba(255,138,71,0.13)'}, HOST:{c:'#5BD6C0',bg:'rgba(91,214,192,0.13)'} };
+    const denyRules=this.state.deny.map((r,i)=>({ tag:r.tag, pattern:r.pattern, tagc:(TAGC[r.tag]||TAGC.HOST).c, tagbg:(TAGC[r.tag]||TAGC.HOST).bg, remove:()=>this.setState({deny:this.state.deny.filter((_,j)=>j!==i)}) }));
+    const oosOpts=[{k:'tag',l:'Tag'},{k:'mute',l:'Mute'},{k:'exclude',l:'Exclude'}].map(o=>{ const on=this.state.oos===o.k; return { label:o.l, pick:()=>this.setState({oos:o.k}), bg:on?'#CDEB45':'transparent', fg:on?'#0B0D13':'#98A2B8', border:on?'#CDEB45':'#232b3b' }; });
+    return {
+      isSettings:true, isHome:false,
+      closeSettings:()=>this.setState({view:'home'}),
+      conn:CONN[cs], connOk:cs==='ok', connTesting:cs==='testing',
+      wsUrl:this.state.wsUrl, setWsUrl:(e)=>this.setState({wsUrl:e.target.value, connState:'ok'}),
+      apiKeyShown:this.state.showKey?key:('•'.repeat(Math.max(0,key.length-4))+key.slice(-4)), apiKeyType:'text',
+      setApiKey:(e)=>this.setState({apiKey:e.target.value}),
+      showKey:this.state.showKey, toggleKey:()=>this.setState({showKey:!this.state.showKey}),
+      testConn:()=>{ this.setState({connState:'testing'}); clearTimeout(this._tc); this._tc=setTimeout(()=>{ this.setState({connState:'ok'}); this.toast('Connection OK · 42 ms'); },1100); },
+      testBg:cs==='testing'?'#161b26':'#161b26', testBorder:cs==='testing'?'#FFC73D':'#2a3243', testFg:cs==='testing'?'#FFC73D':'#C7D0E0',
+      testLabel:cs==='testing'?'Testing…':'Test connection',
+      defScope:this.state.defScope, setDefScope:(e)=>this.setState({defScope:e.target.value}),
+      defSubTrack:this.state.defSub?'#CDEB45':'#232b3b', defSubKnob:this.state.defSub?'#0B0D13':'#5C6680', defSubX:this.state.defSub?18:2, toggleDefSub:()=>this.setState({defSub:!this.state.defSub}),
+      oosOpts,
+      maxSize:this.state.maxSize, maxSizeVal:this.state.maxSize, setMaxSize:(e)=>this.setState({maxSize:+e.target.value}),
+      profTrack:this.state.profileOn?'#CDEB45':'#232b3b', profKnob:this.state.profileOn?'#0B0D13':'#5C6680', profX:this.state.profileOn?18:2, toggleProfile:()=>this.setState({profileOn:!this.state.profileOn}),
+      denyRules, newRule:this.state.newRule, setNewRule:(e)=>this.setState({newRule:e.target.value}),
+      addRule:()=>{ const p=this.state.newRule.trim(); if(!p) return; const tag=/wp-|cms/i.test(p)?'CMS':(/analytics|doubleclick|segment|gtag|track/i.test(p)?'TRACK':(/\.js$/i.test(p)?'LIB':'HOST')); this.setState({deny:[...this.state.deny,{tag,pattern:p}], newRule:''}); this.toast('Rule added'); },
+      toast:this.state.toast,
+    };
+  }
+
+  renderVals(){
+    if(this.state.view==='settings') return this.settingsVals();
+    const cap=this.state.capturing;
+    const CC={app:'#CDEB45',lib:'#6BA8FF',cms:'#C792EA',tracker:'#7E8AA3'};
+    const CL={app:'app',lib:'lib',cms:'plugin',tracker:'tracker'};
+    let captures=[
+      { name:'main.4f2a9c.chunk.js', meta:'412 KB · map found · analyzed', cls:'app', scope:'in', dot:'#CDEB45', flag:'2 SEC', flagc:'#FF6B8A', flagbg:'rgba(255,107,138,0.13)', pulse:'' },
+      { name:'runtime.2c7d.js', meta:'8 KB · ingested', cls:'app', scope:'in', dot:'#6BA8FF', flag:'', pulse:'' },
+      { name:'stripe-loader.js', meta:'24 KB · analyzed', cls:'app', scope:'in', dot:'#CDEB45', flag:'1 SEC', flagc:'#FF6B8A', flagbg:'rgba(255,107,138,0.13)', pulse:'' },
+      { name:'vendors~app.8b1e.js', meta:'1.2 MB · map · analyzing', cls:'lib', scope:'in', dot:'#FFC73D', flag:'', pulse:'<span style="position:absolute;width:7px;height:7px;border-radius:50%;background:#FFC73D;animation:pulse 1s infinite;"></span>' },
+      { name:'jquery.min.js', meta:'88 KB · wp-includes', cls:'lib', scope:'in', dot:'#6BA8FF', flag:'', pulse:'' },
+      { name:'contact-form-7/index.js', meta:'18 KB · wp-plugin', cls:'cms', scope:'in', dot:'#6BA8FF', flag:'1 SEC', flagc:'#FF6B8A', flagbg:'rgba(255,107,138,0.13)', pulse:'' },
+      { name:'gtag.js', meta:'googletagmanager.com', cls:'tracker', scope:'third', dot:'#7E8AA3', flag:'', pulse:'' },
+      { name:'analytics.bundle.js', meta:'96 KB · no map', cls:'tracker', scope:'in', dot:'#7E8AA3', flag:'', pulse:'' },
+    ];
+    const isNoise=(c)=> c.cls==='lib'||c.cls==='cms'||c.cls==='tracker';
+    const mutedCap = this.state.muteNoise ? captures.filter(isNoise).length : 0;
+    captures = (this.state.muteNoise ? captures.filter(c=>!isNoise(c)) : captures).map(c=>({ ...c, showCls:c.cls!=='app', clsColor:CC[c.cls], clsLabel:CL[c.cls], third:c.scope==='third', pulsing:c.dot==='#FFC73D' }));
+    const sw=(on,cb)=>({ toggle:cb, trackBg:on?'#CDEB45':'#232b3b', knobBg:on?'#0B0D13':'#5C6680', knobX:on?18:2 });
+    const toggles=[
+      { label:'Analyze on upload', ...sw(this.state.analyzeUpload, ()=>this.setState({analyzeUpload:!this.state.analyzeUpload})) },
+      { label:'Mute plugins & trackers', ...sw(this.state.muteNoise, ()=>this.setState({muteNoise:!this.state.muteNoise})) },
+      { label:'Capture auth context', ...sw(this.state.captureAuth, ()=>this.setState({captureAuth:!this.state.captureAuth})) },
+    ];
+    return {
+      isHome:true, isSettings:false,
+      openSettings:()=>this.setState({view:'settings'}),
+      host:'app.acme.io', session:'sess_8f2a',
+      capDot: cap?'#CDEB45':'#7E8AA3', capBg: cap?'rgba(205,235,69,0.13)':'rgba(126,138,163,0.13)', capLabel: cap?'CAPTURING':'PAUSED', capturing:cap, capturingOff:!cap,
+      capBorder: cap?'rgba(205,235,69,0.25)':'#1c2230',
+      capPulse: cap?'<span style="position:absolute;width:8px;height:8px;border-radius:50%;background:#CDEB45;animation:pulse 1.1s infinite;"></span>':'',
+      capBtnBg: cap?'#161b26':'#CDEB45', capBtnFg: cap?'#FF8A47':'#0B0D13',
+      capBtnLabel: cap?'Pause capture':'Resume capture',
+      capBtnIcon: cap?'<svg width="100%" height="100%" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg>':'<svg width="100%" height="100%" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4l14 8-14 8V4z"></path></svg>',
+      toggleCapture:()=>this.setState({capturing:!cap}),
+      stats:{ js:42, maps:14, secrets:6 },
+      captures, toggles, mutedCap, showAllCaps:()=>this.setState({muteNoise:false}),
+      scope:this.state.scope||'acme.io',
+      subTrack:this.state.sub?'#CDEB45':'#232b3b', subKnob:this.state.sub?'#0B0D13':'#5C6680', subX:this.state.sub?15:2, toggleSub:()=>this.setState({sub:!this.state.sub}),
+      exportNow:()=>this.toast('Export downloaded'),
+      toast:this.state.toast,
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #0B0D13; }
+  html { scroll-behavior: smooth; }
+  a { color: #CDEB45; text-decoration: none; }
+  a:hover { color: #dff06a; }
+  ::selection { background: rgba(205,235,69,0.28); color: #fff; }
+  ::-webkit-scrollbar { width: 11px; height: 11px; }
+  ::-webkit-scrollbar-track { background: #0B0D13; }
+  ::-webkit-scrollbar-thumb { background: #232b3b; border-radius: 6px; border: 2px solid #0B0D13; }
+  @keyframes dropin { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes ping { 0% { transform: scale(1); opacity: 0.6; } 70%,100% { transform: scale(2.4); opacity: 0; } }
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #0B0D13; color: #ECEFF6; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 14px; -webkit-font-smoothing: antialiased; line-height: 1.6;">
+
+  <div style="position: sticky; top: 0; z-index: 20; background: rgba(11,13,19,0.85); backdrop-filter: blur(10px); border-bottom: 1px solid #1c2230;">
+    <div style="max-width: 1060px; margin: 0 auto; padding: 13px 32px; display: flex; align-items: center; gap: 14px;">
+      <div style="width: 26px; height: 26px; border-radius: 7px; background: #FF4D5E; display: flex; align-items: center; justify-content: center; flex: 0 0 26px;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0B0D13" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v6c0 5 3.5 8 9 9 5.5-1 9-4 9-9V7z"></path><path d="m9.5 12 2 2 3.5-4"></path></svg>
+      </div>
+      <span style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 14px;">Red-Team Feasibility Review</span>
+      <span style="font-family: 'JetBrains Mono'; font-size: 10.5px; color: #5C6680; border: 1px solid #232b3b; padding: 2px 8px; border-radius: 20px;">ADVERSARIAL PASS · v1</span>
+      <div style="margin-left: auto; display: flex; gap: 2px;">
+        <sc-for list="{{ toc }}" as="s" hint-placeholder-count="5">
+          <a href="{{ s.href }}" style="padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; color: #98A2B8;">{{ s.label }}</a>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width: 1060px; margin: 0 auto; padding: 0 32px 100px;">
+
+    <!-- HERO -->
+    <div style="padding: 46px 0 26px; border-bottom: 1px solid #1c2230; animation: dropin .3s ease;">
+      <div style="display: inline-flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono'; font-size: 11px; color: #FF6B8A; background: rgba(255,107,138,0.08); border: 1px solid rgba(255,107,138,0.2); padding: 5px 12px; border-radius: 20px; margin-bottom: 20px;">
+        SWARM REVIEW · TRYING TO BREAK IT
+      </div>
+      <h1 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 37px; line-height: 1.1; letter-spacing: -1.1px; margin: 0 0 16px; max-width: 820px;">Why this won't work — yet</h1>
+      <p style="font-size: 16px; color: #98A2B8; max-width: 820px; margin: 0 0 24px; line-height: 1.6;">Six adversarial lenses read the whole project — the async architecture, external-engine integration, threat-model orchestration, and the shipped/gap roadmap — hunting for the assumption that fails under load, attack, or law. Each finding names the <b style="color:#ECEFF6;">requirement it attacks</b>, the reason it breaks, and the refined requirement that would make it hold. The goal is a spec that survives contact, not a green checklist.</p>
+      <div style="display: flex; gap: 26px; flex-wrap: wrap;">
+        <sc-for list="{{ heroStats }}" as="h" hint-placeholder-count="4">
+          <div>
+            <div style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 24px; color: {{ h.c }}; letter-spacing: -0.5px;">{{ h.n }}</div>
+            <div style="font-size: 12px; color: #7E8AA3;">{{ h.label }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- VERDICT -->
+    <div style="margin: 24px 0 8px; display: flex; align-items: flex-start; gap: 14px; padding: 18px 20px; background: rgba(205,235,69,0.05); border: 1px solid rgba(205,235,69,0.2); border-radius: 13px;">
+      <span style="width: 24px; height: 24px; flex: 0 0 24px; color: #CDEB45; margin-top: 1px;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.1V12a10 10 0 1 1-5.9-9.1M22 4 12 14l-3-3"></path></svg></span>
+      <div>
+        <div style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 16px; margin-bottom: 4px;">Verdict — feasible, conditionally</div>
+        <div style="font-size: 13.5px; color: #B8C1D4; line-height: 1.6;">The overall shape (async spine, evidence-grounded AI, sandboxed active testing) is sound and buildable. But <b style="color:#FF4D5E;">four blockers</b> are contradictions or safety gaps that must be resolved in the spec <i>before</i> build, not during. The most serious is a direct conflict: keys are promised <b style="color:#ECEFF6;">client-direct and un-proxied</b>, yet the same LLM calls are required to be server-queued, rate-limited, cached, and cost-metered. You cannot have both. Pick one and rewrite the affected requirements.</div>
+      </div>
+    </div>
+
+    <!-- 01 THE SWARM -->
+    <div id="swarm" style="padding: 40px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #FF6B8A; margin-bottom: 8px;">01 · THE SWARM</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 16px;">Six reviewers, each paid to be wrong about optimism</h2>
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
+        <sc-for list="{{ reviewers }}" as="r" hint-placeholder-count="6">
+          <div style="background: #11141d; border: 1px solid #1c2230; border-top: 3px solid {{ r.c }}; border-radius: 12px; padding: 15px 16px;">
+            <div style="display: flex; align-items: center; gap: 9px; margin-bottom: 7px;">
+              <span style="width: 30px; height: 30px; border-radius: 8px; background: {{ r.bg }}; color: {{ r.c }}; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ r.iconD }}"></path></svg></span>
+              <div>
+                <div style="font-weight: 600; font-size: 13.5px;">{{ r.name }}</div>
+                <div style="font-family: 'JetBrains Mono'; font-size: 10px; color: {{ r.c }};">{{ r.tag }}</div>
+              </div>
+            </div>
+            <div style="font-size: 12px; color: #8A94AC; line-height: 1.5; margin-bottom: 9px;">{{ r.focus }}</div>
+            <div style="font-family: 'JetBrains Mono'; font-size: 10.5px; color: #5C6680;">{{ r.raised }} findings · {{ r.blockers }} blocker(s)</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- 02 FINDINGS -->
+    <div id="findings" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #FF6B8A; margin-bottom: 8px;">02 · FINDINGS</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 8px;">{{ findingCount }} ways it breaks</h2>
+      <p style="font-size: 14px; color: #98A2B8; max-width: 780px; margin: 0 0 16px;">Filter by severity or by the lens that raised it. Each card attacks a specific requirement ID from the spec.</p>
+
+      <div style="display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;">
+        <sc-for list="{{ sevFilters }}" as="f" hint-placeholder-count="4">
+          <button onClick="{{ f.set }}" style="display: flex; align-items: center; gap: 7px; padding: 7px 13px; border-radius: 9px; border: 1px solid {{ f.bd }}; background: {{ f.bg }}; color: {{ f.fg }}; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600;"><span style="width: 8px; height: 8px; border-radius: 2px; background: {{ f.dot }};"></span>{{ f.label }}<span style="font-family: 'JetBrains Mono'; font-size: 10.5px; color: #5C6680;">{{ f.count }}</span></button>
+        </sc-for>
+      </div>
+      <div style="display: flex; gap: 7px; margin-bottom: 18px; flex-wrap: wrap;">
+        <sc-for list="{{ lensFilters }}" as="f" hint-placeholder-count="7">
+          <button onClick="{{ f.set }}" style="padding: 5px 11px; border-radius: 20px; border: 1px solid {{ f.bd }}; background: {{ f.bg }}; color: {{ f.fg }}; cursor: pointer; font-family: 'JetBrains Mono'; font-size: 10.5px; font-weight: 600;">{{ f.label }}</button>
+        </sc-for>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 11px;">
+        <sc-for list="{{ findings }}" as="f" hint-placeholder-count="10">
+          <div style="background: #11141d; border: 1px solid #1c2230; border-left: 3px solid {{ f.sevC }}; border-radius: 12px; padding: 16px 18px; animation: dropin .2s ease;">
+            <div style="display: flex; align-items: center; gap: 9px; margin-bottom: 10px; flex-wrap: wrap;">
+              <span style="font-family: 'JetBrains Mono'; font-size: 11px; font-weight: 700; color: #98A2B8;">{{ f.id }}</span>
+              <span style="font-size: 9.5px; font-weight: 700; letter-spacing: 0.4px; color: {{ f.sevC }}; background: {{ f.sevBg }}; padding: 3px 9px; border-radius: 5px;">{{ f.sev }}</span>
+              <span style="font-family: 'JetBrains Mono'; font-size: 9.5px; font-weight: 700; color: {{ f.lensC }}; background: {{ f.lensBg }}; padding: 3px 8px; border-radius: 5px;">{{ f.lensTag }}</span>
+              <span style="flex: 1; font-family: 'Space Grotesk'; font-weight: 600; font-size: 15px; color: #ECEFF6; min-width: 200px;">{{ f.title }}</span>
+              <span style="font-family: 'JetBrains Mono'; font-size: 10px; color: #FF8A47; border: 1px solid rgba(255,138,71,0.3); background: rgba(255,138,71,0.07); padding: 2px 8px; border-radius: 5px;">attacks {{ f.attacks }}</span>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div style="background: #0c0f16; border: 1px solid #1c2230; border-radius: 9px; padding: 12px 13px;">
+                <div style="font-family: 'JetBrains Mono'; font-size: 9.5px; color: #FF6B8A; letter-spacing: 0.5px; margin-bottom: 5px;">WHY IT BREAKS</div>
+                <div style="font-size: 12.5px; color: #C7D0E0; line-height: 1.5;">{{ f.breakText }}</div>
+              </div>
+              <div style="background: #0c0f16; border: 1px solid rgba(205,235,69,0.16); border-radius: 9px; padding: 12px 13px;">
+                <div style="font-family: 'JetBrains Mono'; font-size: 9.5px; color: #CDEB45; letter-spacing: 0.5px; margin-bottom: 5px;">REFINED REQUIREMENT</div>
+                <div style="font-size: 12.5px; color: #C7D0E0; line-height: 1.5;">{{ f.fix }}</div>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- 03 BLOCKERS -->
+    <div id="blockers" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #FF4D5E; margin-bottom: 8px;">03 · BLOCKERS BEFORE BUILD</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 16px;">Resolve these in the spec, not the sprint</h2>
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+        <sc-for list="{{ blockers }}" as="b" hint-placeholder-count="4">
+          <div style="background: rgba(255,77,94,0.05); border: 1px solid rgba(255,77,94,0.25); border-radius: 12px; padding: 16px 17px; display: flex; gap: 12px;">
+            <span style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 20px; color: #FF4D5E; flex: 0 0 auto;">{{ b.n }}</span>
+            <div>
+              <div style="font-weight: 600; font-size: 14px; margin-bottom: 3px; color: #ECEFF6;">{{ b.title }}</div>
+              <div style="font-size: 12.5px; color: #B8C1D4; line-height: 1.55;">{{ b.decision }}</div>
+              <div style="font-family: 'JetBrains Mono'; font-size: 10px; color: #7E8AA3; margin-top: 7px;">{{ b.ref }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- 04 WHAT HOLDS -->
+    <div id="holds" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">04 · WHAT SURVIVED THE PASS</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 25px; letter-spacing: -0.5px; margin: 0 0 16px;">Assumptions the swarm couldn't break</h2>
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
+        <sc-for list="{{ holds }}" as="h" hint-placeholder-count="4">
+          <div style="display: flex; gap: 10px; background: #11141d; border: 1px solid #1c2230; border-radius: 11px; padding: 13px 15px; align-items: flex-start;">
+            <span style="width: 16px; height: 16px; flex: 0 0 16px; color: #CDEB45; margin-top: 2px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>
+            <span style="font-size: 12.5px; color: #C7D0E0; line-height: 1.5;">{{ h }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1060,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = { sev: 'all', lens: 'all' };
+
+  LENS(){
+    return {
+      DIST:  { name:'Distributed systems', tag:'RELIABILITY', c:'#6BA8FF', bg:'rgba(107,168,255,0.12)', iconD:'M3 6h18M3 12h18M3 18h18' },
+      SEC:   { name:'Security & sandbox', tag:'ATTACK SURFACE', c:'#FF6B8A', bg:'rgba(255,107,138,0.12)', iconD:'M12 2 3 7v6c0 5 3.5 8 9 9 5.5-1 9-4 9-9V7z' },
+      LLM:   { name:'LLM & cost', tag:'AI CORRECTNESS', c:'#C792EA', bg:'rgba(199,146,234,0.12)', iconD:'M7 7l10 4M7 17l10-5M3 6a2 2 0 1 0 4 0 2 2 0 1 0-4 0M3 18a2 2 0 1 0 4 0 2 2 0 1 0-4 0M17 12a2 2 0 1 0 4 0 2 2 0 1 0-4 0' },
+      TOOL:  { name:'Tooling & integration', tag:'OPS BURDEN', c:'#5BD6C0', bg:'rgba(91,214,192,0.12)', iconD:'M16 18l6-6-6-6M8 6l-6 6 6 6' },
+      LEGAL: { name:'Authorization & legal', tag:'LIABILITY', c:'#FF8A47', bg:'rgba(255,138,71,0.12)', iconD:'M12 3v18M5 7l7-4 7 4M5 7l-2 6a4 4 0 0 0 8 0zM19 7l2 6a4 4 0 0 1-8 0z' },
+      SCALE: { name:'Scale & product', tag:'ECONOMICS', c:'#FFC73D', bg:'rgba(255,199,61,0.12)', iconD:'M3 3v18h18M7 15l4-4 3 3 5-6' },
+    };
+  }
+
+  FINDINGS(){
+    return [
+      { id:'RT-01', sev:'BLOCKER', lens:'SEC', attacks:'Orchestration ↔ REQ-L2/L5/L6', title:'Client-direct keys vs. server-side orchestration is a contradiction',
+        breakText:'The orchestration UI promises keys are used client-direct and never proxied or logged. But REQ-L2/L5/L6 require every model call to run on a server queue with per-provider rate limits, a shared prompt/evidence cache, and a per-run cost meter. A call that leaves the user\u2019s browser straight to the provider cannot be queued, throttled, cached, or metered server-side.',
+        fix:'Choose one model. Either (a) keys live in a server-side vault and calls are proxied \u2014 drop the \u201Cnever proxied\u201D claim; or (b) keep client-direct and move rate/cost/cache enforcement into the client with server-side telemetry only. Rewrite REQ-L2/L5/L6 to match the chosen path.' },
+      { id:'RT-02', sev:'BLOCKER', lens:'SEC', attacks:'REQ-P1 / REQ-T2', title:'A crawl-derived allow-list is not a sandbox',
+        breakText:'Sourcemapper follows sourceMappingURL from attacker-controlled bundles (documented SSRF), and katana crawls links it discovers. If the egress allow-list is seeded or expanded from crawled content, a hostile bundle can point the fetcher at 169.254.169.254 or an internal host and exfiltrate cloud metadata.',
+        fix:'Egress scope is a static, pre-declared host set per engagement, DNS-pinned, with link-local/RFC1918/metadata IPs blocked at the network layer \u2014 never derived from crawled or bundle-referenced URLs. Add this as an explicit MUST.' },
+      { id:'RT-03', sev:'BLOCKER', lens:'LEGAL', attacks:'REQ-P1 / Wave-1 "build first"', title:'"Authorized use only" is a notice, not a control',
+        breakText:'Live-probe + BOLA/BFLA replays crafted requests with the user\u2019s token against a third-party target. A text disclaimer does not stop unauthorized active testing; the platform becomes the instrument of a potential CFAA/computer-misuse violation with no gate.',
+        fix:'Require a per-engagement scope lock + authorization attestation before ANY active traffic: the user declares in-scope hosts and affirms permission; active queues refuse targets outside the locked scope. Passive static analysis stays unrestricted.' },
+      { id:'RT-04', sev:'BLOCKER', lens:'DIST', attacks:'REQ-A3 / REQ-D3', title:'Stage-level idempotency does not prevent duplicate findings',
+        breakText:'Idempotency is keyed by (run_id, stage, target_hash), but a job that partially commits findings then crashes and retries re-emits rows. Content-addressing (REQ-D3) dedupes identical findings, yet a retry that produces slightly different line/col or partial evidence yields a NEW hash \u2014 so retries can still double-write.',
+        fix:'Make the finding write exactly-once via a transactional outbox: stage output is staged in one transaction keyed by finding-hash, committed atomically, and downstream fan-out reads only committed rows. Define the hash over stable fields only (type+value+normalized-path), excluding volatile col/evidence.' },
+      { id:'RT-05', sev:'MAJOR', lens:'DIST', attacks:'REQ-R1/R2', title:'Redis pub/sub SSE drops progress on reconnect',
+        breakText:'SSE over Redis pub/sub is fire-and-forget. A client that briefly disconnects misses every event published in the gap; the heartbeat proves the worker is alive but the progress bar is now permanently behind, re-creating the exact \u201Cam I stuck?\u201D problem the section set out to solve.',
+        fix:'Back progress with a durable per-run event log (Redis Streams / append-only table). SSE carries a Last-Event-ID; on reconnect the hub replays from the last acked offset. Make the durable log the MUST, pub/sub an optional fast-path.' },
+      { id:'RT-06', sev:'MAJOR', lens:'LLM', attacks:'REQ-L3 / REQ-L4', title:'Schema-valid is not grounded',
+        breakText:'Structured-output validation guarantees shape, not truth. A model can emit a schema-valid threat that cites a real finding id which does not actually support the claim \u2014 citation theater that passes REQ-L3 and satisfies REQ-L4 on paper.',
+        fix:'Add a verification pass: every cited finding id must resolve to an existing record, and an automated groundedness check (entailment/self-consistency) must confirm the evidence supports the threat, or it is demoted to \u201Cungrounded inference.\u201D Make this a MUST alongside L4.' },
+      { id:'RT-07', sev:'MAJOR', lens:'TOOL', attacks:'REQ-T1 / REQ-T3', title:'You now own five upstreams\u2019 patch and format lifecycles',
+        breakText:'Pinning Kingfisher, Sourcemapper, katana, gau, and depscan (plus Chrome and cdxgen) means owning seven upstream CVE, release, and output-schema cadences. The out-of-process parsers are brittle: a JSON/JSONL/SARIF field rename upstream silently drops findings.',
+        fix:'Require a per-engine contract-test suite with golden-output fixtures in CI that fails the build on schema drift, plus a documented monthly upgrade + CVE-triage cadence per pinned binary. Add as REQ-T4/T5.' },
+      { id:'RT-08', sev:'MAJOR', lens:'SCALE', attacks:'NFR "50 concurrent runs"', title:'Headless crawl and 50 concurrent runs fight over RAM',
+        breakText:'Katana\u2019s headless mode (needed to reach SPA endpoints \u2014 the product\u2019s whole point) spawns Chrome per crawl. Fifty concurrent runs implies fifty-plus Chrome processes; the worker-image memory budget is unstated. Non-headless mode is cheap but misses the dynamic endpoints, defeating the purpose.',
+        fix:'Give headless crawl its own concurrency lane sized by RAM (e.g. N Chrome slots, queued), decoupled from run concurrency. State the per-worker memory budget as an NFR and document the headless/standard tradeoff per target.' },
+      { id:'RT-09', sev:'MAJOR', lens:'SEC', attacks:'REQ-S1 / REQ-S2', title:'Storing third-party live secrets makes you the target',
+        breakText:'The platform custodies validated, still-live credentials found across many tenants\u2019 targets. That is a concentrated, high-value breach prize and may shift your legal posture (you now hold others\u2019 secrets). Data-handling and retention requirements are absent entirely.',
+        fix:'Default to storing a one-way hash + location, never the plaintext secret; reveal is ephemeral, just-in-time, and audit-logged. Add explicit retention/purge and breach-handling requirements (missing from the spec).' },
+      { id:'RT-10', sev:'MAJOR', lens:'TOOL', attacks:'Wave-1 P0 "teach-a-wrapper"', title:'Teaching a wrapper can\u2019t beat the no-cross-file-dataflow limit',
+        breakText:'Vespasian explicitly does not trace dataflow across files. A wrapper whose base URL is defined in another module still under-extracts after the user maps its call shape; the coverage counter improves but completeness does not, so \u201Cmake findings true\u201D is bounded by a documented static limit.',
+        fix:'Scope the promise honestly: the coverage counter is a MUST (surface un-attributed calls), completeness is explicitly NOT guaranteed. For cross-file base URLs, offer a manual \u201Cset base URL\u201D that re-resolves dependents \u2014 same mechanism as the Needs-Resolution lane.' },
+      { id:'RT-11', sev:'WATCH', lens:'SCALE', attacks:'NFR "< 4 min run SLA"', title:'Polite fetch alone can blow the 4-minute SLA',
+        breakText:'The pipeline is sequential and fetch runs under a per-host token bucket for politeness. A target with hundreds of assets, throttled to be polite, can exceed four minutes on fetch wall-clock alone \u2014 the SLA is stated without an asset-count or host bound.',
+        fix:'Define the SLA against a bounded input (e.g. \u2264 N assets, single host) and report fetch wall-clock separately, or express the SLA as time-to-first-finding rather than time-to-complete.' },
+      { id:'RT-12', sev:'WATCH', lens:'LLM', attacks:'REQ-L6', title:'Cost ceiling pauses mid-fan-out, leaving half a model',
+        breakText:'Agent fan-out per DFD node makes cost superlinear in graph size. A large domain-correlation run can hit the ceiling partway through the fan-out, producing a partial, misleading threat model rather than a clean stop.',
+        fix:'Add a pre-flight cost estimate from node count + effort level, and a per-node budget; pause at safe boundaries with a complete-so-far model, never mid-node. Surface the estimate before the run starts.' },
+      { id:'RT-13', sev:'WATCH', lens:'DIST', attacks:'REQ-D5 + partial state', title:'Diffing a partial run invents phantom "removed" endpoints',
+        breakText:'A run can end \u201Cpartial\u201D when some assets fail to fetch. Diffing a complete prior run against a partial current run shows those un-fetched endpoints as \u201Cremoved,\u201D generating false change alerts \u2014 corrosive to trust on an active target.',
+        fix:'Make diff partial-aware: assets not observed in a partial run are marked \u201Cunknown,\u201D never \u201Cremoved.\u201D Only complete-vs-complete runs may assert removals. Add to REQ-D5.' },
+      { id:'RT-14', sev:'WATCH', lens:'LEGAL', attacks:'Wave-1 P1 archive pull', title:'Archive pulls reach hosts that were never in scope',
+        breakText:'Wayback/gau surface historical bundles that reference third-party CDNs and APIs long gone from the live site. Pulling and (worse) probing those archive-only hosts can touch systems outside any authorization the user has.',
+        fix:'Archive collection is scoped to the locked engagement hosts; archive-only hosts discovered off-scope are listed but never fetched-live or probed without extending the scope lock (RT-03).' },
+      { id:'RT-15', sev:'WATCH', lens:'SCALE', attacks:'REQ-D5 / Wave-3 monitoring', title:'Immutable run snapshots grow without bound',
+        breakText:'Daily continuous re-scans (Wave 3) across many targets each persist a full immutable snapshot. Storage grows linearly forever with no rollup, and object-storage cost becomes the silent dominant line item.',
+        fix:'Add a retention/rollup policy: snapshots older than N days collapse to deltas against a periodic baseline; raw blobs age out to cold storage. State it as a data-lifecycle requirement.' },
+      { id:'RT-16', sev:'WATCH', lens:'LLM', attacks:'REQ-D4', title:'RAG can quietly inject stale or poisoned prior decisions',
+        breakText:'Grounding the threat modeler on Spaces (runbooks, past models) means an outdated or wrong prior decision is retrieved and treated as authoritative, lowering output quality invisibly \u2014 there is no recency or trust signal on retrieved context.',
+        fix:'Attach provenance + recency weighting to retrieved chunks; the modeler must cite retrieved context distinctly from live evidence, and stale context is down-weighted or flagged. Add to REQ-D4.' },
+    ];
+  }
+
+  renderVals(){
+    const toc=[['#swarm','Swarm'],['#findings','Findings'],['#blockers','Blockers'],['#holds','What holds']].map(([href,label])=>({href,label}));
+    const LENS=this.LENS();
+    const all=this.FINDINGS();
+
+    const SEV={ BLOCKER:{c:'#FF4D5E',bg:'rgba(255,77,94,0.13)'}, MAJOR:{c:'#FF8A47',bg:'rgba(255,138,71,0.13)'}, WATCH:{c:'#FFC73D',bg:'rgba(255,199,61,0.13)'} };
+
+    const heroStats=[
+      { n:'16', label:'feasibility findings', c:'#ECEFF6' },
+      { n:'4', label:'blockers before build', c:'#FF4D5E' },
+      { n:'6', label:'adversarial lenses', c:'#FF6B8A' },
+      { n:'9', label:'refined requirements', c:'#CDEB45' },
+    ];
+
+    const reviewers=Object.keys(LENS).map(k=>{
+      const m=LENS[k]; const mine=all.filter(f=>f.lens===k);
+      return { name:m.name, tag:m.tag, focus:this.FOCUS()[k], c:m.c, bg:m.bg, iconD:m.iconD,
+        raised:mine.length, blockers:mine.filter(f=>f.sev==='BLOCKER').length };
+    });
+
+    const sevKeys=['all','BLOCKER','MAJOR','WATCH'];
+    const sevFilters=sevKeys.map(k=>{ const on=this.state.sev===k;
+      const dot=k==='all'?'#98A2B8':SEV[k].c;
+      return { label:k==='all'?'All':k, count:k==='all'?all.length:all.filter(f=>f.sev===k).length,
+        set:()=>this.setState({sev:k}), dot, bd:on?dot:'#232b3b', bg:on?'rgba(255,255,255,0.03)':'transparent', fg:on?'#ECEFF6':'#98A2B8' }; });
+
+    const lensKeys=['all',...Object.keys(LENS)];
+    const lensFilters=lensKeys.map(k=>{ const on=this.state.lens===k;
+      const c=k==='all'?'#98A2B8':LENS[k].c;
+      return { label:k==='all'?'ALL LENSES':LENS[k].name.toUpperCase(),
+        set:()=>this.setState({lens:k}), bd:on?c:'#232b3b', bg:on?'rgba(255,255,255,0.03)':'transparent', fg:on?'#ECEFF6':'#7E8AA3' }; });
+
+    let shown=all;
+    if(this.state.sev!=='all') shown=shown.filter(f=>f.sev===this.state.sev);
+    if(this.state.lens!=='all') shown=shown.filter(f=>f.lens===this.state.lens);
+    const findings=shown.map(f=>({ ...f, sevC:SEV[f.sev].c, sevBg:SEV[f.sev].bg,
+      lensC:LENS[f.lens].c, lensBg:LENS[f.lens].bg, lensTag:LENS[f.lens].tag, fix:f.fix, breakText:f.breakText }));
+
+    const blockers=[
+      { n:'1', title:'Key handling model', decision:'Client-direct or server-orchestrated \u2014 you cannot promise both. This single choice rewrites the entire LLM section.', ref:'RT-01 · Orchestration ↔ REQ-L2/L5/L6' },
+      { n:'2', title:'Egress scope integrity', decision:'The sandbox allow-list must be statically declared and network-enforced, never derived from crawled content, or SSRF via Sourcemapper is trivial.', ref:'RT-02 · REQ-P1/T2' },
+      { n:'3', title:'Authorization gate', decision:'A per-engagement scope lock + attestation must gate all active traffic before build; a disclaimer is not a control.', ref:'RT-03 · REQ-P1' },
+      { n:'4', title:'Exactly-once findings', decision:'Move dedup from stage-level idempotency to a transactional outbox keyed by a stable finding hash, or retries corrupt the findings table.', ref:'RT-04 · REQ-A3/D3' },
+    ];
+
+    const holds=[
+      'The async spine itself \u2014 thin API, broker, specialized worker pools \u2014 is the right shape and is standard, buildable engineering.',
+      'Provenance-first design (file:line on every fact, confidence tiers, ungrounded inference ranked apart) is genuinely strong and defensible.',
+      'Vespasian as an in-process Python library on the analyze worker is clean; only the compiled engines need out-of-process handling.',
+      'Content-addressed findings + run snapshots are the correct primitive for diffing \u2014 the mechanism is sound once partial-run and hash-stability issues (RT-04, RT-13) are fixed.',
+      'Two-tier LLM routing (frontier planner + cheap worker) is a reasonable cost lever, independent of the key-handling decision.',
+      'The gap analysis\u2019 own sequencing (truth \u2192 workflow \u2192 continuous) is well-ordered; the blockers refine it rather than reorder it.',
+    ];
+
+    return { toc, heroStats, reviewers, sevFilters, lensFilters, findings, findingCount:all.length, blockers, holds };
+  }
+
+  FOCUS(){
+    return {
+      DIST:'Retries, ordering, exactly-once, backpressure, the moment two workers disagree.',
+      SEC:'What a hostile bundle or tenant can reach: SSRF, egress scope, secret custody, isolation.',
+      LLM:'Whether grounded means true, whether cost is bounded, whether RAG helps or poisons.',
+      TOOL:'The real cost of a five-binary swarm: versions, output drift, Chrome, licensing.',
+      LEGAL:'Active traffic without provable authorization \u2014 CFAA, ToS, and third-party scope.',
+      SCALE:'SLAs under polite rate limits, RAM under concurrency, storage under continuous monitoring.',
+    };
+  }
+}
+</script>
+</body>
+</html>

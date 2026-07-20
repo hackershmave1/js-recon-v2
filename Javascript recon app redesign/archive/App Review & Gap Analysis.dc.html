@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #0B0D13; }
+  ::selection { background: rgba(205,235,69,0.28); color: #fff; }
+  ::-webkit-scrollbar { width: 11px; height: 11px; }
+  ::-webkit-scrollbar-track { background: #0B0D13; }
+  ::-webkit-scrollbar-thumb { background: #232b3b; border-radius: 6px; border: 2px solid #0B0D13; }
+  ::-webkit-scrollbar-thumb:hover { background: #313b50; }
+  @keyframes dropin { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  html { scroll-behavior: smooth; }
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #0B0D13; color: #ECEFF6; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 14px; -webkit-font-smoothing: antialiased; line-height: 1.6;">
+
+  <!-- sticky top nav -->
+  <div style="position: sticky; top: 0; z-index: 20; background: rgba(11,13,19,0.85); backdrop-filter: blur(10px); border-bottom: 1px solid #1c2230;">
+    <div style="max-width: 1000px; margin: 0 auto; padding: 13px 32px; display: flex; align-items: center; gap: 14px;">
+      <div style="width: 26px; height: 26px; border-radius: 7px; background: #CDEB45; display: flex; align-items: center; justify-content: center; flex: 0 0 26px;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0B0D13" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6M9 15l2 2 4-4"></path></svg>
+      </div>
+      <span style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 14px; letter-spacing: -0.2px;">Recon Workspace — Review</span>
+      <div style="margin-left: auto; display: flex; gap: 4px;">
+        <sc-for list="{{ toc }}" as="s" hint-placeholder-count="5">
+          <a href="{{ s.href }}" style="padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; color: #98A2B8; text-decoration: none;">{{ s.label }}</a>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width: 1000px; margin: 0 auto; padding: 0 32px 100px;">
+
+    <!-- ===== HERO ===== -->
+    <div style="padding: 54px 0 30px; border-bottom: 1px solid #1c2230; animation: dropin .3s ease;">
+      <div style="display: inline-flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono'; font-size: 11px; color: #CDEB45; background: rgba(205,235,69,0.08); border: 1px solid rgba(205,235,69,0.2); padding: 5px 12px; border-radius: 20px; margin-bottom: 20px;">
+        <span style="width: 6px; height: 6px; border-radius: 50%; background: #CDEB45;"></span>PRODUCT REVIEW · WORKFLOW GAP ANALYSIS
+      </div>
+      <h1 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 40px; line-height: 1.1; letter-spacing: -1.2px; margin: 0 0 16px; max-width: 760px;">How the app is used today — and where the journey breaks down</h1>
+      <p style="font-size: 16px; color: #98A2B8; max-width: 720px; margin: 0 0 26px; line-height: 1.6;">An end-to-end read of the JavaScript recon platform against the workflow real security engineers run — from JS collection through OpenAPI reconstruction to threat modeling. Grounded in the underlying <span style="font-family:'JetBrains Mono'; font-size:14px; color:#C7D0E0;">js-api-recon</span> analyzer, the shipped UI, and current bug-bounty / API-ASM practice.</p>
+      <div style="display: flex; gap: 26px; flex-wrap: wrap;">
+        <sc-for list="{{ heroStats }}" as="h" hint-placeholder-count="4">
+          <div>
+            <div style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 26px; color: {{ h.c }}; letter-spacing: -0.5px;">{{ h.n }}</div>
+            <div style="font-size: 12px; color: #7E8AA3;">{{ h.label }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- ===== PART 1: WHAT IT IS ===== -->
+    <div id="what" style="padding: 40px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">01 · THE PRODUCT</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 26px; letter-spacing: -0.6px; margin: 0 0 14px;">What the app actually does</h2>
+      <p style="font-size: 15px; color: #B8C1D4; max-width: 760px; margin: 0 0 22px;">At its core sits a <b style="color:#ECEFF6;">best-effort static analyzer</b>: point it at JavaScript and it reconstructs the backend API without executing code — tracing <span style="font-family:'JetBrains Mono';font-size:13px;color:#7C8CFF;">fetch / XHR / axios / jQuery / WebSocket</span> calls into endpoints, methods, params, headers, and bodies, then emitting an OpenAPI spec and a recon report. Every finding carries a <b style="color:#CDEB45;">file:line</b> and a <b style="color:#CDEB45;">confidence tier</b>; anything dynamic is surfaced, never dropped. The UI wraps this in a multi-target workspace, a capture extension, secret detection, an attack-surface map, and an AI threat-modeling layer.</p>
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
+        <sc-for list="{{ pillars }}" as="p" hint-placeholder-count="6">
+          <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 12px; padding: 15px 16px;">
+            <span style="width: 28px; height: 28px; border-radius: 8px; background: {{ p.bg }}; color: {{ p.c }}; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 10px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ p.icon }}"></path></svg></span>
+            <div style="font-weight: 600; font-size: 13.5px; margin-bottom: 3px;">{{ p.title }}</div>
+            <div style="font-size: 12px; color: #7E8AA3; line-height: 1.5;">{{ p.desc }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- ===== PART 2: EXACT USAGE ===== -->
+    <div id="usage" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">02 · EXACT USAGE</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 26px; letter-spacing: -0.6px; margin: 0 0 14px;">The end-to-end journey, screen by screen</h2>
+      <p style="font-size: 15px; color: #B8C1D4; max-width: 760px; margin: 0 0 26px;">The intended path a security engineer walks — each step maps to a concrete surface in the product. Green means the step is well-supported today; amber means partial; the numbered gaps in the next section attach to these stages.</p>
+
+      <div style="position: relative;">
+        <div style="position: absolute; left: 19px; top: 8px; bottom: 8px; width: 2px; background: #1c2230;"></div>
+        <sc-for list="{{ journey }}" as="j" hint-placeholder-count="8">
+          <div style="position: relative; display: flex; gap: 18px; padding-bottom: 16px;">
+            <div style="flex: 0 0 40px; z-index: 1;">
+              <div style="width: 40px; height: 40px; border-radius: 11px; background: {{ j.dotBg }}; border: 1px solid {{ j.dotBd }}; display: flex; align-items: center; justify-content: center; color: {{ j.dotC }};"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ j.icon }}"></path></svg></div>
+            </div>
+            <div style="flex: 1; background: #11141d; border: 1px solid #1c2230; border-radius: 12px; padding: 15px 17px;">
+              <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 5px;">
+                <span style="font-family: 'JetBrains Mono'; font-size: 11px; color: #5C6680;">STEP {{ j.num }}</span>
+                <span style="font-weight: 600; font-size: 15px;">{{ j.title }}</span>
+                <span style="font-size: 10px; font-weight: 700; letter-spacing: 0.4px; color: {{ j.stateC }}; background: {{ j.stateBg }}; padding: 2px 9px; border-radius: 20px;">{{ j.state }}</span>
+              </div>
+              <div style="font-size: 13.5px; color: #B8C1D4; margin-bottom: 9px; line-height: 1.55;">{{ j.desc }}</div>
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <span style="font-size: 10.5px; color: #7E8AA3; font-family: 'JetBrains Mono';">SURFACE</span>
+                <sc-for list="{{ j.surfaces }}" as="s" hint-placeholder-count="2">
+                  <span style="font-size: 11px; font-family: 'JetBrains Mono'; color: #6BA8FF; background: rgba(107,168,255,0.08); border: 1px solid rgba(107,168,255,0.2); padding: 2px 9px; border-radius: 6px;">{{ s }}</span>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- ===== PART 3: REFERENCE WORKFLOW ===== -->
+    <div id="reference" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">03 · THE BENCHMARK</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 26px; letter-spacing: -0.6px; margin: 0 0 14px;">The reference workflow practitioners actually run</h2>
+      <p style="font-size: 15px; color: #B8C1D4; max-width: 760px; margin: 0 0 22px;">Converged from current bug-bounty JS-recon field guides and commercial API attack-surface-management (ASM) platforms. Two principles recur and both expose gaps below: <b style="color:#ECEFF6;">context over volume</b> (“200 endpoints with provenance beat 10,000 raw URLs”) and <b style="color:#ECEFF6;">continuous over point-in-time</b> (an attack surface is never static — diff it and re-baseline).</p>
+      <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 13px; padding: 6px 8px;">
+        <sc-for list="{{ reference }}" as="r" hint-placeholder-count="5">
+          <div style="display: flex; align-items: center; gap: 13px; padding: 11px 12px; border-bottom: 1px solid {{ r.border }};">
+            <span style="font-family: 'JetBrains Mono'; font-size: 11px; color: #5C6680; flex: 0 0 22px;">{{ r.n }}</span>
+            <span style="flex: 0 0 150px; font-weight: 600; font-size: 13.5px; color: #C7D0E0;">{{ r.phase }}</span>
+            <span style="flex: 1; font-size: 12.5px; color: #8A94AC;">{{ r.detail }}</span>
+            <span style="font-size: 10px; font-weight: 700; letter-spacing: 0.4px; color: {{ r.covC }}; background: {{ r.covBg }}; padding: 3px 10px; border-radius: 20px; flex: 0 0 auto;">{{ r.cov }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- ===== PART 4: GAPS ===== -->
+    <div id="gaps" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">04 · GAP ANALYSIS</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 26px; letter-spacing: -0.6px; margin: 0 0 14px;">Where the workflow breaks — {{ gapCount }} gaps</h2>
+      <p style="font-size: 15px; color: #B8C1D4; max-width: 760px; margin: 0 0 20px;">Each gap names the missing capability, why it hurts this persona, and a concrete fix. Filter by priority. <b style="color:#FF6B8A;">P0</b> = breaks the core promise (“trace &amp; use every issue”); <b style="color:#FF8A47;">P1</b> = major workflow friction; <b style="color:#FFC73D;">P2</b> = maturity / scale.</p>
+
+      <div style="display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap;">
+        <sc-for list="{{ prioFilters }}" as="f" hint-placeholder-count="4">
+          <button onClick="{{ f.set }}" style="display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 9px; border: 1px solid {{ f.bd }}; background: {{ f.bg }}; color: {{ f.fg }}; cursor: pointer; font-family: inherit; font-size: 12.5px; font-weight: 600;">
+            <span style="width: 8px; height: 8px; border-radius: 50%; background: {{ f.dot }};"></span>{{ f.label }}<span style="font-family: 'JetBrains Mono'; font-size: 11px; color: #5C6680;">{{ f.count }}</span>
+          </button>
+        </sc-for>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <sc-for list="{{ gaps }}" as="g" hint-placeholder-count="10">
+          <div style="background: #11141d; border: 1px solid #1c2230; border-left: 3px solid {{ g.prioC }}; border-radius: 12px; padding: 17px 19px;">
+            <div style="display: flex; align-items: flex-start; gap: 12px; margin-bottom: 11px;">
+              <span style="font-size: 10px; font-weight: 700; letter-spacing: 0.5px; color: {{ g.prioC }}; background: {{ g.prioBg }}; padding: 3px 9px; border-radius: 5px; flex: 0 0 auto; margin-top: 2px;">{{ g.prio }}</span>
+              <div style="flex: 1;">
+                <div style="display: flex; align-items: center; gap: 9px; flex-wrap: wrap;">
+                  <span style="font-family: 'Space Grotesk'; font-weight: 600; font-size: 16px; letter-spacing: -0.2px;">{{ g.title }}</span>
+                  <sc-if value="{{ g.shipped }}" hint-placeholder-val="{{ false }}"><span style="display: inline-flex; align-items: center; gap: 5px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.5px; color: #0B0D13; background: #CDEB45; padding: 3px 9px; border-radius: 5px;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#0B0D13" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>SHIPPED</span></sc-if>
+                </div>
+                <div style="font-size: 11.5px; color: #5C6680; font-family: 'JetBrains Mono'; margin-top: 2px;">stage: {{ g.stage }}</div>
+              </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+              <div>
+                <div style="font-size: 10px; color: #FF8A47; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 5px;">THE GAP</div>
+                <div style="font-size: 13px; color: #B8C1D4; line-height: 1.55;">{{ g.gap }}</div>
+              </div>
+              <div>
+                <div style="font-size: 10px; color: #CDEB45; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 5px;">SUGGESTED FIX</div>
+                <div style="font-size: 13px; color: #B8C1D4; line-height: 1.55;">{{ g.fix }}</div>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- ===== PART 5: ROADMAP ===== -->
+    <div id="roadmap" style="padding: 44px 0 10px;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; margin-bottom: 8px;">05 · SEQUENCING</div>
+      <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 26px; letter-spacing: -0.6px; margin: 0 0 22px;">A build order that compounds</h2>
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 13px;">
+        <sc-for list="{{ roadmap }}" as="w" hint-placeholder-count="3">
+          <div style="background: #11141d; border: 1px solid {{ w.border }}; border-radius: 13px; padding: 18px;">
+            <div style="display: flex; align-items: center; gap: 9px; margin-bottom: 6px;">
+              <span style="font-size: 11px; font-weight: 700; letter-spacing: 0.5px; color: {{ w.c }}; background: {{ w.bg }}; padding: 3px 10px; border-radius: 20px;">{{ w.tag }}</span>
+            </div>
+            <div style="font-family: 'Space Grotesk'; font-weight: 600; font-size: 15px; margin-bottom: 4px;">{{ w.title }}</div>
+            <div style="font-size: 12px; color: #7E8AA3; line-height: 1.5; margin-bottom: 12px;">{{ w.why }}</div>
+            <sc-for list="{{ w.items }}" as="it" hint-placeholder-count="3">
+              <div style="display: flex; gap: 8px; margin-bottom: 7px; align-items: flex-start;">
+                <span style="width: 14px; height: 14px; flex: 0 0 14px; color: {{ w.c }}; margin-top: 2px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></span>
+                <span style="font-size: 12.5px; color: #C7D0E0; line-height: 1.45;">{{ it }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="margin-top: 24px; display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px; background: rgba(205,235,69,0.05); border: 1px solid rgba(205,235,69,0.18); border-radius: 12px;">
+        <span style="width: 20px; height: 20px; flex: 0 0 20px; color: #CDEB45; margin-top: 1px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1h6c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2Z"></path></svg></span>
+        <div>
+          <div style="font-weight: 600; font-size: 14px; margin-bottom: 3px;">The one thing to build first</div>
+          <div style="font-size: 13px; color: #B8C1D4; line-height: 1.6;">Live-probe validation closes the loop between static reconstruction and reality. It converts every reconstructed endpoint from “the JS mentions this” into a confirmed <span style="font-family:'JetBrains Mono';font-size:12px;color:#CDEB45;">200 / 401 / 403 / 404</span> with an access-control verdict — directly delivering the north star (“every issue traced to file &amp; line, and usable in context”) and feeding truth into the diff, the threat model, and the report all at once.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1000,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = { prio: 'all' };
+  ic(p){ return p; }
+
+  GAPS(){
+    return [
+      { prio:'P0', shipped:true, stage:'Validate / triage', title:'No live-probe verification of reconstructed endpoints',
+        gap:'Endpoints are reconstructed statically, so every one is an unconfirmed hypothesis. The engineer can\u2019t tell a live route from a dead one, or an auth-gated route from an open one, without leaving the app.',
+        fix:'Add an opt-in live probe per endpoint returning status (200/401/403/404) + response size, plus a BOLA/BFLA lane: replay with the engineer\u2019s token, flag where server-side access control is missing. Turns guesses into confirmed findings.' },
+      { prio:'P0', stage:'Reconstruct spec', title:'Custom API wrappers silently under-extract',
+        gap:'The analyzer knows fetch/axios/jQuery/XHR, but most real apps route calls through a project wrapper (api.post(path, body)). Those calls are missed entirely \u2014 the most common real-world failure \u2014 and nothing tells the user coverage dropped.',
+        fix:'A \u201Cteach a wrapper\u201D affordance: detect repeated unknown call shapes, let the user map one (object.method \u2192 verb/url/body positions), re-run extraction. Surface a per-file \u201Ccalls not attributed\u201D count so blind spots are visible.' },
+      { prio:'P0', stage:'Reconstruct spec', title:'Cross-file / unresolved-host endpoints get buried',
+        gap:'Base URLs defined in one chunk and used in another can\u2019t be resolved statically, so those endpoints land as low-confidence with a placeholder host \u2014 exactly the ones worth chasing \u2014 but they blend into the flat findings list.',
+        fix:'A dedicated \u201CNeeds resolution\u201D bucket: group low-confidence/unresolved-host items as a first-class triage lane with their raw source, one-click jump to the definition site, and a manual \u201Cset base URL\u201D that re-resolves dependent endpoints.' },
+      { prio:'P1', stage:'Collect', title:'No historical / orphaned JS collection',
+        gap:'Only currently-linked JS is analyzed. Removed-but-live endpoints \u2014 frequently the highest-ROI finds \u2014 live in Wayback/archive copies and old bundle chunks that the live site no longer references.',
+        fix:'Add an archive-pull source (Wayback/CDX + old source-map chunks) and a \u201Chistorical-only\u201D tag. Diff historical endpoints against current so removed-from-frontend-but-still-200 routes surface automatically.' },
+      { prio:'P1', stage:'Prioritize', title:'Findings are flat \u2014 no signal-based prioritization',
+        gap:'A bundle yields hundreds of findings. Practitioners work high-signal-first (auth / payment / admin surfaces), but the app shows one undifferentiated list, so the engineer does the ranking by hand.',
+        fix:'Score each file/finding by surface keywords (admin, auth, payment, internal, token) and reachability; add a \u201CPriority\u201D sort and a per-file \u201Ctouches sensitive surface\u201D badge on the Sources tree and Overview.' },
+      { prio:'P1', shipped:true, stage:'Diff / monitor', title:'Re-run exists, but no diff between runs',
+        gap:'Re-running a target recomputes everything with no comparison. The single most valuable question on an active target \u2014 \u201Cwhat changed / what\u2019s new since last run?\u201D \u2014 can\u2019t be answered in-product.',
+        fix:'Persist runs and render a diff: new / changed / removed endpoints, secrets, and files, with a change badge on the session card. This is table-stakes in every ASM platform reviewed.' },
+      { prio:'P1', shipped:true, stage:'Handoff', title:'Weak handoff to the testing toolchain',
+        gap:'A mitmproxy addon exports, but the rest of the loop is manual: no Burp/Postman import, no Intruder-style param wordlist, and dynamic-testing results never flow back to update finding status.',
+        fix:'Add one-click exports: Postman collection + Burp/ZAP import, a parameter wordlist from discovered params, and a lightweight \u201Cmark confirmed from proxy\u201D hook so live results re-enter triage.' },
+      { prio:'P1', stage:'Extract', title:'Non-HTTP signals under-surfaced',
+        gap:'The analyzer captures postMessage (incl. wildcard-origin), storage/cookie access, and signing logic \u2014 prime leads for DOM XSS, token theft, and replay \u2014 but the UI foregrounds endpoints/secrets and leaves these as second-class.',
+        fix:'Promote messaging / storage / signing to first-class finding types with their own severity cues (wildcard postMessage \u2192 high), and trace user-input \u2192 dangerous-sink flows for a DOM-XSS lead view.' },
+      { prio:'P2', stage:'Diff / monitor', title:'No continuous monitoring or alerting',
+        gap:'Everything is on-demand. Attack surfaces change with every deploy; industry guidance treats daily continuous discovery + re-baseline as the floor, not the ceiling. Nothing watches a target between manual runs.',
+        fix:'Scheduled re-scans per target with change alerts (email/webhook/Slack) and a re-baseline action so an accepted change stops re-alerting. Reuses the diff engine from the P1 item.' },
+      { prio:'P2', stage:'Report / handoff', title:'No ticketing / workflow handoff for the AppSec persona',
+        gap:'Export produces MD/JSON/CSV/HTML, but the internal-review persona lives in Jira/GitHub. A confirmed finding can\u2019t become a tracked, owned action without copy-paste.',
+        fix:'Add \u201Ccreate issue\u201D (Jira/GitHub/Linear) from a finding or threat, carrying the file:line, evidence, and severity, with a status that syncs back to triage.' },
+    ];
+  }
+
+  renderVals(){
+    const toc=[['#what','Product'],['#usage','Usage'],['#reference','Benchmark'],['#gaps','Gaps'],['#roadmap','Roadmap']].map(([href,label])=>({href,label}));
+    const heroStats=[
+      { n:'6', label:'product surfaces reviewed', c:'#ECEFF6' },
+      { n:'10', label:'workflow stages mapped', c:'#6BA8FF' },
+      { n:'3', label:'shipped this cycle', c:'#CDEB45' },
+      { n:'7', label:'remaining', c:'#FF8A47' },
+    ];
+    const pillars=[
+      { title:'Static reconstruction', desc:'AST-traces network calls into endpoints, params, headers, bodies \u2014 no code executed.', icon:'M16 18l6-6-6-6M8 6l-6 6 6 6', bg:'rgba(124,140,255,0.12)', c:'#7C8CFF' },
+      { title:'Provenance & confidence', desc:'Every finding carries file:line and a high/medium/low tier; dynamic bits surfaced, not dropped.', icon:'M22 11.1V12a10 10 0 1 1-5.9-9.1M22 4 12 14l-3-3', bg:'rgba(205,235,69,0.12)', c:'#CDEB45' },
+      { title:'Secret detection', desc:'Kingfisher-class engine labels & verifies keys (AWS, Stripe, Google) with severity.', icon:'M6 10V7a6 6 0 0 1 12 0v3M5 10h14v10H5z', bg:'rgba(255,107,138,0.12)', c:'#FF6B8A' },
+      { title:'OpenAPI + Swagger', desc:'Emits a validated 3.0 spec, renders it, flags client-side request signing for replay.', icon:'M3 3h18v18H3zM3 9h18M9 21V9', bg:'rgba(91,214,192,0.12)', c:'#5BD6C0' },
+      { title:'Attack-surface map', desc:'Hosts & clusters discovered from JS; capture via browser extension in authed contexts.', icon:'M4 12a8 8 0 1 0 16 0 8 8 0 1 0-16 0M4 12h16M12 4a13 13 0 0 1 0 16M12 4a13 13 0 0 0 0 16', bg:'rgba(107,168,255,0.12)', c:'#6BA8FF' },
+      { title:'AI threat modeling', desc:'Graph-first STRIDE/OWASP over the evidence, with an orchestration & provider config layer.', icon:'M7 7l10 4M7 17l10-5M3 6a2 2 0 1 0 4 0 2 2 0 1 0-4 0M3 18a2 2 0 1 0 4 0 2 2 0 1 0-4 0M17 12a2 2 0 1 0 4 0 2 2 0 1 0-4 0', bg:'rgba(199,146,234,0.12)', c:'#C792EA' },
+    ];
+
+    const green={dotBg:'rgba(205,235,69,0.1)',dotBd:'rgba(205,235,69,0.3)',dotC:'#CDEB45',state:'SOLID',stateC:'#CDEB45',stateBg:'rgba(205,235,69,0.12)'};
+    const amber={dotBg:'rgba(255,138,71,0.1)',dotBd:'rgba(255,138,71,0.3)',dotC:'#FF8A47',state:'PARTIAL',stateC:'#FF8A47',stateBg:'rgba(255,138,71,0.12)'};
+    const J=(num,title,desc,surfaces,tone,icon)=>({num,title,desc,surfaces,icon,...tone});
+    const journey=[
+      J('01','Add a target & collect JS','Enter a domain to kick off recon, or capture live from the browser extension while moving through authed areas. Runs are tracked per session with live Activity progress.',['New Recon modal','Extension','Activity'],amber,'M12 5v14M5 12h14'),
+      J('02','Discover & reconstruct sources','Discovered JS + source maps are fetched and reconstructed into a browsable file tree; minified files are beautified, obfuscated ones can be deobfuscated inline.',['Sources','Overview'],green,'M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z'),
+      J('03','Extract findings','Endpoints, secrets, params, and dependencies are pulled out \u2014 each labeled, severity-scored, confidence-tiered, and pinned to file:line. Secrets are verified and masked by default.',['Findings','Detail drawer'],green,'M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01'),
+      J('04','Triage & trace','Filter by type/severity/status/engine, open any finding to see its classification, code trace, and set triage state. \u201COpen in Sources\u201D jumps to the exact highlighted line.',['Findings filters','Sources'],green,'M22 3H2l8 9.5V19l4 2v-8.5L22 3z'),
+      J('05','Reconstruct the API spec','Findings roll up into an OpenAPI spec rendered in Swagger; state-changing routes and client-side signing are flagged, with a mitmproxy addon for signed-request replay.',['API Spec'],amber,'M3 3h18v18H3zM3 9h18M9 21V9'),
+      J('06','Map the attack surface','Hosts and route clusters reached from the JS render as a graph, weighted by finding density \u2014 the \u201Cwhere do I look\u201D overview.',['Overview'],green,'M4 12a8 8 0 1 0 16 0 8 8 0 1 0-16 0M4 12h16M12 4a13 13 0 0 1 0 16M12 4a13 13 0 0 0 0 16'),
+      J('07','Threat model','A graph-first STRIDE/OWASP pass over the evidence produces ranked attack paths with explicit assumptions and treatment decisions; providers & agent pipeline are configurable.',['Threat Model','Orchestration'],amber,'M7 7l10 4M7 17l10-5M3 4a2 2 0 1 0 4 0 2 2 0 1 0-4 0M3 16a2 2 0 1 0 4 0 2 2 0 1 0-4 0M17 10a2 2 0 1 0 4 0 2 2 0 1 0-4 0'),
+      J('08','Export & report','Generate a report (MD/JSON/CSV/HTML) scoped to all or filtered findings; global search spans every finding across sessions.',['Export modal','Search'],amber,'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3'),
+    ];
+
+    const refCov=(k)=>({ good:{cov:'COVERED',covC:'#CDEB45',covBg:'rgba(205,235,69,0.12)'}, part:{cov:'PARTIAL',covC:'#FF8A47',covBg:'rgba(255,138,71,0.12)'}, gap:{cov:'GAP',covC:'#FF6B8A',covBg:'rgba(255,107,138,0.12)'} }[k]);
+    const R=(n,phase,detail,k,last)=>({n,phase,detail,...refCov(k),border:last?'transparent':'#1c2230'});
+    const reference=[
+      R('1','Collect / inventory','Crawl live + historical (Wayback/gau) JS, incl. orphaned & lazy chunks','part'),
+      R('2','Prepare','Beautify minified, understand bundling, reconstruct from maps','good'),
+      R('3','Prioritize','Rank files by feature \u2014 auth / payment / admin get read first','gap'),
+      R('4','Extract','Endpoints, secrets, params, storage, messaging, signing','good'),
+      R('5','Reconstruct','Chunks \u2192 features \u2192 OpenAPI spec of the real surface','part'),
+      R('6','Validate live','Probe each endpoint; test access control (BOLA/BFLA) with a token','gap'),
+      R('7','Diff / monitor','Compare runs; alert on new/changed/removed; re-baseline','gap'),
+      R('8','Threat model','Rank attack paths, map to STRIDE / OWASP / CWE','good'),
+      R('9','Report / handoff','Report + push to Burp / Postman / ticketing / SOAR','part',true),
+    ];
+
+    const PC={ P0:{c:'#FF6B8A',bg:'rgba(255,107,138,0.13)'}, P1:{c:'#FF8A47',bg:'rgba(255,138,71,0.13)'}, P2:{c:'#FFC73D',bg:'rgba(255,199,61,0.13)'} };
+    const allGaps=this.GAPS().map(g=>({ ...g, prioC:PC[g.prio].c, prioBg:PC[g.prio].bg }));
+    const shown=this.state.prio==='all'?allGaps:allGaps.filter(g=>g.prio===this.state.prio);
+    const cnt=(p)=>allGaps.filter(g=>g.prio===p).length;
+    const prioFilters=[['all','All'],['P0','P0'],['P1','P1'],['P2','P2']].map(([k,label])=>{
+      const on=this.state.prio===k; const dot=k==='all'?'#98A2B8':PC[k].c;
+      return { label, count:k==='all'?allGaps.length:cnt(k), set:()=>this.setState({prio:k}), dot,
+        bd:on?dot:'#232b3b', bg:on?'rgba(255,255,255,0.03)':'transparent', fg:on?'#ECEFF6':'#98A2B8' };
+    });
+
+    const roadmap=[
+      { tag:'WAVE 1 · P0', c:'#FF6B8A', bg:'rgba(255,107,138,0.13)', border:'rgba(255,107,138,0.3)', title:'Make findings true', why:'Close the gap between \u201Cthe JS mentions it\u201D and reality \u2014 the core promise.',
+        items:['Live-probe status + access-control (BOLA) lane','Teach-a-wrapper extraction + coverage counter','\u201CNeeds resolution\u201D bucket for unresolved hosts'] },
+      { tag:'WAVE 2 · P1', c:'#FF8A47', bg:'rgba(255,138,71,0.13)', border:'rgba(255,138,71,0.3)', title:'Make it a workflow', why:'Rank what matters, see what changed, hand off cleanly.',
+        items:['Run-to-run diff (new/changed/removed)','Signal-based file prioritization','Historical/orphaned JS collection','Postman/Burp export + param wordlist','Promote messaging/storage/signing findings'] },
+      { tag:'WAVE 3 · P2', c:'#FFC73D', bg:'rgba(255,199,61,0.13)', border:'rgba(255,199,61,0.3)', title:'Make it continuous', why:'Move from point-in-time to always-on, team-integrated.',
+        items:['Scheduled re-scans + change alerts','Re-baseline accepted changes','Ticketing/SOAR handoff (Jira/GitHub)'] },
+    ];
+
+    return { toc, heroStats, pillars, journey, reference, gaps:shown, gapCount:allGaps.length, prioFilters, roadmap };
+  }
+}
+</script>
+</body>
+</html>

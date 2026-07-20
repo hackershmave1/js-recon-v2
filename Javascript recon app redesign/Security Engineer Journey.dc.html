@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #0B0D13; }
+  ::-webkit-scrollbar { height: 11px; width: 11px; }
+  ::-webkit-scrollbar-track { background: #0d1017; }
+  ::-webkit-scrollbar-thumb { background: #232b3b; border-radius: 6px; border: 2px solid #0d1017; }
+  ::-webkit-scrollbar-thumb:hover { background: #313b50; }
+  @keyframes jin { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+</style>
+</helmet>
+<div style="min-height: 100vh; background: radial-gradient(1100px 500px at 20% -5%, #14192400, #0B0D13); color: #ECEFF6; font-family: 'IBM Plex Sans', system-ui, sans-serif; padding: 40px 44px 70px;">
+
+  <!-- header -->
+  <div style="display: flex; align-items: flex-start; gap: 16px; max-width: 1180px; margin-bottom: 30px; animation: jin .4s ease;">
+    <div style="width: 40px; height: 40px; border-radius: 11px; background: #CDEB45; display: flex; align-items: center; justify-content: center; flex: 0 0 40px; box-shadow: 0 0 26px rgba(205,235,69,0.32);">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0B0D13" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+    </div>
+    <div style="flex: 1;">
+      <div style="font-family: 'JetBrains Mono'; font-size: 12px; color: #CDEB45; letter-spacing: 1px; margin-bottom: 6px;">RECON WORKSPACE · JOURNEY MAP</div>
+      <h1 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 30px; margin: 0; letter-spacing: -0.7px;">The security engineer's journey</h1>
+      <p style="font-size: 14px; color: #98A2B8; margin: 10px 0 0; max-width: 720px; line-height: 1.6;">End-to-end path through passive JavaScript recon — from connecting the capture extension to shipping a report. Each phase names the goal, the actions, the touchpoints in the app, the mindset, and which original pain point it resolves.</p>
+    </div>
+  </div>
+
+  <!-- personas + legend -->
+  <div style="display: flex; gap: 12px; flex-wrap: wrap; max-width: 1180px; margin-bottom: 34px;">
+    <div style="display: flex; align-items: center; gap: 11px; background: #11141d; border: 1px solid #1c2230; border-radius: 12px; padding: 13px 16px;">
+      <span style="width: 34px; height: 34px; border-radius: 9px; background: rgba(205,235,69,0.12); color: #CDEB45; display: flex; align-items: center; justify-content: center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg></span>
+      <div><div style="font-weight: 700; font-size: 13.5px;">Bug-bounty hunter</div><div style="font-size: 11.5px; color: #7E8AA3;">Fast triage · program scope matters</div></div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 11px; background: #11141d; border: 1px solid #1c2230; border-radius: 12px; padding: 13px 16px;">
+      <span style="width: 34px; height: 34px; border-radius: 9px; background: rgba(124,140,255,0.12); color: #7C8CFF; display: flex; align-items: center; justify-content: center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg></span>
+      <div><div style="font-weight: 700; font-size: 13.5px;">AppSec engineer</div><div style="font-size: 11.5px; color: #7E8AA3;">Internal review · thorough coverage</div></div>
+    </div>
+    <div style="flex: 1;"></div>
+    <div style="display: flex; align-items: center; gap: 16px; background: #11141d; border: 1px solid #1c2230; border-radius: 12px; padding: 13px 16px;">
+      <span style="display: flex; align-items: center; gap: 7px; font-size: 12px; color: #C7D0E0;"><span style="width: 9px; height: 9px; border-radius: 50%; background: #CDEB45;"></span>Built</span>
+      <span style="display: flex; align-items: center; gap: 7px; font-size: 12px; color: #C7D0E0;"><span style="width: 9px; height: 9px; border-radius: 50%; background: #FFC73D;"></span>Partial</span>
+      <span style="display: flex; align-items: center; gap: 7px; font-size: 12px; color: #C7D0E0;"><span style="width: 9px; height: 9px; border-radius: 50%; background: #7C8CFF;"></span>Planned</span>
+    </div>
+  </div>
+
+  <!-- emotion / confidence curve -->
+  <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 14px; padding: 20px 22px 8px; max-width: 1180px; margin-bottom: 20px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+      <div style="font-family: 'Space Grotesk'; font-weight: 600; font-size: 15px;">Confidence through the flow</div>
+      <div style="display: flex; align-items: center; gap: 14px; font-size: 11px; font-family: 'JetBrains Mono'; color: #7E8AA3;">
+        <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 16px; height: 2px; background: #CDEB45; display: inline-block;"></span>now</span>
+        <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 16px; height: 0; border-top: 2px dashed #4a5266; display: inline-block;"></span>old app</span>
+      </div>
+    </div>
+    <div style="height: 150px;">
+      <svg viewBox="0 0 {{ curve.w }} {{ curve.h }}" preserveAspectRatio="none" style="width: 100%; height: 100%; overflow: visible;">
+        <sc-for list="{{ curve.grid }}" as="g" hint-placeholder-count="5"><line x1="0" y1="{{ g.y }}" x2="{{ curve.w }}" y2="{{ g.y }}" stroke="#161b26" stroke-width="1"></line></sc-for>
+        <polyline points="{{ curve.oldPts }}" fill="none" stroke="#4a5266" stroke-width="2" stroke-dasharray="5 5" stroke-linecap="round" stroke-linejoin="round"></polyline>
+        <polyline points="{{ curve.newPts }}" fill="none" stroke="#CDEB45" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></polyline>
+        <sc-for list="{{ curve.dots }}" as="d" hint-placeholder-count="12"><circle cx="{{ d.x }}" cy="{{ d.y }}" r="4" fill="#0B0D13" stroke="#CDEB45" stroke-width="2"></circle></sc-for>
+        <sc-for list="{{ curve.ticks }}" as="t" hint-placeholder-count="12"><text x="{{ t.x }}" y="{{ curve.labelY }}" fill="#5C6680" font-family="JetBrains Mono" font-size="10" text-anchor="middle">{{ t.n }}</text></sc-for>
+        <text x="{{ curve.annotX }}" y="{{ curve.annotY }}" fill="#7E8AA3" font-family="IBM Plex Sans" font-size="11" text-anchor="middle">{{ curve.annotText }}</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- journey matrix (column cards) -->
+  <div style="max-width: 1180px; overflow-x: auto; border: 1px solid #1c2230; border-radius: 14px; background: #0e1119;">
+    <div style="display: flex; min-width: max-content;">
+      <sc-for list="{{ phasesView }}" as="p" hint-placeholder-count="12">
+        <div style="width: 236px; flex: 0 0 236px; border-right: 1px solid #1c2230;">
+          <div style="padding: 15px; border-bottom: 1px solid #232b3b; background: rgba(18,22,33,0.55);">
+            <div style="font-family: 'JetBrains Mono'; font-size: 11px; color: #CDEB45; margin-bottom: 5px;">{{ p.n }}</div>
+            <div style="font-family: 'Space Grotesk'; font-weight: 600; font-size: 14px; color: #ECEFF6; margin-bottom: 9px; min-height: 38px; line-height: 1.25;">{{ p.name }}</div>
+            <span style="display: inline-flex; align-items: center; gap: 6px; font-family: 'JetBrains Mono'; font-size: 11px; color: {{ p.statusColor }};"><span style="width: 8px; height: 8px; border-radius: 50%; background: {{ p.statusColor }};"></span>{{ p.statusLabel }}</span>
+          </div>
+          <div style="padding: 13px 15px; border-bottom: 1px solid #1c2230;">
+            <div style="font-size: 10px; color: #5C6680; font-weight: 700; letter-spacing: 0.6px; margin-bottom: 6px;">MINDSET</div>
+            <div style="font-size: 12px; color: #C7D0E0; font-style: italic; line-height: 1.5;">"{{ p.mind }}"</div>
+          </div>
+          <div style="padding: 13px 15px; border-bottom: 1px solid #1c2230;">
+            <div style="font-size: 10px; color: #5C6680; font-weight: 700; letter-spacing: 0.6px; margin-bottom: 8px;">WHAT THEY DO</div>
+            <sc-for list="{{ p.does }}" as="d" hint-placeholder-count="4"><div style="display: flex; gap: 7px; margin-bottom: 6px;"><span style="color: #CDEB45; flex: 0 0 auto; line-height: 1.5;">·</span><span style="font-size: 12px; color: #B9C2D4; line-height: 1.5;">{{ d.t }}</span></div></sc-for>
+          </div>
+          <div style="padding: 13px 15px; border-bottom: 1px solid #1c2230;">
+            <div style="font-size: 10px; color: #5C6680; font-weight: 700; letter-spacing: 0.6px; margin-bottom: 8px;">TOUCHPOINTS</div>
+            <div style="display: flex; flex-direction: column; gap: 5px;"><sc-for list="{{ p.sees }}" as="s" hint-placeholder-count="3"><span style="font-family: 'JetBrains Mono'; font-size: 11px; color: #7C8CFF; line-height: 1.4;">{{ s.t }}</span></sc-for></div>
+          </div>
+          <div style="padding: 13px 15px;">
+            <div style="font-size: 10px; color: #5C6680; font-weight: 700; letter-spacing: 0.6px; margin-bottom: 6px;">RESOLVES</div>
+            <div style="font-size: 12px; color: #8fae4f; line-height: 1.5;">{{ p.pain }}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- pain points resolved -->
+  <div style="max-width: 1180px; margin-top: 40px;">
+    <h2 style="font-family: 'Space Grotesk'; font-weight: 700; font-size: 21px; margin: 0 0 4px; letter-spacing: -0.4px;">The six pain points, resolved</h2>
+    <p style="font-size: 13px; color: #7E8AA3; margin: 0 0 20px;">The complaints that started this redesign, mapped to what now fixes them.</p>
+    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px;">
+      <sc-for list="{{ pains }}" as="p" hint-placeholder-count="6">
+        <div style="background: #11141d; border: 1px solid #1c2230; border-radius: 13px; padding: 17px 19px;">
+          <div style="display: flex; align-items: center; gap: 11px; margin-bottom: 11px;">
+            <span style="width: 26px; height: 26px; border-radius: 8px; background: rgba(255,77,94,0.12); color: #FF6B8A; display: flex; align-items: center; justify-content: center; font-family: 'JetBrains Mono'; font-weight: 700; font-size: 12px; flex: 0 0 26px;">{{ p.n }}</span>
+            <div style="font-weight: 700; font-size: 14px; color: #ECEFF6;">{{ p.pain }}</div>
+          </div>
+          <div style="display: flex; gap: 9px; align-items: flex-start;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#CDEB45" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 15px; margin-top: 2px;"><path d="M20 6 9 17l-5-5"></path></svg>
+            <div style="font-size: 12.5px; color: #B9C2D4; line-height: 1.6;">{{ p.fix }}</div>
+          </div>
+          <div style="margin-top: 11px; padding-top: 11px; border-top: 1px solid #1c2230; font-family: 'JetBrains Mono'; font-size: 11px; color: #5C6680;">{{ p.where }}</div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{}">
+class Component extends DCLogic {
+  phases(){
+    return [
+      { n:'01', name:'Connect & configure', mind:'Set it up once, forget it.', status:'built',
+        does:['Install capture extension','Connect workspace URL + API key','Test connection','Set default scope & noise denylist'],
+        sees:['Extension popup','Settings: Connection','Settings: Noise denylist'],
+        pain:'Groundwork for a calmer flow' },
+      { n:'02', name:'Set scope', mind:'Stay inside the program. No stray hosts.', status:'built',
+        does:['Enter target + registrable domain','Toggle include-subdomains','Choose out-of-scope handling (tag/mute/exclude)'],
+        sees:['New Recon modal','Scope field','Extension scope row'],
+        pain:'Authorization boundary made explicit' },
+      { n:'03', name:'Capture JS', mind:'Just browse — let it collect.', status:'built',
+        does:['Browse target with extension on','Or launch a server-side recon job','Assets tagged in-scope / third-party','Plugin & tracker noise muted'],
+        sees:['Extension capture feed','New Recon → Start'],
+        pain:'#2 clutter — noise filtered at capture' },
+      { n:'04', name:'Normalize', mind:'Make the code readable before I trust it.', status:'partial',
+        does:['Beautify minified / bundled JS','Reconstruct originals from source maps','Detect obfuscation; deobfuscate if flagged','Blind spots counted, never hidden'],
+        sees:['Sources: file badges','minified · map-recovered · obfuscated ⚠'],
+        pain:'Honest coverage — no silent blind spots' },
+      { n:'05', name:'Analyze (async)', mind:'Is it working, or is it stuck?', status:'built',
+        does:['Engines run: Kingfisher · Vespasian · sourcemapper','Watch live stage stepper + ETA','Keep working; job runs in background'],
+        sees:['Activity panel','Per-job progress + ETA'],
+        pain:'#5 unclear waits — now a labeled job' },
+      { n:'06', name:'Orient', mind:'What am I looking at? Where’s the risk?', status:'built',
+        does:['Scan attack-surface map','Read coverage + miss reasons','Jump to priority findings'],
+        sees:['Overview','Attack surface map','Coverage bars'],
+        pain:'#1 not intuitive — one landing view' },
+      { n:'07', name:'Triage findings', mind:'Sort real from noise, fast.', status:'built',
+        does:['Filter by type / severity / scope / domain','Focus mode mutes lib/CMS/tracker','Open finding → deterministic detection','Mark reviewed / confirmed / false-pos'],
+        sees:['Findings','Filter rail','Finding drawer'],
+        pain:'#2 clutter + #6 relevance' },
+      { n:'08', name:'Trace to source', mind:'Show me exactly where this lives.', status:'built',
+        does:['Open the reconstructed file','See the offending line highlighted','Read surrounding code in context'],
+        sees:['Sources','File tree','Code viewer (file:line)'],
+        pain:'#3 visibility — file:line on everything' },
+      { n:'09', name:'Map API surface', mind:'What can I actually attack?', status:'built',
+        does:['Read generated OpenAPI / GraphQL','Inspect params + risk + host attribution','Jump from operation → finding → source'],
+        sees:['API Spec','Operation detail','Linked findings'],
+        pain:'#6 endpoints tied to domains' },
+      { n:'10', name:'Replay & fuzz', mind:'The requests are signed — can I still tamper?', status:'planned',
+        does:['Detect client-side signing (HMAC, nonce, timestamp)','Scaffold a mitmproxy signing addon','Replay / fuzz with signatures kept valid'],
+        sees:['Finding: request signing','Export: mitmproxy addon'],
+        pain:'Bridges static recon → live testing' },
+      { n:'11', name:'Threat model', mind:'What’s the story across endpoints?', status:'planned',
+        does:['AI ingests spec + findings','Get ranked threats (OWASP / STRIDE)','Each threat cites its evidence'],
+        sees:['Threat Model (planned)','Activity: model run'],
+        pain:'Interpretation, kept out of findings' },
+      { n:'12', name:'Report & re-run', mind:'Package it. Track what’s new.', status:'partial',
+        does:['Export report (MD / JSON / CSV / HTML)','Postman collection for endpoints','Global search across findings','Re-run & diff vs last run'],
+        sees:['Export modal','⌘K search','Re-run (diff planned)'],
+        pain:'North star: usable, exportable output' },
+    ];
+  }
+
+  pains(){
+    return [
+      { n:'1', pain:'Not intuitive', fix:'One unified workspace with a single left-to-right flow and clear nav — no hunting across disconnected tabs.', where:'Workspace shell · nav' },
+      { n:'2', pain:'Badge / tag clutter', fix:'Deterministic chips only, detail moved into the drawer, and a Focus mode that mutes library / CMS / tracker noise.', where:'Findings · Focus mode' },
+      { n:'3', pain:'File paths not visible', fix:'Every finding carries an exact file:line:col trace, and Sources shows the reconstructed tree with the line highlighted.', where:'Finding drawer · Sources' },
+      { n:'4', pain:'Slow load times', fix:'Skeletons, incremental row patching, and expensive work pushed to background jobs so the UI never blocks.', where:'Activity · list rendering' },
+      { n:'5', pain:'Unclear what I’m waiting for', fix:'A persistent Activity panel with a discover → fetch → analyze stepper and a live ETA per job.', where:'Activity panel' },
+      { n:'6', pain:'Deeper issues', fix:'Scope + relevance model, provider identity on secrets, host attribution on endpoints, and detection kept deterministic vs. interpretation.', where:'Finding contract · API Spec' },
+    ];
+  }
+
+  renderVals(){
+    const ph = this.phases();
+    const N = ph.length;
+    const SC = { built:{c:'#CDEB45',l:'Built'}, planned:{c:'#7C8CFF',l:'Planned'}, partial:{c:'#FFC73D',l:'Partial'} };
+    const phasesView = ph.map(p=>({ n:p.n, name:p.name, mind:p.mind, pain:p.pain,
+      statusColor:SC[p.status].c, statusLabel:SC[p.status].l,
+      does:p.does.map(t=>({t})), sees:p.sees.map(t=>({t})) }));
+
+    const emo    = [3, 3, 3.3, 3.7, 4.0, 4.1, 4.6, 4.6, 4.1, 4.2, 4.0, 4.3];
+    const oldEmo = [2.8, 2.6, 2.7, 2.5, 1.6, 2.4, 2.0, 1.8, null, null, null, 2.2];
+    const W=1130, H=150, padL=8, padR=8, padT=14, padB=26;
+    const x=(i)=> padL + i*((W-padL-padR)/(N-1));
+    const y=(v)=> padT + (5-v)*((H-padT-padB)/4);
+    const grid=[1,2,3,4,5].map(g=>({ y:y(g) }));
+    const newPts=emo.map((v,i)=> x(i)+','+y(v)).join(' ');
+    const oldPts=oldEmo.map((v,i)=> v==null?null:(x(i)+','+y(v))).filter(Boolean).join(' ');
+    const dots=emo.map((v,i)=>({ x:x(i), y:y(v) }));
+    const ticks=ph.map((p,i)=>({ x:x(i), n:p.n }));
+    const curve={ w:W, h:H, grid, newPts, oldPts, dots, ticks, labelY:H-6, annotX:x(4), annotY:y(1.6)-10, annotText:'old: “is it stuck?”' };
+
+    return { phasesView, curve, pains:this.pains() };
+  }
+}
+</script>
+</body>
+</html>
