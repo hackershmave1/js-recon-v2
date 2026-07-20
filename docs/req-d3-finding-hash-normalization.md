@@ -59,10 +59,14 @@ tool's on-disk mirror), then:
    (webpack adds `[namespace]` precisely to prevent path collisions — do not drop it).
    `webpack://app/src/a.js` → `app/src/a.js`; `https://Cdn.X/static/app.js` →
    `cdn.x/static/app.js`. Handle `webpack:`, `webpack:/`, `webpack://`.
-2. Collapse content-hash tokens **by position + entropy**, not a fixed length floor:
-   a `.`/`-`/`_`-delimited segment component that is (a) hex `[0-9a-f]{6,}` or
-   (b) `[A-Za-z0-9_-]{8,}` with Shannon entropy ≥ 3.0 bits/char → `{hash}`. Catches
-   `[contenthash:6]` and rollup's 8-char base64url; skips real words.
+2. Collapse content-hash tokens **by position + entropy**. Split each path segment
+   on `.`/`-`/`_`; the **filename stem (first component) and extension (last) are
+   never collapsed**, so distinct camelCase files (`Base64Encoder.js`,
+   `Utf8Decoder.js`) keep separate identities. A remaining component collapses to
+   `{hash}` when it is (a) hex `[0-9a-f]{6,}` containing a digit (so hex-letter words
+   like `decade` stay literal), or (b) `[A-Za-z0-9]{8,}` with Shannon entropy ≥ 3.0.
+   Catches `[contenthash:6]` and rollup's 8-char base64url; a pure-hex stem
+   (`9f8e7d6c.js`) still collapses.
 3. Normalize separators to `/`; resolve `./` and `../`; drop a leading `/`.
 4. Do **not** lowercase the path body (source names can be case-sensitive).
 5. Distinguish absent cases with explicit sentinels: no source map at all →
@@ -161,7 +165,11 @@ INSERT INTO finding_occurrence (finding_hash, occurrence_hash, host, raw_url, �
 - Relative vs absolute call to same path → same identity now (host is not hashed).
 - GET vs POST same path → different identity (method hashed). Correct.
 - WS/WSS handled like HTTP with method `WS`/`WSS`.
-- Duplicate/array query keys de-duped and canonicalized.
+- Duplicate/array query keys de-duped and canonicalized; empty keys dropped.
+- **Schemeless authority** (`fetch("api.x/users")`, no `//`) can't be told from a
+  path by `urlsplit`, so the extractor must resolve calls to absolute or
+  root-relative URLs before normalization; a bare `host/path` is treated as a path
+  (review LOW-3).
 
 ## 8. Test vectors (author before code — TDD)
 

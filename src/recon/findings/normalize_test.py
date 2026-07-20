@@ -187,3 +187,51 @@ def test_occurrence_hash_is_deterministic_and_offset_sensitive():
     assert nz.occurrence_hash(**base) == nz.occurrence_hash(**base)
     moved = {**base, "start": 99, "end": 109}
     assert nz.occurrence_hash(**base) != nz.occurrence_hash(**moved)
+
+
+def test_occurrence_hash_tolerates_none_and_bytes():  # review LOW-4
+    # Must not raise on None or non-JSON-native types (default=str).
+    h = nz.occurrence_hash(host=None, raw=b"\x00secret", start=1, end=2)
+    assert len(h) == 64
+
+
+# --- regressions from the code review -----------------------------------------
+
+def test_source_path_protects_camelcase_stems_from_collapse():  # review HIGH-1
+    a = nz.normalize_source_path("app/src/Base64Encoder.js")
+    b = nz.normalize_source_path("app/src/Utf8Decoder.js")
+    assert a == "app/src/Base64Encoder.js"
+    assert b == "app/src/Utf8Decoder.js"
+    assert a != b  # distinct files must not merge into {hash}.js
+
+
+def test_source_path_collapses_base64url_hash_regardless_of_class():  # review MEDIUM-2
+    # interior hash component collapses whether or not it has upper/digit
+    assert nz.normalize_source_path("app/index.q7x2m9k4.js") == "app/index.{hash}.js"
+    assert nz.normalize_source_path("app/index.kLmnoPqr.js") == "app/index.{hash}.js"
+
+
+def test_source_path_collapses_pure_hex_stem():
+    assert nz.normalize_source_path("9f8e7d6c.js") == "{hash}.js"
+
+
+def test_source_path_dotdot_never_pops_the_authority():  # review LOW-6
+    assert nz.normalize_source_path("webpack://app/../secret.js") == "app/secret.js"
+
+
+def test_endpoint_does_not_decode_encoded_slash():  # security: no forged segment
+    ep = nz.normalize_endpoint("GET", "/a%2Fb/12")
+    assert ep.value == "GET /a%2Fb/{id}"
+    assert "%2F" in ep.value
+
+
+def test_endpoint_drops_fragment_and_empty_query_key():  # review LOW-6
+    assert nz.normalize_endpoint("GET", "/a#frag").value == "GET /a"
+    assert nz.normalize_endpoint("GET", "/a?=v&x=1").value == "GET /a?x"
+
+
+def test_finding_hash_golden_vector_locks_cross_process_stability():
+    # Hardcoded digest — any change to the canonical form or algorithm breaks this.
+    assert nz.finding_hash("endpoint", "GET /users/{id}", "app/src/api.js") == (
+        "f47b2e5c384f0deeeafb61cfa39210339c7e237ef99ed002b527fe5fa9788046"
+    )

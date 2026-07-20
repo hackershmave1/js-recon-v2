@@ -19,6 +19,7 @@ import hashlib
 import json
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlsplit
 
@@ -89,44 +90,53 @@ def shannon_entropy(text: str) -> float:
 # Source-path normalization (§3) — best-effort stable across rebuilds.
 # ---------------------------------------------------------------------------
 
-def _strip_scheme_keep_authority(source: str) -> str:
-    """Drop the URL scheme but KEEP the authority/namespace (webpack adds it to
-    prevent path collisions), lowercasing the authority only."""
+def _split_scheme(source: str) -> tuple[str | None, str]:
+    """Split a source into (authority, path). The scheme is dropped; the
+    authority/namespace is KEPT (webpack adds it to prevent path collisions) and
+    lowercased. Returned separately so `..` resolution can never pop it."""
     match = _SCHEME_RE.match(source)
     if not match:
-        return source
+        return None, source
     _scheme, slashes, rest = match.groups()
     if slashes == "//":
-        authority, sep, path = rest.partition("/")
-        authority = authority.lower()
-        return f"{authority}/{path}" if sep else authority
+        authority, _sep, path = rest.partition("/")
+        return (authority.lower() or None), path
     # `webpack:/js/...` or `webpack:js/...` — no authority, just a path.
-    return rest.lstrip("/")
+    return None, rest.lstrip("/")
 
 
-def _is_hash_token(component: str) -> bool:
-    if re.fullmatch(r"[0-9a-fA-F]{6,}", component):
+def _is_hash_token(component: str, *, allow_wordish: bool) -> bool:
+    # Hex hashes (with a digit, so hex-letter words like `decade`/`facade` stay
+    # literal) collapse in any position.
+    if re.fullmatch(r"[0-9a-fA-F]{6,}", component) and any(c.isdigit() for c in component):
         return True
-    # Base64url build hashes are mixed-case with digits; requiring all three
-    # keeps lowercase words (`handlers`, `utf8encoder`) literal.
+    # Ambiguous base64url-ish tokens collapse ONLY in a non-stem position, so a
+    # camelCase filename stem (`Utf8Decoder`) can never be mistaken for a hash.
     return bool(
-        re.fullmatch(r"[A-Za-z0-9]{8,}", component)
-        and any(c.isdigit() for c in component)
-        and any(c.isupper() for c in component)
-        and any(c.islower() for c in component)
+        allow_wordish
+        and re.fullmatch(r"[A-Za-z0-9]{8,}", component)
         and shannon_entropy(component) >= _PATH_HASH_ENTROPY
     )
 
 
 def _collapse_hashes_in_segment(segment: str) -> str:
-    """Replace content-hash components (`app.9f8e7d6c.js` -> `app.{hash}.js`),
-    detected by position + entropy rather than a fixed length floor so
-    `[contenthash:6]` and rollup's 8-char base64url are caught (review H3)."""
+    """Replace content-hash components (`app.9f8e7d6c.js` -> `app.{hash}.js`) by
+    POSITION + entropy (spec §3.2): the filename stem (first component) and the
+    extension (last) are never collapsed, so two distinct camelCase files like
+    `Base64Encoder.js` / `Utf8Decoder.js` keep separate identities (review HIGH-1);
+    hex hashes may sit anywhere. Catches `[contenthash:6]` and rollup base64url."""
     parts = re.split(r"([._\-])", segment)
-    return "".join(
-        "{hash}" if part and part not in "._-" and _is_hash_token(part) else part
-        for part in parts
-    )
+    comp_idx = [i for i, part in enumerate(parts) if part and part not in "._-"]
+    if not comp_idx:
+        return segment
+    first, last = comp_idx[0], comp_idx[-1]
+    has_extension = len(comp_idx) > 1
+    for i in comp_idx:
+        if has_extension and i == last:
+            continue  # extension is never a hash
+        if _is_hash_token(parts[i], allow_wordish=(i != first)):
+            parts[i] = "{hash}"
+    return "".join(parts)
 
 
 def normalize_source_path(source: str | None) -> str:
@@ -137,17 +147,18 @@ def normalize_source_path(source: str | None) -> str:
     """
     if source is None or not source.strip():
         return NULL_SOURCE
-    text = _strip_scheme_keep_authority(source.strip()).replace("\\", "/")
+    authority, path = _split_scheme(source.strip())
     parts: list[str] = []
-    for part in text.split("/"):
+    for part in path.replace("\\", "/").split("/"):
         if part in ("", "."):
             continue
         if part == "..":
             if parts:
-                parts.pop()
+                parts.pop()  # never pops the authority — it is prepended below
             continue
         parts.append(_collapse_hashes_in_segment(part))
-    return "/".join(parts)
+    segments = ([authority] if authority else []) + parts
+    return "/".join(segments)
 
 
 # ---------------------------------------------------------------------------
@@ -199,10 +210,11 @@ def _normalize_query(query: str) -> str:
     """Sorted, de-duped param *names* only; array keys canonicalized (§4.1, L1)."""
     if not query:
         return ""
-    keys = {
-        _ARRAY_KEY_RE.sub("", key)
-        for key, _value in parse_qsl(query, keep_blank_values=True)
-    }
+    keys: set[str] = set()
+    for key, _value in parse_qsl(query, keep_blank_values=True):
+        name = _ARRAY_KEY_RE.sub("", key)
+        if name:  # drop empty keys so `?=v&x=1` == `?x=1` (review LOW-6)
+            keys.add(name)
     return "&".join(sorted(keys))
 
 
@@ -256,18 +268,33 @@ def normalize_secret_value(raw_token: str, rule_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _canonical(obj: dict[str, object]) -> bytes:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    # allow_nan=False: NaN/Inf are non-standard JSON and would break cross-process
+    # stability. default=str: tolerate bytes/other by a deterministic repr rather
+    # than raising (review LOW-4).
+    return json.dumps(
+        obj, sort_keys=True, separators=(",", ":"), allow_nan=False, default=str
+    ).encode("utf-8")
 
 
 def finding_hash(finding_type: str, value: str, path: str) -> str:
-    """The stable REQ-D3 identity: sha256 over canonical {type, value, path}."""
+    """The stable REQ-D3 identity: sha256 over canonical {type, value, path}.
+
+    ``value``/``path`` are NFC-normalized so two builds differing only in Unicode
+    composition form do not churn in the D5 diff (review LOW-5)."""
     return hashlib.sha256(
-        _canonical({"type": finding_type, "value": value, "path": path})
+        _canonical(
+            {
+                "type": finding_type,
+                "value": unicodedata.normalize("NFC", value),
+                "path": unicodedata.normalize("NFC", path),
+            }
+        )
     ).hexdigest()
 
 
 def occurrence_hash(**fields: object) -> str:
     """Idempotency key for one sighting — canonical over its volatile identifying
     fields (raw value, host, source-path variant, offsets), so a retry re-emits
-    the same occurrence_hash and the append is a no-op."""
+    the same occurrence_hash and the append is a no-op. Pass offsets as ``int``
+    (an ``int`` and an equal ``float`` canonicalize differently)."""
     return hashlib.sha256(_canonical(dict(fields))).hexdigest()
