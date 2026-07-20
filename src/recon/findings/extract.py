@@ -10,6 +10,12 @@ resolvable (a bare variable, a runtime concatenation) is NOT invented — it is
 counted in ``Extraction.unattributed`` so coverage can be reported truthfully.
 Downstream, each :class:`RawEndpoint` is normalized (recon.findings.normalize)
 and written through the outbox (recon.findings.store).
+
+Known MVP limitations (no data-flow analysis): a library aliased to another name
+(``const a = axios; a.get(...)``) is not resolved and leaves no trace; a URL built
+by concatenation or held in a variable is counted as unattributed, never guessed;
+and ``.open(<method-string>, <url>)`` on a non-XHR receiver can be a rare false
+positive since the receiver's type isn't tracked.
 """
 
 from __future__ import annotations
@@ -142,6 +148,28 @@ def _body_params(node: Node | None) -> list[RawParam]:
     return [RawParam(name, "body") for name in _object_pairs(node)]
 
 
+def _body_params_from_value(node: Node | None) -> list[RawParam]:
+    """Body params from an object literal OR a ``JSON.stringify({...})`` wrapper
+    (the near-universal way a JSON body is built)."""
+    if node is None:
+        return []
+    if node.type == "object":
+        return _body_params(node)
+    if node.type == "call_expression":
+        fn = node.child_by_field_name("function")
+        if fn is not None and _text(fn) == "JSON.stringify":
+            inner = _args(node)
+            if inner and inner[0].type == "object":
+                return _body_params(inner[0])
+    return []
+
+
+def _config_query_params(config: Node | None) -> list[RawParam]:
+    """axios's ``params`` config key is serialized into the query string."""
+    params_obj = _object_pairs(config).get("params")
+    return [RawParam(name, "query") for name in _object_pairs(params_obj)]
+
+
 def _endpoint(kind: str, method: str, url: str, params: list[RawParam], call: Node) -> RawEndpoint:
     row, col = call.start_point
     deduped = list(dict.fromkeys(params))  # preserve order, drop repeats
@@ -170,17 +198,31 @@ def _handle_call(call: Node, result: Extraction) -> None:
             _fetch(call, result)
         elif name == "axios":
             _axios_call(call, result)
-    elif fn.type == "member_expression":
+        return
+    # Member access, dotted (axios.get) or computed (axios["get"]) — the latter is
+    # common in property-mangled bundles and must not be silently dropped (C2).
+    if fn.type == "member_expression":
         obj = _text(fn.child_by_field_name("object"))
         prop = _text(fn.child_by_field_name("property"))
-        if prop == "fetch" and obj in _GLOBAL_OBJECTS:
-            _fetch(call, result)
-        elif prop == "open":
-            _xhr_open(call, result)
-        elif obj == "axios":
-            _axios_member(call, prop, result)
-        elif obj in _JQUERY:
-            _jquery(call, prop, result)
+    elif fn.type == "subscript_expression":
+        obj = _text(fn.child_by_field_name("object"))
+        prop = _string_value(fn.child_by_field_name("index"))
+        if prop is None:  # dynamic index -> can't attribute a method name
+            return
+    else:
+        return
+    _dispatch_member(call, obj, prop, result)
+
+
+def _dispatch_member(call: Node, obj: str, prop: str, result: Extraction) -> None:
+    if prop == "fetch" and obj in _GLOBAL_OBJECTS:
+        _fetch(call, result)
+    elif prop == "open":
+        _xhr_open(call, result)
+    elif obj == "axios":
+        _axios_member(call, prop, result)
+    elif obj in _JQUERY:
+        _jquery(call, prop, result)
 
 
 def _fetch(call: Node, result: Extraction) -> None:
@@ -193,13 +235,16 @@ def _fetch(call: Node, result: Extraction) -> None:
     if len(args) >= 2 and args[1].type == "object":
         options = _object_pairs(args[1])
         method = (_string_value(options.get("method")) or "GET").upper()
-        params += _body_params(options.get("body"))
+        params += _body_params_from_value(options.get("body"))
     result.endpoints.append(_endpoint("fetch", method, url, params, call))
 
 
 def _xhr_open(call: Node, result: Extraction) -> None:
     args = _args(call)
     method = _string_value(args[0]) if args else None
+    # NOTE: XHR is inferred from the `.open(<method>, <url>)` shape, not from
+    # tracking that the receiver is an XMLHttpRequest (no data-flow). This can
+    # rarely false-positive on another `.open(<http-method-string>, <str>)` API.
     if method is None or method.upper() not in HTTP_METHODS:
         return  # a `.open(...)` on something that isn't an XHR
     url = _string_value(args[1]) if len(args) >= 2 else None
@@ -236,7 +281,17 @@ def _axios_member(call: Node, prop: str, result: Extraction) -> None:
     if url is None:
         result.unattributed += 1
         return
-    result.endpoints.append(_endpoint("axios", prop, url, _query_params(url), call))
+    params = _query_params(url)
+    if prop.upper() in ("POST", "PUT", "PATCH"):
+        # axios.post(url, data[, config])
+        if len(args) >= 2:
+            params += _body_params_from_value(args[1])
+        if len(args) >= 3:
+            params += _config_query_params(args[2])
+    elif len(args) >= 2:
+        # axios.get/delete/head(url[, config]) — query params live in the config
+        params += _config_query_params(args[1])
+    result.endpoints.append(_endpoint("axios", prop, url, params, call))
 
 
 def _axios_from_config(config: Node, call: Node, result: Extraction) -> None:
@@ -246,7 +301,11 @@ def _axios_from_config(config: Node, call: Node, result: Extraction) -> None:
         result.unattributed += 1
         return
     method = (_string_value(pairs.get("method")) or "GET").upper()
-    params = _query_params(url) + _body_params(pairs.get("data")) + _body_params(pairs.get("params"))
+    params = (
+        _query_params(url)
+        + _config_query_params(config)  # axios `params` -> query, not body
+        + _body_params_from_value(pairs.get("data"))
+    )
     result.endpoints.append(_endpoint("axios", method, url, params, call))
 
 
@@ -260,15 +319,23 @@ def _jquery(call: Node, prop: str, result: Extraction) -> None:
             result.unattributed += 1
             return
         method = (_string_value(pairs.get("type")) or _string_value(pairs.get("method")) or "GET").upper()
-        params = _query_params(url) + _body_params(pairs.get("data"))
+        # jQuery sends `data` as the query string for GET/HEAD, else as the body.
+        location = "query" if method in ("GET", "HEAD") else "body"
+        params = _query_params(url) + [
+            RawParam(name, location) for name in _object_pairs(pairs.get("data"))
+        ]
         result.endpoints.append(_endpoint("jquery", method, url, params, call))
     elif prop in _JQUERY_METHODS:
         url = _string_value(args[0]) if args else None
         if url is None:
             result.unattributed += 1
             return
+        params = _query_params(url)
+        if len(args) >= 2 and args[1].type == "object":
+            location = "body" if prop == "post" else "query"  # $.get sends query
+            params += [RawParam(name, location) for name in _object_pairs(args[1])]
         result.endpoints.append(
-            _endpoint("jquery", _JQUERY_METHODS[prop], url, _query_params(url), call)
+            _endpoint("jquery", _JQUERY_METHODS[prop], url, params, call)
         )
 
 

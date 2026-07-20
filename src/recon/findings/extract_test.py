@@ -106,3 +106,39 @@ def test_mixed_bundle_finds_all_sinks():
 def test_line_number_is_one_based():
     ep = _only('\n\nfetch("/a");')
     assert ep.line == 3
+
+
+# --- regressions from the code review ----------------------------------------
+
+def test_axios_params_config_is_query_not_body():  # review HIGH-1
+    ep = _only('axios({url:"/s", method:"get", params:{a:1}, data:{b:2}})')
+    locations = {(p.name, p.location) for p in ep.params}
+    assert ("a", "query") in locations
+    assert ("b", "body") in locations
+    assert ("a", "body") not in locations
+
+
+def test_computed_member_sinks_are_detected():  # review HIGH-2 (C2 honesty)
+    assert _only('axios["get"]("/x")').url == "/x"
+    assert _only('window["fetch"]("/y")').kind == "fetch"
+    xhr = _only('var r=new XMLHttpRequest(); r["open"]("POST","/z");')
+    assert (xhr.kind, xhr.method, xhr.url) == ("xhr", "POST", "/z")
+
+
+def test_axios_shorthand_mines_body_and_query_params():  # review MEDIUM-2
+    post = _only('axios.post("/x", {name:1, email:2})')
+    assert {(p.name, p.location) for p in post.params} == {("name", "body"), ("email", "body")}
+    get = _only('axios.get("/s", {params:{page:1}})')
+    assert ("page", "query") in {(p.name, p.location) for p in get.params}
+
+
+def test_jquery_shorthand_mines_data():  # review MEDIUM-2
+    post = _only('$.post("/x", {name:1})')
+    assert ("name", "body") in {(p.name, p.location) for p in post.params}
+    get = _only('$.get("/s", {q:1})')
+    assert ("q", "query") in {(p.name, p.location) for p in get.params}
+
+
+def test_json_stringify_body_is_mined():  # review MEDIUM-3
+    ep = _only('fetch("/x", {method:"POST", body:JSON.stringify({a:1, b:2})})')
+    assert {(p.name, p.location) for p in ep.params} == {("a", "body"), ("b", "body")}
