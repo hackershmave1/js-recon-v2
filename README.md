@@ -9,7 +9,8 @@ redesign/Developer Requirements.dc.html` (the REQ-* IDs).
 
 A recon run exists as a persisted state machine, all heavy work is enqueued off
 the request thread, and status streams back over SSE with a polling fallback.
-Stage work is still stubbed; the real engines arrive in slice 2.
+Stage work was stubbed in slice 1; the analyze stage now runs the real
+in-process extractor (see slice 2 below).
 
 ```
 client ──POST /runs──▶ API (accept+enqueue, <200ms) ──▶ Redis Streams ──▶ worker
@@ -32,6 +33,20 @@ client ──POST /runs──▶ API (accept+enqueue, <200ms) ──▶ Redis St
 - Object-storage key convention; no blob bytes in a row (REQ-D2)
 - Engagement scope lock + authorization acknowledgment before a run (REQ-P3)
 - Structured logging with `run_id` correlation (REQ-S3)
+
+## Slice 2 — one JS file → findings (in progress)
+
+The analyze stage is real: it reads the run's JS input blob, statically traces
+network calls (`fetch`/XHR/`axios`/jQuery/WebSocket) with tree-sitter, and writes
+content-addressed findings through a transactional outbox.
+
+- Finding identity `finding_hash = sha256(type + normalized value + source path)` — spec in `docs/req-d3-finding-hash-normalization.md` (REQ-D3)
+- Exactly-once findings via an outbox (REQ-A3); a normalization merge surfaces as occurrences, never a silent drop (REQ-C2)
+- `finding`/`finding_occurrence` tables under row-level security (migration `0002`)
+- Drive it: `coordinator.start_run_with_input(...)` stores the JS blob and enqueues the run
+
+Still to come this slice: out-of-process engines (Kingfisher secrets, Sourcemapper
+source maps), the egress sandbox + real fetch stage, and an HTTP upload path.
 
 ## Run in Docker (full stack)
 
