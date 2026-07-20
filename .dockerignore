@@ -1,0 +1,15 @@
+.venv
+venv
+.git
+.gitignore
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+htmlcov
+.coverage
+.env
+dist
+build
+*.egg-info
+Javascript recon app redesign
