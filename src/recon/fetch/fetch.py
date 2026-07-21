@@ -36,7 +36,7 @@ from recon import storage
 from recon.config import get_settings
 from recon.db.base import tenant_session
 from recon.db.models import Run
-from recon.fetch import egress
+from recon.fetch import egress, politeness
 from recon.observability import get_logger
 from recon.queue import retry
 from recon.sessions import service as sessions_service
@@ -123,7 +123,9 @@ def fetch_url(
                         # 3xx) are deterministic and fail fast.
                         message = f"target returned HTTP {response.status_code}"
                         if retry.http_retryable(response.status_code):
-                            raise retry.RetryableError(message)
+                            # Honor the target's own backoff ask (REQ-Q3) when present.
+                            retry_after = _parse_retry_after(response.headers.get("retry-after"))
+                            raise retry.RetryableError(message, retry_after=retry_after)
                         raise retry.FatalError(message)
                     body = bytearray()
                     for chunk in response.iter_bytes():
@@ -157,6 +159,18 @@ def fetch_run(redis: Redis, *, tenant_id: str, run_id: str) -> None:
         raise egress.EgressBlocked("session is not authorized for egress")
 
     settings = get_settings()
+    # Politeness gate (REQ-Q3): never hammer one target, and stay under a global
+    # fetch budget. A throttle defers the whole fetch via retry backoff rather than
+    # blocking the worker (which does not heartbeat mid-fetch). A hostless/malformed
+    # target skips the gate (no shared empty-host bucket) — fetch_url's egress
+    # validation rejects it deterministically a moment later.
+    host = (urlsplit(target).hostname or "").lower()
+    if host:
+        wait = politeness.check(redis, host, settings=settings)
+        if wait > 0:
+            raise retry.RetryableError(
+                f"fetch throttled for host {host!r}; retry in {wait:.1f}s", retry_after=wait
+            )
     try:
         content = fetch_url(
             target,
@@ -171,3 +185,18 @@ def fetch_run(redis: Redis, *, tenant_id: str, run_id: str) -> None:
     with tenant_session(tenant_id) as session:
         session.execute(update(Run).where(Run.id == run_id).values(input_ref=key))
     log.info("fetch.done", run_id=run_id, bytes=len(content))
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse a ``Retry-After`` header's delta-seconds form (e.g. ``"30"``).
+
+    The HTTP-date form is intentionally not handled — it is rare for 429s and a
+    stale clock could yield a negative/huge wait; absent a parse we fall back to
+    the normal exponential backoff, which is safe."""
+    if not value:
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        return None
+    return seconds if seconds > 0 else None

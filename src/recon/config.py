@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     fetch_timeout_seconds: float = 20.0
     max_fetch_bytes: int = 10 * 1024 * 1024  # 10 MiB — matches the upload cap
 
+    # Fetch politeness (REQ-Q3): a single target is never hammered. A run may hit
+    # the same host at most once per interval (a distributed, cross-run min-gap),
+    # and total outbound fetch rate is capped by a global budget. A throttled fetch
+    # is rescheduled with backoff, so this bounds pressure without dropping work.
+    fetch_min_host_interval_seconds: float = 1.0
+    fetch_global_max_per_second: int = 10
+
     # Object storage — blobs are referenced by key, never stored in a row (REQ-D2).
     s3_endpoint_url: str | None = None
     s3_access_key: str | None = None

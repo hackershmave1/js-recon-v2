@@ -166,6 +166,11 @@ def _handle_failure(
             base_delay=settings.retry_base_delay_seconds,
             max_delay=settings.retry_max_delay_seconds,
         )
+        # A fetch politeness throttle / target Retry-After asks for a minimum wait
+        # (REQ-Q3); never undercut it with a shorter backoff sample.
+        retry_after = getattr(exc, "retry_after", None)
+        if retry_after:
+            delay = max(delay, float(retry_after))
         message["attempts"] = attempt_no
         progress.finish_job(tenant_id, job_id, JobState.FAILED, attempts=attempt_no)
         streams.reschedule(redis, queue, message, delay)

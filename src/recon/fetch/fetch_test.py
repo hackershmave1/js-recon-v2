@@ -121,6 +121,28 @@ def test_fetch_4xx_is_fatal(monkeypatch):
         )
 
 
+def test_fetch_429_is_retryable_and_honors_retry_after(monkeypatch):
+    # A 429 is retryable (REQ-Q3 backoff); its Retry-After delta-seconds surfaces
+    # on the error so the worker won't retry sooner than the target asked.
+    _stub_public_dns(monkeypatch)
+    with pytest.raises(retry.RetryableError, match="HTTP 429") as excinfo:
+        fetch.fetch_url(
+            "https://acme.io/a", _SCOPE, timeout_s=5, max_bytes=1000,
+            transport=_mock(lambda r: httpx.Response(429, headers={"retry-after": "12"})),
+        )
+    assert excinfo.value.retry_after == 12.0
+
+
+def test_fetch_429_without_retry_after_has_none(monkeypatch):
+    _stub_public_dns(monkeypatch)
+    with pytest.raises(retry.RetryableError) as excinfo:
+        fetch.fetch_url(
+            "https://acme.io/a", _SCOPE, timeout_s=5, max_bytes=1000,
+            transport=_mock(lambda r: httpx.Response(429)),
+        )
+    assert excinfo.value.retry_after is None
+
+
 def test_pin_dns_builds_sockaddr_and_fails_closed():
     # Directly exercise the pin's resolver: the MockTransport tests never trigger a
     # real getaddrinfo, so cover the security-critical sockaddr build + fail-closed.
@@ -167,6 +189,28 @@ def test_fetch_run_stores_input_and_is_idempotent(redis, authorized_session, mon
 
     monkeypatch.setattr(fetch, "fetch_url", _must_not_fetch)
     fetch.fetch_run(redis, tenant_id=tenant, run_id=view.id)  # no-op, no exception
+
+
+@pytest.mark.integration
+def test_fetch_run_throttled_defers_without_fetching(redis, authorized_session, monkeypatch):
+    # When politeness throttles the host (REQ-Q3), fetch_run raises a RetryableError
+    # carrying the wait and never performs the fetch — the worker reschedules it.
+    from recon.fetch import politeness
+    from recon.runs import service
+
+    tenant, session_id = authorized_session
+    view = service.create_run(
+        redis, tenant_id=tenant, session_id=session_id, target="https://acme.io/app.js"
+    )
+    monkeypatch.setattr(politeness, "check", lambda *args, **kwargs: 3.0)
+
+    def _must_not_fetch(*args, **kwargs):
+        raise AssertionError("throttled fetch_run must not perform a fetch")
+
+    monkeypatch.setattr(fetch, "fetch_url", _must_not_fetch)
+    with pytest.raises(retry.RetryableError) as excinfo:
+        fetch.fetch_run(redis, tenant_id=tenant, run_id=view.id)
+    assert excinfo.value.retry_after == 3.0
 
 
 @pytest.mark.integration

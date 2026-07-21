@@ -11,7 +11,16 @@ import random
 
 
 class RetryableError(Exception):
-    """A transient failure — worth another attempt."""
+    """A transient failure — worth another attempt.
+
+    ``retry_after`` (seconds) lets the raiser request a minimum backoff — a fetch
+    politeness throttle (REQ-Q3) or a target's ``Retry-After`` header. The worker
+    takes ``max(computed backoff, retry_after)`` so an explicit ask is never
+    undercut, while the attempt cap still bounds total retries."""
+
+    def __init__(self, *args: object, retry_after: float | None = None) -> None:
+        super().__init__(*args)
+        self.retry_after = retry_after
 
 
 class FatalError(Exception):

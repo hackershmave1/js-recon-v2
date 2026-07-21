@@ -55,3 +55,10 @@ def test_should_retry_respects_attempt_cap():
     assert retry.should_retry(1, 3, retry.RetryableError()) is True
     assert retry.should_retry(3, 3, retry.RetryableError()) is False
     assert retry.should_retry(1, 3, retry.FatalError()) is False
+
+
+def test_retryable_error_carries_optional_retry_after():
+    assert retry.RetryableError("x").retry_after is None
+    assert retry.RetryableError("x", retry_after=5.0).retry_after == 5.0
+    # Still retryable regardless of the hint.
+    assert retry.is_retryable(retry.RetryableError("x", retry_after=5.0)) is True
