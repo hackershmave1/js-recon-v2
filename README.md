@@ -49,13 +49,21 @@ through a transactional outbox.
   Identity is `provider:sha256(token)` — the raw match lives only on the
   occurrence, never in the hash. A missing binary degrades coverage honestly; a
   genuine engine failure fails/retries the stage.
-- Drive it over HTTP: `POST /runs/upload` (multipart `file=@bundle.js` + `session_id`)
-  stores the JS blob and enqueues a run; `GET /runs/{run_id}/findings` reads back the
-  findings (each with its occurrences). Service-level `coordinator.start_run_with_input(...)`
-  does the same without HTTP.
+- Real per-source paths via Sourcemapper (out-of-process, built from source in a
+  multi-stage image): with a source map — uploaded (`map=@bundle.js.map`) or an
+  inline `data:` map — the original sources are recovered and analyzed, so
+  findings are attributed to real paths (e.g. `app/src/api.js`) instead of the
+  `input.js` placeholder. No map → the bundle is analyzed as before; the coverage
+  event records how the map was handled so map-scoped coverage isn't mistaken for
+  full-bundle coverage (REQ-D5).
+- Drive it over HTTP: `POST /runs/upload` (multipart `file=@bundle.js` +
+  `session_id`, optional `map=@bundle.js.map`) stores the blob(s) and enqueues a
+  run; `GET /runs/{run_id}/findings` reads back the findings (each with its
+  occurrences). Service-level `coordinator.start_run_with_input(...)` does the same
+  without HTTP.
 
-Still to come this slice: Sourcemapper (source maps → real per-source paths) and
-the egress sandbox + real fetch stage.
+Still to come this slice: the egress sandbox + real fetch stage (so runs can pull
+assets from the target instead of only accepting uploads).
 
 ## Run in Docker (full stack)
 
