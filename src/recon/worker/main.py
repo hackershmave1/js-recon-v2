@@ -15,6 +15,7 @@ from redis import Redis
 
 from recon.config import get_settings
 from recon.domain import JobState, QueueName, RunStage, RunState
+from recon.fetch import fetch
 from recon.findings import analyze
 from recon.observability import bind_run, get_logger
 from recon.progress import heartbeat as progress
@@ -130,8 +131,11 @@ def process_message(redis: Redis, queue: QueueName, msg_id: str, message: dict) 
                     done=step,
                     total=STUB_STEPS,
                 )
-            # Real work: the analyze stage extracts findings from the JS input and
-            # writes them through the outbox. A failure here routes to retry/DLQ.
+            # Real work. The fetch stage pulls the run's target asset through the
+            # egress guard into the input blob; analyze extracts findings from it.
+            # A failure in either routes to retry/DLQ.
+            if stage == RunStage.FETCHING:
+                fetch.fetch_run(redis, tenant_id=tenant_id, run_id=run_id)
             if stage == RunStage.ANALYZING:
                 analyze.analyze_run(redis, tenant_id=tenant_id, run_id=run_id)
         except Exception as exc:  # noqa: BLE001 - failure routing is intentional

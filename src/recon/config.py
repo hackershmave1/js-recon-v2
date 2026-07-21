@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     engine_timeout_seconds: float = 120.0
     engine_max_output_bytes: int = 32 * 1024 * 1024  # 32 MiB
 
+    # Fetch stage: pulling a target asset through the egress guard (REQ-P2).
+    # NOTE: keep fetch_timeout_seconds < heartbeat_stall_threshold_seconds — the
+    # blocking fetch does not heartbeat, so a longer fetch than the stall window
+    # would let a peer worker reclaim the job and fetch twice.
+    fetch_timeout_seconds: float = 20.0
+    max_fetch_bytes: int = 10 * 1024 * 1024  # 10 MiB — matches the upload cap
+
     # Object storage — blobs are referenced by key, never stored in a row (REQ-D2).
     s3_endpoint_url: str | None = None
     s3_access_key: str | None = None
