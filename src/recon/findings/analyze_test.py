@@ -87,7 +87,7 @@ def test_coverage_event_counts_unattributed(redis, authorized_session):
     assert coverage["attributed"] == 4
 
 
-def test_secret_in_js_produces_secret_finding(redis, authorized_session):
+def test_secret_in_js_produces_secret_finding(redis, authorized_session, engines_required):
     import pytest
 
     from recon.findings import kingfisher
@@ -97,6 +97,8 @@ def test_secret_in_js_produces_secret_finding(redis, authorized_session):
     token = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEF0123"
     js = f'const apiKey = "{token}";\nfetch("/api/ping");\n'
     if kingfisher.scan(js.encode("utf-8")).status == "unavailable":
+        if engines_required:
+            pytest.fail("kingfisher binary required (RECON_REQUIRE_ENGINES) but unavailable")
         pytest.skip("kingfisher binary not available")
 
     view = coordinator.start_run_with_input(

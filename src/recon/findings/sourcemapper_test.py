@@ -11,6 +11,8 @@ import json
 import os
 import urllib.parse
 
+import pytest
+
 from recon.findings import engines, sourcemapper
 
 _MAP = {"version": 3, "sources": ["app/src/api.js"], "mappings": "AAAA"}
@@ -105,3 +107,40 @@ def test_recover_sources_total_bytes_capped(monkeypatch):
     # cap smaller than the recovered file -> it is dropped rather than read whole.
     result = sourcemapper.recover_sources(b"{}", bin_path="stub", max_recovered_bytes=10)
     assert result.files == []
+
+
+# A golden source map with sourcesContent — the real binary reconstructs the two
+# declared sources verbatim. Kept as the contract fixture (REQ-T4): regenerate the
+# expectations from real output if the pinned Sourcemapper commit is bumped.
+_GOLDEN_MAP = json.dumps(
+    {
+        "version": 3,
+        "file": "bundle.js",
+        "sources": ["src/app.js", "src/util.js"],
+        "sourcesContent": ['fetch("/api/widgets/7");\n', "export const util = 1;\n"],
+        "names": [],
+        "mappings": "",
+    }
+).encode("utf-8")
+
+
+@pytest.mark.integration
+def test_recover_sources_real_binary_matches_golden_map(engines_required):
+    # Contract test against the REAL sourcemapper binary (Docker/CI only — it has
+    # no host build). Marked integration so it runs in the container job (where the
+    # Go-built binary lives), not the no-infra host job. The golden map must
+    # recover its two declared sources with
+    # exact content; an upstream output-schema drift (a changed tree layout or a
+    # hard-fail on this input) trips this, so a silent regression can't ship
+    # (REQ-T4). Skips on a host without the Go-built binary, fails in CI.
+    try:
+        recovered = sourcemapper.recover_sources(_GOLDEN_MAP, origin="uploaded")
+    except engines.EngineError as exc:  # pragma: no cover - only on drift
+        pytest.fail(f"sourcemapper rejected the golden map (output-schema drift?): {exc}")
+    if recovered.status == "unavailable":
+        if engines_required:
+            pytest.fail("sourcemapper binary required (RECON_REQUIRE_ENGINES) but unavailable")
+        pytest.skip("sourcemapper binary not available (no host build)")
+    by_path = {f.path: f.content for f in recovered.files}
+    assert set(by_path) == {"src/app.js", "src/util.js"}
+    assert by_path["src/app.js"] == b'fetch("/api/widgets/7");\n'

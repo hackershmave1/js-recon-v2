@@ -101,14 +101,19 @@ def test_scan_reraises_genuine_engine_error():
         kingfisher.scan(b'const x = 1;', bin_path=sys.executable)
 
 
-def test_scan_real_binary_detects_planted_secret():
-    # Built from split literals so no secret-shaped token is committed; kingfisher
-    # reassembles and detects it at runtime.
+def test_scan_real_binary_detects_planted_secret(engines_required):
+    # Contract test against the REAL Kingfisher binary (REQ-T4): a planted Stripe
+    # key must still be detected. If an upstream output rename dropped rule.id or
+    # finding.snippet, parse_findings would yield nothing and this fails — that is
+    # the drift gate. Built from split literals so no secret-shaped token is
+    # committed; kingfisher reassembles and detects it at runtime.
     token = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEF0123"
     source = f'const stripeKey = "{token}";\n'.encode("utf-8")
 
     result = kingfisher.scan(source)
     if result.status == "unavailable":  # binary not installed in this environment
+        if engines_required:
+            pytest.fail("kingfisher binary required (RECON_REQUIRE_ENGINES) but unavailable")
         pytest.skip("kingfisher binary not available")
     assert result.status == "ok"
     assert any("stripe" in secret.rule_id for secret in result.secrets)
