@@ -107,3 +107,79 @@ def test_secret_in_js_produces_secret_finding(redis, authorized_session):
     findings = _findings(tenant, view.id)
     secret_values = {f.value for f in findings if f.type == "secret"}
     assert any(v.startswith("stripe:") for v in secret_values)
+
+
+def test_recovered_sources_get_real_paths(redis, authorized_session, monkeypatch):
+    # With a source map, endpoints come from the RECOVERED source (real path),
+    # not the minified bundle. recover_sources is faked so no Go binary is needed;
+    # the analyze stage is exercised directly. The run is created WITHOUT enqueuing
+    # a stage, so the test leaves no stray message in the shared-Redis queues (the
+    # full worker pipeline is covered by other tests).
+    from sqlalchemy import update
+
+    from recon import storage
+    from recon.db.base import tenant_session
+    from recon.findings import analyze, sourcemapper
+    from recon.runs import service
+
+    tenant, session_id = authorized_session
+
+    def fake_recover(map_bytes, **_kwargs):
+        return sourcemapper.RecoveredSources(
+            files=[sourcemapper.RecoveredFile("app/src/api.js", b'fetch("/api/widgets/7");')],
+            status="ok",
+            origin="uploaded",
+        )
+
+    monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
+
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
+    input_key = storage.put_blob(tenant, view.id, "input", b'fetch("/bundle/only");')
+    map_key = storage.put_blob(tenant, view.id, "source_map", b'{"version":3}')
+    with tenant_session(tenant) as session:
+        session.execute(
+            update(models.Run)
+            .where(models.Run.id == view.id)
+            .values(input_ref=input_key, source_map_ref=map_key)
+        )
+
+    analyze.analyze_run(redis, tenant_id=tenant, run_id=view.id)
+
+    endpoints = [f for f in _findings(tenant, view.id) if f.type == "endpoint"]
+    # Attributed to the real source path, reflecting the recovered source's URL —
+    # the bundle's own /bundle/only endpoint is not analyzed when a map is present.
+    assert [e.path for e in endpoints] == ["app/src/api.js"]
+    assert endpoints[0].value == "GET /api/widgets/{id}"
+
+
+def test_malformed_inline_map_falls_back_to_bundle(redis, authorized_session, monkeypatch):
+    # A malformed inline map (attacker-influenced — it rides in the analyzed JS)
+    # must NOT fail the run; analyze falls back to bundle analysis and records the
+    # honest "inline-error" status.
+    from sqlalchemy import update
+
+    from recon import storage
+    from recon.db.base import tenant_session
+    from recon.findings import analyze, engines, sourcemapper
+    from recon.runs import service
+
+    tenant, session_id = authorized_session
+
+    def boom(map_bytes, **_kwargs):
+        raise engines.EngineError("unparseable source map")
+
+    monkeypatch.setattr(sourcemapper, "recover_sources", boom)
+
+    # Inline map is base64 of {"version":3} — passes the JSON sanity check, so it
+    # reaches recover_sources (which is stubbed to fail as the real tool would).
+    js = 'fetch("/api/health");\n//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ=='
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
+    key = storage.put_blob(tenant, view.id, "input", js.encode("utf-8"))
+    with tenant_session(tenant) as session:
+        session.execute(update(models.Run).where(models.Run.id == view.id).values(input_ref=key))
+
+    coverage = analyze.analyze_run(redis, tenant_id=tenant, run_id=view.id)  # must not raise
+
+    assert coverage.source_map == "inline-error"
+    endpoint_values = {f.value for f in _findings(tenant, view.id) if f.type == "endpoint"}
+    assert "GET /api/health" in endpoint_values  # bundle analyzed as the fallback

@@ -18,15 +18,15 @@ from recon.db.base import tenant_session
 from recon.db.models import Run
 from recon.domain import FindingType
 from recon.events.log import publish, record_event
-from recon.findings import kingfisher, normalize, store
+from recon.findings import engines, kingfisher, normalize, sourcemapper, store
 from recon.findings.extract import RawEndpoint, extract
 from recon.findings.kingfisher import RawSecret
 from recon.observability import get_logger
 
 log = get_logger("recon.findings.analyze")
 
-# Single-file MVP: the input is one JS blob with no source map, so every finding
-# shares one logical source path. Real per-source paths arrive with Sourcemapper.
+# Fallback source path when no source map recovers the real per-file paths — the
+# whole bundle is one logical source. Sourcemapper replaces this with real paths.
 _SOURCE_NAME = "input.js"
 
 
@@ -40,6 +40,11 @@ class Coverage:
     # reported as "no secrets". Reachable values are "ok" and "unavailable" — a
     # genuine engine error/timeout raises before a Coverage is ever returned.
     secrets_engine: str = "ok"
+    # Source-map honesty: how many original files were recovered, and how the map
+    # was handled (none | uploaded | inline | unavailable | inline-error). REQ-D5
+    # must NOT treat map-scoped endpoint coverage as full-bundle coverage.
+    sources_recovered: int = 0
+    source_map: str = "none"
 
 
 def analyze_run(redis: Redis, *, tenant_id: str, run_id: str) -> Coverage:
@@ -47,62 +52,118 @@ def analyze_run(redis: Redis, *, tenant_id: str, run_id: str) -> Coverage:
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
         input_ref = run.input_ref if run is not None else None
+        source_map_ref = run.source_map_ref if run is not None else None
     if not input_ref:
         return Coverage(0, 0, 0)
 
     raw = storage.get_blob(input_ref)
     source = raw.decode("utf-8", "replace")
-    extraction = extract(source)
     # Secret scanning runs out-of-process, BEFORE the staging transaction, so a
     # multi-second subprocess never holds a DB connection open. A missing binary
     # degrades coverage (status recorded on the event); a genuine engine failure
     # raises here and fails/retries the stage rather than under-reporting secrets.
     scan = kingfisher.scan(raw)
-    path = normalize.normalize_source_path(_SOURCE_NAME)
 
+    # Prefer recovered original sources (real per-source paths) when a source map
+    # is available; otherwise analyze the bundle under the input.js placeholder.
+    # We can't union the two — the source path is part of finding identity, so the
+    # same endpoint hashes differently per path (that is why coverage records the
+    # map status: map-scoped coverage is NOT full-bundle coverage, REQ-D5).
+    units, source_map_status, sources_recovered = _analysis_units(source_map_ref, source)
+
+    attributed = 0
+    unattributed = 0
     written = 0
     with tenant_session(tenant_id) as session:  # one REQ-A3 staging transaction
-        for endpoint in extraction.endpoints:
-            written += _record_endpoint(session, tenant_id, run_id, path, endpoint)
+        for source_name, unit_text in units:
+            extraction = extract(unit_text)
+            attributed += len(extraction.endpoints)
+            unattributed += extraction.unattributed
+            path = normalize.normalize_source_path(source_name)
+            for endpoint in extraction.endpoints:
+                written += _record_endpoint(session, tenant_id, run_id, path, source_name, endpoint)
+        # Secrets are scanned on the original bundle this slice (input.js path).
+        # NOTE (follow-up): scanning recovered sources for secrets (real per-source
+        # paths for secrets too) is deferred; endpoint/param paths are the D3 win here.
+        secret_path = normalize.normalize_source_path(_SOURCE_NAME)
         for secret in scan.secrets:
-            written += _record_secret(session, tenant_id, run_id, path, source, secret)
+            written += _record_secret(session, tenant_id, run_id, secret_path, source, secret)
         coverage_event = record_event(
             session,
             tenant_id=tenant_id,
             run_id=run_id,
             event_type="analyze.coverage",
             payload={
-                "attributed": len(extraction.endpoints),
-                "unattributed": extraction.unattributed,
+                "attributed": attributed,
+                "unattributed": unattributed,
                 "secrets": len(scan.secrets),
                 "secrets_engine": scan.status,
+                "sources_recovered": sources_recovered,
+                "source_map": source_map_status,
             },
         )
     publish(redis, coverage_event)
     log.info(
         "analyze.done",
         run_id=run_id,
-        attributed=len(extraction.endpoints),
-        unattributed=extraction.unattributed,
+        attributed=attributed,
+        unattributed=unattributed,
         secrets=len(scan.secrets),
         secrets_engine=scan.status,
+        sources_recovered=sources_recovered,
+        source_map=source_map_status,
         findings=written,
     )
     return Coverage(
-        len(extraction.endpoints),
-        extraction.unattributed,
-        written,
-        secrets=len(scan.secrets),
-        secrets_engine=scan.status,
+        attributed, unattributed, written,
+        secrets=len(scan.secrets), secrets_engine=scan.status,
+        sources_recovered=sources_recovered, source_map=source_map_status,
     )
 
 
-def _record_endpoint(session, tenant_id: str, run_id: str, path: str, ep: RawEndpoint) -> int:
+def _analysis_units(source_map_ref: str | None, source: str) -> tuple[list[tuple[str, str]], str, int]:
+    """Decide what to analyze: recovered original sources (real paths) if a source
+    map recovers any, else the bundle under ``input.js``. Returns the (name, text)
+    units, the source-map status, and the count of recovered files."""
+    map_bytes, origin = _resolve_source_map(source_map_ref, source)
+    if not map_bytes:
+        return [(_SOURCE_NAME, source)], "none", 0
+
+    try:
+        recovered = sourcemapper.recover_sources(map_bytes, origin=origin)
+    except engines.EngineError:
+        # An inline map is opportunistic and rides in the (untrusted) analyzed JS,
+        # so a malformed one must NOT fail the run — fall back to bundle analysis.
+        # An uploaded map is user-supplied and explicit, so a failure surfaces.
+        if origin == "inline":
+            return [(_SOURCE_NAME, source)], "inline-error", 0
+        raise
+    if recovered.status != "ok":  # binary unavailable -> fall back to the bundle
+        return [(_SOURCE_NAME, source)], recovered.status, 0
+    if not recovered.files:  # map present but nothing recovered (e.g. no sourcesContent)
+        return [(_SOURCE_NAME, source)], origin, 0
+
+    units = [(f.path, f.content.decode("utf-8", "replace")) for f in recovered.files]
+    return units, origin, len(recovered.files)
+
+
+def _resolve_source_map(source_map_ref: str | None, source: str) -> tuple[bytes | None, str]:
+    if source_map_ref:
+        return storage.get_blob(source_map_ref), "uploaded"
+    inline = sourcemapper.extract_inline_map(source)
+    if inline:
+        return inline, "inline"
+    return None, "none"
+
+
+def _record_endpoint(
+    session, tenant_id: str, run_id: str, path: str, source_path: str, ep: RawEndpoint
+) -> int:
     normalized = normalize.normalize_endpoint(ep.method, ep.url)
     written = _write(
         session, tenant_id, run_id, FindingType.ENDPOINT, normalized.value, path,
         occurrence=store.Occurrence(
-            host=normalized.host, raw_url=ep.url, source_path=_SOURCE_NAME,
+            host=normalized.host, raw_url=ep.url, source_path=source_path,
             line=ep.line, col=ep.col, offset_start=ep.start_byte, offset_end=ep.end_byte,
             evidence=ep.snippet, engine="vespasian",
         ),
@@ -114,7 +175,7 @@ def _record_endpoint(session, tenant_id: str, run_id: str, path: str, ep: RawEnd
         written += _write(
             session, tenant_id, run_id, FindingType.PARAM, value, path,
             occurrence=store.Occurrence(
-                host=normalized.host, raw_url=ep.url, source_path=_SOURCE_NAME,
+                host=normalized.host, raw_url=ep.url, source_path=source_path,
                 line=ep.line, col=ep.col, offset_start=ep.start_byte, offset_end=ep.end_byte,
                 engine="vespasian",
             ),

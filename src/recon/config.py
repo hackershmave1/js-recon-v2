@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     # or absolute path (the pinned wheel puts `kingfisher` on PATH). The timeout
     # and output cap bound a misbehaving engine (P2 sandbox, MVP level).
     kingfisher_bin: str = "kingfisher"
+    sourcemapper_bin: str = "sourcemapper"
     engine_timeout_seconds: float = 120.0
     engine_max_output_bytes: int = 32 * 1024 * 1024  # 32 MiB
 
