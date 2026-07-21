@@ -23,6 +23,10 @@ dependencies = [
     # In-process JS static analysis ("Vespasian") — AST parsing of target bundles.
     "tree-sitter>=0.23",
     "tree-sitter-javascript>=0.23",
+    # Out-of-process secret scanner (MongoDB Kingfisher). The wheel bundles the
+    # platform binary and exposes a `kingfisher` console script; pinned so the
+    # rule-id -> provider map (recon.findings.normalize) stays stable.
+    "kingfisher-bin==1.106.0",
 ]
 
 [project.optional-dependencies]

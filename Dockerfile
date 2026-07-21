@@ -18,6 +18,13 @@ RUN pip install .
 RUN useradd --create-home --uid 10001 app && chown -R app:app /app
 USER app
 
+# Pre-warm Kingfisher's compiled-rule cache into the image (as the `app` user, so
+# it lands in that user's home) — a fresh container's first secret scan then skips
+# the full ruleset compile, helping the <4min SLA. Best-effort: never fail build.
+RUN printf 'const kingfisherWarmup = 1;\n' > /tmp/warm.js \
+    && (kingfisher scan /tmp/warm.js --no-validate --no-update-check >/dev/null 2>&1 || true) \
+    && rm -f /tmp/warm.js
+
 EXPOSE 8000
 
 # Default to the API; worker/migrate override this in docker-compose.

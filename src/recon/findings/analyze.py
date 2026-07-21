@@ -18,8 +18,9 @@ from recon.db.base import tenant_session
 from recon.db.models import Run
 from recon.domain import FindingType
 from recon.events.log import publish, record_event
-from recon.findings import normalize, store
+from recon.findings import kingfisher, normalize, store
 from recon.findings.extract import RawEndpoint, extract
+from recon.findings.kingfisher import RawSecret
 from recon.observability import get_logger
 
 log = get_logger("recon.findings.analyze")
@@ -34,6 +35,11 @@ class Coverage:
     attributed: int
     unattributed: int
     findings_written: int
+    secrets: int = 0
+    # Honest engine status (REQ-C2/§5): a scanner that was absent must not be
+    # reported as "no secrets". Reachable values are "ok" and "unavailable" — a
+    # genuine engine error/timeout raises before a Coverage is ever returned.
+    secrets_engine: str = "ok"
 
 
 def analyze_run(redis: Redis, *, tenant_id: str, run_id: str) -> Coverage:
@@ -44,14 +50,22 @@ def analyze_run(redis: Redis, *, tenant_id: str, run_id: str) -> Coverage:
     if not input_ref:
         return Coverage(0, 0, 0)
 
-    source = storage.get_blob(input_ref).decode("utf-8", "replace")
+    raw = storage.get_blob(input_ref)
+    source = raw.decode("utf-8", "replace")
     extraction = extract(source)
+    # Secret scanning runs out-of-process, BEFORE the staging transaction, so a
+    # multi-second subprocess never holds a DB connection open. A missing binary
+    # degrades coverage (status recorded on the event); a genuine engine failure
+    # raises here and fails/retries the stage rather than under-reporting secrets.
+    scan = kingfisher.scan(raw)
     path = normalize.normalize_source_path(_SOURCE_NAME)
 
     written = 0
     with tenant_session(tenant_id) as session:  # one REQ-A3 staging transaction
         for endpoint in extraction.endpoints:
             written += _record_endpoint(session, tenant_id, run_id, path, endpoint)
+        for secret in scan.secrets:
+            written += _record_secret(session, tenant_id, run_id, path, source, secret)
         coverage_event = record_event(
             session,
             tenant_id=tenant_id,
@@ -60,6 +74,8 @@ def analyze_run(redis: Redis, *, tenant_id: str, run_id: str) -> Coverage:
             payload={
                 "attributed": len(extraction.endpoints),
                 "unattributed": extraction.unattributed,
+                "secrets": len(scan.secrets),
+                "secrets_engine": scan.status,
             },
         )
     publish(redis, coverage_event)
@@ -68,9 +84,17 @@ def analyze_run(redis: Redis, *, tenant_id: str, run_id: str) -> Coverage:
         run_id=run_id,
         attributed=len(extraction.endpoints),
         unattributed=extraction.unattributed,
+        secrets=len(scan.secrets),
+        secrets_engine=scan.status,
         findings=written,
     )
-    return Coverage(len(extraction.endpoints), extraction.unattributed, written)
+    return Coverage(
+        len(extraction.endpoints),
+        extraction.unattributed,
+        written,
+        secrets=len(scan.secrets),
+        secrets_engine=scan.status,
+    )
 
 
 def _record_endpoint(session, tenant_id: str, run_id: str, path: str, ep: RawEndpoint) -> int:
@@ -97,6 +121,27 @@ def _record_endpoint(session, tenant_id: str, run_id: str, path: str, ep: RawEnd
             attributes={"location": param.location, "name": param.name},
         )
     return written
+
+
+def _record_secret(session, tenant_id: str, run_id: str, path: str, source: str, secret: RawSecret) -> int:
+    # value = provider:sha256(token) — the raw token is never hashed in cleartext.
+    value = normalize.normalize_secret_value(secret.snippet, secret.rule_id)
+    offset = kingfisher.byte_offset(source, secret.line, secret.column_start)
+    offset_end = offset + len(secret.snippet.encode("utf-8")) if offset is not None else None
+    # NOTE (sensitivity): the raw matched secret is stored on the occurrence
+    # (evidence) so an authorized tester can validate/revoke it (REQ-D3 §4.2). It
+    # is tenant-scoped by RLS; redaction-at-rest + a retention TTL are a later
+    # slice (REQ-S4/D6). The finding identity itself carries only the hash.
+    return _write(
+        session, tenant_id, run_id, FindingType.SECRET, value, path,
+        occurrence=store.Occurrence(
+            source_path=_SOURCE_NAME, line=secret.line, col=secret.column_start,
+            offset_start=offset, offset_end=offset_end,
+            evidence=secret.snippet, engine="kingfisher", confidence=secret.confidence,
+            verified=True if secret.validation_status == "Active" else None,
+        ),
+        attributes={"rule": secret.rule_id, "name": secret.rule_name},
+    )
 
 
 def _write(session, tenant_id, run_id, finding_type, value, path, *, occurrence, attributes) -> int:

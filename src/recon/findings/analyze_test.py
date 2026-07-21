@@ -85,3 +85,25 @@ def test_coverage_event_counts_unattributed(redis, authorized_session):
         ).scalar_one()
     assert coverage["unattributed"] == 1
     assert coverage["attributed"] == 4
+
+
+def test_secret_in_js_produces_secret_finding(redis, authorized_session):
+    import pytest
+
+    from recon.findings import kingfisher
+
+    tenant, session_id = authorized_session
+    # Split literals so no secret-shaped token is committed; kingfisher reassembles.
+    token = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEF0123"
+    js = f'const apiKey = "{token}";\nfetch("/api/ping");\n'
+    if kingfisher.scan(js.encode("utf-8")).status == "unavailable":
+        pytest.skip("kingfisher binary not available")
+
+    view = coordinator.start_run_with_input(
+        redis, tenant_id=tenant, session_id=session_id, js_source=js
+    )
+    assert _drive(redis, view.id, tenant) == RunState.DONE.value
+
+    findings = _findings(tenant, view.id)
+    secret_values = {f.value for f in findings if f.type == "secret"}
+    assert any(v.startswith("stripe:") for v in secret_values)
