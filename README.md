@@ -44,6 +44,11 @@ through a transactional outbox.
 - Finding identity `finding_hash = sha256(type + normalized value + source path)` — spec in `docs/req-d3-finding-hash-normalization.md` (REQ-D3)
 - Exactly-once findings via an outbox (REQ-A3); a normalization merge surfaces as occurrences, never a silent drop (REQ-C2)
 - `finding`/`finding_occurrence` tables under row-level security (migration `0002`)
+- Honest coverage, surfaced (REQ-C2): `GET /runs/{run_id}/findings` returns a
+  `coverage` block — attributed vs. un-attributed call counts **per source file**,
+  plus the secret-engine and source-map status. Completeness is never claimed; the
+  per-file un-attributed count shows exactly which file has calls we couldn't map
+  (read from the durable event log, `null` until analyze runs).
 - Secret findings from MongoDB Kingfisher, run out-of-process via the engine
   harness (timeout + output cap + offline flags; OS-level sandbox deferred).
   Identity is `provider:sha256(token)` — the raw match lives only on the
@@ -63,16 +68,39 @@ through a transactional outbox.
   hostile target can't pivot the fetcher at internal/link-local/cloud-metadata
   addresses (SSRF). The connection is pinned to the validated IP (DNS-rebind
   defense) and redirects are re-validated per hop. OS/network-level egress
-  isolation is deferred.
+  isolation is deferred (tracked debt — see below).
+- Fetch politeness (REQ-Q3): before a fetch, a Redis limiter enforces a per-host
+  minimum interval (a single target is never hammered, across every worker) and a
+  global per-second budget; a throttled fetch is rescheduled with backoff rather
+  than blocking the worker, and a target's `Retry-After` on a 429 is honored.
+  robots.txt handling rides with the (deferred) crawl stage.
+- Engine contract tests in CI (REQ-T4): `.github/workflows/ci.yml` runs the
+  suite on every push; Kingfisher's and Sourcemapper's real-binary golden-output
+  tests run there so an upstream output-schema drift fails the build rather than
+  silently dropping findings (`RECON_REQUIRE_ENGINES=1` turns a missing engine
+  from a skip into a failure).
 - Drive it over HTTP: `POST /runs/upload` (multipart `file=@bundle.js` +
   `session_id`, optional `map=@bundle.js.map`) stores the blob(s) and enqueues a
   run; or `POST /runs` with a `target` URL to fetch. `GET /runs/{run_id}/findings`
   reads back the findings (each with its occurrences). Service-level
   `coordinator.start_run_with_input(...)` does the same without HTTP.
 
-Still to come: automated asset discovery (katana crawl of the DISCOVER stage) and
-OS/network-level egress isolation — plus the later slices (manual-probe handoff,
-grounded threat model, diff + continuous).
+Deferred out of slice 2 (confirmed scope, tracked as debt):
+
+- **Automated asset discovery** — katana crawl / gau archive enumeration of the
+  DISCOVER stage (REQ-C1, REQ-Q5). Slice 2 is "one JS file → findings" (upload or
+  a single in-scope URL); multi-asset crawl is the scale story. robots.txt handling
+  rides here too.
+- **OS/network-level egress isolation** (REQ-P2/T2, "blocked at the network
+  layer") — the app-level guard already defeats the SSRF threat for the traffic we
+  originate; netns/firewall/seccomp isolation is defense-in-depth hardening, most
+  valuable once net-emitting engines actually run. Tracked as a deferred MUST.
+- **Secret reveal** — ephemeral, just-in-time, audit-logged reveal (REQ-S2) is a
+  workspace interaction that lands with the slice-3 manual-probe handoff; secrets
+  are already stored as hash + location.
+
+Then the later slices: manual-probe handoff, grounded threat model, diff +
+continuous.
 
 ## Run in Docker (full stack)
 
