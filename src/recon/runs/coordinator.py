@@ -97,16 +97,20 @@ def start_run_with_input(
     tenant_id: str,
     session_id: str,
     js_source: str | bytes,
+    map_source: bytes | None = None,
     target: str | None = None,
 ) -> RunView:
-    """Create a run, store its JS input as a blob, point the run at it, then
-    enqueue the first stage. The analyze stage reads that blob (REQ-D2)."""
+    """Create a run, store its JS input (and optional source map) as blobs, point
+    the run at them, then enqueue the first stage. The analyze stage reads the JS
+    blob (REQ-D2) and, when present, recovers real source paths from the map."""
     content = js_source.encode("utf-8") if isinstance(js_source, str) else js_source
     view = service.create_run(redis, tenant_id=tenant_id, session_id=session_id, target=target)
-    key = storage.put_blob(tenant_id, view.id, "input", content)
-    # Set input_ref before enqueue so the analyze stage always sees it.
+    values: dict[str, str] = {"input_ref": storage.put_blob(tenant_id, view.id, "input", content)}
+    if map_source:
+        values["source_map_ref"] = storage.put_blob(tenant_id, view.id, "source_map", map_source)
+    # Set the refs before enqueue so the analyze stage always sees them.
     with tenant_session(tenant_id) as session:
-        session.execute(update(Run).where(Run.id == view.id).values(input_ref=key))
+        session.execute(update(Run).where(Run.id == view.id).values(**values))
     enqueue_stage(redis, tenant_id=tenant_id, run_id=view.id, stage=RunStage.DISCOVERING)
     return view
 

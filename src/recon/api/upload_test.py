@@ -143,3 +143,24 @@ def test_get_findings_unknown_run_is_404(client, tenant):
         "/runs/00000000-0000-0000-0000-000000000000/findings", headers=_headers(tenant)
     )
     assert resp.status_code == 404
+
+
+def test_upload_with_source_map_stores_and_references_it(client, authorized_session):
+    # The optional .map field is stored as a blob and referenced on the run so the
+    # analyze stage can recover real source paths (exercises migration 0003).
+    tenant, session_id = authorized_session
+    smap = b'{"version":3,"sources":["app/api.js"],"sourcesContent":["fetch(1)"],"mappings":""}'
+    resp = client.post(
+        "/runs/upload",
+        files={
+            "file": ("bundle.js", _JS, "application/javascript"),
+            "map": ("bundle.js.map", smap, "application/json"),
+        },
+        data={"session_id": session_id},
+        headers=_headers(tenant),
+    )
+    assert resp.status_code == 202
+    run_id = resp.json()["run_id"]
+    with tenant_session(tenant) as session:
+        run = session.get(models.Run, run_id)
+        assert run.source_map_ref is not None

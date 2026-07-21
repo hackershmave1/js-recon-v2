@@ -137,6 +137,9 @@ class Run(Base):
         server_default=text("'{\"fetch_ok\": false, \"analyze_ok\": false}'::jsonb"),
     )
     input_ref: Mapped[str | None] = mapped_column(Text)  # object-storage key (REQ-D2)
+    # Optional uploaded source map blob key; Sourcemapper recovers real per-source
+    # paths from it (analyze stage). Added in migration 0003.
+    source_map_ref: Mapped[str | None] = mapped_column(Text)
     target: Mapped[str | None] = mapped_column(Text)
     error: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)

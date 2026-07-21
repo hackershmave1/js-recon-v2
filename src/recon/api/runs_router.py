@@ -65,11 +65,15 @@ def start_run_from_upload(
     file: UploadFile = File(...),
     session_id: str = Form(...),
     target: str | None = Form(default=None),
+    map: UploadFile | None = File(default=None),
     tenant_id: str = Depends(get_tenant_id),
     redis: Redis = Depends(get_redis),
 ) -> dict:
     """Start a run from an uploaded JS bundle (``multipart/form-data``), the
     HTTP driver for the "one JS file -> findings" slice (REQ-A1, REQ-D2).
+
+    An optional ``map`` field carries the bundle's source map; when present the
+    analyze stage recovers real per-source paths from it (Sourcemapper).
 
     Unlike the pure-enqueue ``POST /runs``, this writes the bundle to object
     storage before returning, so it carries its own latency budget (a blob PUT) —
@@ -88,21 +92,31 @@ def start_run_from_upload(
         raise HTTPException(status_code=403, detail="session is not authorized for recon")
 
     cap = get_settings().max_upload_bytes
-    # Read at most cap+1 bytes so an oversized upload can't balloon memory here.
-    content = file.file.read(cap + 1)
+    content = _read_capped(file, cap)
     if not content:
         raise HTTPException(status_code=400, detail="uploaded file is empty")
     if len(content) > cap:
         raise HTTPException(status_code=413, detail=f"uploaded file exceeds {cap} bytes")
+
+    # The source map is optional; a present-but-empty map is treated as absent.
+    map_source = _read_capped(map, cap) if map is not None else b""
+    if len(map_source) > cap:
+        raise HTTPException(status_code=413, detail=f"uploaded map exceeds {cap} bytes")
 
     view = coordinator.start_run_with_input(
         redis,
         tenant_id=tenant_id,
         session_id=session_id,
         js_source=content,
+        map_source=map_source or None,
         target=target,
     )
     return {"run_id": view.id, "state": view.state}
+
+
+def _read_capped(upload: UploadFile, cap: int) -> bytes:
+    # Read at most cap+1 bytes so an oversized upload can't balloon memory here.
+    return upload.file.read(cap + 1)
 
 
 @router.get("/runs/{run_id}/status")
