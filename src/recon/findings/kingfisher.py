@@ -17,8 +17,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import sys
 import tempfile
 from dataclasses import dataclass, field
 
@@ -128,26 +126,6 @@ def _opt_int(value: object) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def _resolve_bin(name: str) -> str:
-    """Resolve an engine binary name to a runnable path.
-
-    On PATH (the container, where the wheel's console script is installed) it is
-    used as-is. In a non-activated venv (host dev/CI) PATH lacks the venv's
-    scripts dir, so we also look beside the running interpreter — where console
-    scripts live — before giving up. An explicit path is used verbatim."""
-    if os.path.isabs(name) or os.sep in name or (os.altsep and os.altsep in name):
-        return name
-    found = shutil.which(name)
-    if found:
-        return found
-    scripts_dir = os.path.dirname(sys.executable)
-    for candidate in (name, name + ".exe"):
-        path = os.path.join(scripts_dir, candidate)
-        if os.path.isfile(path):
-            return path
-    return name  # let subprocess raise FileNotFoundError -> EngineNotAvailable
-
-
 def byte_offset(source: str, line: int | None, column: int | None) -> int | None:
     """UTF-8 byte offset from Kingfisher's 1-based line + column.
 
@@ -196,7 +174,7 @@ def scan(
             handle.write(source)
         # Scan the file (not the dir) so no sibling/symlink is ever walked.
         argv = [
-            _resolve_bin(bin_path), "scan", target,
+            engines.resolve_bin(bin_path), "scan", target,
             "--format", "json",
             "--no-validate", "--no-update-check", "--no-dedup",
         ]

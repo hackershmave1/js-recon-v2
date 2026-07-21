@@ -22,7 +22,10 @@ self-contained binary (threads, no child procs) fed an already size-capped input
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 
 
@@ -53,6 +56,26 @@ class EngineResult:
     returncode: int
     stdout: bytes
     stderr: bytes
+
+
+def resolve_bin(name: str) -> str:
+    """Resolve an engine binary name to a runnable path.
+
+    On PATH (the container, where the binary/console-script is installed) it is
+    used as-is. In a non-activated venv (host dev/CI) PATH lacks the venv scripts
+    dir, so we also look beside the running interpreter — where console scripts
+    live — before giving up. An explicit path is used verbatim."""
+    if os.path.isabs(name) or os.sep in name or (os.altsep and os.altsep in name):
+        return name
+    found = shutil.which(name)
+    if found:
+        return found
+    scripts_dir = os.path.dirname(sys.executable)
+    for candidate in (name, name + ".exe"):
+        path = os.path.join(scripts_dir, candidate)
+        if os.path.isfile(path):
+            return path
+    return name  # let subprocess raise FileNotFoundError -> EngineNotAvailable
 
 
 def run_engine(
