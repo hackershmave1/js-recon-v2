@@ -37,19 +37,25 @@ client ──POST /runs──▶ API (accept+enqueue, <200ms) ──▶ Redis St
 ## Slice 2 — one JS file → findings (in progress)
 
 The analyze stage is real: it reads the run's JS input blob, statically traces
-network calls (`fetch`/XHR/`axios`/jQuery/WebSocket) with tree-sitter, and writes
-content-addressed findings through a transactional outbox.
+network calls (`fetch`/XHR/`axios`/jQuery/WebSocket) with tree-sitter, scans for
+secrets with an out-of-process engine, and writes content-addressed findings
+through a transactional outbox.
 
 - Finding identity `finding_hash = sha256(type + normalized value + source path)` — spec in `docs/req-d3-finding-hash-normalization.md` (REQ-D3)
 - Exactly-once findings via an outbox (REQ-A3); a normalization merge surfaces as occurrences, never a silent drop (REQ-C2)
 - `finding`/`finding_occurrence` tables under row-level security (migration `0002`)
+- Secret findings from MongoDB Kingfisher, run out-of-process via the engine
+  harness (timeout + output cap + offline flags; OS-level sandbox deferred).
+  Identity is `provider:sha256(token)` — the raw match lives only on the
+  occurrence, never in the hash. A missing binary degrades coverage honestly; a
+  genuine engine failure fails/retries the stage.
 - Drive it over HTTP: `POST /runs/upload` (multipart `file=@bundle.js` + `session_id`)
   stores the JS blob and enqueues a run; `GET /runs/{run_id}/findings` reads back the
   findings (each with its occurrences). Service-level `coordinator.start_run_with_input(...)`
   does the same without HTTP.
 
-Still to come this slice: out-of-process engines (Kingfisher secrets, Sourcemapper
-source maps) and the egress sandbox + real fetch stage.
+Still to come this slice: Sourcemapper (source maps → real per-source paths) and
+the egress sandbox + real fetch stage.
 
 ## Run in Docker (full stack)
 
