@@ -152,6 +152,15 @@ def test_secret_provider_falls_back_to_leading_token():
     assert nz.provider_for_rule("some_new.rule.v3") == "some"
 
 
+def test_secret_provider_for_kingfisher_rule_id_is_second_segment():
+    # Kingfisher ids are `kingfisher.<provider>.<n>`; the provider is segment 2,
+    # not the leading `kingfisher` engine token.
+    assert nz.provider_for_rule("kingfisher.stripe.2") == "stripe"
+    assert nz.provider_for_rule("kingfisher.aws.1") == "aws"
+    assert nz.provider_for_rule("KINGFISHER.GITHUB.7") == "github"
+    assert nz.provider_for_rule("kingfisher") == "unknown"
+
+
 def test_secret_does_not_strip_token_legal_chars():
     # `.` `-` `_` `=` `+` `/` are legal inside tokens and must survive.
     token = "abc.d0-Ef_G/h+i="

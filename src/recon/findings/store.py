@@ -37,12 +37,18 @@ class Occurrence:
     verified: bool | None = None
 
     def _identity(self) -> dict[str, object]:
+        # line/col are part of identity so two sightings stay distinct even when
+        # byte offsets are absent — e.g. Kingfisher reports line/col but no offset,
+        # so an engine that yields no offset must not collapse two real secret
+        # sightings into one occurrence (REQ-C2 honesty).
         return {
             "raw_url": self.raw_url,
             "host": self.host,
             "source_path": self.source_path,
             "offset_start": self.offset_start,
             "offset_end": self.offset_end,
+            "line": self.line,
+            "col": self.col,
         }
 
 

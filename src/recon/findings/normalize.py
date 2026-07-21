@@ -61,18 +61,15 @@ _PCT_RE = re.compile(r"%([0-9A-Fa-f]{2})")
 # `=`/`+`/`/` are token-legal and are NOT stripped.
 _SECRET_DELIMS = "\"'`()[]{}<>,;: \t\r\n"
 
-# Kingfisher ships 950+ evolving rules; pin the rule-id -> provider map to a
-# known ruleset version so an upstream rule rename cannot churn identity
-# (review M1). Unknown rules fall back to a sanitized leading token.
-KINGFISHER_RULES_VERSION = "1.x"
-_PROVIDER_BY_RULE: dict[str, str] = {
-    "stripe.live_secret_key": "stripe",
-    "stripe.live_restricted_key": "stripe",
-    "aws.access_key_id": "aws",
-    "google.api_key": "google",
-    "slack.incoming_webhook": "slack",
-    "firebase.api_key": "firebase",
-}
+# Kingfisher ships ~930 evolving rules with ids `kingfisher.<provider>.<n>`; the
+# provider slug is derived from the second segment (see provider_for_rule), which
+# is stable across rule renumbering (review M1). This map is a pinned OVERRIDE for
+# any specific rule id whose second segment is not the desired provider slug — it
+# is keyed by the real full rule id and empty until such a case is found.
+# KINGFISHER_RULES_VERSION is informational: it records which ruleset the
+# second-segment derivation was validated against (not wired into any hash).
+KINGFISHER_RULES_VERSION = "1.106"
+_PROVIDER_BY_RULE: dict[str, str] = {}
 
 
 def shannon_entropy(text: str) -> float:
@@ -247,12 +244,21 @@ def strip_secret_delimiters(raw_token: str) -> str:
 
 
 def provider_for_rule(rule_id: str) -> str:
-    """Map an engine rule id to a stable provider slug (pinned map, review M1)."""
+    """Map an engine rule id to a stable provider slug (pinned map, review M1).
+
+    Kingfisher ids are ``kingfisher.<provider>.<n>`` (e.g. ``kingfisher.stripe.2``),
+    so the provider is the SECOND segment — the leading ``kingfisher`` token is the
+    engine name, not the provider. Non-Kingfisher ids fall back to the leading
+    token. The pinned map overrides both for any id needing a hand-fixed slug."""
     key = rule_id.strip().lower()
     if key in _PROVIDER_BY_RULE:
         return _PROVIDER_BY_RULE[key]
-    lead = re.split(r"[./_\-]", key, maxsplit=1)[0]
-    return lead or "unknown"
+    segments = [s for s in re.split(r"[./_\-]", key) if s]
+    if not segments:
+        return "unknown"
+    if segments[0] == "kingfisher":
+        return segments[1] if len(segments) >= 2 else "unknown"
+    return segments[0]
 
 
 def normalize_secret_value(raw_token: str, rule_id: str) -> str:
