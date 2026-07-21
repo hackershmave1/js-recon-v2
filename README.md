@@ -56,14 +56,23 @@ through a transactional outbox.
   `input.js` placeholder. No map → the bundle is analyzed as before; the coverage
   event records how the map was handled so map-scoped coverage isn't mistaken for
   full-bundle coverage (REQ-D5).
+- Fetch from the target (not just uploads): start a run with a target URL
+  (`POST /runs` with `target`) and the FETCHING stage pulls that asset through an
+  application-level egress guard — http(s) only, host must be in the session's
+  declared scope (REQ-P2), and every resolved IP must be globally routable, so a
+  hostile target can't pivot the fetcher at internal/link-local/cloud-metadata
+  addresses (SSRF). The connection is pinned to the validated IP (DNS-rebind
+  defense) and redirects are re-validated per hop. OS/network-level egress
+  isolation is deferred.
 - Drive it over HTTP: `POST /runs/upload` (multipart `file=@bundle.js` +
   `session_id`, optional `map=@bundle.js.map`) stores the blob(s) and enqueues a
-  run; `GET /runs/{run_id}/findings` reads back the findings (each with its
-  occurrences). Service-level `coordinator.start_run_with_input(...)` does the same
-  without HTTP.
+  run; or `POST /runs` with a `target` URL to fetch. `GET /runs/{run_id}/findings`
+  reads back the findings (each with its occurrences). Service-level
+  `coordinator.start_run_with_input(...)` does the same without HTTP.
 
-Still to come this slice: the egress sandbox + real fetch stage (so runs can pull
-assets from the target instead of only accepting uploads).
+Still to come: automated asset discovery (katana crawl of the DISCOVER stage) and
+OS/network-level egress isolation — plus the later slices (manual-probe handoff,
+grounded threat model, diff + continuous).
 
 ## Run in Docker (full stack)
 
