@@ -26,6 +26,9 @@ def get_run_findings(
     return {
         "run_id": result.run_id,
         "count": len(result.findings),
+        # REQ-C2: coverage is reported honestly alongside the findings it qualifies;
+        # null until the analyze stage has run. Completeness is NOT guaranteed.
+        "coverage": _coverage_dict(result.coverage),
         "findings": [
             {
                 "finding_hash": finding.finding_hash,
@@ -53,5 +56,22 @@ def get_run_findings(
                 ],
             }
             for finding in result.findings
+        ],
+    }
+
+
+def _coverage_dict(coverage: queries.CoverageView | None) -> dict | None:
+    if coverage is None:
+        return None
+    return {
+        "attributed": coverage.attributed,
+        "unattributed": coverage.unattributed,
+        "secrets": coverage.secrets,
+        "secrets_engine": coverage.secrets_engine,
+        "sources_recovered": coverage.sources_recovered,
+        "source_map": coverage.source_map,
+        "files": [
+            {"path": f.path, "attributed": f.attributed, "unattributed": f.unattributed}
+            for f in coverage.files
         ],
     }

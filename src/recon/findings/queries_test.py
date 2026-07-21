@@ -49,6 +49,36 @@ def test_list_findings_returns_findings_with_occurrences(redis, authorized_sessi
     assert health.occurrences and health.occurrences[0].raw_url == "/api/health"
 
 
+def test_list_findings_includes_coverage(redis, authorized_session):
+    # REQ-C2: the read model surfaces the analyze coverage counters next to the
+    # findings they qualify — read from the durable event log, not recomputed.
+    tenant, session_id = authorized_session
+    view = coordinator.start_run_with_input(
+        redis, tenant_id=tenant, session_id=session_id, js_source=_JS
+    )
+    _drive(redis, tenant, view.id)
+
+    result = findings_queries.list_findings(tenant, view.id)
+    assert result is not None and result.coverage is not None
+    # _JS has two attributable calls and no dynamic/unresolvable one.
+    assert result.coverage.attributed == 2
+    assert result.coverage.unattributed == 0
+    assert result.coverage.source_map == "none"
+    assert [f.attributed for f in result.coverage.files] == [2]
+
+
+def test_list_findings_coverage_is_none_before_analyze(redis, authorized_session):
+    # A no-input run reaches done but analyze is a no-op that emits no coverage
+    # event — coverage is null, distinct from "analyzed, found nothing".
+    tenant, session_id = authorized_session
+    view = coordinator.start_run(redis, tenant_id=tenant, session_id=session_id)
+    _drive(redis, tenant, view.id)
+
+    result = findings_queries.list_findings(tenant, view.id)
+    assert result is not None
+    assert result.coverage is None
+
+
 def test_list_findings_unknown_run_is_none(tenant):
     missing = "00000000-0000-0000-0000-000000000000"
     assert findings_queries.list_findings(tenant, missing) is None

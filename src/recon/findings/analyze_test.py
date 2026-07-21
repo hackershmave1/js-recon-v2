@@ -183,3 +183,48 @@ def test_malformed_inline_map_falls_back_to_bundle(redis, authorized_session, mo
     assert coverage.source_map == "inline-error"
     endpoint_values = {f.value for f in _findings(tenant, view.id) if f.type == "endpoint"}
     assert "GET /api/health" in endpoint_values  # bundle analyzed as the fallback
+
+
+def test_coverage_is_reported_per_file(redis, authorized_session, monkeypatch):
+    # With two recovered sources, the attributed/unattributed counter is reported
+    # PER FILE (REQ-C2) so a reader sees WHICH file has unmapped calls — a
+    # bundle-wide sum would hide that, and that per-file signal is exactly what the
+    # wrapper-teaching SHOULD acts on. recover_sources is faked (no Go binary).
+    from sqlalchemy import update
+
+    from recon import storage
+    from recon.db.base import tenant_session
+    from recon.findings import analyze, sourcemapper
+    from recon.runs import service
+
+    tenant, session_id = authorized_session
+
+    def fake_recover(map_bytes, **_kwargs):
+        return sourcemapper.RecoveredSources(
+            files=[
+                sourcemapper.RecoveredFile("app/clean.js", b'fetch("/api/a");'),
+                sourcemapper.RecoveredFile("app/dynamic.js", b"fetch(runtimeUrl);"),
+            ],
+            status="ok",
+            origin="uploaded",
+        )
+
+    monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
+
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
+    input_key = storage.put_blob(tenant, view.id, "input", b'fetch("/bundle");')
+    map_key = storage.put_blob(tenant, view.id, "source_map", b'{"version":3}')
+    with tenant_session(tenant) as session:
+        session.execute(
+            update(models.Run)
+            .where(models.Run.id == view.id)
+            .values(input_ref=input_key, source_map_ref=map_key)
+        )
+
+    coverage = analyze.analyze_run(redis, tenant_id=tenant, run_id=view.id)
+
+    # One attributed call (clean.js) + one unattributed (dynamic.js) across the two.
+    assert coverage.attributed == 1
+    assert coverage.unattributed == 1
+    by_path = {f.path: (f.attributed, f.unattributed) for f in coverage.files}
+    assert by_path == {"app/clean.js": (1, 0), "app/dynamic.js": (0, 1)}

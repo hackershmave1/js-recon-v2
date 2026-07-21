@@ -31,6 +31,18 @@ _SOURCE_NAME = "input.js"
 
 
 @dataclass(frozen=True)
+class FileCoverage:
+    """Per-file honesty counter (REQ-C2): how many calls in one source file were
+    attributed to an endpoint vs. left un-attributed. Keyed by the same normalized
+    path the finding carries, so a reader can see *which* file has unmapped calls
+    (the input the wrapper-teaching SHOULD acts on)."""
+
+    path: str
+    attributed: int
+    unattributed: int
+
+
+@dataclass(frozen=True)
 class Coverage:
     attributed: int
     unattributed: int
@@ -45,6 +57,9 @@ class Coverage:
     # must NOT treat map-scoped endpoint coverage as full-bundle coverage.
     sources_recovered: int = 0
     source_map: str = "none"
+    # Per-file breakdown of the attributed/unattributed totals (REQ-C2 is a
+    # per-file counter — a bundle-wide sum hides which file needs attention).
+    files: tuple[FileCoverage, ...] = ()
 
 
 def analyze_run(redis: Redis, *, tenant_id: str, run_id: str) -> Coverage:
@@ -74,12 +89,18 @@ def analyze_run(redis: Redis, *, tenant_id: str, run_id: str) -> Coverage:
     attributed = 0
     unattributed = 0
     written = 0
+    # Per normalized path (== finding.path), so coverage joins 1:1 to findings and
+    # several source names that collapse to one path aggregate together (REQ-C2).
+    per_file: dict[str, list[int]] = {}
     with tenant_session(tenant_id) as session:  # one REQ-A3 staging transaction
         for source_name, unit_text in units:
             extraction = extract(unit_text)
+            path = normalize.normalize_source_path(source_name)
             attributed += len(extraction.endpoints)
             unattributed += extraction.unattributed
-            path = normalize.normalize_source_path(source_name)
+            bucket = per_file.setdefault(path, [0, 0])
+            bucket[0] += len(extraction.endpoints)
+            bucket[1] += extraction.unattributed
             for endpoint in extraction.endpoints:
                 written += _record_endpoint(session, tenant_id, run_id, path, source_name, endpoint)
         # Secrets are scanned on the original bundle this slice (input.js path).
@@ -88,6 +109,10 @@ def analyze_run(redis: Redis, *, tenant_id: str, run_id: str) -> Coverage:
         secret_path = normalize.normalize_source_path(_SOURCE_NAME)
         for secret in scan.secrets:
             written += _record_secret(session, tenant_id, run_id, secret_path, source, secret)
+        files = tuple(
+            FileCoverage(path=path, attributed=counts[0], unattributed=counts[1])
+            for path, counts in sorted(per_file.items())
+        )
         coverage_event = record_event(
             session,
             tenant_id=tenant_id,
@@ -100,6 +125,10 @@ def analyze_run(redis: Redis, *, tenant_id: str, run_id: str) -> Coverage:
                 "secrets_engine": scan.status,
                 "sources_recovered": sources_recovered,
                 "source_map": source_map_status,
+                "files": [
+                    {"path": f.path, "attributed": f.attributed, "unattributed": f.unattributed}
+                    for f in files
+                ],
             },
         )
     publish(redis, coverage_event)
@@ -118,6 +147,7 @@ def analyze_run(redis: Redis, *, tenant_id: str, run_id: str) -> Coverage:
         attributed, unattributed, written,
         secrets=len(scan.secrets), secrets_engine=scan.status,
         sources_recovered=sources_recovered, source_map=source_map_status,
+        files=files,
     )
 
 

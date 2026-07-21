@@ -70,6 +70,15 @@ def test_upload_starts_run_and_findings_are_retrievable(client, redis, authorize
     # The finding carries its occurrence(s) so a normalization merge is visible (REQ-C2).
     assert endpoint["occurrences"][0]["raw_url"] == "/api/users/42"
 
+    # REQ-C2: coverage counters are surfaced on the findings response (honestly, and
+    # per file) — not left buried on the analyze.coverage event.
+    coverage = body["coverage"]
+    assert coverage is not None
+    assert coverage["attributed"] == 1
+    assert coverage["unattributed"] == 0
+    assert coverage["source_map"] == "none"
+    assert len(coverage["files"]) == 1 and coverage["files"][0]["attributed"] == 1
+
 
 def test_upload_missing_tenant_header_is_401(client, authorized_session):
     _tenant, session_id = authorized_session
