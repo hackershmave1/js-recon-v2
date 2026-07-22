@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import shlex
+from urllib.parse import urlsplit
 
 from recon.probe.reconstruct import ReconstructedRequest
 
@@ -26,15 +27,26 @@ def _control_free(text: str) -> str:
     return "".join(ch for ch in text if 0x20 <= ord(ch) != 0x7f)
 
 
-def _base_url(request: ReconstructedRequest) -> str:
-    if request.hosts:
-        return f"https://{_control_free(request.hosts[0])}"
-    return _BASE_URL_PLACEHOLDER
+def _request_parts(request: ReconstructedRequest) -> tuple[str, str, str]:
+    """Return (base, origin_target, host) for the artifact.
 
-
-def _target(request: ReconstructedRequest) -> str:
-    # Prefer the concrete observed URL (ready-to-fire); fall back to templated path.
-    return _control_free(request.example_url or request.path)[:_MAX_URL] or "/"
+    Prefers the concrete observed URL. If it is ALREADY absolute
+    (scheme://host/...), the host/scheme come from it directly — never
+    re-prepended, which previously produced a double-scheme URL. If it is
+    relative, the base is the occurrence host (or a {{base_url}} placeholder).
+    origin_target is always origin-form (path + query) for the raw-HTTP request
+    line; curl joins base + origin_target into a full URL.
+    """
+    observed = _control_free(request.example_url or request.path)[:_MAX_URL]
+    split = urlsplit(observed)
+    if split.scheme and split.netloc:
+        host = split.netloc
+        base = f"{split.scheme}://{host}"
+        origin = (split.path or "/") + (f"?{split.query}" if split.query else "")
+        return base, origin, host
+    host = _control_free(request.hosts[0])[:_MAX_URL] if request.hosts else None
+    base = f"https://{host}" if host else _BASE_URL_PLACEHOLDER
+    return base, (observed or "/"), (host or "HOST")
 
 
 def _json_body(request: ReconstructedRequest) -> str | None:
@@ -48,10 +60,9 @@ def to_curl(request: ReconstructedRequest) -> str | None:
     if not request.probeable:
         return None
     # Sanitize method (attacker-controlled via JS literals)
-    method = _control_free(request.method)
-    url = _base_url(request) + _target(request)
-    # Cap full URL; use robust POSIX single-quote with embedded-quote escaping
-    url = url[:_MAX_URL]
+    method = _control_free(request.method)[:_MAX_URL]
+    base, origin, _host = _request_parts(request)
+    url = (base + origin)[:_MAX_URL]
     quoted_url = "'" + url.replace("'", "'\\''") + "'"
     # Cap host in comment (attacker-controlled via JS string literal)
     host_note = f"  (host: {_control_free(request.hosts[0])[:_MAX_URL]})" if request.hosts else "  (host unknown)"
@@ -62,7 +73,7 @@ def to_curl(request: ReconstructedRequest) -> str | None:
     curl = f"curl -X {shlex.quote(method)} {quoted_url}"
     extra: list[str] = []
     if request.content_type:
-        extra.append(f"-H {shlex.quote('Content-Type: ' + request.content_type)}")
+        extra.append(f"-H {shlex.quote('Content-Type: ' + _control_free(request.content_type))}")
     body = _json_body(request)
     if body:
         extra.append(f"--data {shlex.quote(body)}")
@@ -82,17 +93,15 @@ def to_curl(request: ReconstructedRequest) -> str | None:
 def to_http(request: ReconstructedRequest) -> str | None:
     if not request.probeable:
         return None
-    # Sanitize method (attacker-controlled via JS literals)
-    method = _control_free(request.method)
-    # Cap host (attacker-controlled via JS string literal)
-    host = (_control_free(request.hosts[0]) if request.hosts else "HOST")[:_MAX_URL]
+    base, origin, host = _request_parts(request)
+    method = _control_free(request.method)[:_MAX_URL]
     lines = [
-        f"{method} {_target(request)} HTTP/1.1",
+        f"{method} {origin} HTTP/1.1",
         f"Host: {host}",
         "# add auth/headers here",
     ]
     if request.content_type:
-        lines.append(f"Content-Type: {request.content_type}")
+        lines.append(f"Content-Type: {_control_free(request.content_type)}")
     lines.append("")
     lines.append(_json_body(request) or "")
     return "\n".join(lines)
