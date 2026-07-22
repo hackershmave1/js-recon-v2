@@ -51,12 +51,12 @@ def to_curl(request: ReconstructedRequest) -> str | None:
     method = _control_free(request.method)
     url = _base_url(request) + _target(request)
     # Cap full URL; use robust POSIX single-quote with embedded-quote escaping
-    url = (url)[:_MAX_URL]
+    url = url[:_MAX_URL]
     quoted_url = "'" + url.replace("'", "'\\''") + "'"
     # Cap host in comment (attacker-controlled via JS string literal)
     host_note = f"  (host: {_control_free(request.hosts[0])[:_MAX_URL]})" if request.hosts else "  (host unknown)"
     lines = [
-        f"# {_control_free(request.operation)}{host_note}",
+        f"# {_control_free(request.operation)[:_MAX_URL]}{host_note}",
         "# add auth/headers here",
     ]
     curl = f"curl -X {shlex.quote(method)} {quoted_url}"
@@ -73,7 +73,9 @@ def to_curl(request: ReconstructedRequest) -> str | None:
     else:
         lines.append(curl)
     if len(request.hosts) > 1:
-        lines.append("# other hosts: " + ", ".join(_control_free(h) for h in request.hosts[1:]))
+        # Cap the whole "other hosts" line (hosts are attacker-controlled)
+        other_hosts_line = ("# other hosts: " + ", ".join(_control_free(h) for h in request.hosts[1:]))[:_MAX_URL]
+        lines.append(other_hosts_line)
     return "\n".join(lines)
 
 

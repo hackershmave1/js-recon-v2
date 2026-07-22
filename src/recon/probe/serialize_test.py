@@ -77,3 +77,29 @@ def test_curl_caps_oversized_url():
     assert len(out) < 20000
     # Verify the URL itself is capped to _MAX_URL
     assert huge_host not in out  # the oversized host should not appear in full
+
+
+def test_curl_neutralizes_hostile_method():
+    # Cross-cover: verify to_curl also strips method CR/LF (was only tested in to_http).
+    out = serialize.to_curl(_req(method="GET\r\nX-Injected: 1", body_params=(), content_type=None))
+    assert "\r" not in out
+    assert "\nX-Injected:" not in out  # the injected header never became its own line
+
+
+def test_http_caps_oversized_host():
+    # Cross-cover: verify to_http also caps oversized hosts (was only tested in to_curl).
+    huge_host = "a" * 100000
+    out = serialize.to_http(_req(hosts=(huge_host,), example_url="/x"))
+    # Verify http output is bounded (well under 9000 chars, much less than the 100k host)
+    assert len(out) < 9000
+    assert huge_host not in out
+
+
+def test_curl_caps_oversized_other_hosts():
+    # Verify Fix A#1: "other hosts" line is capped.
+    huge_host2 = "b" * 100000
+    out = serialize.to_curl(_req(hosts=("a.com", huge_host2), example_url="/x"))
+    # Verify curl output is bounded (well under 20000 chars)
+    assert len(out) < 20000
+    # Verify the huge secondary host is not fully present
+    assert huge_host2 not in out
