@@ -219,16 +219,18 @@ def _record_secret(session, tenant_id: str, run_id: str, path: str, source: str,
     value = normalize.normalize_secret_value(secret.snippet, secret.rule_id)
     offset = kingfisher.byte_offset(source, secret.line, secret.column_start)
     offset_end = offset + len(secret.snippet.encode("utf-8")) if offset is not None else None
-    # NOTE (sensitivity): the raw matched secret is stored on the occurrence
-    # (evidence) so an authorized tester can validate/revoke it (REQ-D3 §4.2). It
-    # is tenant-scoped by RLS; redaction-at-rest + a retention TTL are a later
-    # slice (REQ-S4/D6). The finding identity itself carries only the hash.
+    # REQ-S2 (storage model A): the raw secret is NOT stored. We keep only the
+    # identity hash (finding.value) + byte offsets; the plaintext is re-derived
+    # just-in-time from the source blob on an audited reveal (recon.probe.reveal),
+    # so the platform is never a concentrated store of live credentials. Offsets
+    # are computed against source == raw.decode("utf-8","replace"); reveal MUST
+    # slice that same byte space (see recon.probe.reveal).
     return _write(
         session, tenant_id, run_id, FindingType.SECRET, value, path,
         occurrence=store.Occurrence(
             source_path=_SOURCE_NAME, line=secret.line, col=secret.column_start,
             offset_start=offset, offset_end=offset_end,
-            evidence=secret.snippet, engine="kingfisher", confidence=secret.confidence,
+            engine="kingfisher", confidence=secret.confidence,
             verified=True if secret.validation_status == "Active" else None,
         ),
         attributes={"rule": secret.rule_id, "name": secret.rule_name},
