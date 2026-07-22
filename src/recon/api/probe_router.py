@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from recon.api.deps import get_tenant_id
-from recon.probe import reconstruct, serialize, triage
+from recon.probe import reconstruct, reveal, serialize, triage
 from recon.probe.reconstruct import ReconstructedRequest
 
 router = APIRouter(tags=["probe"])
@@ -21,6 +21,11 @@ class TriageRequest(BaseModel):
     status: str
     note: str | None = None
     actor: str | None = None
+
+
+class RevealRequest(BaseModel):
+    actor: str | None = None
+    reason: str | None = None
 
 
 @router.get("/runs/{run_id}/requests")
@@ -57,6 +62,27 @@ def set_finding_triage(
         "actor": state.actor,
         "updated_at": state.updated_at,
     }
+
+
+@router.post("/runs/{run_id}/findings/{finding_hash}/reveal")
+def reveal_secret_value(
+    run_id: str,
+    finding_hash: str,
+    body: RevealRequest | None = None,
+    tenant_id: str = Depends(get_tenant_id),
+) -> dict:
+    body = body or RevealRequest()
+    outcome = reveal.reveal_secret(
+        tenant_id, run_id, finding_hash, actor=body.actor, reason=body.reason
+    )
+    if outcome is None:
+        raise HTTPException(status_code=404, detail="run or secret not found")
+    if not outcome.revealed:
+        raise HTTPException(
+            status_code=reveal.DENIAL_STATUS[outcome.denial],
+            detail=f"cannot reveal secret: {outcome.denial}",
+        )
+    return {"finding_hash": finding_hash, "value": outcome.value}
 
 
 def _request_dict(request: ReconstructedRequest) -> dict:
