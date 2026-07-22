@@ -235,6 +235,23 @@ def normalize_param_value(operation: str, location: str, name: str) -> str:
     return f"{operation} {location}:{name}"
 
 
+def operation_of_endpoint_value(value: str) -> str:
+    """The operation (`METHOD + templated path`) of a stored ENDPOINT finding value.
+
+    An endpoint value is ``operation`` + an optional ``?query`` suffix
+    (see :func:`normalize_endpoint`), so the operation is everything before ``?``."""
+    return value.split("?", 1)[0]
+
+
+def operation_of_param_value(value: str) -> str:
+    """The operation of a stored PARAM finding value.
+
+    A param value is ``f"{operation} {location}:{name}"`` (see
+    :func:`normalize_param_value`); ``location:name`` is the final space-separated
+    token and contains no space, so the operation is everything before it."""
+    return value.rsplit(" ", 1)[0]
+
+
 # ---------------------------------------------------------------------------
 # Secret value normalization (§4.2)
 # ---------------------------------------------------------------------------

@@ -244,3 +244,28 @@ def test_finding_hash_golden_vector_locks_cross_process_stability():
     assert nz.finding_hash("endpoint", "GET /users/{id}", "app/src/api.js") == (
         "f47b2e5c384f0deeeafb61cfa39210339c7e237ef99ed002b527fe5fa9788046"
     )
+
+
+# --- operation-key parsers (inverse of builders) ----------------------------
+
+
+def test_operation_of_endpoint_value_strips_query():
+    assert nz.operation_of_endpoint_value("POST /api/users/{id}?a&b") == "POST /api/users/{id}"
+
+
+def test_operation_of_endpoint_value_without_query():
+    assert nz.operation_of_endpoint_value("GET /orders") == "GET /orders"
+
+
+def test_operation_of_param_value_strips_location_and_name():
+    assert nz.operation_of_param_value("POST /api/users/{id} body:name") == "POST /api/users/{id}"
+
+
+def test_operation_helpers_roundtrip_from_builders():
+    operation = nz.endpoint_operation("POST", "https://api.acme.io/api/users/42")
+    endpoint_value = nz.normalize_endpoint(
+        "POST", "https://api.acme.io/api/users/42?a=1"
+    ).value
+    param_value = nz.normalize_param_value(operation, "body", "name")
+    assert nz.operation_of_endpoint_value(endpoint_value) == operation
+    assert nz.operation_of_param_value(param_value) == operation
