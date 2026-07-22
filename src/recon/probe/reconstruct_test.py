@@ -64,6 +64,8 @@ def test_build_unions_hosts_across_occurrences():
     ]
     (req,) = reconstruct.build_requests(findings)
     assert req.hosts == ("one.acme.io", "two.acme.io")
+    # endpoint_hash is deterministic: the minimum of the two finding_hashes
+    assert req.endpoint_hash == "e1"
 
 
 def test_build_marks_websocket_not_probeable():
@@ -77,3 +79,14 @@ def test_build_endpoint_without_params_has_no_body():
     (req,) = reconstruct.build_requests(findings)
     assert req.body_params == ()
     assert req.content_type is None
+
+
+def test_build_ignores_params_without_a_matching_endpoint():
+    """REQ-C2 honesty: params without an endpoint are silently dropped (not invented)."""
+    findings = [
+        _param("POST /api/users/{id} body:name", "body", "name"),
+        _param("POST /api/users/{id} query:trace", "query", "trace"),
+    ]
+    # No endpoint finding for "POST /api/users/{id}", so zero requests are built
+    reqs = reconstruct.build_requests(findings)
+    assert reqs == []

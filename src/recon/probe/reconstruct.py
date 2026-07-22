@@ -47,7 +47,12 @@ def _method_and_path(operation: str) -> tuple[str, str]:
 
 
 def build_requests(findings: list[FindingView]) -> list[ReconstructedRequest]:
-    """Group endpoint + param findings into one request per operation."""
+    """Group endpoint + param findings into one request per operation.
+
+    Output is deterministic regardless of input order: params are sorted by name,
+    the endpoint_hash is the minimum among the operation's endpoint findings,
+    and example_url is selected in sorted-by-finding_hash order.
+    """
     endpoints: dict[str, list[FindingView]] = {}
     params: dict[str, list[FindingView]] = {}
     for finding in findings:
@@ -68,10 +73,11 @@ def build_requests(findings: list[FindingView]) -> list[ReconstructedRequest]:
             for occurrence in finding.occurrences
             if occurrence.host
         }))
+        # Select example_url deterministically: iterate findings in sorted-by-hash order
         example_url = next(
             (
                 occurrence.raw_url
-                for finding in endpoint_findings
+                for finding in sorted(endpoint_findings, key=lambda f: f.finding_hash)
                 for occurrence in finding.occurrences
                 if occurrence.raw_url
             ),
@@ -91,18 +97,28 @@ def build_requests(findings: list[FindingView]) -> list[ReconstructedRequest]:
             elif location == "body" and name not in body_params:
                 body_params.append(name)
 
+        # Sort query_params and body_params by name for deterministic output
+        sorted_query_params = tuple(
+            query_params[name]
+            for name in sorted(query_params.keys())
+        )
+        sorted_body_params = tuple(sorted(body_params))
+
+        # Select endpoint_hash deterministically: use the minimum finding_hash
+        endpoint_hash = min(f.finding_hash for f in endpoint_findings)
+
         requests.append(
             ReconstructedRequest(
                 operation=operation,
                 method=method,
                 path=path,
                 hosts=hosts,
-                query_params=tuple(query_params.values()),
-                body_params=tuple(body_params),
-                content_type="application/json" if body_params else None,
+                query_params=sorted_query_params,
+                body_params=sorted_body_params,
+                content_type="application/json" if sorted_body_params else None,
                 example_url=example_url,
                 probeable=method not in _WEBSOCKET_METHODS,
-                endpoint_hash=endpoint_findings[0].finding_hash,
+                endpoint_hash=endpoint_hash,
             )
         )
     return requests
