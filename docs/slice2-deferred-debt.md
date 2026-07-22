@@ -10,7 +10,7 @@ that should pull it back in.
 |---|---|---|---|---|
 | OS/network-level egress isolation | P2, T2 | **MUST** (deferred) | App-level guard only | Before running any net-emitting engine (Sourcemapper URL-fetch, Kingfisher validators) or exposing the fetcher to untrusted multi-tenant load |
 | Automated asset discovery (katana crawl, gau archive, robots.txt) | C1, Q5 | SHOULD | DISCOVER stage stubbed | When scope moves from "one asset" to "crawl a host" (M3 scale) |
-| Ephemeral/JIT/audit-logged secret reveal | S2 | MUST (reveal half) | Storage half done (hash + location) | **Slice 3b** — slice 3a shipped the P1 handoff (reconstruct + artifacts + triage) WITHOUT reveal; the reveal UX is the 3b sub-slice |
+| Ephemeral/JIT/audit-logged secret reveal | S2 | MUST | **DONE (slice 3b)** — hash+location by default, JIT reveal by slicing the source blob, audited | — (see the slice-3b section below for residual debt) |
 | Freeze migration 0001 to a static snapshot | D1 | infra | 0001/0002 use `create_all` from live metadata; 0003 guarded with `IF NOT EXISTS` | Before real prod/zero-downtime upgrades (M3) — see below |
 
 ## OS/network-level egress isolation (deferred MUST — the one to watch)
@@ -42,17 +42,21 @@ paths on a host are being fetched). This is the M3 "scale" story, not "one JS
 file". The `< 4 min` SLA is explicitly defined for bounded input (≤ N assets,
 single host).
 
-## Secret reveal (S2 reveal half)
+## Secret reveal (S2) — DONE in slice 3b
 
-Secrets are already custodied safely: finding identity is `provider:sha256(token)`
-(never plaintext in the hash), the raw match lives only on the RLS-scoped
-occurrence row (a reviewed decision, `docs/req-d3-finding-hash-normalization.md`
-§4.2). The remaining reveal UX — ephemeral, just-in-time, audit-logged disclosure —
-is a workspace interaction and lands with **slice 3b**. Slice 3a shipped the
-REQ-P1 handoff (request reconstruction, curl + raw-HTTP artifacts, finding-level
-triage) but deliberately embeds a `# add auth/headers here` placeholder rather
-than any secret material — which is exactly REQ-S2's never-plaintext-by-default
-posture. 3b adds the JIT reveal that can substitute a live value.
+**Closed 2026-07-22 (slice 3b, both gates passed).** REQ-S2 is discharged with
+storage model A: the raw secret is **never stored** — the DB keeps only the
+identity hash (`provider:sha256(token)`) + byte offsets, and the run's source blob
+is the single at-rest copy. The findings read redacts secret `evidence` (keyed on
+`finding.type == "secret"`, so legacy plaintext rows are masked too) and adds a
+`revealable` flag. `POST /runs/{id}/findings/{hash}/reveal` re-derives the value
+just-in-time by slicing the blob at the stored offsets (in analyze's exact
+decode-replace byte space), re-checks `provider:sha256` (fail-closed → 409 on
+drift), and returns it once — auditing **every** attempt (`secret.revealed` /
+`secret.reveal_denied`, value-free `run_event`). The offset convention is verified
+against the real Kingfisher engine in CI. See
+`docs/superpowers/specs/2026-07-22-slice3b-secret-reveal-design.md` (§10 records
+the adversarial-gate findings folded in).
 
 ## Slice-3a deferred debt (manual-probe handoff)
 
@@ -61,7 +65,7 @@ out of scope, plus residual review nits, tracked here:
 
 | Item | Priority | Why deferred | Trigger to revisit |
 |---|---|---|---|
-| S2 secret reveal (ephemeral/JIT/audit) | MUST | Its own sub-slice with a crypto/storage decision | **Slice 3b** (next) |
+| S2 secret reveal (ephemeral/JIT/audit) | MUST | ~~Its own sub-slice~~ | **DONE — slice 3b (see below)** |
 | Static request-header extraction (Vespasian) | SHOULD | 3a reconstructs method/path/query/body; headers/auth are the manual tester's to add | Pairs with the C2 wrapper-teaching thread |
 | Postman + mitmproxy exporters | SHOULD | curl + raw-HTTP cover curl + Burp; each new format is an isolated pure serializer | On demand (team/Postman or signature-replay workflows) |
 | Cross-file base-URL resolution + wrapper-teaching (C2 SHOULDs) | SHOULD | No data model yet; relative endpoints render `{{base_url}}` | The C2 SHOULD thread |
@@ -71,6 +75,34 @@ out of scope, plus residual review nits, tracked here:
 - `TriageStatus` StrEnum: the three status values live in the model CHECK, `VALID_STATUSES`, and the API — a `recon.domain.TriageStatus` + `_enum_check` would DRY them (matches the codebase convention).
 - Migration `0004` `downgrade()` hardcodes `drop_table("finding_triage")` instead of looping `TRIAGE_TABLES` (latent if the tuple grows).
 - Test coverage: no `build_requests` permutation (input-order) test though determinism is now load-bearing; only WSS (not plain WS) websocket test; no assertion on the triage note/actor **return value** after a status-only upsert (DB row is asserted); `to_http` unpacks an unused `base` var (rename `_base`).
+
+## Slice-3b deferred debt (secret reveal)
+
+Slice 3b (REQ-S2) is complete on `main` (adversarial design gate at the design
+stage + whole-branch code review, both passed). Deliberately out of scope, plus
+residual review nits, tracked here:
+
+| Item | Priority | Why deferred / safe now | Trigger to revisit |
+|---|---|---|---|
+| Retention / TTL + tenant-initiated purge | S4 **MUST** | Its own slice; with model A, purge collapses to the source-blob lifecycle | **Slice 5** (retention/diff) — the TTL numbers were always slated there |
+| Backfill/scrub of pre-3b `evidence` rows | S2 | No real prod data; the read redaction already masks them and reveal ignores the column | Fold into slice-5 purge, or before any real data lands |
+| Re-scan to relocate offset-less secrets | S2 | Rare (Kingfisher gave no locatable offset); such a finding is `revealable:false` | If offset-less secrets show up in practice and must be revealable |
+| SSE-publish of the reveal audit | S3 | Reveal audit is persisted to `run_event` (durable); live streaming is not required | If a SIEM/live-audit consumer needs reveal events on the stream |
+| Per-user auth for a verifiable reveal "who" | S1/S2 | Platform-wide — `X-Tenant-Id`/`actor` are best-effort labels (same as 3a triage) | When real per-user auth lands |
+
+**Residual review nits (non-blocking, from the gates):**
+- A non-`ClientError` blob-read failure now audits a `denial="error"` and re-raises
+  (500) — but if `_audit` itself raised it would mask the original error; pre-exists
+  on all paths, not introduced by 3b.
+- Non-UUID `run_id` in the reveal/triage/reconstruct routes raises `DataError` → 500
+  rather than 404 (shared pre-existing pattern; no leak).
+- Test coverage: no multi-occurrence `revealable` `any()`-branch test; no route-level
+  409/410 test (covered at the service layer); happy-path route test doesn't assert
+  `finding_hash` in the body.
+- **Pre-existing flake (NOT slice 3b):** `integration_test.py::test_duplicate_delivery_is_idempotent`
+  intermittently fails under full-suite load (shared Redis stream/consumer-group
+  timing); passes 3/3 in isolation. A slice-1 worker test — trace + stabilize when
+  convenient.
 
 ## Migration strategy: `create_all` vs incremental DDL
 
