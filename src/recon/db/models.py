@@ -294,6 +294,39 @@ class FindingOccurrence(Base):
     finding: Mapped["Finding"] = relationship(back_populates="occurrences")
 
 
+class FindingTriage(Base):
+    """A user's triage verdict on a finding (REQ-P1 mark-confirmed, REQ-D1).
+
+    Keyed by (session_id, finding_hash) — NOT by run — so a verdict set on a
+    stable finding identity (REQ-D3) survives re-runs (REQ-D5 continuous rescan).
+    ``finding_hash`` is intentionally not a foreign key: triage outlives any single
+    run's ``finding`` rows, so the join to a finding is logical (on the hash)."""
+
+    __tablename__ = "finding_triage"
+    __table_args__ = (
+        UniqueConstraint("session_id", "finding_hash", name="uq_triage_session_finding"),
+        CheckConstraint(
+            "status IN ('open', 'confirmed', 'dismissed')", name="ck_triage_status"
+        ),
+        Index("ix_triage_session", "tenant_id", "session_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("session.id", ondelete="CASCADE"), nullable=False
+    )
+    finding_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="open")
+    note: Mapped[str | None] = mapped_column(Text)
+    # Best-effort supplied label until real per-user auth lands (see api.deps).
+    actor: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+    updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
+
+
 # Tables carrying a tenant_id get FORCE RLS in the migration.
 TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "app_user",
@@ -309,3 +342,6 @@ FINDINGS_TABLES: tuple[str, ...] = (
     "finding",
     "finding_occurrence",
 )
+
+# Slice-3a addition, RLS-enabled by migration 0004.
+TRIAGE_TABLES: tuple[str, ...] = ("finding_triage",)
