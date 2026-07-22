@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 
 from recon.db.base import tenant_session
 from recon.db.models import Finding, FindingOccurrence, FindingTriage, Run, RunEvent
+from recon.domain import FindingType
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,7 @@ class FindingView:
     first_stage: str | None
     occurrences: list[OccurrenceView]
     triage: TriageView | None = None
+    revealable: bool = False
 
 
 @dataclass(frozen=True)
@@ -110,7 +112,9 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
         return FindingsView(
             run_id=str(run_id),
             findings=[
-                _finding_view(finding, triage_by_hash.get(finding.finding_hash))
+                _finding_view(
+                    finding, triage_by_hash.get(finding.finding_hash), run.input_ref
+                )
                 for finding in findings
             ],
             coverage=_latest_coverage(session, run_id),
@@ -146,7 +150,28 @@ def _latest_coverage(session, run_id: str) -> CoverageView | None:
     )
 
 
-def _finding_view(finding: Finding, triage_row: FindingTriage | None = None) -> FindingView:
+def _finding_view(
+    finding: Finding,
+    triage_row: FindingTriage | None = None,
+    run_input_ref: str | None = None,
+) -> FindingView:
+    # REQ-S2: a secret's raw evidence is never served; the value comes only from the
+    # audited reveal endpoint. Endpoint/param evidence (a code snippet) is kept.
+    is_secret = finding.type == FindingType.SECRET.value
+    occurrences = [
+        _occurrence_view(occurrence, redact_evidence=is_secret)
+        for occurrence in sorted(
+            finding.occurrences,
+            key=lambda o: (o.source_path or "", o.offset_start or 0, o.occurrence_hash),
+        )
+    ]
+    revealable = bool(
+        is_secret
+        and run_input_ref
+        and any(
+            o.offset_start is not None and o.offset_end is not None for o in occurrences
+        )
+    )
     return FindingView(
         finding_hash=finding.finding_hash,
         type=finding.type,
@@ -155,14 +180,9 @@ def _finding_view(finding: Finding, triage_row: FindingTriage | None = None) -> 
         severity=finding.severity,
         attributes=dict(finding.attributes or {}),
         first_stage=finding.first_stage,
-        occurrences=[
-            _occurrence_view(occurrence)
-            for occurrence in sorted(
-                finding.occurrences,
-                key=lambda o: (o.source_path or "", o.offset_start or 0, o.occurrence_hash),
-            )
-        ],
+        occurrences=occurrences,
         triage=_triage_view(triage_row),
+        revealable=revealable,
     )
 
 
@@ -175,7 +195,9 @@ def _triage_view(row: FindingTriage | None) -> TriageView | None:
     )
 
 
-def _occurrence_view(occurrence: FindingOccurrence) -> OccurrenceView:
+def _occurrence_view(
+    occurrence: FindingOccurrence, redact_evidence: bool = False
+) -> OccurrenceView:
     return OccurrenceView(
         host=occurrence.host,
         raw_url=occurrence.raw_url,
@@ -184,7 +206,7 @@ def _occurrence_view(occurrence: FindingOccurrence) -> OccurrenceView:
         col=occurrence.col,
         offset_start=occurrence.offset_start,
         offset_end=occurrence.offset_end,
-        evidence=occurrence.evidence,
+        evidence=None if redact_evidence else occurrence.evidence,
         engine=occurrence.engine,
         confidence=occurrence.confidence,
         verified=occurrence.verified,

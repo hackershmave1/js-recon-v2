@@ -38,6 +38,7 @@ def get_run_findings(
                 "severity": finding.severity,
                 "attributes": finding.attributes,
                 "first_stage": finding.first_stage,
+                "revealable": finding.revealable,
                 "triage": (
                     None
                     if finding.triage is None
