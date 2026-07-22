@@ -250,3 +250,27 @@ Thin routes (`Depends(get_tenant_id)`), delegating to `probe/queries.py` +
 
 None blocking. Header/auth completeness is a known, deliberate limitation of 3a
 (the manual tester supplies their own session auth); it is recorded in §2.3 and §10.
+
+## 12. As-built amendments (final-gate fixes)
+
+Changes made after implementation, from the whole-branch code review + adversarial
+design review (all landed, tested, re-verified):
+
+- **Absolute-URL serialization (was a HIGH bug).** `example_url` is the raw JS
+  literal and is frequently absolute; the serializer must not re-prepend
+  `https://<host>` (which produced a double-scheme URL). As-built, a
+  `_request_parts` helper yields `(base, origin_target, host)`: an absolute
+  observed URL supplies its own scheme/host, and raw HTTP emits **origin-form**
+  (`METHOD /path HTTP/1.1` + `Host:`), not absolute-form.
+- **Operation-level triage.** `ReconstructedRequest.endpoint_hash` (single) became
+  `endpoint_hashes: tuple[str, ...]` (all of the operation's endpoint findings,
+  sorted), exposed on `GET /runs/{id}/requests`, so confirming an operation can
+  verdict every underlying finding (query-variant endpoints included).
+- **Honest Content-Type.** `application/json` is asserted only when body params
+  exist **and** every contributing endpoint kind is `fetch`/`axios`; for jQuery
+  (form-urlencoded) / unknown kinds the header is omitted rather than guessed
+  (REQ-C2 honesty).
+- **Triage write hardening.** `note`/`actor` are `COALESCE`d on upsert (a
+  status-only update no longer clobbers a stored note/actor), and the returned
+  `TriageState` re-reads the persisted row. A triage POST now returns `404` when
+  the `finding_hash` does not exist in the run (matches the §7 contract).

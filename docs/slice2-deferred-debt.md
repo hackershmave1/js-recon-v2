@@ -10,7 +10,7 @@ that should pull it back in.
 |---|---|---|---|---|
 | OS/network-level egress isolation | P2, T2 | **MUST** (deferred) | App-level guard only | Before running any net-emitting engine (Sourcemapper URL-fetch, Kingfisher validators) or exposing the fetcher to untrusted multi-tenant load |
 | Automated asset discovery (katana crawl, gau archive, robots.txt) | C1, Q5 | SHOULD | DISCOVER stage stubbed | When scope moves from "one asset" to "crawl a host" (M3 scale) |
-| Ephemeral/JIT/audit-logged secret reveal | S2 | MUST (reveal half) | Storage half done (hash + location) | Slice 3 (manual-probe handoff / workspace) — reveal is a workspace interaction |
+| Ephemeral/JIT/audit-logged secret reveal | S2 | MUST (reveal half) | Storage half done (hash + location) | **Slice 3b** — slice 3a shipped the P1 handoff (reconstruct + artifacts + triage) WITHOUT reveal; the reveal UX is the 3b sub-slice |
 | Freeze migration 0001 to a static snapshot | D1 | infra | 0001/0002 use `create_all` from live metadata; 0003 guarded with `IF NOT EXISTS` | Before real prod/zero-downtime upgrades (M3) — see below |
 
 ## OS/network-level egress isolation (deferred MUST — the one to watch)
@@ -48,7 +48,29 @@ Secrets are already custodied safely: finding identity is `provider:sha256(token
 (never plaintext in the hash), the raw match lives only on the RLS-scoped
 occurrence row (a reviewed decision, `docs/req-d3-finding-hash-normalization.md`
 §4.2). The remaining reveal UX — ephemeral, just-in-time, audit-logged disclosure —
-is a workspace interaction and lands with the slice-3 manual-probe handoff.
+is a workspace interaction and lands with **slice 3b**. Slice 3a shipped the
+REQ-P1 handoff (request reconstruction, curl + raw-HTTP artifacts, finding-level
+triage) but deliberately embeds a `# add auth/headers here` placeholder rather
+than any secret material — which is exactly REQ-S2's never-plaintext-by-default
+posture. 3b adds the JIT reveal that can substitute a live value.
+
+## Slice-3a deferred debt (manual-probe handoff)
+
+Slice 3a (REQ-P1) is complete on `main` (both review gates passed). Deliberately
+out of scope, plus residual review nits, tracked here:
+
+| Item | Priority | Why deferred | Trigger to revisit |
+|---|---|---|---|
+| S2 secret reveal (ephemeral/JIT/audit) | MUST | Its own sub-slice with a crypto/storage decision | **Slice 3b** (next) |
+| Static request-header extraction (Vespasian) | SHOULD | 3a reconstructs method/path/query/body; headers/auth are the manual tester's to add | Pairs with the C2 wrapper-teaching thread |
+| Postman + mitmproxy exporters | SHOULD | curl + raw-HTTP cover curl + Burp; each new format is an isolated pure serializer | On demand (team/Postman or signature-replay workflows) |
+| Cross-file base-URL resolution + wrapper-teaching (C2 SHOULDs) | SHOULD | No data model yet; relative endpoints render `{{base_url}}` | The C2 SHOULD thread |
+| `recon_object` materialization (persisted per-op projection) | — | 3a reconstructs on-demand at read time; no persisted projection needed yet | Slice 4, when the threat model needs a stable-id projection |
+
+**Residual review nits (non-blocking, from the final gates):**
+- `TriageStatus` StrEnum: the three status values live in the model CHECK, `VALID_STATUSES`, and the API — a `recon.domain.TriageStatus` + `_enum_check` would DRY them (matches the codebase convention).
+- Migration `0004` `downgrade()` hardcodes `drop_table("finding_triage")` instead of looping `TRIAGE_TABLES` (latent if the tuple grows).
+- Test coverage: no `build_requests` permutation (input-order) test though determinism is now load-bearing; only WSS (not plain WS) websocket test; no assertion on the triage note/actor **return value** after a status-only upsert (DB row is asserted); `to_http` unpacks an unused `base` var (rename `_base`).
 
 ## Migration strategy: `create_all` vs incremental DDL
 
