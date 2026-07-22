@@ -122,3 +122,14 @@ def build_requests(findings: list[FindingView]) -> list[ReconstructedRequest]:
             )
         )
     return requests
+
+
+def reconstruct_run(tenant_id: str, run_id: str) -> list[ReconstructedRequest] | None:
+    """Reconstruct every probeable request for a run, or ``None`` if the run is
+    invisible to the tenant. Reuses the findings read model (no new query)."""
+    from recon.findings import queries  # local import avoids a module-load cycle
+
+    view = queries.list_findings(tenant_id, run_id)
+    if view is None:
+        return None
+    return build_requests(view.findings)
