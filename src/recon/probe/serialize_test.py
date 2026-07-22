@@ -1,0 +1,53 @@
+from recon.probe import serialize
+from recon.probe.reconstruct import QueryParam, ReconstructedRequest
+
+
+def _req(**overrides):
+    base = dict(
+        operation="POST /api/users/{id}", method="POST", path="/api/users/{id}",
+        hosts=("api.acme.io",), query_params=(), body_params=("amount",),
+        content_type="application/json", example_url="/api/users/123",
+        probeable=True, endpoint_hash="e1",
+    )
+    base.update(overrides)
+    return ReconstructedRequest(**base)
+
+
+def test_curl_uses_concrete_example_url_and_method():
+    out = serialize.to_curl(_req())
+    assert "curl -X POST" in out
+    assert "'https://api.acme.io/api/users/123'" in out
+    assert "-H 'Content-Type: application/json'" in out
+    assert '--data \'{"amount":"<amount>"}\'' in out
+    assert "# add auth/headers here" in out
+
+
+def test_curl_falls_back_to_base_url_placeholder_when_no_host():
+    out = serialize.to_curl(_req(hosts=(), example_url="/x"))
+    assert "{{base_url}}/x" in out
+
+
+def test_curl_shell_quotes_hostile_url():
+    # A hostile path must be quoted as a single shell token, never executed.
+    out = serialize.to_curl(_req(example_url="/a; rm -rf /", body_params=(), content_type=None))
+    assert "'https://api.acme.io/a; rm -rf /'" in out
+
+
+def test_http_strips_crlf_injection_from_target():
+    out = serialize.to_http(_req(example_url="/a\r\nX-Evil: 1", body_params=(), content_type=None))
+    assert "\r" not in out
+    assert "\nX-Evil:" not in out  # the injected header never became its own line
+
+
+def test_websocket_request_has_no_artifacts():
+    req = _req(operation="WSS /socket", method="WSS", path="/socket", probeable=False)
+    assert serialize.to_curl(req) is None
+    assert serialize.to_http(req) is None
+
+
+def test_http_has_request_line_host_and_json_body():
+    out = serialize.to_http(_req())
+    assert out.startswith("POST /api/users/123 HTTP/1.1")
+    assert "Host: api.acme.io" in out
+    assert "Content-Type: application/json" in out
+    assert '{"amount":"<amount>"}' in out
