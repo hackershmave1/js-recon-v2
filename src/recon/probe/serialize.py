@@ -47,17 +47,19 @@ def _json_body(request: ReconstructedRequest) -> str | None:
 def to_curl(request: ReconstructedRequest) -> str | None:
     if not request.probeable:
         return None
+    # Sanitize method (attacker-controlled via JS literals)
+    method = _control_free(request.method)
     url = _base_url(request) + _target(request)
-    # Ensure URL is always quoted for consistency and safety
-    quoted_url = shlex.quote(url)
-    if not quoted_url.startswith(("'", '"')):
-        quoted_url = f"'{url}'"
-    host_note = f"  (host: {_control_free(request.hosts[0])})" if request.hosts else "  (host unknown)"
+    # Cap full URL; use robust POSIX single-quote with embedded-quote escaping
+    url = (url)[:_MAX_URL]
+    quoted_url = "'" + url.replace("'", "'\\''") + "'"
+    # Cap host in comment (attacker-controlled via JS string literal)
+    host_note = f"  (host: {_control_free(request.hosts[0])[:_MAX_URL]})" if request.hosts else "  (host unknown)"
     lines = [
         f"# {_control_free(request.operation)}{host_note}",
         "# add auth/headers here",
     ]
-    curl = f"curl -X {shlex.quote(request.method)} {quoted_url}"
+    curl = f"curl -X {shlex.quote(method)} {quoted_url}"
     extra: list[str] = []
     if request.content_type:
         extra.append(f"-H {shlex.quote('Content-Type: ' + request.content_type)}")
@@ -78,9 +80,12 @@ def to_curl(request: ReconstructedRequest) -> str | None:
 def to_http(request: ReconstructedRequest) -> str | None:
     if not request.probeable:
         return None
-    host = _control_free(request.hosts[0]) if request.hosts else "HOST"
+    # Sanitize method (attacker-controlled via JS literals)
+    method = _control_free(request.method)
+    # Cap host (attacker-controlled via JS string literal)
+    host = (_control_free(request.hosts[0]) if request.hosts else "HOST")[:_MAX_URL]
     lines = [
-        f"{request.method} {_target(request)} HTTP/1.1",
+        f"{method} {_target(request)} HTTP/1.1",
         f"Host: {host}",
         "# add auth/headers here",
     ]

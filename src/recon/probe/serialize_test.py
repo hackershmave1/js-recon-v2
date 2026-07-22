@@ -51,3 +51,29 @@ def test_http_has_request_line_host_and_json_body():
     assert "Host: api.acme.io" in out
     assert "Content-Type: application/json" in out
     assert '{"amount":"<amount>"}' in out
+
+
+def test_http_strips_crlf_injection_from_method():
+    # CRITICAL: method is attacker-controlled (JS fetch/axios literals).
+    # A hostile method must have CR/LF stripped to prevent header injection.
+    out = serialize.to_http(_req(method="GET\r\nX-Injected: 1"))
+    # After stripping CR/LF, the method becomes "GETX-Injected: 1" (control chars removed).
+    # The key is: no CR/LF characters in output (injection prevented).
+    assert "\r" not in out
+    assert "\nX-Injected:" not in out  # the injected header never became its own line
+    # Verify no standalone newline in the request line (single line still intact)
+    lines = out.split("\n")
+    request_line = lines[0]
+    # The request line should not contain a bare CR
+    assert "\r" not in request_line
+
+
+def test_curl_caps_oversized_url():
+    # IMPORTANT: hosts[0] is attacker-controlled (JS string literal).
+    # An oversized host must be capped to prevent unbounded artifact size.
+    huge_host = "a" * 100000
+    out = serialize.to_curl(_req(hosts=(huge_host,), example_url="/x"))
+    # Verify curl output is bounded (well under 20000 chars)
+    assert len(out) < 20000
+    # Verify the URL itself is capped to _MAX_URL
+    assert huge_host not in out  # the oversized host should not appear in full
