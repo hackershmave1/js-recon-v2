@@ -19,6 +19,11 @@ from recon.findings import normalize, queries
 # WebSocket "endpoints" are not HTTP requests, so curl/raw-HTTP do not apply.
 _WEBSOCKET_METHODS = frozenset({"WS", "WSS"})
 
+# Body serialized as JSON only for these client kinds; jQuery `data` is
+# form-urlencoded and xhr/unknown is not known, so we omit Content-Type rather
+# than assert a wrong one (REQ-C2 honesty).
+_JSON_BODY_KINDS = frozenset({"fetch", "axios"})
+
 
 @dataclass(frozen=True)
 class QueryParam:
@@ -37,7 +42,7 @@ class ReconstructedRequest:
     content_type: str | None
     example_url: str | None  # a representative concrete occurrence.raw_url
     probeable: bool          # False for websocket operations
-    endpoint_hash: str       # the finding_hash to triage / mark confirmed
+    endpoint_hashes: tuple[str, ...]  # every contributing endpoint finding_hash
 
 
 def _method_and_path(operation: str) -> tuple[str, str]:
@@ -49,8 +54,8 @@ def build_requests(findings: list[queries.FindingView]) -> list[ReconstructedReq
     """Group endpoint + param findings into one request per operation.
 
     Output is deterministic regardless of input order: params are sorted by name,
-    the endpoint_hash is the minimum among the operation's endpoint findings,
-    and example_url is selected in sorted-by-finding_hash order.
+    endpoint_hashes is the sorted tuple of every contributing endpoint finding's
+    hash, and example_url is selected in sorted-by-finding_hash order.
     """
     endpoints: dict[str, list[queries.FindingView]] = {}
     params: dict[str, list[queries.FindingView]] = {}
@@ -103,8 +108,7 @@ def build_requests(findings: list[queries.FindingView]) -> list[ReconstructedReq
         )
         sorted_body_params = tuple(sorted(body_params))
 
-        # Select endpoint_hash deterministically: use the minimum finding_hash
-        endpoint_hash = min(f.finding_hash for f in endpoint_findings)
+        kinds = {f.attributes.get("kind") for f in endpoint_findings}
 
         requests.append(
             ReconstructedRequest(
@@ -114,10 +118,10 @@ def build_requests(findings: list[queries.FindingView]) -> list[ReconstructedReq
                 hosts=hosts,
                 query_params=sorted_query_params,
                 body_params=sorted_body_params,
-                content_type="application/json" if sorted_body_params else None,
+                content_type="application/json" if (sorted_body_params and kinds <= _JSON_BODY_KINDS) else None,
                 example_url=example_url,
                 probeable=method not in _WEBSOCKET_METHODS,
-                endpoint_hash=endpoint_hash,
+                endpoint_hashes=tuple(sorted(f.finding_hash for f in endpoint_findings)),
             )
         )
     return requests

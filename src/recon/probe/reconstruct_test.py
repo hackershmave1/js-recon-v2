@@ -44,7 +44,7 @@ def test_build_groups_endpoint_with_its_params_by_operation():
     assert req.content_type == "application/json"
     assert req.example_url == "/api/users/42"
     assert req.probeable is True
-    assert req.endpoint_hash == "e1"
+    assert req.endpoint_hashes == ("e1",)
 
 
 def test_build_seeds_query_example_from_raw_url():
@@ -64,8 +64,8 @@ def test_build_unions_hosts_across_occurrences():
     ]
     (req,) = reconstruct.build_requests(findings)
     assert req.hosts == ("one.acme.io", "two.acme.io")
-    # endpoint_hash is deterministic: the minimum of the two finding_hashes
-    assert req.endpoint_hash == "e1"
+    # endpoint_hashes is deterministic: sorted tuple of every contributing endpoint's hash
+    assert req.endpoint_hashes == ("e1", "e2")
 
 
 def test_build_marks_websocket_not_probeable():
@@ -90,3 +90,31 @@ def test_build_ignores_params_without_a_matching_endpoint():
     # No endpoint finding for "POST /api/users/{id}", so zero requests are built
     reqs = reconstruct.build_requests(findings)
     assert reqs == []
+
+
+def test_build_groups_multiple_query_variants_into_one_operation():
+    """MED-2: distinct query-key variants of the same operation are one triage
+    unit — endpoint_hashes carries every contributing finding_hash, sorted."""
+    findings = [
+        _endpoint("GET /search?q", host="api.acme.io", raw_url="/search?q=shoes", finding_hash="e1"),
+        _endpoint("GET /search?page&q", host="api.acme.io", raw_url="/search?page=2&q=shoes", finding_hash="e2"),
+    ]
+    reqs = reconstruct.build_requests(findings)
+    assert len(reqs) == 1
+    assert reqs[0].endpoint_hashes == ("e1", "e2")
+
+
+def test_build_omits_content_type_for_jquery_body():
+    """MED-3: jQuery `data` is form-urlencoded, not JSON — asserting
+    application/json would be a lie the artifact then ships to the target."""
+    findings = [
+        FindingView(
+            finding_hash="e1", type="endpoint", value="POST /api/users/{id}", path="input.js",
+            severity=None, attributes={"method": "POST", "kind": "jquery"},
+            first_stage="analyzing", occurrences=[_occ(host="api.acme.io", raw_url="/api/users/42")],
+        ),
+        _param("POST /api/users/{id} body:name", "body", "name"),
+    ]
+    (req,) = reconstruct.build_requests(findings)
+    assert req.body_params == ("name",)
+    assert req.content_type is None

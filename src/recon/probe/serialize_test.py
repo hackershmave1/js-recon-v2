@@ -7,7 +7,7 @@ def _req(**overrides):
         operation="POST /api/users/{id}", method="POST", path="/api/users/{id}",
         hosts=("api.acme.io",), query_params=(), body_params=("amount",),
         content_type="application/json", example_url="/api/users/123",
-        probeable=True, endpoint_hash="e1",
+        probeable=True, endpoint_hashes=("e1",),
     )
     base.update(overrides)
     return ReconstructedRequest(**base)
