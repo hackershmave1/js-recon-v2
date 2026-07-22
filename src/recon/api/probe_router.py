@@ -49,7 +49,7 @@ def set_finding_triage(
         status=body.status, note=body.note, actor=body.actor,
     )
     if state is None:
-        raise HTTPException(status_code=404, detail="run not found")
+        raise HTTPException(status_code=404, detail="run or finding not found")
     return {
         "finding_hash": finding_hash,
         "status": state.status,
@@ -75,6 +75,6 @@ def _request_dict(request: ReconstructedRequest) -> dict:
         "content_type": request.content_type,
         "example_url": request.example_url,
         "probeable": request.probeable,
-        "endpoint_hash": request.endpoint_hash,
+        "endpoint_hashes": list(request.endpoint_hashes),
         "artifacts": artifacts,
     }

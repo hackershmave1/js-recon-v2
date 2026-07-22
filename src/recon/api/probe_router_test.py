@@ -100,3 +100,14 @@ def test_post_triage_unknown_run_is_404(client, tenant):
         headers=_headers(tenant),
     )
     assert resp.status_code == 404
+
+
+def test_post_triage_unknown_finding_is_404(client, authorized_session):
+    tenant, session_id = authorized_session
+    run_id, _hash = _seed(tenant, session_id)
+    resp = client.post(
+        f"/runs/{run_id}/findings/" + "b" * 64 + "/triage",
+        json={"status": "confirmed"},
+        headers=_headers(tenant),
+    )
+    assert resp.status_code == 404
