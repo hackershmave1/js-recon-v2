@@ -14,8 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlsplit
 
-from recon.findings import normalize
-from recon.findings.queries import FindingView
+from recon.findings import normalize, queries
 
 # WebSocket "endpoints" are not HTTP requests, so curl/raw-HTTP do not apply.
 _WEBSOCKET_METHODS = frozenset({"WS", "WSS"})
@@ -46,15 +45,15 @@ def _method_and_path(operation: str) -> tuple[str, str]:
     return method, path or "/"
 
 
-def build_requests(findings: list[FindingView]) -> list[ReconstructedRequest]:
+def build_requests(findings: list[queries.FindingView]) -> list[ReconstructedRequest]:
     """Group endpoint + param findings into one request per operation.
 
     Output is deterministic regardless of input order: params are sorted by name,
     the endpoint_hash is the minimum among the operation's endpoint findings,
     and example_url is selected in sorted-by-finding_hash order.
     """
-    endpoints: dict[str, list[FindingView]] = {}
-    params: dict[str, list[FindingView]] = {}
+    endpoints: dict[str, list[queries.FindingView]] = {}
+    params: dict[str, list[queries.FindingView]] = {}
     for finding in findings:
         if finding.type == "endpoint":
             key = normalize.operation_of_endpoint_value(finding.value)
@@ -127,8 +126,6 @@ def build_requests(findings: list[FindingView]) -> list[ReconstructedRequest]:
 def reconstruct_run(tenant_id: str, run_id: str) -> list[ReconstructedRequest] | None:
     """Reconstruct every probeable request for a run, or ``None`` if the run is
     invisible to the tenant. Reuses the findings read model (no new query)."""
-    from recon.findings import queries  # local import avoids a module-load cycle
-
     view = queries.list_findings(tenant_id, run_id)
     if view is None:
         return None
