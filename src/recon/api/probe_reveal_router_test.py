@@ -7,7 +7,6 @@ from recon.db import models
 from recon.db.base import tenant_session
 from recon.domain import FindingType
 from recon.findings import kingfisher, normalize, store
-from recon.sessions import service as sessions_service
 
 pytestmark = pytest.mark.integration
 

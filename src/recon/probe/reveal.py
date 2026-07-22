@@ -66,8 +66,38 @@ def reveal_secret(
     if target is None:
         return None
 
-    outcome = _derive(target)
-    event_type = "secret.revealed" if outcome.revealed else "secret.reveal_denied"
+    try:
+        outcome = _derive(target)
+    except Exception:
+        # An unexpected failure reading/slicing the blob (e.g. a transient
+        # botocore BotoCoreError) is still a reveal ATTEMPT and must be audited
+        # (REQ-S3). Record a value-free denial, then re-raise so the API still
+        # surfaces the 500 — we do not mask an infra fault as a normal outcome.
+        _audit(tenant_id, run_id, finding_hash, target, actor, reason,
+               event_type="secret.reveal_denied", denial="error")
+        raise
+
+    _audit(tenant_id, run_id, finding_hash, target, actor, reason,
+           event_type=("secret.revealed" if outcome.revealed else "secret.reveal_denied"),
+           denial=outcome.denial)
+    return outcome
+
+
+def _audit(
+    tenant_id: str,
+    run_id: str,
+    finding_hash: str,
+    target: _Target,
+    actor: str | None,
+    reason: str | None,
+    *,
+    event_type: str,
+    denial: str | None,
+) -> None:
+    """Commit one durable, value-free audit row for a reveal attempt.
+
+    Its own transaction, independent of anything the caller does next (including
+    re-raising), so a denial is recorded even when the attempt then fails/errors."""
     with tenant_session(tenant_id) as session:  # own transaction -> commits on exit
         record_event(
             session,
@@ -78,14 +108,13 @@ def reveal_secret(
                 "finding_hash": finding_hash,
                 "actor": actor,
                 "reason": reason,
-                "denial": outcome.denial,
+                "denial": denial,
                 "source_path": target.source_path,
                 "line": target.line,
                 "offset_start": target.offset_start,
                 "offset_end": target.offset_end,
             },
         )
-    return outcome
 
 
 def _load_target(tenant_id: str, run_id: str, finding_hash: str) -> _Target | None:

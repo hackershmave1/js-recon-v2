@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from botocore.exceptions import EndpointConnectionError
 
 from recon import storage
 from recon.db import models
@@ -175,6 +176,32 @@ def test_reveal_offsetless_secret_is_denied():
     assert outcome.revealed is False and outcome.denial == "no_offsets"
     assert reveal.DENIAL_STATUS["no_offsets"] == 422
     assert len(_events(tenant, run_id, "secret.reveal_denied")) == 1
+
+
+def test_reveal_unexpected_blob_error_is_audited_then_reraised(monkeypatch):
+    # An infra fault (e.g. a transient BotoCoreError, NOT a ClientError) reading the
+    # blob is still a reveal ATTEMPT and must be audited (REQ-S3) even though the
+    # caller still sees the original exception (the API surfaces it as a 500).
+    tenant = sessions_service.create_tenant("rv-8")
+    session_id = sessions_service.create_session(
+        tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
+    ).id
+    token = "sk_" + "live_" + "INFRAERR00"
+    run_id, finding_hash = _seed(tenant, session_id, token=token)
+
+    def _raise_infra_error(*args, **kwargs):
+        raise EndpointConnectionError(endpoint_url="http://x")
+
+    monkeypatch.setattr(storage, "get_blob", _raise_infra_error)
+
+    with pytest.raises(EndpointConnectionError):
+        reveal.reveal_secret(tenant, run_id, finding_hash, actor="tester", reason="validate")
+
+    (event,) = _events(tenant, run_id, "secret.reveal_denied")
+    assert event.payload["denial"] == "error"
+    assert event.payload["finding_hash"] == finding_hash
+    assert "value" not in event.payload
+    assert token not in json.dumps(event.payload)
 
 
 def test_reveal_unknown_or_other_tenant_returns_none_without_audit():

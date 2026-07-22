@@ -5,7 +5,6 @@ from recon.db import models
 from recon.db.base import tenant_session
 from recon.findings import analyze, kingfisher, normalize, queries
 from recon.probe import reveal
-from recon.sessions import service as sessions_service
 
 pytestmark = pytest.mark.integration
 

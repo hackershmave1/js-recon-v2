@@ -127,7 +127,7 @@ def _opt_int(value: object) -> int | None:
 
 
 def byte_offset(source: str, line: int | None, column: int | None) -> int | None:
-    """UTF-8 byte offset from Kingfisher's 1-based line + column.
+    """UTF-8 byte offset from Kingfisher's 1-based line and 0-based column.
 
     Kingfisher reports line/column but no raw offset; occurrence identity keys on
     offsets (see ``store.Occurrence._identity``), so we derive one from the source
