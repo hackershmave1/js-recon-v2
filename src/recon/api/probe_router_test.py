@@ -6,7 +6,6 @@ from recon.db import models
 from recon.db.base import tenant_session
 from recon.domain import FindingType
 from recon.findings import store
-from recon.sessions import service as sessions_service
 
 pytestmark = pytest.mark.integration
 
@@ -46,6 +45,18 @@ def test_get_requests_returns_artifacts(client, authorized_session):
     assert request["method"] == "POST"
     assert "curl -X POST" in request["artifacts"]["curl"]
     assert request["artifacts"]["http"].startswith("POST /api/users/42 HTTP/1.1")
+
+
+def test_get_requests_for_run_with_no_findings_is_empty_200(client, authorized_session):
+    tenant, session_id = authorized_session
+    with tenant_session(tenant) as session:
+        run = models.Run(tenant_id=tenant, session_id=session_id, state="done")
+        session.add(run)
+        session.flush()
+        run_id = str(run.id)
+    resp = client.get(f"/runs/{run_id}/requests", headers=_headers(tenant))
+    assert resp.status_code == 200
+    assert resp.json() == {"run_id": run_id, "count": 0, "requests": []}
 
 
 def test_get_requests_unknown_run_is_404(client, tenant):
