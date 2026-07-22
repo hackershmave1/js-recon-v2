@@ -38,6 +38,16 @@ def get_run_findings(
                 "severity": finding.severity,
                 "attributes": finding.attributes,
                 "first_stage": finding.first_stage,
+                "triage": (
+                    None
+                    if finding.triage is None
+                    else {
+                        "status": finding.triage.status,
+                        "note": finding.triage.note,
+                        "actor": finding.triage.actor,
+                        "updated_at": finding.triage.updated_at,
+                    }
+                ),
                 "occurrences": [
                     {
                         "host": occurrence.host,

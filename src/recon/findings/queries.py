@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from recon.db.base import tenant_session
-from recon.db.models import Finding, FindingOccurrence, Run, RunEvent
+from recon.db.models import Finding, FindingOccurrence, FindingTriage, Run, RunEvent
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,14 @@ class OccurrenceView:
 
 
 @dataclass(frozen=True)
+class TriageView:
+    status: str
+    note: str | None
+    actor: str | None
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class FindingView:
     finding_hash: str
     type: str
@@ -43,6 +51,7 @@ class FindingView:
     attributes: dict
     first_stage: str | None
     occurrences: list[OccurrenceView]
+    triage: TriageView | None = None
 
 
 @dataclass(frozen=True)
@@ -80,8 +89,15 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
     counters, or ``None`` if the run does not exist for this tenant. Ordered
     deterministically for stable output."""
     with tenant_session(tenant_id) as session:
-        if session.get(Run, run_id) is None:
+        run = session.get(Run, run_id)
+        if run is None:
             return None
+        triage_by_hash = {
+            row.finding_hash: row
+            for row in session.scalars(
+                select(FindingTriage).where(FindingTriage.session_id == str(run.session_id))
+            ).all()
+        }
         findings = session.scalars(
             select(Finding)
             .where(Finding.run_id == str(run_id))
@@ -93,7 +109,10 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
         ).all()
         return FindingsView(
             run_id=str(run_id),
-            findings=[_finding_view(finding) for finding in findings],
+            findings=[
+                _finding_view(finding, triage_by_hash.get(finding.finding_hash))
+                for finding in findings
+            ],
             coverage=_latest_coverage(session, run_id),
         )
 
@@ -127,7 +146,7 @@ def _latest_coverage(session, run_id: str) -> CoverageView | None:
     )
 
 
-def _finding_view(finding: Finding) -> FindingView:
+def _finding_view(finding: Finding, triage_row: FindingTriage | None = None) -> FindingView:
     return FindingView(
         finding_hash=finding.finding_hash,
         type=finding.type,
@@ -143,6 +162,16 @@ def _finding_view(finding: Finding) -> FindingView:
                 key=lambda o: (o.source_path or "", o.offset_start or 0, o.occurrence_hash),
             )
         ],
+        triage=_triage_view(triage_row),
+    )
+
+
+def _triage_view(row: FindingTriage | None) -> TriageView | None:
+    if row is None:
+        return None
+    return TriageView(
+        status=row.status, note=row.note, actor=row.actor,
+        updated_at=row.updated_at.isoformat(),
     )
 
 
