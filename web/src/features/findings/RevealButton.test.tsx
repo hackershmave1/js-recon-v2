@@ -31,4 +31,18 @@ describe("RevealButton", () => {
     await userEvent.click(screen.getByRole("button", { name: /reveal/i }));
     expect(await screen.findByText(/purged/i)).toBeInTheDocument();
   });
+
+  it("maps 422 no_offsets to a no-location message", async () => {
+    vi.spyOn(api, "revealSecret").mockRejectedValue(new ApiError(422, "cannot reveal secret: no_offsets"));
+    ui();
+    await userEvent.click(screen.getByRole("button", { name: /reveal/i }));
+    expect(await screen.findByText(/no stored location/i)).toBeInTheDocument();
+  });
+
+  it("maps 500 to a try-again message", async () => {
+    vi.spyOn(api, "revealSecret").mockRejectedValue(new ApiError(500, "boom"));
+    ui();
+    await userEvent.click(screen.getByRole("button", { name: /reveal/i }));
+    expect(await screen.findByText(/try again/i)).toBeInTheDocument();
+  });
 });
