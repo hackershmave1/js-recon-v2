@@ -18,6 +18,7 @@ export function RunProgress({ runId, onFindings }: { runId: string; onFindings: 
     const controller = new AbortController();
     const refresh = async () => {
       const [s, f] = await Promise.all([getStatus(tenantId, runId), getFindings(tenantId, runId)]);
+      if (controller.signal.aborted) return;
       setState(s.state); setStage(s.stage); setPct(s.pct);
       onFindingsRef.current(f);
     };
@@ -27,6 +28,7 @@ export function RunProgress({ runId, onFindings }: { runId: string; onFindings: 
       onEvent: (e) => setEvents((prev) => [...prev, e]),
       checkTerminal: async () => {
         const s = await getStatus(tenantId, runId);
+        if (controller.signal.aborted) return true;
         setState(s.state);
         if (TERMINAL_STATES.has(s.state)) { void refresh(); return true; }
         return false;

@@ -16,7 +16,8 @@ describe("RunProgress", () => {
       h.onEvent({ id: "1", event: "run.progress", data: '{"stage":"analyze"}' });
     });
     render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
-    await waitFor(() => expect(screen.getByText(/analyze/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("analyzing")).toBeInTheDocument());
+    expect(screen.getByText(/50%/)).toBeInTheDocument();
     expect(api.getFindings).toHaveBeenCalledWith("123e4567-e89b-12d3-a456-426614174000", "r");
   });
 });
