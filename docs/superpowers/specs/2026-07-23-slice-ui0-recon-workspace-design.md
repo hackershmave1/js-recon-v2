@@ -82,11 +82,15 @@ adversarial gate (§9/HIGH-1, MED-3):
    - Mount hashed assets: `app.mount("/assets", StaticFiles(directory=<dist>/assets))`
      (Vite fingerprints files under `/assets`).
    - Register **one** catch-all `@app.get("/{full_path:path}")` **last** that returns
-     `index.html` **only** for `GET` paths not under the API prefixes
-     `{/runs, /sessions, /healthz}`; any unknown path under those prefixes **re-raises a
-     JSON 404** so the API contract (JSON errors) is preserved. This is the SPA deep-link
+     `index.html` when the request `Accept` header contains `text/html` (a browser
+     navigation), and otherwise **re-raises a JSON 404**. This is the SPA deep-link
      fallback — `StaticFiles(html=True)` alone does **not** do it (it 404s, never serves
      `index.html`), which is why a bare mount would break a hard refresh on `/runs/:id`.
+     NOTE (refined during planning): an Accept-header rule is used instead of a
+     path-prefix rule because the client's own deep link `/runs/:id` shares the `/runs`
+     API prefix — a prefix rule would wrongly 404 it. Browser navigations send
+     `Accept: text/html` → SPA shell; the client's `fetch` calls (which set
+     `Accept: application/json`) that hit a typo'd API path stay JSON 404.
    - The whole block is guarded on `<dist>` existing (`os.path.isdir`) → a **no-op when
      absent** (unit tests / dev without a build). The guard is **required**: `StaticFiles`
      defaults to `check_dir=True` and raises at construction if the directory is missing.
