@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 
 from recon.api.deps import get_tenant_id
 from recon.sessions import service
@@ -35,6 +36,9 @@ def create_session(
         )
     except service.AuthorizationRequired as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        # A syntactically-valid tenant id that isn't provisioned violates the FK.
+        raise HTTPException(status_code=400, detail="unknown tenant") from exc
     return {
         "session_id": view.id,
         "scope_hosts": view.scope_hosts,
