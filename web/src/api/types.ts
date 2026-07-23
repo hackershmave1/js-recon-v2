@@ -6,7 +6,7 @@ export interface RunStatus {
 }
 export interface Occurrence {
   host: string | null; raw_url: string | null; source_path: string | null;
-  line: number | null; col: number | null; evidence: string | null;
+  line: number | null; col: number | null; offset_start: number | null; offset_end: number | null; evidence: string | null;
   engine: string | null; confidence: string | null; verified: boolean | null;
 }
 export interface Triage { status: string; note: string | null; actor: string | null; updated_at: string; }
