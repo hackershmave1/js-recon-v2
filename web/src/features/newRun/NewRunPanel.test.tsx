@@ -22,6 +22,7 @@ describe("NewRunPanel", () => {
     expect(submit).toBeDisabled();
     await userEvent.type(screen.getByLabelText(/scope host/i), "example.com");
     await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
+    expect(submit).toBeDisabled(); // still disabled: file not chosen yet
     await userEvent.upload(screen.getByLabelText(/javascript file/i),
       new File(["console.log(1)"], "app.js", { type: "text/javascript" }));
     expect(submit).toBeEnabled();
@@ -39,6 +40,9 @@ describe("NewRunPanel", () => {
     expect(api.createSession).toHaveBeenCalledWith("123e4567-e89b-12d3-a456-426614174000",
       { scope_hosts: ["example.com"], authorized_by: "tester" });
     expect(api.uploadRun).toHaveBeenCalled();
+    const form = vi.mocked(api.uploadRun).mock.calls[0][1];
+    expect(form.get("session_id")).toBe("s1");
+    expect(form.get("file")).toBeInstanceOf(File);
     expect(navigate).toHaveBeenCalledWith("/runs/run-9");
   });
 });
