@@ -11,6 +11,10 @@ describe("tenant", () => {
     expect(isValidTenant("123e4567-e89b-12d3-a456-426614174000")).toBe(true);
     expect(isValidTenant("123e4567e89b12d3a456426614174000")).toBe(true); // un-hyphenated
     expect(isValidTenant("not-a-uuid")).toBe(false);
+    expect(isValidTenant("{123e4567-e89b-12d3-a456-426614174000}")).toBe(true);       // braced
+    expect(isValidTenant("urn:uuid:123e4567-e89b-12d3-a456-426614174000")).toBe(true); // urn:uuid:
+    expect(isValidTenant("uuid:123e4567e89b12d3a456426614174000")).toBe(true);          // uuid: without urn: (server accepts)
+    expect(isValidTenant("12{3e4567e89b12d3a456426614174000}")).toBe(false);            // mid-string brace rejected
   });
 
   it("gate blocks until a valid tenant is entered, then persists it", async () => {

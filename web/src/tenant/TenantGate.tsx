@@ -1,10 +1,12 @@
 import { useState, type ReactNode } from "react";
 import { useTenant } from "./TenantContext";
 
-// No stricter than the server's uuid.UUID(): accept hyphenated, un-hyphenated,
-// braced, and urn forms. Normalize by stripping urn:/braces/hyphens to 32 hex.
+// No stricter than the server's Python uuid.UUID(): drop urn:/uuid: prefixes
+// (independent, global), strip only leading/trailing braces, drop hyphens,
+// then require 32 hex chars.
 export function isValidTenant(v: string): boolean {
-  const hex = v.trim().toLowerCase().replace(/^urn:uuid:/, "").replace(/[{}-]/g, "");
+  let hex = v.trim().toLowerCase().replace(/urn:/g, "").replace(/uuid:/g, "");
+  hex = hex.replace(/^[{}]+|[{}]+$/g, "").replace(/-/g, "");
   return /^[0-9a-f]{32}$/.test(hex);
 }
 
