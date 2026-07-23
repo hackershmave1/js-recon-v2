@@ -1,0 +1,8 @@
+:root { color-scheme: dark; --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --border:#30363d; --danger:#f85149; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 ui-sans-serif,system-ui,sans-serif; }
+button { background:var(--accent); color:#0d1117; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; }
+button:disabled { opacity:.5; cursor:not-allowed; }
+input, textarea, select { background:#010409; color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:6px 8px; }
+.card { border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; }
+.sev-high{color:var(--danger)} .muted{color:var(--muted)}
