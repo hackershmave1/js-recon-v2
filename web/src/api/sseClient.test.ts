@@ -51,10 +51,12 @@ describe("sseClient", () => {
     expect(f).toHaveBeenCalledTimes(2);
   });
 
-  it("falls back after 3 consecutive network errors", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network")));
+  it("falls back after exactly 3 consecutive network errors", async () => {
+    const f = vi.fn().mockRejectedValue(new Error("network"));
+    vi.stubGlobal("fetch", f);
     const onFallback = vi.fn();
     await streamRunEvents("r", "t", { onEvent: () => {}, checkTerminal: async () => false, onFallback });
+    expect(f).toHaveBeenCalledTimes(3);
     expect(onFallback).toHaveBeenCalledOnce();
   });
 
@@ -67,5 +69,13 @@ describe("sseClient", () => {
     await streamRunEvents("r", "t", { onEvent: () => {}, checkTerminal });
     expect(f.mock.calls[0][1].headers["X-Tenant-Id"]).toBe("t");
     expect(f.mock.calls[1][1].headers["Last-Event-ID"]).toBe("42");
+  });
+
+  it("calls onOpen on each successful connect", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      ok(['id: 1\nevent: run.transition\ndata: {"from":"analyzing","to":"done"}\n\n'])));
+    const onOpen = vi.fn();
+    await streamRunEvents("r", "t", { onEvent: () => {}, onOpen, checkTerminal: async () => true });
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 });
