@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     env: str = "local"
     log_level: str = "INFO"
 
+    # Absolute path to the built front-end (web/dist). When set and present, the
+    # API serves the SPA (assets + client-route fallback); absent → API-only.
+    # Docker sets RECON_SPA_DIST_DIR=/app/web/dist (the package is pip-installed,
+    # so __file__ can't locate the repo tree there). Default suits editable/dev.
+    spa_dist_dir: str | None = None
+
     # The app/workers connect as a NON-superuser role so row-level security is
     # actually enforced (a Postgres superuser bypasses RLS). Migrations and
     # bootstrap use the owning admin role.
