@@ -5,6 +5,14 @@
 FROM golang:1.23-bookworm AS sourcemapper-build
 RUN go install github.com/denandz/sourcemapper@442aed28d1841f32580dda91b4bea740c07bd2ad
 
+# Build the front-end SPA (Node), copied into the runtime image below.
+FROM node:20-bookworm AS web-build
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
 # Single application image; the same image runs as the API, the worker, and the
 # one-shot migration job (the command differs per compose service).
 FROM python:3.11-slim-bookworm
@@ -20,6 +28,9 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY alembic.ini ./
 RUN pip install .
+
+# Front-end build output; RECON_SPA_DIST_DIR (compose) points the API at it.
+COPY --from=web-build /web/dist ./web/dist
 
 # Sourcemapper binary onto PATH (root-owned, readable by the app user).
 COPY --from=sourcemapper-build /go/bin/sourcemapper /usr/local/bin/sourcemapper
