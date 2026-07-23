@@ -6,7 +6,6 @@ Redis and return. Heavy work happens in the worker process.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException
@@ -49,9 +48,11 @@ def _default_dist() -> Path:
 
 
 def _mount_spa(app: FastAPI, settings) -> None:
-    dist = Path(settings.spa_dist_dir) if settings.spa_dist_dir else _default_dist()
-    if not dist.is_dir():
-        return  # API-only; StaticFiles(check_dir=True) would otherwise raise here
+    dist = Path(settings.spa_dist_dir).resolve() if settings.spa_dist_dir else _default_dist()
+    if not (dist.is_dir() and (dist / "assets").is_dir() and (dist / "index.html").is_file()):
+        # API-only, or a partial/absent build; StaticFiles(check_dir=True) would
+        # otherwise raise here for a missing/partial dist directory.
+        return
     app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
     index = dist / "index.html"
 
