@@ -67,14 +67,19 @@ def test_partial_dist_missing_assets_is_noop(tmp_path, monkeypatch):
     assert client.get("/", headers={"accept": "text/html"}).status_code == 404
 
 
-def test_relative_setting_is_resolved(tmp_path, monkeypatch):
+def test_relative_setting_resolves_to_absolute(tmp_path, monkeypatch):
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)
     (dist / "index.html").write_text("<!doctype html><div id=root></div>", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("RECON_SPA_DIST_DIR", "dist")
+    monkeypatch.setenv("RECON_SPA_DIST_DIR", "dist")  # relative on purpose
     get_settings.cache_clear()
-    client = TestClient(create_app())
-    r = client.get("/runs/x", headers={"accept": "text/html"})
-    assert r.status_code == 200
-    assert "<div id=root>" in r.text
+    app = create_app()
+    # The mounted /assets StaticFiles must hold an ABSOLUTE directory — proof
+    # that _mount_spa applied .resolve(). Without it the mount would keep the
+    # relative "dist/assets" and break once the process cwd changes.
+    assets = [r for r in app.routes if getattr(r, "path", None) == "/assets"]
+    assert assets, "assets mount missing"
+    directory = Path(assets[0].app.directory)
+    assert directory.is_absolute()
+    assert directory == (tmp_path / "dist" / "assets")
