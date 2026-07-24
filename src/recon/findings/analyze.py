@@ -234,22 +234,19 @@ def _record_secret(
     # extracted snippet, and a line/column offset would slice the wrong bytes and
     # fail-close the reveal (409). Offsets live in source == raw.decode("utf-8",
     # "replace"), the same byte space reveal slices; the located span always
-    # round-trips. Derive line/col from the located offset so they agree with it.
+    # round-trips. A snippet not present verbatim (rare) stores offset-less ->
+    # reveal 422, never wrong bytes. line/col stay the engine's (display only).
     key = (secret.rule_id, secret.snippet)
     located = kingfisher.locate_snippet(source, secret.snippet, search_from=cursors.get(key, 0))
-    if located is None:
-        # Snippet not present verbatim (rare) — store offset-less; reveal -> 422,
-        # never a wrong-bytes reveal.
-        offset_start = offset_end = None
-        line, col = secret.line, secret.column_start
-    else:
+    if located is not None:
         offset_start, offset_end = located
         cursors[key] = offset_end  # next identical sighting searches past this one
-        line, col = kingfisher.line_col_at_byte(source, offset_start)
+    else:
+        offset_start = offset_end = None
     return _write(
         session, tenant_id, run_id, FindingType.SECRET, value, path,
         occurrence=store.Occurrence(
-            source_path=_SOURCE_NAME, line=line, col=col,
+            source_path=_SOURCE_NAME, line=secret.line, col=secret.column_start,
             offset_start=offset_start, offset_end=offset_end,
             engine="kingfisher", confidence=secret.confidence,
             verified=True if secret.validation_status == "Active" else None,

@@ -106,22 +106,13 @@ def test_locate_snippet_repeats_get_distinct_offsets_via_cursor():
     assert first is not None
     second = kingfisher.locate_snippet(source, "TOKEN123", search_from=first[1])
     assert second is not None and second[0] > first[0]  # a distinct second sighting
-    # A cursor that overshoots falls back to the first match rather than dropping it.
-    assert kingfisher.locate_snippet(source, "TOKEN123", search_from=10_000) == first
+    # A cursor past the last sighting finds nothing (honest offset-less), not a re-collision.
+    assert kingfisher.locate_snippet(source, "TOKEN123", search_from=10_000) is None
 
 
 def test_locate_snippet_absent_or_empty_is_none():
     assert kingfisher.locate_snippet("nothing to see", "SECRET") is None
     assert kingfisher.locate_snippet("anything", "") is None
-
-
-def test_line_col_at_byte_agrees_with_located_offset():
-    source = 'const ID = "x";\nconst KEY = "wJalrSECRETzz";\n'
-    located = kingfisher.locate_snippet(source, "wJalrSECRETzz")
-    assert located is not None
-    line, col = kingfisher.line_col_at_byte(source, located[0])
-    assert line == 2  # the secret is on the 2nd line (not the engine's reported one)
-    assert source.split("\n")[line - 1][col : col + len("wJalrSECRETzz")] == "wJalrSECRETzz"
 
 
 def test_scan_missing_binary_degrades_gracefully():

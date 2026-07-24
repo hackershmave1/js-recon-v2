@@ -168,24 +168,10 @@ def locate_snippet(
         return None
     data = source.encode("utf-8")
     needle = snippet.encode("utf-8")
-    idx = data.find(needle, max(search_from, 0))
-    if idx < 0 and search_from > 0:
-        idx = data.find(needle)  # cursor overshot (out-of-order sightings) -> first
+    idx = data.find(needle, search_from)
     if idx < 0:
         return None
     return idx, idx + len(needle)
-
-
-def line_col_at_byte(source: str, byte_offset: int) -> tuple[int, int]:
-    """1-based line + 0-based char column of a byte offset (for honest display).
-
-    Derived from the located offset so the occurrence's line/col agree with its
-    byte span — Kingfisher's own line/column can point at a different line than the
-    extracted snippet (see :func:`locate_snippet`)."""
-    prefix = source.encode("utf-8")[: max(byte_offset, 0)].decode("utf-8", "replace")
-    line = prefix.count("\n") + 1
-    col = len(prefix) - (prefix.rfind("\n") + 1)
-    return line, col
 
 
 def scan(
