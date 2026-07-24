@@ -13,3 +13,6 @@ dist
 build
 *.egg-info
 Javascript recon app redesign
+node_modules
+**/node_modules
+web/dist

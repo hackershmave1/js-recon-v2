@@ -31,6 +31,26 @@ jobs:
           RECON_REQUIRE_ENGINES: "1"
         run: pytest -m "not integration"
 
+  # Front-end lane: lints, tests, and builds the SPA on its own (no Python/Docker
+  # needed), so a broken web build fails fast instead of only surfacing during the
+  # Docker image build in integration-tests.
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
   # Full lane: builds the app image (which compiles the pinned Sourcemapper commit
   # with Go) and brings up the data stores, then runs the whole suite inside the
   # image. This is where Sourcemapper's real-binary golden-map contract test and

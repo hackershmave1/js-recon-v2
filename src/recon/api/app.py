@@ -6,7 +6,11 @@ Redis and return. Heavy work happens in the worker process.
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from pathlib import Path
+
+from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from recon.api import findings_router, probe_router, runs_router, sessions_router
@@ -34,7 +38,32 @@ def create_app() -> FastAPI:
         return {"status": "ok" if healthy else "degraded", "checks": checks}
 
     log.info("api.started", env=settings.env)
+    _mount_spa(app, settings)
     return app
+
+
+def _default_dist() -> Path:
+    # Editable/dev layout: src/recon/api/app.py → repo_root/web/dist.
+    return Path(__file__).resolve().parents[3] / "web" / "dist"
+
+
+def _mount_spa(app: FastAPI, settings) -> None:
+    dist = Path(settings.spa_dist_dir).resolve() if settings.spa_dist_dir else _default_dist()
+    if not (dist.is_dir() and (dist / "assets").is_dir() and (dist / "index.html").is_file()):
+        # API-only, or a partial/absent build; StaticFiles(check_dir=True) would
+        # otherwise raise here for a missing/partial dist directory.
+        return
+    app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+    index = dist / "index.html"
+
+    # Registered last → real API routes match first. Browser navigations (Accept
+    # includes text/html) get the SPA shell so client-side routes like /runs/:id
+    # deep-link; anything else (e.g. a typo'd API path from fetch) stays JSON 404.
+    @app.get("/{full_path:path}")
+    def spa_fallback(full_path: str, accept: str = Header(default="")) -> FileResponse:
+        if "text/html" in accept:
+            return FileResponse(index)
+        raise HTTPException(status_code=404, detail="not found")
 
 
 def _check_redis() -> bool:
