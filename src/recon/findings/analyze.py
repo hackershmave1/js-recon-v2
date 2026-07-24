@@ -107,8 +107,13 @@ def analyze_run(redis: Redis, *, tenant_id: str, run_id: str) -> Coverage:
         # NOTE (follow-up): scanning recovered sources for secrets (real per-source
         # paths for secrets too) is deferred; endpoint/param paths are the D3 win here.
         secret_path = normalize.normalize_source_path(_SOURCE_NAME)
+        # Per (rule, snippet) search cursor so N identical secret sightings map to N
+        # distinct byte offsets (distinct occurrences, REQ-C2) instead of collapsing.
+        secret_cursors: dict[tuple[str, str], int] = {}
         for secret in scan.secrets:
-            written += _record_secret(session, tenant_id, run_id, secret_path, source, secret)
+            written += _record_secret(
+                session, tenant_id, run_id, secret_path, source, secret, secret_cursors
+            )
         files = tuple(
             FileCoverage(path=path, attributed=counts[0], unattributed=counts[1])
             for path, counts in sorted(per_file.items())
@@ -214,22 +219,38 @@ def _record_endpoint(
     return written
 
 
-def _record_secret(session, tenant_id: str, run_id: str, path: str, source: str, secret: RawSecret) -> int:
+def _record_secret(
+    session, tenant_id: str, run_id: str, path: str, source: str,
+    secret: RawSecret, cursors: dict[tuple[str, str], int],
+) -> int:
     # value = provider:sha256(token) — the raw token is never hashed in cleartext.
     value = normalize.normalize_secret_value(secret.snippet, secret.rule_id)
-    offset = kingfisher.byte_offset(source, secret.line, secret.column_start)
-    offset_end = offset + len(secret.snippet.encode("utf-8")) if offset is not None else None
-    # REQ-S2 (storage model A): the raw secret is NOT stored. We keep only the
-    # identity hash (finding.value) + byte offsets; the plaintext is re-derived
-    # just-in-time from the source blob on an audited reveal (recon.probe.reveal),
-    # so the platform is never a concentrated store of live credentials. Offsets
-    # are computed against source == raw.decode("utf-8","replace"); reveal MUST
-    # slice that same byte space (see recon.probe.reveal).
+    # REQ-S2 (storage model A): the raw secret is NOT stored — only the identity
+    # hash (finding.value) + byte offsets; the plaintext is re-derived just-in-time
+    # from the source blob on an audited reveal (recon.probe.reveal), so the platform
+    # is never a concentrated store of live credentials. Locate the snippet by
+    # CONTENT (kingfisher.locate_snippet), NOT the engine's line/column — those mark
+    # the rule match region, which for some rules sits on a different line than the
+    # extracted snippet, and a line/column offset would slice the wrong bytes and
+    # fail-close the reveal (409). Offsets live in source == raw.decode("utf-8",
+    # "replace"), the same byte space reveal slices; the located span always
+    # round-trips. Derive line/col from the located offset so they agree with it.
+    key = (secret.rule_id, secret.snippet)
+    located = kingfisher.locate_snippet(source, secret.snippet, search_from=cursors.get(key, 0))
+    if located is None:
+        # Snippet not present verbatim (rare) — store offset-less; reveal -> 422,
+        # never a wrong-bytes reveal.
+        offset_start = offset_end = None
+        line, col = secret.line, secret.column_start
+    else:
+        offset_start, offset_end = located
+        cursors[key] = offset_end  # next identical sighting searches past this one
+        line, col = kingfisher.line_col_at_byte(source, offset_start)
     return _write(
         session, tenant_id, run_id, FindingType.SECRET, value, path,
         occurrence=store.Occurrence(
-            source_path=_SOURCE_NAME, line=secret.line, col=secret.column_start,
-            offset_start=offset, offset_end=offset_end,
+            source_path=_SOURCE_NAME, line=line, col=col,
+            offset_start=offset_start, offset_end=offset_end,
             engine="kingfisher", confidence=secret.confidence,
             verified=True if secret.validation_status == "Active" else None,
         ),

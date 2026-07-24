@@ -11,9 +11,25 @@ pytestmark = pytest.mark.integration
 
 def test_reveal_roundtrips_real_kingfisher_offsets(redis, authorized_session, engines_required):
     tenant, session_id = authorized_session
-    # Split literals so no secret-shaped token is committed; kingfisher reassembles.
-    token = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEF0123"
-    js = f'const apiKey = "{token}";\nfetch("/api/ping");\n'
+    # Split literals so no secret-shaped token is committed; kingfisher reassembles
+    # the CONTIGUOUS tokens at runtime (the "+" splits live only in this file).
+    #
+    # Two providers on DIFFERENT lines, with the AWS access-key id ABOVE its secret
+    # access key. AWS-style rules report their match region near the id — a
+    # different line than the extracted secret snippet — so deriving the byte offset
+    # from the engine's line/column sliced the wrong bytes and the reveal
+    # fail-closed (409). This guards the content-locating fix
+    # (recon.findings.kingfisher.locate_snippet) for AWS *and* Stripe, not just a
+    # single single-line token.
+    aws_id = "AKIA" + "2E4XZ7K9QW3RT8YV"
+    aws_secret = "wJalr" + "XUtnFEMIK7MDENGbPxRfiCYzEXKEYFAKE01"
+    stripe_key = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dcTESTONLY"
+    js = (
+        f'const AWS_ACCESS_KEY_ID = "{aws_id}";\n'
+        f'const AWS_SECRET_ACCESS_KEY = "{aws_secret}";\n'
+        f'const STRIPE = "{stripe_key}";\n'
+        'fetch("/api/ping");\n'
+    )
     if kingfisher.scan(js.encode("utf-8")).status == "unavailable":
         if engines_required:
             pytest.fail("kingfisher binary required (RECON_REQUIRE_ENGINES) but unavailable")
@@ -31,13 +47,19 @@ def test_reveal_roundtrips_real_kingfisher_offsets(redis, authorized_session, en
     analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id)
 
     result = queries.list_findings(tenant, run_id)
-    secret = next(f for f in result.findings if f.type == "secret")
-    assert secret.revealable is True
+    secrets = [f for f in result.findings if f.type == "secret"]
+    assert secrets, "expected real Kingfisher to report secret findings"
 
-    # The round-trip: real Kingfisher line/column -> byte_offset -> blob slice ->
-    # provider:sha256 must match. A 409 here means byte_offset's column convention
-    # is wrong for the real engine (see contingency below), NOT that reveal is broken.
-    outcome = reveal.reveal_secret(tenant, run_id, secret.finding_hash)
-    assert outcome is not None and outcome.revealed is True
-    assert token in outcome.value
-    assert normalize.strip_secret_delimiters(outcome.value) == token
+    # EVERY secret must reveal (no 409), and the AWS secret + Stripe key must both
+    # round-trip to their exact plaintext. Before the fix, the AWS secret 409'd
+    # because its offset was derived from the (different-line) match region.
+    revealed: list[str] = []
+    for secret in secrets:
+        assert secret.revealable is True
+        outcome = reveal.reveal_secret(tenant, run_id, secret.finding_hash)
+        assert outcome is not None and outcome.revealed is True, (
+            f"reveal fail-closed for {secret.value} (offset did not round-trip)"
+        )
+        revealed.append(normalize.strip_secret_delimiters(outcome.value))
+    assert aws_secret in revealed
+    assert stripe_key in revealed

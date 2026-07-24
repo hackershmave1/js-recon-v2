@@ -25,7 +25,7 @@ def test_record_secret_stores_offsets_but_not_plaintext():
         session.add(run)
         session.flush()
         run_id = str(run.id)
-        analyze._record_secret(session, tenant, run_id, "input.js", source, secret)
+        analyze._record_secret(session, tenant, run_id, "input.js", source, secret, {})
 
     with tenant_session(tenant) as session:
         occurrence = session.query(models.FindingOccurrence).one()

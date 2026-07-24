@@ -148,6 +148,46 @@ def byte_offset(source: str, line: int | None, column: int | None) -> int | None
     return len(prefix.encode("utf-8"))
 
 
+def locate_snippet(
+    source: str, snippet: str, *, search_from: int = 0
+) -> tuple[int, int] | None:
+    """Byte ``[start, end)`` of ``snippet`` within ``source``, located by CONTENT.
+
+    In the utf-8/replace byte space reveal slices (see ``recon.probe.reveal``:
+    ``source == raw.decode("utf-8","replace")``, so ``source.encode("utf-8")``
+    reproduces it). We do NOT derive this from Kingfisher's line/column: those mark
+    the rule's *match region*, which for some rules (e.g. an AWS secret-access-key
+    keyed off a nearby access-key id) is not where the extracted ``snippet`` lives —
+    a line/column offset then slices the wrong bytes and an audited reveal
+    fail-closes 409. Locating the exact snippet bytes guarantees the round-trip:
+    ``data[start:end]`` IS the snippet, so ``normalize_secret_value`` matches the
+    finding identity. ``search_from`` lets N identical sightings map to N distinct
+    offsets (occurrence honesty, REQ-C2). Returns ``None`` if the snippet is not
+    present verbatim — the finding is then stored offset-less (reveal -> 422)."""
+    if not snippet:
+        return None
+    data = source.encode("utf-8")
+    needle = snippet.encode("utf-8")
+    idx = data.find(needle, max(search_from, 0))
+    if idx < 0 and search_from > 0:
+        idx = data.find(needle)  # cursor overshot (out-of-order sightings) -> first
+    if idx < 0:
+        return None
+    return idx, idx + len(needle)
+
+
+def line_col_at_byte(source: str, byte_offset: int) -> tuple[int, int]:
+    """1-based line + 0-based char column of a byte offset (for honest display).
+
+    Derived from the located offset so the occurrence's line/col agree with its
+    byte span — Kingfisher's own line/column can point at a different line than the
+    extracted snippet (see :func:`locate_snippet`)."""
+    prefix = source.encode("utf-8")[: max(byte_offset, 0)].decode("utf-8", "replace")
+    line = prefix.count("\n") + 1
+    col = len(prefix) - (prefix.rfind("\n") + 1)
+    return line, col
+
+
 def scan(
     source: bytes,
     *,
