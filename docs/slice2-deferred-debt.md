@@ -145,7 +145,7 @@ error handling, was fixed). Live visual walkthrough passed against the Docker st
 
 | Item | Where | Priority | Status | Trigger / fix |
 |---|---|---|---|---|
-| Reveal 409 on fresh AWS/Stripe secrets | backend `recon.findings` analyze offset + `recon.probe.reveal` | **bug** | Open (chip `task_9828c115`) | Fresh secret's stored byte-offset span doesn't hash-match the matched-secret bytes on re-slice → JIT reveal fail-closes 409. Slice-3b CI round-trip likely narrower than AWS/Stripe rules. Fix + add real-Kingfisher AWS/Stripe round-trip test. |
+| Reveal 409 on fresh AWS/Stripe secrets | backend `recon.findings` analyze offset + `recon.probe.reveal` | **bug** | **FIXED (7bedf21)** | Root cause: Kingfisher's line/column mark the rule *match region* (for AWS-style rules, a different line than the extracted snippet), so the derived byte offset sliced the wrong bytes → 409. Fix: `analyze._record_secret` now locates the snippet by **content** (`kingfisher.locate_snippet`, per-snippet cursor for repeats; `None`→422 when absent); real-Kingfisher round-trip test extended to AWS + Stripe on different lines. |
 | Dev-only: hard-refresh on `/runs/:id` blank | `web/vite.config.ts` proxy | Minor (dev DX) | Open | The `/runs` proxy rule forwards the *document* request to the api (returns built index.html on the dev origin → missing assets). Prod (one-origin api catch-all) is fine. Fix: Vite proxy `bypass` returning the dev index.html for `Accept: text/html` navigations, or move API under a distinct prefix. |
 
 **Deferred Minors (from per-task + final review; final reviewer = fine-to-defer):**
