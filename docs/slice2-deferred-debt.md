@@ -131,3 +131,29 @@ because the dev `pgdata` volume predated the column).
   `depends_on migrate: service_completed_successfully`, so `docker compose run api`
   re-triggers migrate and fails the job. `docker compose up -d migrate` alone
   swallows the exit code — don't rely on step 1 to surface a migration failure.
+
+---
+
+## Slice UI-0 (first UI slice — React+Vite Recon Workspace) — deferred debt
+
+Slice UI-0 built a thin React+Vite UI over the done backend (upload → watch → orient →
+triage → reveal). Code complete on branch `slice-ui0`; both §4 gates passed (adversarial
+design at design-time; higher-model whole-branch review — its one must-fix, RunProgress
+error handling, was fixed). Live visual walkthrough passed against the Docker stack.
+
+**Surfaced issues (NOT UI-0 defects — separate work):**
+
+| Item | Where | Priority | Status | Trigger / fix |
+|---|---|---|---|---|
+| Reveal 409 on fresh AWS/Stripe secrets | backend `recon.findings` analyze offset + `recon.probe.reveal` | **bug** | Open (chip `task_9828c115`) | Fresh secret's stored byte-offset span doesn't hash-match the matched-secret bytes on re-slice → JIT reveal fail-closes 409. Slice-3b CI round-trip likely narrower than AWS/Stripe rules. Fix + add real-Kingfisher AWS/Stripe round-trip test. |
+| Dev-only: hard-refresh on `/runs/:id` blank | `web/vite.config.ts` proxy | Minor (dev DX) | Open | The `/runs` proxy rule forwards the *document* request to the api (returns built index.html on the dev origin → missing assets). Prod (one-origin api catch-all) is fine. Fix: Vite proxy `bypass` returning the dev index.html for `Accept: text/html` navigations, or move API under a distinct prefix. |
+
+**Deferred Minors (from per-task + final review; final reviewer = fine-to-defer):**
+- `web/.oxlintrc.json` + `oxlint` devDependency unused (lint script is `tsc -b --noEmit`) — remove or wire in. Stock Vite `web/README.md` also references unused tooling.
+- `sseClient.ts`: `parseFrame` drops a whole frame if its first line is a `:`-comment (theoretical — server keep-alives are standalone frames); no `AbortSignal` cancellation test; terse `h`/`e` identifiers.
+- `sseClient.ts` (M-1): clean-close reconnect has no backoff/cap — a fast-closing non-terminal stream (abnormal server) would hot-loop. Add a ~1s delay before the clean-close reconnect.
+- `RunProgress.tsx` / `FindingDetail.tsx`: occurrence lists use array-index React keys (harmless — append-only lists).
+- `FindingsView`: the `coverage === null` branch is untested.
+- `sessions_router.py` (M-2): `except IntegrityError` is broad — a future unique/check constraint on session insert would also read as "unknown tenant"; narrow or comment if constraints grow.
+- `TriageControls.current` typed `string` rather than the triage-status union (compile-time only).
+- `NewRunPanel.tsx` uses two `react` imports vs the combined style (arguably more correct under `verbatimModuleSyntax`; leave).
