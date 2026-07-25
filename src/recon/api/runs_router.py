@@ -24,6 +24,7 @@ from redis import Redis
 
 from recon.api.deps import get_redis, get_tenant_id
 from recon.config import get_settings
+from recon.discover import queries as discover_queries
 from recon.domain import TERMINAL_STATES
 from recon.events import stream
 from recon.runs import coordinator, queries, service
@@ -144,6 +145,22 @@ def get_status(
         "heartbeat_at": status.heartbeat_at,
         "stalled": status.stalled,
     }
+
+
+@router.get("/runs/{run_id}/assets")
+def get_run_assets(
+    run_id: str,
+    tenant_id: str = Depends(get_tenant_id),
+) -> dict:
+    """The discovered in-scope .js assets manifest for a crawl run (REQ-C2).
+
+    Returns a `pending` placeholder until the DISCOVERING stage records one."""
+    if queries.get_status(tenant_id, run_id) is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    manifest = discover_queries.get_assets_manifest(tenant_id, run_id)
+    if manifest is None:
+        return {"domain": None, "status": "pending", "assets": []}
+    return manifest
 
 
 def _sse_frame(event: dict) -> str:
