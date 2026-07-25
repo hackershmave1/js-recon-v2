@@ -21,7 +21,7 @@ from recon.config import get_settings
 
 # Artifact kinds stored as blobs. Extended as later slices add source maps,
 # reconstructed sources, and reports.
-BLOB_KINDS = frozenset({"input", "raw_js", "source_map", "reconstructed", "report"})
+BLOB_KINDS = frozenset({"input", "raw_js", "source_map", "reconstructed", "report", "assets"})
 
 
 def object_key(tenant_id: str, run_id: str, kind: str, content: bytes) -> str:
