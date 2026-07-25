@@ -46,7 +46,7 @@ def parse_assets(stdout: bytes) -> list[str]:
             continue
         try:
             row = json.loads(line)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             continue
         url = _extract_url(row)
         if url is None:

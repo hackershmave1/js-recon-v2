@@ -13,6 +13,7 @@ def test_build_argv_is_headless_scoped_jsonl():
     assert argv[argv.index("-u") + 1] == "https://acme.io"
     assert argv[argv.index("-system-chrome-path") + 1] == "/usr/bin/chromium"
     assert "-em" in argv and argv[argv.index("-em") + 1] == "js"
+    assert "-jc" not in argv  # discovery-only: katana enumerates, Vespasian parses
 
 
 def test_parse_assets_keeps_ordered_unique_js_urls():
