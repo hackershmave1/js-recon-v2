@@ -26,6 +26,8 @@ def test_build_argv_headless_is_opt_in():
     assert "-no-sandbox" in argv
     assert argv[argv.index("-headless-options") + 1] == "--disable-dev-shm-usage"
     assert "-em" not in argv
+    assert "-system-chrome" not in argv
+    assert "-system-chrome-path" not in argv
 
 
 def test_parse_assets_keeps_ordered_unique_js_urls():

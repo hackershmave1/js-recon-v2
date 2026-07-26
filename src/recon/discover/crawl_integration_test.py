@@ -1,7 +1,8 @@
 """Real katana+chromium crawl of a local fixture site (crawl+parse layer).
 
 Runs where katana+chromium exist (the container/CI); SKIPS on a host without
-katana. Verifies the real headless crawl discovers the fixture's linked .js.
+katana. Verifies the real standard (default, non-headless) crawl discovers the
+fixture's linked .js. Headless mode is opt-in and not verified here.
 progress.beat is patched so no DB/redis is needed — the heartbeat path is
 unit-tested in harness_test.py. The egress-drop security behavior is asserted
 separately (it cannot be exercised via discover_run against a private-IP fixture,

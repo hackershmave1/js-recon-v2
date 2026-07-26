@@ -6,7 +6,7 @@ never pass ``-em`` (extension match): ``-em js`` was tried and empirically
 filtered out *everything* katana would otherwise find, and it is redundant
 anyway since ``parse_assets`` below already keeps only ``.js`` URLs. Crawl mode
 defaults to standard (non-headless), which is the proven-working path; headless
-is opt-in via ``crawl_headless`` (see the ``headless`` param docstring below for
+is opt-in via ``crawl_headless`` (see the inline comment below for
 why). Flags drift between katana releases; re-verify against the vendored
 version (``katana -h``) and capture parse fixtures from real output. The JSON
 field carrying the crawled URL is ``request.endpoint`` (top-level ``endpoint``
