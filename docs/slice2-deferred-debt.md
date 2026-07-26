@@ -157,3 +157,35 @@ error handling, was fixed). Live visual walkthrough passed against the Docker st
 - `sessions_router.py` (M-2): `except IntegrityError` is broad — a future unique/check constraint on session insert would also read as "unknown tenant"; narrow or comment if constraints grow.
 - `TriageControls.current` typed `string` rather than the triage-status union (compile-time only).
 - `NewRunPanel.tsx` uses two `react` imports vs the combined style (arguably more correct under `verbatimModuleSyntax`; leave).
+
+## Slice X — katana crawl discovery (surfaced issues + deferred debt)
+
+Slice X = a real `DISCOVERING` stage: crawl an in-scope domain with **katana** →
+in-scope `.js` assets manifest (surfaced via `GET /runs/{id}/assets` + UI inventory).
+Fetch/analyze stay single-asset (a domain run flows DISCOVER → FETCH no-op →
+ANALYZE no-op → DONE, manifest = deliverable). Standard-mode crawl **proven live**
+(discovers `app.js` + `vendor.js` from the `recon.test` fixture). Both §4 gates passed:
+adversarial design at design-time returned **DO NOT BUILD AS SPECIFIED** → the slice
+was split into Slice X + Slice Y; the higher-model whole-branch review returned
+**MERGE AFTER FIXES** — its one blocker (an existing full-run integration test that,
+once discovery became real, crawled the public internet) was fixed (`a800d31`).
+
+| Item | Where | Priority | Status | Trigger / fix |
+|---|---|---|---|---|
+| Headless crawl unverified in-container | `recon.discover.katana.build_argv` (headless branch) | Deferred (opt-in) | Open | katana's go-rod launcher **rejects the vendored Debian chromium** (`-system-chrome-path` → "system chrome binary does not exist") and downloads its own (~13s, which eats `-crawl-duration`). `crawl_headless` defaults **False** (standard, proven), so this doesn't gate the happy path. Fix: pre-bake go-rod's chromium revision into the image OR attach via `-chrome-ws-url`; account for browser launch time in the crawl budget. |
+| Crawl-time subresource SSRF | headless crawl (Chrome loads subresources outside `egress.py`) | Accepted residual risk | Open | App-level egress only (scope flags + per-URL `egress.validate_target` on manifest entries). Hardening path: deployment network control (no route to metadata/RFC1918) → forced egress proxy enforcing `egress.py` → netns/nftables. |
+| `discover_run` crawls for any in-scope host target | `recon.discover.crawl.discover_run` | Minor (latent) | Open | It crawls for **any** run whose `target` is a non-empty in-scope host, not only bare-domain crawl runs. No shipped UI path hits this (upload → `target=None` → early-return; crawl → bare domain), but an API-only `POST /runs` with a full asset URL would trigger a domain crawl (and an out-of-scope `target` `FatalError`s a run that previously succeeded). Guard: only crawl when `target` has no path. |
+| Live in-UI crawl-mode walkthrough not done | `web/` crawl mode | Deferred | Open | Needs the Task-9 SPA baked into the api image = a full docker rebuild (~hours in this env). Standard crawl proven at the katana/parse layer instead. |
+
+**Deferred Minors (per-task + final review; reviewer = fine-to-defer):**
+- `harness.py`: temp-file fd leak if `subprocess.Popen` raises before the `try` — wrap `out` in `try/finally`.
+- `storage.py:22-24`: `BLOB_KINDS` comment not updated to mention `"assets"`.
+- `queries.py`: `dict(row[0])` redundant copy; the "event exists but no `assets_ref` → None" branch is untested.
+- FE `AssetsInventory`: renders for every run (upload runs show a permanent "0 assets · pending" card); no loading placeholder; list `key={a.url}` (dup-source risk).
+- `harness_test.py` backstop test asserts `killpg` called but not the `getpgid(pid)` argument.
+- Some Slice X commit bodies are trailer-only.
+
+**Slice Y (the gate-deferred multi-asset half):** multi-asset fetch/analyze (loop the
+manifest), the occurrence **asset-dimension migration**, secret-reveal routing to
+per-asset blobs, and **PARTIAL** completeness (REQ-D5). **OpenAPI/Swagger export** is
+the other half of "complete the first chunk".

@@ -1,4 +1,4 @@
-import type { FindingsResponse, RunRef, RunStatus, SessionView, Triage } from "./types";
+import type { AssetsManifest, FindingsResponse, RunRef, RunStatus, SessionView, Triage } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -37,6 +37,16 @@ export function createSession(
 
 export function uploadRun(tenantId: string, form: FormData): Promise<RunRef> {
   return request("/runs/upload", { method: "POST", body: form }, tenantId);
+}
+
+export function startRun(
+  tenantId: string, body: { session_id: string; target: string },
+): Promise<RunRef> {
+  return request("/runs", json("POST", body), tenantId);
+}
+
+export function getAssets(tenantId: string, runId: string): Promise<AssetsManifest> {
+  return request(`/runs/${encodeURIComponent(runId)}/assets`, {}, tenantId);
 }
 
 export function getStatus(tenantId: string, runId: string): Promise<RunStatus> {

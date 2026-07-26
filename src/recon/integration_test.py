@@ -41,7 +41,7 @@ def _drive(redis, run_id, tenant, *, max_passes=30) -> str:
 
 def test_full_run_reaches_done(redis, authorized_session):
     tenant, session_id = authorized_session
-    view = coordinator.start_run(redis, tenant_id=tenant, session_id=session_id, target="acme.io")
+    view = coordinator.start_run(redis, tenant_id=tenant, session_id=session_id)
     assert view.state == RunState.QUEUED.value
     final = _drive(redis, view.id, tenant)
     assert final == RunState.DONE.value

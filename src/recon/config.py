@@ -60,6 +60,22 @@ class Settings(BaseSettings):
     fetch_min_host_interval_seconds: float = 1.0
     fetch_global_max_per_second: int = 10
 
+    # Discovery/crawl stage (Slice X): headless katana crawl of an in-scope domain.
+    # crawl_heartbeat_interval_seconds must stay well under
+    # heartbeat_stall_threshold_seconds so the poll loop renews the job lease during
+    # a long crawl and no peer worker reclaims the RUNNING job (double-crawl).
+    katana_bin: str = "katana"
+    # Reserved: katana's go-rod launcher currently rejects a system chrome path
+    # (uses its own browser); kept for when that is resolved.
+    system_chrome_path: str = "/usr/bin/chromium"
+    crawl_headless: bool = False
+    crawl_depth: int = 3
+    crawl_duration_seconds: float = 120.0
+    crawl_max_assets: int = 500
+    crawl_max_output_bytes: int = 32 * 1024 * 1024  # 32 MiB
+    crawl_heartbeat_interval_seconds: float = 10.0
+    crawl_kill_grace_seconds: float = 15.0
+
     # Object storage — blobs are referenced by key, never stored in a row (REQ-D2).
     s3_endpoint_url: str | None = None
     s3_access_key: str | None = None

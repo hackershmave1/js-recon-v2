@@ -14,6 +14,7 @@ import time
 from redis import Redis
 
 from recon.config import get_settings
+from recon.discover import crawl
 from recon.domain import JobState, QueueName, RunStage, RunState
 from recon.fetch import fetch
 from recon.findings import analyze
@@ -68,6 +69,19 @@ def _enter_stage(redis: Redis, tenant_id: str, run_id: str, stage: RunStage, sta
         return True
     except (sm.InvalidTransition, service.TransitionConflict):
         return False
+
+
+def _run_stage_work(
+    redis: Redis, stage: RunStage, *, tenant_id: str, run_id: str, job_id: str
+) -> None:
+    """Dispatch a stage to its real engine. Stubbed stages (INGEST/CORRELATE) are
+    no-ops here; a bare-domain FETCH/ANALYZE also no-op (Slice X)."""
+    if stage == RunStage.DISCOVERING:
+        crawl.discover_run(redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id)
+    elif stage == RunStage.FETCHING:
+        fetch.fetch_run(redis, tenant_id=tenant_id, run_id=run_id)
+    elif stage == RunStage.ANALYZING:
+        analyze.analyze_run(redis, tenant_id=tenant_id, run_id=run_id)
 
 
 def process_message(redis: Redis, queue: QueueName, msg_id: str, message: dict) -> str:
@@ -131,13 +145,11 @@ def process_message(redis: Redis, queue: QueueName, msg_id: str, message: dict) 
                     done=step,
                     total=STUB_STEPS,
                 )
-            # Real work. The fetch stage pulls the run's target asset through the
-            # egress guard into the input blob; analyze extracts findings from it.
-            # A failure in either routes to retry/DLQ.
-            if stage == RunStage.FETCHING:
-                fetch.fetch_run(redis, tenant_id=tenant_id, run_id=run_id)
-            if stage == RunStage.ANALYZING:
-                analyze.analyze_run(redis, tenant_id=tenant_id, run_id=run_id)
+            # Real work. Discover crawls the run's domain into an assets manifest;
+            # fetch pulls the run's target asset through the egress guard into the
+            # input blob; analyze extracts findings from it. A failure in any of
+            # these routes to retry/DLQ.
+            _run_stage_work(redis, stage, tenant_id=tenant_id, run_id=run_id, job_id=job_id)
         except Exception as exc:  # noqa: BLE001 - failure routing is intentional
             return _handle_failure(
                 redis, queue, msg_id, message, exc,
