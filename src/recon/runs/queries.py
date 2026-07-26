@@ -17,6 +17,7 @@ from recon.db.base import tenant_session
 from recon.db.models import Job, Run
 from recon.domain import ACTIVE_STATES, RunState
 from recon.progress.heartbeat import is_stalled
+from recon.queue import retry
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,16 @@ def get_run_flags(tenant_id: str, run_id: str) -> RunFlags | None:
             pause_requested=run.pause_requested,
             cancel_requested=run.cancel_requested,
         )
+
+
+def raise_if_control_requested(tenant_id: str, run_id: str) -> None:
+    """Raise ControlInterrupt if a pause/cancel was requested for the run (REQ-A4,
+    used by the fetch/analyze per-asset loops to stop cooperatively mid-stage)."""
+    flags = get_run_flags(tenant_id, run_id)
+    if flags and flags.cancel_requested:
+        raise retry.ControlInterrupt("cancel")
+    if flags and flags.pause_requested:
+        raise retry.ControlInterrupt("pause")
 
 
 @dataclass(frozen=True)

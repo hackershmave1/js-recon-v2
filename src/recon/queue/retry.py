@@ -27,6 +27,18 @@ class FatalError(Exception):
     """A permanent failure — send straight to the DLQ, do not retry."""
 
 
+class ControlInterrupt(Exception):
+    """A long stage observed a pause/cancel request mid-work and stopped cooperatively.
+
+    Carries ``kind`` ('pause'|'cancel'); the worker maps it to the same transition its
+    pre-work checkpoints do, so a multi-asset stage honors REQ-A4 without waiting for
+    the whole loop. Not a failure — never retried or dead-lettered."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(kind)
+        self.kind = kind
+
+
 def http_retryable(status_code: int) -> bool:
     """429 and 5xx retry; other 4xx fail fast."""
     if status_code == 429:
