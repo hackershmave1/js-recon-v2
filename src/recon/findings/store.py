@@ -35,6 +35,10 @@ class Occurrence:
     engine: str | None = None
     confidence: str | None = None
     verified: bool | None = None
+    # Slice Y asset dimension. asset_url is part of occurrence identity so the same
+    # finding stays distinct per asset; run_asset_id is stored for reveal routing.
+    run_asset_id: str | None = None
+    asset_url: str | None = None
 
     def _identity(self) -> dict[str, object]:
         # line/col are part of identity so two sightings stay distinct even when
@@ -49,6 +53,7 @@ class Occurrence:
             "offset_end": self.offset_end,
             "line": self.line,
             "col": self.col,
+            "asset_url": self.asset_url,
         }
 
 
@@ -112,6 +117,7 @@ def record_finding(
         .values(
             tenant_id=str(tenant_id),
             finding_id=finding_id,
+            run_asset_id=occurrence.run_asset_id,
             occurrence_hash=occurrence_hash,
             host=occurrence.host,
             raw_url=occurrence.raw_url,
