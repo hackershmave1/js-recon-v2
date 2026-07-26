@@ -16,8 +16,8 @@ from recon.fetch import egress
 
 pytestmark = pytest.mark.integration
 
-FIXTURE_URL = "http://fixture-site/"
-SCOPE = ["fixture-site"]
+FIXTURE_URL = "http://recon.test/"
+SCOPE = ["recon.test"]
 
 
 def test_real_katana_crawl_discovers_in_scope_js(engines_required):
@@ -25,7 +25,6 @@ def test_real_katana_crawl_discovers_in_scope_js(engines_required):
     argv = katana.build_argv(
         katana_bin=settings.katana_bin, domain=FIXTURE_URL, scope_hosts=SCOPE,
         depth=settings.crawl_depth, crawl_duration_seconds=30.0,
-        system_chrome_path=settings.system_chrome_path,
     )
     try:
         with patch("recon.discover.harness.progress.beat"):

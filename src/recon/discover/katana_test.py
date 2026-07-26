@@ -2,18 +2,30 @@
 from recon.discover import katana
 
 
-def test_build_argv_is_headless_scoped_jsonl():
+def test_build_argv_standard_by_default():
     argv = katana.build_argv(
         katana_bin="katana", domain="acme.io", scope_hosts=["acme.io"],
-        depth=3, crawl_duration_seconds=120.0, system_chrome_path="/usr/bin/chromium",
+        depth=3, crawl_duration_seconds=120.0,
     )
     assert argv[0] == "katana"
-    assert "-headless" in argv and "-no-sandbox" in argv
-    assert "-jsonl" in argv
     assert argv[argv.index("-u") + 1] == "https://acme.io"
-    assert argv[argv.index("-system-chrome-path") + 1] == "/usr/bin/chromium"
-    assert "-em" in argv and argv[argv.index("-em") + 1] == "js"
-    assert "-jc" not in argv  # discovery-only: katana enumerates, Vespasian parses
+    assert "-jsonl" in argv
+    assert argv[argv.index("-field-scope") + 1] == "rdn"
+    assert "-crawl-scope" in argv
+    assert "-jc" not in argv   # discovery-only: Vespasian parses, not katana
+    assert "-em" not in argv   # -em js filtered everything; parse_assets filters .js
+    assert "-headless" not in argv  # standard by default
+
+
+def test_build_argv_headless_is_opt_in():
+    argv = katana.build_argv(
+        katana_bin="katana", domain="acme.io", scope_hosts=["acme.io"],
+        depth=3, crawl_duration_seconds=120.0, headless=True,
+    )
+    assert "-headless" in argv
+    assert "-no-sandbox" in argv
+    assert argv[argv.index("-headless-options") + 1] == "--disable-dev-shm-usage"
+    assert "-em" not in argv
 
 
 def test_parse_assets_keeps_ordered_unique_js_urls():

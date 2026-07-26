@@ -49,7 +49,7 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
         katana_bin=settings.katana_bin, domain=target,
         scope_hosts=engagement.scope_hosts, depth=settings.crawl_depth,
         crawl_duration_seconds=settings.crawl_duration_seconds,
-        system_chrome_path=settings.system_chrome_path,
+        headless=settings.crawl_headless,
     )
     result = harness.run_crawl(
         redis, argv, tenant_id=tenant_id, run_id=run_id, job_id=job_id,

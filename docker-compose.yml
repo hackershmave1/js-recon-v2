@@ -73,6 +73,10 @@ services:
     image: nginx:alpine
     volumes:
       - ./web/fixtures:/usr/share/nginx/html:ro
+    networks:
+      default:
+        aliases:
+          - recon.test
 
   # One-shot: apply migrations (schema + RLS + app role), then exit.
   migrate:

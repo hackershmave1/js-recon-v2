@@ -65,7 +65,10 @@ class Settings(BaseSettings):
     # heartbeat_stall_threshold_seconds so the poll loop renews the job lease during
     # a long crawl and no peer worker reclaims the RUNNING job (double-crawl).
     katana_bin: str = "katana"
+    # Reserved: katana's go-rod launcher currently rejects a system chrome path
+    # (uses its own browser); kept for when that is resolved.
     system_chrome_path: str = "/usr/bin/chromium"
+    crawl_headless: bool = False
     crawl_depth: int = 3
     crawl_duration_seconds: float = 120.0
     crawl_max_assets: int = 500
