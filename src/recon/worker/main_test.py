@@ -6,9 +6,12 @@ routing decision — how a retry delay is chosen — is tested in isolation.
 
 from __future__ import annotations
 
+import pytest
+
 from recon.domain import QueueName, RunStage
 from recon.progress import heartbeat as progress
 from recon.queue import retry, streams
+from recon.runs import coordinator, queries
 from recon.worker import main as worker
 
 
@@ -55,3 +58,25 @@ def test_no_retry_after_uses_plain_backoff(monkeypatch):
     assert result == "retry"
     # attempt 1 backoff ceiling is base_delay (1.0); no artificial floor applied.
     assert 0.0 <= captured["delay"] <= 1.0
+
+
+@pytest.mark.integration
+def test_control_interrupt_pauses_without_advancing(monkeypatch, redis, authorized_session):
+    tenant, session_id = authorized_session
+    view = coordinator.start_run(redis, tenant_id=tenant, session_id=session_id, target="acme.io")
+    # Drive the discover message; make the stage raise a cancel interrupt.
+    monkeypatch.setattr(
+        worker,
+        "_run_stage_work",
+        lambda *a, **k: (_ for _ in ()).throw(retry.ControlInterrupt("cancel")),
+    )
+    advanced = {"n": 0}
+    monkeypatch.setattr(
+        coordinator, "advance", lambda *a, **k: advanced.__setitem__("n", advanced["n"] + 1)
+    )
+
+    processed = worker.run_once(redis, "worker-test", block_ms=50)
+
+    assert processed >= 1
+    assert advanced["n"] == 0  # a cancel must NOT advance the run
+    assert queries.get_run_flags(tenant, view.id).state == "cancelled"

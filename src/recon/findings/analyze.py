@@ -62,8 +62,14 @@ class Coverage:
     files: tuple[FileCoverage, ...] = ()
 
 
-def analyze_run(redis: Redis, *, tenant_id: str, run_id: str) -> Coverage:
-    """Analyze the run's input JS and persist its findings. No input -> no-op."""
+def analyze_run(
+    redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None = None
+) -> Coverage:
+    """Analyze the run's input JS and persist its findings. No input -> no-op.
+
+    ``job_id`` is accepted so the worker's dispatch call is stable ahead of the
+    multi-asset loop (heartbeat + cooperative REQ-A4 interrupt), which will use it;
+    the single-blob path here does not need it yet."""
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
         input_ref = run.input_ref if run is not None else None

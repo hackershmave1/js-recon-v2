@@ -138,9 +138,13 @@ def fetch_url(
     raise retry.FatalError(f"exceeded {max_redirects} redirects")
 
 
-def fetch_run(redis: Redis, *, tenant_id: str, run_id: str) -> None:
+def fetch_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None = None) -> None:
     """Fetch the run's target into its input blob. No-op when there is no target
-    or the input was already fetched (idempotent across a stage retry)."""
+    or the input was already fetched (idempotent across a stage retry).
+
+    ``job_id`` is accepted so the worker's dispatch call is stable ahead of the
+    multi-asset loop (heartbeat + cooperative REQ-A4 interrupt), which will use it;
+    the single-target path here does not need it yet."""
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
         target = run.target if run is not None else None
