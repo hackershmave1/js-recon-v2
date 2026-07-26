@@ -45,4 +45,39 @@ describe("NewRunPanel", () => {
     expect(form.get("file")).toBeInstanceOf(File);
     expect(navigate).toHaveBeenCalledWith("/runs/run-9");
   });
+
+  it("defaults to upload mode", () => {
+    renderPanel();
+    expect(screen.getByRole("radio", { name: /upload/i })).toBeChecked();
+    expect(screen.getByLabelText(/javascript file/i)).toBeInTheDocument();
+  });
+
+  it("switching to crawl mode shows a domain input and gates submit on it", async () => {
+    renderPanel();
+    await userEvent.click(screen.getByRole("radio", { name: /crawl/i }));
+    expect(screen.queryByLabelText(/javascript file/i)).not.toBeInTheDocument();
+    const submit = screen.getByRole("button", { name: /crawl/i });
+    expect(submit).toBeDisabled();
+    await userEvent.type(screen.getByLabelText(/scope host/i), "example.com");
+    await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
+    expect(submit).toBeDisabled(); // still disabled: no domain yet
+    await userEvent.type(screen.getByLabelText("Domain"), "acme.io");
+    expect(submit).toBeEnabled();
+  });
+
+  it("crawl mode creates a session then starts a crawl run, then navigates to the run", async () => {
+    vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: ["example.com"], authorization_ack: true });
+    vi.spyOn(api, "startRun").mockResolvedValue({ run_id: "run-42", state: "queued" });
+    renderPanel();
+    await userEvent.click(screen.getByRole("radio", { name: /crawl/i }));
+    await userEvent.type(screen.getByLabelText(/scope host/i), "example.com");
+    await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
+    await userEvent.type(screen.getByLabelText("Domain"), "acme.io");
+    await userEvent.click(screen.getByRole("button", { name: /crawl/i }));
+    expect(api.createSession).toHaveBeenCalledWith("123e4567-e89b-12d3-a456-426614174000",
+      { scope_hosts: ["example.com"], authorized_by: "tester" });
+    expect(api.startRun).toHaveBeenCalledWith("123e4567-e89b-12d3-a456-426614174000",
+      { session_id: "s1", target: "acme.io" });
+    expect(navigate).toHaveBeenCalledWith("/runs/run-42");
+  });
 });

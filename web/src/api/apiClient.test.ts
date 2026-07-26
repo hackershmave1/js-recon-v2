@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ApiError, getFindings, createSession } from "./apiClient";
+import { ApiError, getFindings, createSession, startRun, getAssets } from "./apiClient";
 
 beforeEach(() => vi.restoreAllMocks());
 
@@ -37,5 +37,25 @@ describe("apiClient", () => {
     expect(path).toBe("/sessions");
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body)).toEqual({ scope_hosts: ["a"], authorized_by: "me" });
+  });
+
+  it("sends the tenant header + JSON body for startRun and POSTs /runs", async () => {
+    const f = mockFetch(201, { run_id: "run-1", state: "queued" });
+    vi.stubGlobal("fetch", f);
+    await startRun("t", { session_id: "s1", target: "acme.io" });
+    const [path, init] = f.mock.calls[0];
+    expect(path).toBe("/runs");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["X-Tenant-Id"]).toBe("t");
+    expect(JSON.parse(init.body)).toEqual({ session_id: "s1", target: "acme.io" });
+  });
+
+  it("GETs /runs/{id}/assets for getAssets", async () => {
+    const f = mockFetch(200, { domain: "acme.io", status: "ok", assets: [] });
+    vi.stubGlobal("fetch", f);
+    await getAssets("t", "run-1");
+    const [path, init] = f.mock.calls[0];
+    expect(path).toBe("/runs/run-1/assets");
+    expect((init.headers as Record<string, string>)["X-Tenant-Id"]).toBe("t");
   });
 });

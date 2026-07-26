@@ -21,5 +21,10 @@ export interface Coverage {
   files: { path: string; attributed: number; unattributed: number }[];
 }
 export interface FindingsResponse { run_id: string; count: number; coverage: Coverage | null; findings: Finding[]; }
+export interface AssetsManifest {
+  domain: string | null;
+  status: "pending" | "ok" | "capped" | "timeout";
+  assets: { url: string; source: string }[];
+}
 export const TERMINAL_STATES = new Set(["done", "partial", "failed", "cancelled"]);
 export const TRIAGE_STATUSES = ["open", "confirmed", "dismissed"] as const;
