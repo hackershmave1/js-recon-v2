@@ -30,7 +30,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from recon.db.base import Base
-from recon.domain import FindingType, JobState, QueueName, RunStage, RunState
+from recon.domain import AssetStatus, FindingType, JobState, QueueName, RunStage, RunState
 
 _UUID_PK = {
     "primary_key": True,
@@ -277,6 +277,12 @@ class FindingOccurrence(Base):
     finding_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("finding.id", ondelete="CASCADE"), nullable=False
     )
+    # Slice Y: which discovered asset this sighting came from. NULL for legacy
+    # single-asset (upload / single-URL) runs. Part of occurrence identity via
+    # asset_url (see recon.findings.store); the row keeps the FK for reveal routing.
+    run_asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("run_asset.id", ondelete="SET NULL")
+    )
     occurrence_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     host: Mapped[str | None] = mapped_column(Text)  # occurrence-only, never hashed (C1)
     raw_url: Mapped[str | None] = mapped_column(Text)
@@ -292,6 +298,43 @@ class FindingOccurrence(Base):
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
     finding: Mapped["Finding"] = relationship(back_populates="occurrences")
+
+
+class RunAsset(Base):
+    """One discovered in-scope .js asset of a crawl run (Slice Y, REQ-C1/D5).
+
+    Seeded pending by discover; fetch sets ``input_ref`` + ``fetch_status``; analyze
+    sets ``analyze_status``. The per-asset blob lives at ``input_ref`` (kind="input").
+    Absent for legacy single-asset runs, which keep using ``run.input_ref``."""
+
+    __tablename__ = "run_asset"
+    __table_args__ = (
+        UniqueConstraint("run_id", "url", name="uq_run_asset_run_url"),
+        CheckConstraint(_enum_check("fetch_status", AssetStatus), name="ck_run_asset_fetch_status"),
+        CheckConstraint(
+            _enum_check("analyze_status", AssetStatus), name="ck_run_asset_analyze_status"
+        ),
+        Index("ix_run_asset_run", "tenant_id", "run_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("run.id", ondelete="CASCADE"), nullable=False
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    input_ref: Mapped[str | None] = mapped_column(Text)
+    fetch_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=AssetStatus.PENDING.value
+    )
+    fetch_error: Mapped[str | None] = mapped_column(Text)
+    analyze_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=AssetStatus.PENDING.value
+    )
+    analyze_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
 
 class FindingTriage(Base):
@@ -345,3 +388,6 @@ FINDINGS_TABLES: tuple[str, ...] = (
 
 # Slice-3a addition, RLS-enabled by migration 0004.
 TRIAGE_TABLES: tuple[str, ...] = ("finding_triage",)
+
+# Slice-Y addition, RLS-enabled by migration 0005.
+ASSET_TABLES: tuple[str, ...] = ("run_asset",)
