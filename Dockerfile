@@ -35,6 +35,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Headless crawl needs a browser; katana drives system chromium over CDP.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium \
+    && rm -rf /var/lib/apt/lists/*
+
 # Dependencies first for layer caching, then the source.
 COPY pyproject.toml README.md ./
 COPY src ./src
@@ -46,11 +51,6 @@ COPY --from=web-build /web/dist ./web/dist
 
 # Sourcemapper binary onto PATH (root-owned, readable by the app user).
 COPY --from=sourcemapper-build /go/bin/sourcemapper /usr/local/bin/sourcemapper
-
-# Headless crawl needs a browser; katana drives system chromium over CDP.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends chromium \
-    && rm -rf /var/lib/apt/lists/*
 
 # katana binary onto PATH (root-owned, readable by the app user).
 COPY --from=katana-build /go/bin/katana /usr/local/bin/katana
