@@ -5,6 +5,18 @@
 FROM golang:1.23-bookworm AS sourcemapper-build
 RUN go install github.com/denandz/sourcemapper@442aed28d1841f32580dda91b4bea740c07bd2ad
 
+# Build katana (JS-asset discovery crawler). Pinned to a released tag, never
+# @latest — v1.6.1 is the current latest stable release as of 2026-07-26
+# (verified via github.com/projectdiscovery/katana/releases; supersedes the
+# older v1.1.0 placeholder). katana v1.6.1's go.mod requires go >= 1.25.7, so
+# this stage uses golang:1.25-bookworm rather than 1.23 (sourcemapper-build's
+# version) — a build-stage-only bump that doesn't affect the runtime image.
+# Re-verify the tag + that `-headless -system-chrome` works against the
+# vendored chromium at build time. See docs/slice2-deferred-debt.md
+# (headless-Chrome/CGO note).
+FROM golang:1.25-bookworm AS katana-build
+RUN go install github.com/projectdiscovery/katana/cmd/katana@v1.6.1
+
 # Build the front-end SPA (Node), copied into the runtime image below.
 FROM node:20-bookworm AS web-build
 WORKDIR /web
@@ -34,6 +46,14 @@ COPY --from=web-build /web/dist ./web/dist
 
 # Sourcemapper binary onto PATH (root-owned, readable by the app user).
 COPY --from=sourcemapper-build /go/bin/sourcemapper /usr/local/bin/sourcemapper
+
+# Headless crawl needs a browser; katana drives system chromium over CDP.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium \
+    && rm -rf /var/lib/apt/lists/*
+
+# katana binary onto PATH (root-owned, readable by the app user).
+COPY --from=katana-build /go/bin/katana /usr/local/bin/katana
 
 # Run as a non-root user.
 RUN useradd --create-home --uid 10001 app && chown -R app:app /app
