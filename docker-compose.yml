@@ -64,6 +64,16 @@ services:
     volumes:
       - miniodata:/data
 
+  # Static fixture site for the discovery-crawl integration test (task 10). Sits on
+  # the compose network's private IP so it is reachable in-scope by the worker;
+  # egress re-validation still rejects it as an out-of-band manifest URL, which is
+  # exactly why the real-katana test asserts at the harness/parse layer instead of
+  # via discover_run (see crawl_integration_test.py).
+  fixture-site:
+    image: nginx:alpine
+    volumes:
+      - ./web/fixtures:/usr/share/nginx/html:ro
+
   # One-shot: apply migrations (schema + RLS + app role), then exit.
   migrate:
     <<: *app-base
