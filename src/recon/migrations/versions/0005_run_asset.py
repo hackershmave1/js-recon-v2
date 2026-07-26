@@ -9,8 +9,13 @@ what's missing) then given FORCE RLS + the tenant_isolation policy + GRANT, exac
 like 0004. The finding_occurrence.run_asset_id COLUMN is an *incremental add on an
 existing table*, so it MUST use ADD COLUMN IF NOT EXISTS — on a fresh DB 0001's
 create_all already made it (the 0003 DuplicateColumn hazard); on an older dev DB the
-guard adds it. The FK is enforced on fresh DBs via create_all (consistent with the
-documented create_all-vs-incremental posture in slice2-deferred-debt.md).
+guard adds it. The inline REFERENCES clause on that ADD COLUMN carries the FK +
+ON DELETE SET NULL onto the incremental path too (relying on create_all alone left
+older/dev DBs with a bare uuid column and no referential integrity — fixed in review
+round 1); run_asset already exists by this point in the same upgrade(), so the FK is
+always satisfiable. On a fresh DB the column (with its FK) already exists via
+create_all, so IF NOT EXISTS makes the ALTER a no-op — no double-add (consistent with
+the documented create_all-vs-incremental posture in slice2-deferred-debt.md).
 """
 
 from __future__ import annotations
@@ -32,9 +37,12 @@ def upgrade() -> None:
     bind = op.get_bind()
     Base.metadata.create_all(bind)  # idempotent: builds run_asset (+ any missing)
     # Incremental column add on an existing table — guard against the fresh-DB
-    # create_all having already made it (the 0003 bug).
+    # create_all having already made it (the 0003 bug). The inline REFERENCES
+    # carries the FK + cascade onto this path too — run_asset is already created
+    # above in this same upgrade(), so it's always there to reference.
     op.execute(
-        'ALTER TABLE "finding_occurrence" ADD COLUMN IF NOT EXISTS run_asset_id uuid'
+        'ALTER TABLE "finding_occurrence" ADD COLUMN IF NOT EXISTS run_asset_id uuid '
+        "REFERENCES run_asset(id) ON DELETE SET NULL"
     )
     for table in models.ASSET_TABLES:
         op.execute(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY')
