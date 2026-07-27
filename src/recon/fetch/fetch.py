@@ -270,7 +270,17 @@ def _fetch_assets(
     that per-asset commit is what makes a redelivery idempotent (skip, don't
     re-fetch, don't double-egress). A control interrupt (REQ-A4) is checked at the
     top of every iteration, before any fetch attempt, and propagates straight out
-    of this loop (never caught here — it is not a failure)."""
+    of this loop (never caught here — it is not a failure).
+
+    Every asset actually processed (not skipped) gets an unconditional heartbeat
+    BEFORE its fetch attempt, regardless of how it turns out. This bounds the max
+    gap between lease renewals to one ``fetch_url`` call (<= fetch_timeout_seconds)
+    plus a short host-slot wait — safely under heartbeat_stall_threshold_seconds.
+    Without it, a run of several slow-then-fail assets whose errors carry no
+    ``retry_after`` (a bare FatalError/EgressBlocked, or a RetryableError like
+    "overall fetch deadline exceeded") would go unheartbeated long enough for a
+    peer worker to reclaim the stream message and double-fetch the remaining
+    assets — exactly what the politeness gate exists to prevent."""
     engagement = _authorized_engagement(tenant_id, run_id)
     settings = get_settings()
     total = len(rows)
@@ -279,6 +289,11 @@ def _fetch_assets(
         if asset.fetch_status in terminal or asset.input_ref:
             continue  # terminal already — idempotent redelivery skip
         run_queries.raise_if_control_requested(tenant_id, run_id)  # REQ-A4
+        if job_id:
+            # Unconditional, once per processed asset — see the docstring above.
+            progress.beat(
+                redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, done=i, total=total
+            )
         host = (urlsplit(asset.url).hostname or "").lower()
         if host:
             _await_host_slot(
@@ -303,10 +318,6 @@ def _fetch_assets(
         key = storage.put_blob(tenant_id, run_id, "input", content)
         with tenant_session(tenant_id) as s:
             run_assets.set_fetch_ok(s, asset.id, key)  # per-asset commit
-        if job_id:
-            progress.beat(
-                redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, done=i, total=total
-            )
         log.info("fetch.asset_done", run_id=run_id, url=asset.url, bytes=len(content))
 
 

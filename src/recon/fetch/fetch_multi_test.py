@@ -58,11 +58,28 @@ def test_fetch_loop_is_idempotent_on_redelivery(redis, authorized_session, monke
 
 
 def test_fetch_loop_honors_cancel(redis, authorized_session, monkeypatch):
+    # Genuinely mid-loop: cancel arrives WHILE asset 1 is "in flight" (the fake
+    # fetch_url itself requests it, as another actor would), not before the loop
+    # starts — so this guards against a future refactor hoisting the control
+    # check out of the loop body.
     from recon.runs import service as run_service
     tenant, session_id = authorized_session
-    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/a.js", "https://acme.io/b.js"])
-    run_service.request_cancel(redis, tenant_id=tenant, run_id=run_id)
-    monkeypatch.setattr(fetch, "fetch_url", lambda *a, **k: b"x();")
+    urls = ["https://acme.io/a.js", "https://acme.io/b.js"]
+    run_id = _crawl_run(redis, tenant, session_id, urls)
+
+    calls = []
+
+    def fake_fetch(url, scope, **kw):
+        calls.append(url)
+        run_service.request_cancel(redis, tenant_id=tenant, run_id=run_id)
+        return b"x();"
+
+    monkeypatch.setattr(fetch, "fetch_url", fake_fetch)
     with pytest.raises(retry.ControlInterrupt) as ci:
         fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
     assert ci.value.kind == "cancel"
+    assert calls == ["https://acme.io/a.js"]  # asset 2 must never be fetched
+
+    rows = {r.url: r for r in assets.list_for_run(tenant, run_id)}
+    assert rows["https://acme.io/a.js"].fetch_status == "ok"
+    assert rows["https://acme.io/b.js"].fetch_status == "pending"
