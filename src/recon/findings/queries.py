@@ -142,21 +142,40 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
                 )
                 for finding in findings
             ],
-            coverage=_latest_coverage(session, run_id),
+            coverage=_latest_coverage(session, run_id, is_multi_asset=bool(asset_refs)),
         )
 
 
-def _latest_coverage(session, run_id: str) -> CoverageView | None:
-    """The most recent ``analyze.coverage`` event for the run (a stage retry appends
-    a fresh one; the highest id is authoritative). ``None`` until analyze has run."""
-    payload = session.scalars(
+def _latest_coverage(session, run_id: str, *, is_multi_asset: bool) -> CoverageView | None:
+    """The run's analyze coverage counters (REQ-C2).
+
+    A multi-asset (crawl) run's assets each emit their OWN ``analyze.coverage``
+    event, exactly once — a redelivery skips an already analyze-terminal asset
+    rather than re-analyzing it, so no asset's event is ever re-emitted. The true
+    run-wide total is therefore the SUM of every one of the run's events, not just
+    the highest-id one: taking only the latest silently dropped every earlier
+    asset's counts (e.g. reporting ``secrets: 0`` even though an earlier asset's
+    own event had recorded some).
+
+    A legacy single-asset run instead has exactly one analyze stage, which a
+    retry re-runs IN PLACE and which re-emits its one event again — there,
+    summing would double-count a retry, so the highest-id event alone (latest
+    wins, the original behavior) is what's correct.
+
+    ``None`` until analyze has emitted at least one event for the run.
+    """
+    payloads = session.scalars(
         select(RunEvent.payload)
         .where(RunEvent.run_id == str(run_id), RunEvent.type == "analyze.coverage")
         .order_by(RunEvent.id.desc())
-        .limit(1)
-    ).first()
-    if payload is None:
+    ).all()
+    if not payloads:
         return None
+    payload = _merge_coverage_payloads(payloads) if is_multi_asset else payloads[0]
+    return _coverage_view_from_payload(payload)
+
+
+def _coverage_view_from_payload(payload: dict) -> CoverageView:
     return CoverageView(
         attributed=int(payload.get("attributed", 0)),
         unattributed=int(payload.get("unattributed", 0)),
@@ -173,6 +192,37 @@ def _latest_coverage(session, run_id: str) -> CoverageView | None:
             for entry in payload.get("files", [])
         ],
     )
+
+
+def _merge_coverage_payloads(payloads: list[dict]) -> dict:
+    """Sum every asset's own coverage payload into one run-wide payload (Slice Y).
+
+    Mirrors ``analyze._merge_coverage``'s semantics exactly: counts are additive;
+    ``secrets_engine`` is the LESS-healthy of all the events ("unavailable" wins
+    over "ok") so one asset's absent scanner is never masked by another asset's
+    clean scan (REQ-C2); ``files`` (per-source-path detail) is concatenated across
+    assets rather than merged path-by-path — it is per-file-per-asset detail, so
+    two assets sharing the same fallback path still get two distinct entries;
+    ``source_map`` is not meaningful to merge (every asset this slice analyzes
+    with ``source_map_ref=None``), so any one value stands in — the first
+    (highest-id) event's.
+    """
+    files: list[dict] = []
+    for payload in payloads:
+        files.extend(payload.get("files", []))
+    return {
+        "attributed": sum(int(p.get("attributed", 0)) for p in payloads),
+        "unattributed": sum(int(p.get("unattributed", 0)) for p in payloads),
+        "secrets": sum(int(p.get("secrets", 0)) for p in payloads),
+        "secrets_engine": (
+            "unavailable"
+            if any(p.get("secrets_engine") == "unavailable" for p in payloads)
+            else "ok"
+        ),
+        "sources_recovered": sum(int(p.get("sources_recovered", 0)) for p in payloads),
+        "source_map": payloads[0].get("source_map", "none"),
+        "files": files,
+    }
 
 
 def _finding_view(

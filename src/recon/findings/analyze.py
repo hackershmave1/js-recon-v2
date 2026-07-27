@@ -18,7 +18,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from botocore.exceptions import ClientError
 from redis import Redis
+from sqlalchemy.exc import SQLAlchemyError
 
 from recon import storage
 from recon.db.base import tenant_session
@@ -137,23 +139,35 @@ def _analyze_assets(
     keeps a mid-loop infra error from rolling back an earlier asset's
     already-committed findings. A control interrupt (REQ-A4) is checked at the
     top of every iteration, before any analyze attempt, and propagates straight
-    out of this loop (never caught here — it is not a failure; the broad
-    ``except Exception`` below never sees it, since it is raised outside the
-    ``try``).
+    out of this loop (never caught here — it is not a failure, and it is raised
+    outside the ``try`` below, so neither except clause ever sees it).
 
-    The ``try`` wraps ONLY the transaction (``_analyze_blob`` + ``set_analyze_ok``)
-    — a genuine per-asset analyze failure there is the one thing that should be
-    recorded as ``analyze_failed``. ``publish``/logging/``_merge_coverage`` run in
-    the paired ``else`` (reached only after a clean commit), NOT in the ``try``:
-    if they were in the ``try`` and ``publish`` raised (Redis reset, pool
-    exhaustion — the DB itself perfectly healthy), the ``except`` would open a
-    fresh transaction and overwrite the just-committed ``"ok"`` with a
-    self-contradictory ``"failed"`` on data that was in fact fully analyzed —
-    permanently (the row is now analyze-terminal, so redelivery's skip-condition
-    never revisits it) and silently (the run would finalize PARTIAL over an
-    asset that actually succeeded, with no path back). ``try/except/else`` makes
-    that class of post-commit failure propagate instead, out to the worker's
-    normal job-level retry, exactly as an infra error should.
+    The ``try`` wraps ONLY the transaction (``_analyze_blob`` + ``set_analyze_ok``),
+    and its two except clauses split what "failure" means there.
+    ``ClientError``/``SQLAlchemyError`` (the blob read or the DB write) are
+    INFRASTRUCTURE errors — a transient S3 blip or a DB hiccup, not a verdict on
+    this asset's content — so they RE-RAISE to the worker's normal job-level
+    retry, matching ``fetch.py``'s narrower
+    ``except (EgressBlocked, FatalError, RetryableError)``. Recording one of
+    those as ``analyze_failed`` would make a transient blip a PERMANENT per-asset
+    failure (the row becomes analyze-terminal, so redelivery's skip-condition
+    never revisits it), producing a false PARTIAL for an asset that would have
+    succeeded on a retry. Any OTHER exception is a genuine per-asset analyze
+    failure (e.g. a malformed unit the extractor chokes on) — that is the one
+    thing recorded as ``analyze_failed``, best-effort, so it does not abort the
+    rest of the loop.
+
+    ``publish``/logging/``_merge_coverage`` run in the paired ``else`` (reached
+    only after a clean commit), NOT in the ``try``: if they were in the ``try``
+    and ``publish`` raised (Redis reset, pool exhaustion — the DB itself
+    perfectly healthy), the ``except`` would open a fresh transaction and
+    overwrite the just-committed ``"ok"`` with a self-contradictory ``"failed"``
+    on data that was in fact fully analyzed — permanently (the row is now
+    analyze-terminal, so redelivery's skip-condition never revisits it) and
+    silently (the run would finalize PARTIAL over an asset that actually
+    succeeded, with no path back). ``try/except/else`` makes that class of
+    post-commit failure propagate instead, out to the worker's normal job-level
+    retry, exactly as an infra error should.
 
     Every asset actually processed (not skipped) gets an unconditional heartbeat
     BEFORE its analyze attempt, regardless of how it turns out — mirrors fetch's
@@ -188,7 +202,9 @@ def _analyze_assets(
                     asset_url=asset.url,
                 )
                 run_assets.set_analyze_ok(session, asset.id)
-        except Exception as exc:  # noqa: BLE001 - per-asset best-effort
+        except (ClientError, SQLAlchemyError):
+            raise  # infra (storage/DB) -> job-level retry, matching fetch.py
+        except Exception as exc:
             with tenant_session(tenant_id) as session:
                 run_assets.set_analyze_failed(session, asset.id, str(exc))  # per-asset commit
             log.warning("analyze.asset_failed", run_id=run_id, url=asset.url, error=str(exc))

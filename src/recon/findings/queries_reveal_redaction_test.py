@@ -3,6 +3,7 @@ import pytest
 from recon.db import models
 from recon.db.base import tenant_session
 from recon.domain import FindingType
+from recon.events.log import record_event
 from recon.findings import normalize, queries, store
 from recon.runs import assets
 from recon.sessions import service as sessions_service
@@ -164,3 +165,68 @@ def test_occurrence_asset_url_for_crawl_run_and_none_for_legacy():
         f for f in legacy_result.findings if f.finding_hash == legacy_hash
     ).occurrences[0]
     assert legacy_occurrence.asset_url is None
+
+
+def _record_coverage(tenant, run_id, **payload):
+    with tenant_session(tenant) as session:
+        record_event(
+            session, tenant_id=tenant, run_id=run_id, event_type="analyze.coverage",
+            payload=payload,
+        )
+
+
+def test_multi_asset_coverage_sums_across_assets_not_last_only():
+    # Each asset emits its OWN analyze.coverage event exactly once (a redelivery
+    # skips an already analyze-terminal asset, so no asset's event is ever
+    # re-emitted) -- the read model must SUM every event for a multi-asset run,
+    # not take only the highest-id one, or an earlier asset's secrets vanish
+    # behind a later asset's zero-secrets event.
+    tenant = sessions_service.create_tenant("rd-6")
+    session_id = sessions_service.create_session(
+        tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
+    ).id
+    run_id = _run(tenant, session_id, input_ref=None)
+    with tenant_session(tenant) as session:
+        assets.seed_pending(
+            session, tenant_id=tenant, run_id=run_id,
+            urls=["https://acme.io/a.js", "https://acme.io/b.js"],
+        )
+    _record_coverage(
+        tenant, run_id, attributed=5, unattributed=0, secrets=2, secrets_engine="ok",
+        sources_recovered=0, source_map="none",
+        files=[{"path": "input.js", "attributed": 5, "unattributed": 0}],
+    )
+    _record_coverage(
+        tenant, run_id, attributed=3, unattributed=0, secrets=0, secrets_engine="ok",
+        sources_recovered=0, source_map="none",
+        files=[{"path": "input.js", "attributed": 3, "unattributed": 0}],
+    )
+
+    result = queries.list_findings(tenant, run_id)
+    assert result is not None and result.coverage is not None
+    assert result.coverage.attributed == 8
+    assert result.coverage.secrets == 2  # NOT 0 -- would be if only the last event won
+
+
+def test_legacy_single_asset_coverage_still_latest_event_wins():
+    # A legacy (pre-crawl) run has no run_asset rows -- its one analyze stage is
+    # what a stage retry re-runs IN PLACE, re-emitting its single coverage event
+    # again, so latest-wins (not summed) is still the correct read there.
+    tenant = sessions_service.create_tenant("rd-7")
+    session_id = sessions_service.create_session(
+        tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
+    ).id
+    run_id = _run(tenant, session_id, input_ref=f"{tenant}/x/input/deadbeef")
+    _record_coverage(
+        tenant, run_id, attributed=1, unattributed=0, secrets=9, secrets_engine="ok",
+        sources_recovered=0, source_map="none", files=[],
+    )
+    _record_coverage(
+        tenant, run_id, attributed=4, unattributed=1, secrets=0, secrets_engine="ok",
+        sources_recovered=0, source_map="none", files=[],
+    )
+
+    result = queries.list_findings(tenant, run_id)
+    assert result is not None and result.coverage is not None
+    assert result.coverage.attributed == 4  # the retry's event alone, not summed
+    assert result.coverage.secrets == 0

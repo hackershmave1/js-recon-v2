@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from botocore.exceptions import ClientError
 from sqlalchemy import select
 
 from recon import storage
@@ -65,20 +66,31 @@ def test_analyze_loop_dedups_across_assets_with_attribution(redis, authorized_se
     assert all(a.analyze_status == "ok" for a in assets.list_for_run(tenant, run_id))
 
 
-def test_analyze_loop_records_ok_and_failed_per_asset(redis, authorized_session):
-    # The "bad" asset's blob key was never actually stored, so storage.get_blob
-    # raises for real inside _analyze_blob (no monkeypatching kingfisher/extract
-    # needed) -- the good asset's finding must still land despite the other's
-    # failure (best-effort, per-asset commit).
+def test_analyze_loop_records_ok_and_failed_per_asset(redis, authorized_session, monkeypatch):
+    # A genuine per-asset analyze failure (e.g. the extractor choking on one
+    # asset's content) must be recorded as analyze_failed and must not abort the
+    # run -- the good asset's finding still lands (best-effort, per-asset
+    # commit). Triggered via extract() so this stays a genuine per-asset failure,
+    # not an infra one (ClientError/SQLAlchemyError now propagate instead -- see
+    # test_analyze_loop_reraises_infra_error_instead_of_recording_failed).
     tenant, session_id = authorized_session
     run_id = _crawl_run(redis, tenant, session_id,
                         ["https://acme.io/a.js", "https://acme.io/bad.js"])
     rows = {r.url: r for r in assets.list_for_run(tenant, run_id)}
     good_key = storage.put_blob(tenant, run_id, "input", b'fetch("/api/good");')
+    bad_key = storage.put_blob(tenant, run_id, "input", b"BOOM_TRIGGER")
     with tenant_session(tenant) as s:
         assets.set_fetch_ok(s, rows["https://acme.io/a.js"].id, good_key)
-        assets.set_fetch_ok(s, rows["https://acme.io/bad.js"].id, "tenant/run/input/does-not-exist")
+        assets.set_fetch_ok(s, rows["https://acme.io/bad.js"].id, bad_key)
 
+    real_extract = analyze.extract
+
+    def fake_extract(text):
+        if text == "BOOM_TRIGGER":
+            raise ValueError("simulated per-asset analyze failure")
+        return real_extract(text)
+
+    monkeypatch.setattr(analyze, "extract", fake_extract)
     analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
 
     result = {r.url: r for r in assets.list_for_run(tenant, run_id)}
@@ -86,6 +98,33 @@ def test_analyze_loop_records_ok_and_failed_per_asset(redis, authorized_session)
     assert result["https://acme.io/bad.js"].analyze_status == "failed"
     endpoint_values = {f.value for f in _findings(tenant, run_id) if f.type == "endpoint"}
     assert "GET /api/good" in endpoint_values
+
+
+def test_analyze_loop_reraises_infra_error_instead_of_recording_failed(
+    redis, authorized_session, monkeypatch
+):
+    # A transient infra error (S3 ClientError reading the blob, or a DB blip) must
+    # propagate to the worker's job-level retry, not get recorded as a permanent
+    # per-asset analyze_failed -- that would make a transient blip terminal (the
+    # row becomes analyze-terminal, so redelivery's skip-condition never revisits
+    # it) and could false-PARTIAL a run whose asset would have succeeded on retry.
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/a.js"])
+    rows = assets.list_for_run(tenant, run_id)
+    key = storage.put_blob(tenant, run_id, "input", b'fetch("/api/x");')
+    with tenant_session(tenant) as s:
+        assets.set_fetch_ok(s, rows[0].id, key)
+
+    def boom(*a, **k):
+        raise ClientError({"Error": {"Code": "InternalError", "Message": "blip"}}, "GetObject")
+
+    monkeypatch.setattr(storage, "get_blob", boom)
+    with pytest.raises(ClientError):
+        analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    # Never recorded as failed -- stays at its pre-attempt "pending", so the
+    # worker's retry still sees an asset eligible for another analyze attempt.
+    assert assets.list_for_run(tenant, run_id)[0].analyze_status == "pending"
 
 
 def test_analyze_loop_does_not_overwrite_ok_when_publish_fails_post_commit(
