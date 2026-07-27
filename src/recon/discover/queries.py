@@ -9,6 +9,7 @@ from sqlalchemy import select
 from recon import storage
 from recon.db.base import tenant_session
 from recon.db.models import RunEvent
+from recon.runs import assets as run_assets
 
 
 def latest_assets_event(tenant_id: str, run_id: str) -> dict | None:
@@ -27,3 +28,21 @@ def get_assets_manifest(tenant_id: str, run_id: str) -> dict | None:
     if payload is None or not payload.get("assets_ref"):
         return None
     return json.loads(storage.get_blob(payload["assets_ref"]))
+
+
+def get_assets_with_status(tenant_id: str, run_id: str) -> dict | None:
+    """Merge per-asset fetch/analyze status onto the discovery manifest.
+
+    Returns the manifest with each asset enriched by fetch_status and
+    analyze_status from the run_assets table (missing rows default to
+    "pending").
+    """
+    manifest = get_assets_manifest(tenant_id, run_id)
+    if manifest is None:
+        return None
+    status_by_url = {a.url: a for a in run_assets.list_for_run(tenant_id, run_id)}
+    for entry in manifest.get("assets", []):
+        row = status_by_url.get(entry["url"])
+        entry["fetch_status"] = row.fetch_status if row else "pending"
+        entry["analyze_status"] = row.analyze_status if row else "pending"
+    return manifest

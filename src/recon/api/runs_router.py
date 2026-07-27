@@ -154,10 +154,13 @@ def get_run_assets(
 ) -> dict:
     """The discovered in-scope .js assets manifest for a crawl run (REQ-C2).
 
-    Returns a `pending` placeholder until the DISCOVERING stage records one."""
+    Returns a `pending` placeholder until the DISCOVERING stage records one.
+    Each asset includes fetch_status and analyze_status from the run_assets
+    table (missing rows default to "pending").
+    """
     if queries.get_status(tenant_id, run_id) is None:
         raise HTTPException(status_code=404, detail="run not found")
-    manifest = discover_queries.get_assets_manifest(tenant_id, run_id)
+    manifest = discover_queries.get_assets_with_status(tenant_id, run_id)
     if manifest is None:
         return {"domain": None, "status": "pending", "assets": []}
     return manifest
