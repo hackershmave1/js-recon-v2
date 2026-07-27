@@ -67,3 +67,34 @@ def test_discover_run_rejects_unauthorized_session():
          patch("recon.discover.crawl.sessions_service.get_session", return_value=engagement):
         with pytest.raises(retry.FatalError):
             crawl.discover_run(MagicMock(), tenant_id="t", run_id="r", job_id="j")
+
+
+def test_discover_run_skips_target_with_path():
+    # A single-asset URL target is NOT a crawl — no event, no rows (backward compat).
+    with patch("recon.discover.crawl.queries.latest_assets_event", return_value=None), \
+         patch("recon.discover.crawl._load_target",
+               return_value=("https://acme.io/app.js", "sess-1")), \
+         patch("recon.discover.crawl.sessions_service.get_session"), \
+         patch("recon.discover.crawl.harness.run_crawl") as run_crawl:
+        crawl.discover_run(MagicMock(), tenant_id="t", run_id="r", job_id="j")
+    run_crawl.assert_not_called()
+
+
+def test_discover_run_seeds_run_asset_rows():
+    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
+    seeded = {}
+    with patch("recon.discover.crawl.record_event", return_value=MagicMock()), \
+         patch("recon.discover.crawl.publish"), \
+         patch("recon.discover.crawl.assets.seed_pending",
+               side_effect=lambda s, **k: seeded.update(k)):
+        for p in _patches(
+            katana_urls=["https://acme.io/app.js", "https://acme.io/vendor.js"],
+            validated={"https://acme.io/app.js", "https://acme.io/vendor.js"},
+            engagement=engagement,
+        ):
+            p.start()
+        try:
+            crawl.discover_run(MagicMock(), tenant_id="t", run_id="r", job_id="j")
+        finally:
+            patch.stopall()
+    assert seeded["urls"] == ["https://acme.io/app.js", "https://acme.io/vendor.js"]

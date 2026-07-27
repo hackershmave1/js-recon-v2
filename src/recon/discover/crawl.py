@@ -25,6 +25,7 @@ from recon.events.log import publish, record_event
 from recon.fetch import egress
 from recon.observability import get_logger
 from recon.queue import retry
+from recon.runs import assets
 from recon.sessions import service as sessions_service
 
 log = get_logger("recon.discover")
@@ -37,6 +38,9 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
     target, session_id = _load_target(tenant_id, run_id)
     if not target:
         return  # nothing to crawl (e.g. an upload run with no domain target)
+
+    if not _is_bare_domain(target):
+        return  # a single asset URL, not a domain crawl — legacy path handles it
 
     engagement = sessions_service.get_session(tenant_id, session_id)
     if engagement is None or not engagement.authorization_ack:
@@ -72,6 +76,9 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
         tenant_id, run_id, "assets", json.dumps(manifest).encode("utf-8")
     )
     with tenant_session(tenant_id) as session:
+        assets.seed_pending(
+            session, tenant_id=tenant_id, run_id=run_id, urls=kept
+        )
         event = record_event(
             session, tenant_id=tenant_id, run_id=run_id,
             event_type="discover.assets",
@@ -98,6 +105,15 @@ def _load_target(tenant_id: str, run_id: str) -> tuple[str | None, str | None]:
         if run is None:
             return None, None
         return run.target, str(run.session_id)
+
+
+def _is_bare_domain(target: str) -> bool:
+    """A crawl target must be a bare host (no path) — a target with a path is a
+    single asset URL and stays on the legacy single-asset path (Slice Y backward
+    compat; also closes the Slice X 'crawls any in-scope target' latent guard)."""
+    t = target if "://" in target else f"https://{target}"
+    path = urlsplit(t).path
+    return path in ("", "/")
 
 
 def _host(target: str) -> str:

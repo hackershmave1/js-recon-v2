@@ -70,6 +70,14 @@ class FindingType(StrEnum):
     PARAM = "param"
 
 
+class AssetStatus(StrEnum):
+    """Per-asset fetch/analyze outcome on a run_asset row (Slice Y)."""
+
+    PENDING = "pending"
+    OK = "ok"
+    FAILED = "failed"
+
+
 # The stages in execution order — used to know what comes next and to resume.
 STAGE_ORDER: tuple[RunStage, ...] = (
     RunStage.DISCOVERING,

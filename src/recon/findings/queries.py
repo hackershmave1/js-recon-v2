@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from recon.db.base import tenant_session
-from recon.db.models import Finding, FindingOccurrence, FindingTriage, Run, RunEvent
+from recon.db.models import Finding, FindingOccurrence, FindingTriage, Run, RunAsset, RunEvent
 from recon.domain import FindingType
 
 
@@ -32,6 +32,9 @@ class OccurrenceView:
     engine: str | None
     confidence: str | None
     verified: bool | None
+    # Slice Y: which discovered asset this sighting came from, resolved from
+    # run_asset_id -> run_asset.url. None for legacy (pre-crawl) occurrences.
+    asset_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,15 @@ class FindingsView:
     coverage: CoverageView | None
 
 
+@dataclass(frozen=True)
+class _AssetRef:
+    """A run_asset's blob pointer and URL, keyed by run_asset_id — one lookup
+    serves both `revealable`'s blob resolution and the occurrence's asset_url."""
+
+    input_ref: str | None
+    url: str
+
+
 def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
     """Every finding for a run with its occurrences and the analyze coverage
     counters, or ``None`` if the run does not exist for this tenant. Ordered
@@ -109,29 +121,61 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
             .order_by(Finding.type, Finding.value, Finding.finding_hash)
             .options(selectinload(Finding.occurrences))
         ).all()
+        # Slice Y: a crawl run's bytes live per-asset (run.input_ref is NULL for
+        # those runs), so `revealable` must be computed from each occurrence's own
+        # asset blob, not the run-level ref — and the FE needs the asset's URL for
+        # attribution. One query for every asset the run owns serves both.
+        asset_refs = {
+            str(a.id): _AssetRef(input_ref=a.input_ref, url=a.url)
+            for a in session.scalars(
+                select(RunAsset).where(RunAsset.run_id == str(run_id))
+            ).all()
+        }
         return FindingsView(
             run_id=str(run_id),
             findings=[
                 _finding_view(
-                    finding, triage_by_hash.get(finding.finding_hash), run.input_ref
+                    finding,
+                    triage_by_hash.get(finding.finding_hash),
+                    run.input_ref,
+                    asset_refs,
                 )
                 for finding in findings
             ],
-            coverage=_latest_coverage(session, run_id),
+            coverage=_latest_coverage(session, run_id, is_multi_asset=bool(asset_refs)),
         )
 
 
-def _latest_coverage(session, run_id: str) -> CoverageView | None:
-    """The most recent ``analyze.coverage`` event for the run (a stage retry appends
-    a fresh one; the highest id is authoritative). ``None`` until analyze has run."""
-    payload = session.scalars(
+def _latest_coverage(session, run_id: str, *, is_multi_asset: bool) -> CoverageView | None:
+    """The run's analyze coverage counters (REQ-C2).
+
+    A multi-asset (crawl) run's assets each emit their OWN ``analyze.coverage``
+    event, exactly once — a redelivery skips an already analyze-terminal asset
+    rather than re-analyzing it, so no asset's event is ever re-emitted. The true
+    run-wide total is therefore the SUM of every one of the run's events, not just
+    the highest-id one: taking only the latest silently dropped every earlier
+    asset's counts (e.g. reporting ``secrets: 0`` even though an earlier asset's
+    own event had recorded some).
+
+    A legacy single-asset run instead has exactly one analyze stage, which a
+    retry re-runs IN PLACE and which re-emits its one event again — there,
+    summing would double-count a retry, so the highest-id event alone (latest
+    wins, the original behavior) is what's correct.
+
+    ``None`` until analyze has emitted at least one event for the run.
+    """
+    payloads = session.scalars(
         select(RunEvent.payload)
         .where(RunEvent.run_id == str(run_id), RunEvent.type == "analyze.coverage")
         .order_by(RunEvent.id.desc())
-        .limit(1)
-    ).first()
-    if payload is None:
+    ).all()
+    if not payloads:
         return None
+    payload = _merge_coverage_payloads(payloads) if is_multi_asset else payloads[0]
+    return _coverage_view_from_payload(payload)
+
+
+def _coverage_view_from_payload(payload: dict) -> CoverageView:
     return CoverageView(
         attributed=int(payload.get("attributed", 0)),
         unattributed=int(payload.get("unattributed", 0)),
@@ -150,26 +194,79 @@ def _latest_coverage(session, run_id: str) -> CoverageView | None:
     )
 
 
+def _merge_coverage_payloads(payloads: list[dict]) -> dict:
+    """Sum every asset's own coverage payload into one run-wide payload (Slice Y).
+
+    Mirrors ``analyze._merge_coverage``'s semantics exactly: counts are additive;
+    ``secrets_engine`` is the LESS-healthy of all the events ("unavailable" wins
+    over "ok") so one asset's absent scanner is never masked by another asset's
+    clean scan (REQ-C2); ``files`` (per-source-path detail) is concatenated across
+    assets rather than merged path-by-path — it is per-file-per-asset detail, so
+    two assets sharing the same fallback path still get two distinct entries;
+    ``source_map`` is not meaningful to merge (every asset this slice analyzes
+    with ``source_map_ref=None``), so any one value stands in — the first
+    (highest-id) event's.
+    """
+    files: list[dict] = []
+    for payload in payloads:
+        files.extend(payload.get("files", []))
+    return {
+        "attributed": sum(int(p.get("attributed", 0)) for p in payloads),
+        "unattributed": sum(int(p.get("unattributed", 0)) for p in payloads),
+        "secrets": sum(int(p.get("secrets", 0)) for p in payloads),
+        "secrets_engine": (
+            "unavailable"
+            if any(p.get("secrets_engine") == "unavailable" for p in payloads)
+            else "ok"
+        ),
+        "sources_recovered": sum(int(p.get("sources_recovered", 0)) for p in payloads),
+        "source_map": payloads[0].get("source_map", "none"),
+        "files": files,
+    }
+
+
 def _finding_view(
     finding: Finding,
     triage_row: FindingTriage | None = None,
     run_input_ref: str | None = None,
+    asset_refs: dict[str, _AssetRef] | None = None,
 ) -> FindingView:
     # REQ-S2: a secret's raw evidence is never served; the value comes only from the
     # audited reveal endpoint. Endpoint/param evidence (a code snippet) is kept.
     is_secret = finding.type == FindingType.SECRET.value
+    asset_refs = asset_refs or {}
+
+    def _asset_url_for(occurrence: FindingOccurrence) -> str | None:
+        # Slice Y: resolve the occurrence's own asset URL for FE attribution.
+        # None for legacy occurrences (run_asset_id NULL, pre-crawl runs).
+        if occurrence.run_asset_id is None:
+            return None
+        ref = asset_refs.get(str(occurrence.run_asset_id))
+        return ref.url if ref else None
+
     occurrences = [
-        _occurrence_view(occurrence, redact_evidence=is_secret)
+        _occurrence_view(
+            occurrence, redact_evidence=is_secret, asset_url=_asset_url_for(occurrence)
+        )
         for occurrence in sorted(
             finding.occurrences,
             key=lambda o: (o.source_path or "", o.offset_start or 0, o.occurrence_hash),
         )
     ]
+
+    def _blob_for(occurrence: FindingOccurrence) -> str | None:
+        # Slice Y: an asset-tagged occurrence reveals from its own asset blob;
+        # a legacy occurrence (run_asset_id NULL) falls back to run.input_ref.
+        if occurrence.run_asset_id is not None:
+            ref = asset_refs.get(str(occurrence.run_asset_id))
+            return ref.input_ref if ref else None
+        return run_input_ref
+
     revealable = bool(
         is_secret
-        and run_input_ref
         and any(
-            o.offset_start is not None and o.offset_end is not None for o in occurrences
+            o.offset_start is not None and o.offset_end is not None and _blob_for(o)
+            for o in finding.occurrences
         )
     )
     return FindingView(
@@ -196,7 +293,9 @@ def _triage_view(row: FindingTriage | None) -> TriageView | None:
 
 
 def _occurrence_view(
-    occurrence: FindingOccurrence, redact_evidence: bool = False
+    occurrence: FindingOccurrence,
+    redact_evidence: bool = False,
+    asset_url: str | None = None,
 ) -> OccurrenceView:
     return OccurrenceView(
         host=occurrence.host,
@@ -210,4 +309,5 @@ def _occurrence_view(
         engine=occurrence.engine,
         confidence=occurrence.confidence,
         verified=occurrence.verified,
+        asset_url=asset_url,
     )

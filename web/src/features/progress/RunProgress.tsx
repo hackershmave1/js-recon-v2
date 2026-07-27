@@ -53,7 +53,16 @@ export function RunProgress({ runId, onFindings }: { runId: string; onFindings: 
   return (
     <div className="card">
       <h2>Run {runId}</h2>
-      <p>State: <strong>{state}</strong>{stage ? ` · ${stage}` : ""}{pct != null ? ` · ${pct}%` : ""}</p>
+      <p>
+        State: <strong>{state}</strong>
+        {/* Slice Y: done vs partial are both terminal but not the same outcome —
+            a distinct chip per terminal state (not just the plain word) keeps a
+            partially-completed crawl from reading as a clean success at a glance. */}
+        {TERMINAL_STATES.has(state) && (
+          <span className={`chip chip-${state}`}>{state.toUpperCase()}</span>
+        )}
+        {stage ? ` · ${stage}` : ""}{pct != null ? ` · ${pct}%` : ""}
+      </p>
       {error && <p className="sev-high">{error}</p>}
       <ul>{events.map((e, i) => <li key={i} className="muted">{e.event}: {e.data}</li>)}</ul>
     </div>

@@ -79,9 +79,9 @@ def _run_stage_work(
     if stage == RunStage.DISCOVERING:
         crawl.discover_run(redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id)
     elif stage == RunStage.FETCHING:
-        fetch.fetch_run(redis, tenant_id=tenant_id, run_id=run_id)
+        fetch.fetch_run(redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id)
     elif stage == RunStage.ANALYZING:
-        analyze.analyze_run(redis, tenant_id=tenant_id, run_id=run_id)
+        analyze.analyze_run(redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id)
 
 
 def process_message(redis: Redis, queue: QueueName, msg_id: str, message: dict) -> str:
@@ -150,6 +150,16 @@ def process_message(redis: Redis, queue: QueueName, msg_id: str, message: dict) 
             # input blob; analyze extracts findings from it. A failure in any of
             # these routes to retry/DLQ.
             _run_stage_work(redis, stage, tenant_id=tenant_id, run_id=run_id, job_id=job_id)
+        except retry.ControlInterrupt as ci:
+            # A long stage (multi-asset fetch/analyze) saw pause/cancel mid-loop —
+            # mirror the pre-work checkpoints above instead of falling into failure
+            # routing; do NOT advance, the run is now paused/cancelled.
+            if ci.kind == "cancel":
+                _to_cancelled(redis, tenant_id, run_id)
+            else:
+                _to_paused(redis, tenant_id, run_id, stage)
+            streams.ack(redis, queue, msg_id)
+            return ci.kind
         except Exception as exc:  # noqa: BLE001 - failure routing is intentional
             return _handle_failure(
                 redis, queue, msg_id, message, exc,

@@ -8,8 +8,8 @@ const data: FindingsResponse = {
   run_id: "r", count: 2,
   coverage: { attributed: 3, unattributed: 1, secrets: 1, secrets_engine: "kingfisher", sources_recovered: 0, source_map: false, files: [] },
   findings: [
-    { finding_hash: "h1", type: "endpoint", value: "/api/users", path: null, severity: "info", attributes: {}, first_stage: "analyze", revealable: false, triage: null, occurrences: [{ host: null, raw_url: null, source_path: "app.js", line: 10, col: 4, offset_start: 100, offset_end: 120, evidence: "GET /api/users", engine: "vespasian", confidence: "high", verified: true }] },
-    { finding_hash: "h2", type: "secret", value: "aws:sha256:abcd", path: null, severity: "high", attributes: {}, first_stage: "analyze", revealable: true, triage: null, occurrences: [{ host: null, raw_url: null, source_path: "app.js", line: 5, col: 2, offset_start: null, offset_end: null, evidence: "LEAKED-SECRET-MARKER-XYZ", engine: "kingfisher", confidence: "high", verified: true }] },
+    { finding_hash: "h1", type: "endpoint", value: "/api/users", path: null, severity: "info", attributes: {}, first_stage: "analyze", revealable: false, triage: null, occurrences: [{ host: null, raw_url: null, source_path: "app.js", line: 10, col: 4, offset_start: 100, offset_end: 120, evidence: "GET /api/users", engine: "vespasian", confidence: "high", verified: true, asset_url: "https://acme.io/app.js" }] },
+    { finding_hash: "h2", type: "secret", value: "aws:sha256:abcd", path: null, severity: "high", attributes: {}, first_stage: "analyze", revealable: true, triage: null, occurrences: [{ host: null, raw_url: null, source_path: "app.js", line: 5, col: 2, offset_start: null, offset_end: null, evidence: "LEAKED-SECRET-MARKER-XYZ", engine: "kingfisher", confidence: "high", verified: true, asset_url: null }] },
   ],
 };
 
@@ -24,5 +24,14 @@ describe("FindingsView", () => {
     expect(screen.getByText(/GET \/api\/users/)).toBeInTheDocument();
     // Secret evidence is suppressed; proves the redaction gate blocks secrets.
     expect(screen.queryByText(/LEAKED-SECRET-MARKER-XYZ/)).toBeNull();
+  });
+
+  it("attributes each occurrence to its source asset (Slice Y), omitting it for legacy occurrences", () => {
+    render(<TenantProvider><FindingsView data={data} runId="r" /></TenantProvider>);
+    // h1's occurrence carries asset_url -> shown.
+    expect(screen.getByText(/https:\/\/acme\.io\/app\.js/)).toBeInTheDocument();
+    // h2's occurrence has asset_url: null (legacy) -> no attribution text rendered
+    // for it; the only asset_url on the page is h1's.
+    expect(screen.getAllByText(/https:\/\/acme\.io\/app\.js/)).toHaveLength(1);
   });
 });

@@ -14,6 +14,9 @@ export function FindingDetail({ finding, runId }: { finding: Finding; runId: str
         {finding.occurrences.map((o, i) => (
           <li key={i} className="muted">
             {o.source_path ?? o.host ?? "?"}{o.line != null ? `:${o.line}` : ""}
+            {/* Slice Y: which discovered asset this sighting came from; absent
+                (null) for legacy pre-crawl occurrences, so nothing renders. */}
+            {o.asset_url ? ` · ${o.asset_url}` : ""}
             {/* evidence is server-redacted for secrets; render only when present */}
             {o.evidence && !isSecret ? ` — ${o.evidence}` : ""}
             {o.engine ? ` [${o.engine}]` : ""}
