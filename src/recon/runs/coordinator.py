@@ -14,9 +14,10 @@ from recon import storage
 from recon.config import get_settings
 from recon.db.base import tenant_session
 from recon.db.models import Job, Run
-from recon.domain import JobState, QueueName, RunStage, RunState
+from recon.discover import queries as discover_queries
+from recon.domain import AssetStatus, JobState, QueueName, RunStage, RunState
 from recon.queue import streams
-from recon.runs import service, state_machine as sm
+from recon.runs import assets as run_assets, service, state_machine as sm
 from recon.runs.service import RunView
 
 # Which queue carries each stage's work (REQ-Q1). Ingest/analyze/correlate all
@@ -122,16 +123,37 @@ def advance(redis: Redis, *, tenant_id: str, run_id: str, completed: RunStage) -
         enqueue_stage(redis, tenant_id=tenant_id, run_id=run_id, stage=nxt)
         return
     try:
+        to_state, completeness = _finalize_state(tenant_id, run_id)
         service.transition(
             redis,
             tenant_id=tenant_id,
             run_id=run_id,
-            to_state=RunState.DONE,
-            extra_values={"completeness": {"fetch_ok": True, "analyze_ok": True}},
+            to_state=to_state,
+            extra_values={"completeness": completeness},
         )
     except (service.TransitionConflict, sm.InvalidTransition):
         # Already finalized by a concurrent/duplicate delivery — idempotent.
         pass
+
+
+def _finalize_state(tenant_id: str, run_id: str) -> tuple[RunState, dict]:
+    """DONE vs PARTIAL from per-asset status (REQ-D5).
+
+    The discriminator for "is this a crawl run" is the presence of a
+    discover.assets event, NOT the run_asset row count — a crawl that timed out
+    before finding any assets has zero rows but must still finalize PARTIAL.
+    Legacy single-asset runs (no discover.assets event) keep the historical
+    hardcoded DONE.
+    """
+    event = discover_queries.latest_assets_event(tenant_id, run_id)
+    if event is None:
+        return RunState.DONE, {"fetch_ok": True, "analyze_ok": True}
+    rows = run_assets.list_for_run(tenant_id, run_id)
+    crawl_ok = event.get("status") == "ok"
+    fetch_ok = crawl_ok and all(a.fetch_status == AssetStatus.OK.value for a in rows)
+    analyze_ok = fetch_ok and all(a.analyze_status == AssetStatus.OK.value for a in rows)
+    to_state = RunState.DONE if (fetch_ok and analyze_ok) else RunState.PARTIAL
+    return to_state, {"fetch_ok": fetch_ok, "analyze_ok": analyze_ok}
 
 
 def resume_run(redis: Redis, *, tenant_id: str, run_id: str) -> RunView:
