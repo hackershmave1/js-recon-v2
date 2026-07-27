@@ -134,8 +134,16 @@ def _load_target(tenant_id: str, run_id: str, finding_hash: str) -> _Target | No
         if finding is None:
             return None
         occurrence = _reveal_occurrence(finding.occurrences)
+        # Slice Y: a crawl run's bytes live per-asset (run.input_ref is NULL for
+        # those runs). Route to the chosen occurrence's own asset blob; fall back
+        # to run.input_ref for legacy single-asset runs (run_asset_id is NULL there).
+        input_ref = run.input_ref
+        if occurrence is not None and occurrence.run_asset_id is not None:
+            asset = session.get(models.RunAsset, occurrence.run_asset_id)
+            if asset is not None and asset.input_ref:
+                input_ref = asset.input_ref
         return _Target(
-            input_ref=run.input_ref,
+            input_ref=input_ref,
             rule=str((finding.attributes or {}).get("rule", "")),
             value=finding.value,
             offset_start=None if occurrence is None else occurrence.offset_start,

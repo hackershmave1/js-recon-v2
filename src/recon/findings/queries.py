@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from recon.db.base import tenant_session
-from recon.db.models import Finding, FindingOccurrence, FindingTriage, Run, RunEvent
+from recon.db.models import Finding, FindingOccurrence, FindingTriage, Run, RunAsset, RunEvent
 from recon.domain import FindingType
 
 
@@ -109,11 +109,23 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
             .order_by(Finding.type, Finding.value, Finding.finding_hash)
             .options(selectinload(Finding.occurrences))
         ).all()
+        # Slice Y: a crawl run's bytes live per-asset (run.input_ref is NULL for
+        # those runs), so `revealable` must be computed from each occurrence's own
+        # asset blob, not the run-level ref. One query for every asset the run owns.
+        asset_refs = {
+            str(a.id): a.input_ref
+            for a in session.scalars(
+                select(RunAsset).where(RunAsset.run_id == str(run_id))
+            ).all()
+        }
         return FindingsView(
             run_id=str(run_id),
             findings=[
                 _finding_view(
-                    finding, triage_by_hash.get(finding.finding_hash), run.input_ref
+                    finding,
+                    triage_by_hash.get(finding.finding_hash),
+                    run.input_ref,
+                    asset_refs,
                 )
                 for finding in findings
             ],
@@ -154,10 +166,12 @@ def _finding_view(
     finding: Finding,
     triage_row: FindingTriage | None = None,
     run_input_ref: str | None = None,
+    asset_refs: dict[str, str | None] | None = None,
 ) -> FindingView:
     # REQ-S2: a secret's raw evidence is never served; the value comes only from the
     # audited reveal endpoint. Endpoint/param evidence (a code snippet) is kept.
     is_secret = finding.type == FindingType.SECRET.value
+    asset_refs = asset_refs or {}
     occurrences = [
         _occurrence_view(occurrence, redact_evidence=is_secret)
         for occurrence in sorted(
@@ -165,11 +179,19 @@ def _finding_view(
             key=lambda o: (o.source_path or "", o.offset_start or 0, o.occurrence_hash),
         )
     ]
+
+    def _blob_for(occurrence: FindingOccurrence) -> str | None:
+        # Slice Y: an asset-tagged occurrence reveals from its own asset blob;
+        # a legacy occurrence (run_asset_id NULL) falls back to run.input_ref.
+        if occurrence.run_asset_id is not None:
+            return asset_refs.get(str(occurrence.run_asset_id))
+        return run_input_ref
+
     revealable = bool(
         is_secret
-        and run_input_ref
         and any(
-            o.offset_start is not None and o.offset_end is not None for o in occurrences
+            o.offset_start is not None and o.offset_end is not None and _blob_for(o)
+            for o in finding.occurrences
         )
     )
     return FindingView(
