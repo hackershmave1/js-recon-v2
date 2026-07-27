@@ -133,15 +133,21 @@ def _load_target(tenant_id: str, run_id: str, finding_hash: str) -> _Target | No
         ).first()
         if finding is None:
             return None
-        occurrence = _reveal_occurrence(finding.occurrences)
-        # Slice Y: a crawl run's bytes live per-asset (run.input_ref is NULL for
-        # those runs). Route to the chosen occurrence's own asset blob; fall back
-        # to run.input_ref for legacy single-asset runs (run_asset_id is NULL there).
-        input_ref = run.input_ref
-        if occurrence is not None and occurrence.run_asset_id is not None:
-            asset = session.get(models.RunAsset, occurrence.run_asset_id)
-            if asset is not None and asset.input_ref:
-                input_ref = asset.input_ref
+        # Slice Y (Task 9 review, Important #2): `queries.revealable` is True when
+        # ANY offset-bearing occurrence's blob resolves, but the deterministic-first
+        # occurrence in sort order need not be that one (e.g. it sits on an asset
+        # whose fetch is still pending/failed while a sibling occurrence's asset is
+        # fetched). Committing to the sort-order-first pick regardless of whether
+        # ITS blob exists would falsely deny a finding the read-gate promised was
+        # revealable. So: walk the candidates in the SAME deterministic order
+        # queries.py sorts by, and reveal from the first one whose blob actually
+        # resolves — safe because every occurrence of one finding_hash decodes to
+        # the same stripped token (see _reveal_candidates), and the integrity
+        # re-check below still fails closed on any wrong-bytes slice.
+        candidates = _reveal_candidates(finding.occurrences)
+        occurrence, input_ref = _first_resolvable_occurrence(
+            session, run_id, run.input_ref, candidates
+        )
         return _Target(
             input_ref=input_ref,
             rule=str((finding.attributes or {}).get("rule", "")),
@@ -153,21 +159,54 @@ def _load_target(tenant_id: str, run_id: str, finding_hash: str) -> _Target | No
         )
 
 
-def _reveal_occurrence(occurrences):
-    """The deterministic-first occurrence that carries byte offsets, or ``None``.
+def _reveal_candidates(occurrences):
+    """Every offset-bearing occurrence, deterministically sorted (source_path,
+    offset_start, occurrence_hash) — the same order ``queries.py`` displays them
+    in, for stability.
 
     All occurrences of one finding_hash decode to the same stripped token, so any
-    offset-bearing one is correct; the ordering matches ``queries.py`` for stability."""
+    one of them is a correct reveal source; which one actually HAS a readable
+    blob is a separate question handled by ``_first_resolvable_occurrence``."""
     candidates = [
         o for o in occurrences
         if o.offset_start is not None and o.offset_end is not None
     ]
-    if not candidates:
-        return None
     return sorted(
         candidates,
         key=lambda o: (o.source_path or "", o.offset_start or 0, o.occurrence_hash),
-    )[0]
+    )
+
+
+def _first_resolvable_occurrence(session, run_id, run_input_ref, candidates):
+    """The first candidate (in deterministic order) whose blob resolves, paired
+    with that blob's ref — or the deterministic-first candidate with
+    ``input_ref=None`` when none resolve (preserves the single-candidate
+    behavior: the audit still logs a stable source_path/offset and ``_derive``
+    still denies ``source_gone``), or ``(None, None)`` when there are no
+    offset-bearing occurrences at all."""
+    if not candidates:
+        return None, None
+    for occurrence in candidates:
+        input_ref = _occurrence_blob_ref(session, run_id, run_input_ref, occurrence)
+        if input_ref:
+            return occurrence, input_ref
+    return candidates[0], None
+
+
+def _occurrence_blob_ref(session, run_id, run_input_ref, occurrence):
+    """The blob ref one occurrence would reveal from: its own run_asset (looked
+    up scoped to THIS run — Task 9 review, Minor #3 defense-in-depth alongside
+    RLS, matching ``queries.py``'s per-run asset map), or ``run_input_ref`` for a
+    legacy occurrence (``run_asset_id`` NULL)."""
+    if occurrence.run_asset_id is None:
+        return run_input_ref
+    asset = session.scalars(
+        select(models.RunAsset).where(
+            models.RunAsset.id == occurrence.run_asset_id,
+            models.RunAsset.run_id == str(run_id),
+        )
+    ).first()
+    return asset.input_ref if asset is not None else None
 
 
 def _derive(target: _Target) -> RevealOutcome:
