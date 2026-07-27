@@ -88,6 +88,52 @@ def test_analyze_loop_records_ok_and_failed_per_asset(redis, authorized_session)
     assert "GET /api/good" in endpoint_values
 
 
+def test_analyze_loop_does_not_overwrite_ok_when_publish_fails_post_commit(
+    redis, authorized_session, monkeypatch
+):
+    # publish() runs AFTER the per-asset transaction has already committed
+    # findings + analyze_status="ok". A failure there (Redis reset, pool
+    # exhaustion, broker restart -- the DB itself perfectly healthy) must NOT
+    # be recorded as an analyze failure: overwriting the just-committed "ok"
+    # with "failed" would make the row self-contradictory (fully analyzed data,
+    # "failed" status) and terminal (a redelivery's skip-condition would never
+    # revisit it), silently finalizing the run PARTIAL over an asset that
+    # actually succeeded, with no path back. Regression guard for the
+    # try/except/else fix in _analyze_assets.
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/a.js"])
+    rows = assets.list_for_run(tenant, run_id)
+    key = storage.put_blob(tenant, run_id, "input", b'fetch("/api/x");')
+    with tenant_session(tenant) as s:
+        assets.set_fetch_ok(s, rows[0].id, key)
+
+    def boom(*a, **k):
+        raise RuntimeError("redis reset")
+
+    monkeypatch.setattr(analyze, "publish", boom)
+    with pytest.raises(RuntimeError, match="redis reset"):
+        analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    # The finding was committed before publish ever ran...
+    assert len(_findings(tenant, run_id)) == 1
+    # ...and the status must still read "ok", NOT overwritten to "failed", and
+    # the exception must have propagated (asserted above) so the worker's
+    # normal job-level retry -- not a spurious per-asset failure -- handles it.
+    assert assets.list_for_run(tenant, run_id)[0].analyze_status == "ok"
+
+
+def test_merge_coverage_reports_less_healthy_secrets_engine():
+    # Aggregating across assets must not let a LATER successful scan mask an
+    # EARLIER asset going unscanned -- REQ-C2 honesty (see the docstring on
+    # Coverage.secrets_engine: an absent scanner must not read as "no secrets").
+    ok = analyze.Coverage(1, 0, 1, secrets=0, secrets_engine="ok")
+    unavailable = analyze.Coverage(1, 0, 1, secrets=0, secrets_engine="unavailable")
+
+    assert analyze._merge_coverage(unavailable, ok).secrets_engine == "unavailable"
+    assert analyze._merge_coverage(ok, unavailable).secrets_engine == "unavailable"
+    assert analyze._merge_coverage(ok, ok).secrets_engine == "ok"
+
+
 def test_analyze_loop_is_idempotent_on_redelivery(redis, authorized_session, monkeypatch):
     tenant, session_id = authorized_session
     run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/a.js"])

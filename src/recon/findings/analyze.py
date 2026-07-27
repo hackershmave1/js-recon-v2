@@ -141,6 +141,20 @@ def _analyze_assets(
     ``except Exception`` below never sees it, since it is raised outside the
     ``try``).
 
+    The ``try`` wraps ONLY the transaction (``_analyze_blob`` + ``set_analyze_ok``)
+    — a genuine per-asset analyze failure there is the one thing that should be
+    recorded as ``analyze_failed``. ``publish``/logging/``_merge_coverage`` run in
+    the paired ``else`` (reached only after a clean commit), NOT in the ``try``:
+    if they were in the ``try`` and ``publish`` raised (Redis reset, pool
+    exhaustion — the DB itself perfectly healthy), the ``except`` would open a
+    fresh transaction and overwrite the just-committed ``"ok"`` with a
+    self-contradictory ``"failed"`` on data that was in fact fully analyzed —
+    permanently (the row is now analyze-terminal, so redelivery's skip-condition
+    never revisits it) and silently (the run would finalize PARTIAL over an
+    asset that actually succeeded, with no path back). ``try/except/else`` makes
+    that class of post-commit failure propagate instead, out to the worker's
+    normal job-level retry, exactly as an infra error should.
+
     Every asset actually processed (not skipped) gets an unconditional heartbeat
     BEFORE its analyze attempt, regardless of how it turns out — mirrors fetch's
     ``_fetch_assets`` (see its docstring for the full rationale): this bounds the
@@ -174,20 +188,26 @@ def _analyze_assets(
                     asset_url=asset.url,
                 )
                 run_assets.set_analyze_ok(session, asset.id)
-            # Publish AFTER the transaction above commits — REQ-R2 (commit-then-
-            # publish, see recon.events.log's module docstring): a subscriber must
-            # never observe the event before the finding rows it describes are
-            # durably visible to a fresh read.
+        except Exception as exc:  # noqa: BLE001 - per-asset best-effort
+            with tenant_session(tenant_id) as session:
+                run_assets.set_analyze_failed(session, asset.id, str(exc))  # per-asset commit
+            log.warning("analyze.asset_failed", run_id=run_id, url=asset.url, error=str(exc))
+        else:
+            # Only reached if the transaction above committed cleanly. Publish
+            # AFTER that commit — REQ-R2 (commit-then-publish, see
+            # recon.events.log's module docstring): a subscriber must never
+            # observe the event before the finding rows it describes are
+            # durably visible to a fresh read. Kept in `else`, NOT in the `try`,
+            # so a post-commit failure here (e.g. Redis reset/pool exhaustion —
+            # DB perfectly healthy) does not fall into `except` and overwrite
+            # the just-committed "ok" with a self-contradictory "failed"; it
+            # propagates instead, straight to the worker's job-level retry.
             publish(redis, coverage_event)
             log.info(
                 "analyze.asset_done", run_id=run_id, url=asset.url,
                 findings=coverage.findings_written,
             )
             agg = _merge_coverage(agg, coverage)
-        except Exception as exc:  # noqa: BLE001 - per-asset best-effort
-            with tenant_session(tenant_id) as session:
-                run_assets.set_analyze_failed(session, asset.id, str(exc))  # per-asset commit
-            log.warning("analyze.asset_failed", run_id=run_id, url=asset.url, error=str(exc))
     return agg
 
 
@@ -292,23 +312,31 @@ def _analyze_blob(
 def _merge_coverage(a: Coverage, b: Coverage) -> Coverage:
     """Sum one more asset's Coverage into the loop's running aggregate (Slice Y).
 
-    Only the counts are additive across assets. ``secrets_engine``/``source_map``
-    are per-blob statuses, not counts, so the latest asset's status wins (in
-    practice every asset passes ``source_map_ref=None``, so ``source_map`` stays
-    "none" unless an asset's own JS happens to carry an inline map). ``files``
-    (per-source-path detail) is already durably recorded on each asset's own
-    ``analyze.coverage`` event, which is what REQ-C2 reads back (the highest-id
-    event wins — see ``findings/queries.py``'s ``_latest_coverage``); this
-    run-level aggregate is never persisted, so it stays empty rather than
-    inventing a merge across assets' distinct-but-identically-named fallback
-    paths.
+    Only the counts are additive across assets. ``secrets_engine`` reports the
+    LESS-healthy of the two statuses ("unavailable" wins over "ok"): taking
+    whichever asset merely ran LAST would let a later successful scan mask an
+    earlier asset going unscanned, which is exactly the silent-under-reporting
+    REQ-C2 exists to prevent (see ``Coverage.secrets_engine``'s own docstring —
+    a scanner that was absent must not be reported as "no secrets").
+    ``source_map`` is not a health signal the same way (every asset this slice
+    passes ``source_map_ref=None``, so it is "none" in practice unless an
+    asset's own JS carries an inline map) — the latest asset's value is kept as
+    a simple, low-stakes default. ``files`` (per-source-path detail) is already
+    durably recorded on each asset's own ``analyze.coverage`` event, which is
+    what REQ-C2 reads back (the highest-id event wins — see
+    ``findings/queries.py``'s ``_latest_coverage``); this run-level aggregate is
+    never persisted, so it stays empty rather than inventing a merge across
+    assets' distinct-but-identically-named fallback paths.
     """
+    unavailable = "unavailable"
     return Coverage(
         attributed=a.attributed + b.attributed,
         unattributed=a.unattributed + b.unattributed,
         findings_written=a.findings_written + b.findings_written,
         secrets=a.secrets + b.secrets,
-        secrets_engine=b.secrets_engine,
+        secrets_engine=(
+            unavailable if unavailable in (a.secrets_engine, b.secrets_engine) else "ok"
+        ),
         sources_recovered=a.sources_recovered + b.sources_recovered,
         source_map=b.source_map,
     )
