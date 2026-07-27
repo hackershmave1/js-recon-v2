@@ -33,12 +33,16 @@ from redis import Redis
 from sqlalchemy import update
 
 from recon import storage
-from recon.config import get_settings
+from recon.config import Settings, get_settings
 from recon.db.base import tenant_session
 from recon.db.models import Run
+from recon.domain import AssetStatus
 from recon.fetch import egress, politeness
 from recon.observability import get_logger
+from recon.progress import heartbeat as progress
 from recon.queue import retry
+from recon.runs import assets as run_assets
+from recon.runs import queries as run_queries
 from recon.sessions import service as sessions_service
 
 log = get_logger("recon.fetch")
@@ -139,12 +143,23 @@ def fetch_url(
 
 
 def fetch_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None = None) -> None:
-    """Fetch the run's target into its input blob. No-op when there is no target
-    or the input was already fetched (idempotent across a stage retry).
+    """Fetch the run's asset(s) into their input blob(s).
 
-    ``job_id`` is accepted so the worker's dispatch call is stable ahead of the
-    multi-asset loop (heartbeat + cooperative REQ-A4 interrupt), which will use it;
-    the single-target path here does not need it yet."""
+    A crawl run (``run_asset`` rows present, Slice Y) loops every not-yet-terminal
+    asset through ``_fetch_assets``: idempotent per asset (a terminal row is
+    skipped, never re-fetched), paced per host (REQ-Q3), best-effort (one asset's
+    failure does not abort the run), heartbeating, and cooperatively interruptible
+    (REQ-A4).
+
+    An upload/single-URL run (no ``run_asset`` rows) falls through unchanged to
+    the legacy path below: fetch ``run.target`` into ``run.input_ref``, a no-op
+    when there is no target or it was already fetched (idempotent across a stage
+    retry)."""
+    rows = run_assets.list_for_run(tenant_id, run_id)
+    if rows:
+        _fetch_assets(redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, rows=rows)
+        return
+    # ---- legacy single-target path below (unchanged) ----
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
         target = run.target if run is not None else None
@@ -204,3 +219,102 @@ def _parse_retry_after(value: str | None) -> float | None:
     except ValueError:
         return None
     return seconds if seconds > 0 else None
+
+
+def _await_host_slot(
+    redis: Redis, host: str, *, tenant_id: str, run_id: str, job_id: str | None,
+    settings: Settings,
+) -> None:
+    """Acquire the per-host politeness slot, re-checking until ``check()`` yields it.
+
+    ``politeness.check`` is a CONSUMING acquire (REQ-Q3): it returns ``0.0`` ONLY to
+    the caller that actually took the host slot (and incremented the global
+    budget). A sleep-once-then-proceed would fetch WITHOUT ever having taken that
+    slot — defeating the anti-hammer guarantee for every asset after the first on
+    a host — so this re-checks in a loop, heartbeating through each wait so the
+    job's lease survives a long throttle."""
+    while (wait := politeness.check(redis, host, settings=settings)) > 0:
+        _beat_sleep(redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, seconds=wait)
+
+
+def _beat_sleep(
+    redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None, seconds: float
+) -> None:
+    """Sleep ``seconds``, heartbeating the job lease once per full interval elapsed.
+
+    A wait shorter than one heartbeat interval can't threaten the (much longer)
+    ``heartbeat_stall_threshold_seconds``, so it sleeps quietly without a write;
+    a wait spanning one or more full intervals heartbeats along the way, so a long
+    politeness/Retry-After backoff can never starve the job's lease mid-wait."""
+    remaining = seconds
+    step = get_settings().crawl_heartbeat_interval_seconds
+    while remaining > 0:
+        nap = min(step, remaining)
+        time.sleep(nap)
+        remaining -= nap
+        if job_id and remaining > 0:
+            progress.beat(
+                redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id,
+                done=0, total=0, emit_event=False,
+            )
+
+
+def _fetch_assets(
+    redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None,
+    rows: list[run_assets.AssetRow],
+) -> None:
+    """Fetch every not-yet-terminal asset of a crawl run (REQ-C1/D5), best-effort.
+
+    Each asset's terminal status commits in ITS OWN transaction (not one loop-wide
+    one) so an infra error mid-loop can never roll back an earlier asset's commit —
+    that per-asset commit is what makes a redelivery idempotent (skip, don't
+    re-fetch, don't double-egress). A control interrupt (REQ-A4) is checked at the
+    top of every iteration, before any fetch attempt, and propagates straight out
+    of this loop (never caught here — it is not a failure)."""
+    engagement = _authorized_engagement(tenant_id, run_id)
+    settings = get_settings()
+    total = len(rows)
+    terminal = (AssetStatus.OK.value, AssetStatus.FAILED.value)
+    for i, asset in enumerate(rows, 1):
+        if asset.fetch_status in terminal or asset.input_ref:
+            continue  # terminal already — idempotent redelivery skip
+        run_queries.raise_if_control_requested(tenant_id, run_id)  # REQ-A4
+        host = (urlsplit(asset.url).hostname or "").lower()
+        if host:
+            _await_host_slot(
+                redis, host, tenant_id=tenant_id, run_id=run_id, job_id=job_id, settings=settings
+            )
+        try:
+            content = fetch_url(
+                asset.url, engagement.scope_hosts,
+                timeout_s=settings.fetch_timeout_seconds, max_bytes=settings.max_fetch_bytes,
+            )
+        except (egress.EgressBlocked, retry.FatalError, retry.RetryableError) as exc:
+            with tenant_session(tenant_id) as s:
+                run_assets.set_fetch_failed(s, asset.id, str(exc))  # per-asset commit
+            log.warning("fetch.asset_failed", run_id=run_id, url=asset.url, error=str(exc))
+            retry_after = getattr(exc, "retry_after", None)
+            if retry_after:  # honor the target's host-wide backoff even though we drop it
+                _beat_sleep(
+                    redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id,
+                    seconds=float(retry_after),
+                )
+            continue
+        key = storage.put_blob(tenant_id, run_id, "input", content)
+        with tenant_session(tenant_id) as s:
+            run_assets.set_fetch_ok(s, asset.id, key)  # per-asset commit
+        if job_id:
+            progress.beat(
+                redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, done=i, total=total
+            )
+        log.info("fetch.asset_done", run_id=run_id, url=asset.url, bytes=len(content))
+
+
+def _authorized_engagement(tenant_id: str, run_id: str) -> sessions_service.SessionView:
+    with tenant_session(tenant_id) as session:
+        run = session.get(Run, run_id)
+        session_id = str(run.session_id) if run is not None else None
+    engagement = sessions_service.get_session(tenant_id, session_id)
+    if engagement is None or not engagement.authorization_ack:
+        raise retry.FatalError("session is not authorized for egress")
+    return engagement
