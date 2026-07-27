@@ -10,7 +10,6 @@ from recon.db.base import tenant_session
 from recon.domain import FindingType
 from recon.findings import normalize
 from recon.findings.store import Occurrence, record_finding
-from recon.sessions import service as sessions_service
 
 pytestmark = pytest.mark.integration
 

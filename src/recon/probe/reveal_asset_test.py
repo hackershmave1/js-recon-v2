@@ -44,8 +44,8 @@ def test_reveal_slices_the_occurrences_asset_blob(redis, authorized_session):
 
 
 def test_reveal_asset_routed_integrity_mismatch_is_409(redis, authorized_session):
-    # Task 9 review, Important #1: the fail-closed drift re-check must still fire
-    # through the new asset-routed branch, not just the legacy run.input_ref one.
+    # The fail-closed drift re-check must still fire through the asset-routed
+    # branch, not just the legacy run.input_ref one.
     tenant, session_id = authorized_session
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id, target="acme.io")
     run_id = view.id
@@ -82,12 +82,11 @@ def test_reveal_asset_routed_integrity_mismatch_is_409(redis, authorized_session
 def test_reveal_skips_a_pending_sibling_asset_to_reveal_from_the_fetched_one(
     redis, authorized_session
 ):
-    # Task 9 review, Important #2: queries.revealable is True whenever ANY
-    # offset-bearing occurrence's blob resolves, but reveal._reveal_candidates'
-    # deterministic sort order need not put that occurrence first. Here the
-    # occurrence on the still-PENDING asset sorts first (source_path "a-..." <
-    # "b-..."); reveal must skip it and use the fetched sibling instead of
-    # denying source_gone.
+    # queries.revealable is True whenever ANY offset-bearing occurrence's blob
+    # resolves, but reveal._reveal_candidates' deterministic sort order need not
+    # put that occurrence first. Here the occurrence on the still-PENDING asset
+    # sorts first (source_path "a-..." < "b-..."); reveal must skip it and use
+    # the fetched sibling instead of denying source_gone.
     tenant, session_id = authorized_session
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id, target="acme.io")
     run_id = view.id

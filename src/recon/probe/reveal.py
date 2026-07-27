@@ -133,17 +133,17 @@ def _load_target(tenant_id: str, run_id: str, finding_hash: str) -> _Target | No
         ).first()
         if finding is None:
             return None
-        # Slice Y (Task 9 review, Important #2): `queries.revealable` is True when
-        # ANY offset-bearing occurrence's blob resolves, but the deterministic-first
-        # occurrence in sort order need not be that one (e.g. it sits on an asset
-        # whose fetch is still pending/failed while a sibling occurrence's asset is
-        # fetched). Committing to the sort-order-first pick regardless of whether
-        # ITS blob exists would falsely deny a finding the read-gate promised was
-        # revealable. So: walk the candidates in the SAME deterministic order
-        # queries.py sorts by, and reveal from the first one whose blob actually
-        # resolves — safe because every occurrence of one finding_hash decodes to
-        # the same stripped token (see _reveal_candidates), and the integrity
-        # re-check below still fails closed on any wrong-bytes slice.
+        # Slice Y: `queries.revealable` is True when ANY offset-bearing occurrence's
+        # blob resolves, but the deterministic-first occurrence in sort order need
+        # not be that one (e.g. it sits on an asset whose fetch is still
+        # pending/failed while a sibling occurrence's asset is fetched). Committing
+        # to the sort-order-first pick regardless of whether ITS blob exists would
+        # falsely deny a finding the read-gate promised was revealable. So: walk the
+        # candidates in the SAME deterministic order queries.py sorts by, and reveal
+        # from the first one whose blob actually resolves — safe because every
+        # occurrence of one finding_hash decodes to the same stripped token (see
+        # _reveal_candidates), and the integrity re-check below still fails closed
+        # on any wrong-bytes slice.
         candidates = _reveal_candidates(finding.occurrences)
         occurrence, input_ref = _first_resolvable_occurrence(
             session, run_id, run.input_ref, candidates
@@ -195,9 +195,9 @@ def _first_resolvable_occurrence(session, run_id, run_input_ref, candidates):
 
 def _occurrence_blob_ref(session, run_id, run_input_ref, occurrence):
     """The blob ref one occurrence would reveal from: its own run_asset (looked
-    up scoped to THIS run — Task 9 review, Minor #3 defense-in-depth alongside
-    RLS, matching ``queries.py``'s per-run asset map), or ``run_input_ref`` for a
-    legacy occurrence (``run_asset_id`` NULL)."""
+    up scoped to THIS run — defense-in-depth alongside RLS, matching
+    ``queries.py``'s per-run asset map), or ``run_input_ref`` for a legacy
+    occurrence (``run_asset_id`` NULL)."""
     if occurrence.run_asset_id is None:
         return run_input_ref
     asset = session.scalars(

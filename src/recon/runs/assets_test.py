@@ -3,7 +3,6 @@ import pytest
 from recon.db import models
 from recon.db.base import tenant_session
 from recon.runs import assets
-from recon.sessions import service as sessions_service
 
 pytestmark = pytest.mark.integration
 
