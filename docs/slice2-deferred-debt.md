@@ -185,7 +185,33 @@ once discovery became real, crawled the public internet) was fixed (`a800d31`).
 - `harness_test.py` backstop test asserts `killpg` called but not the `getpgid(pid)` argument.
 - Some Slice X commit bodies are trailer-only.
 
-**Slice Y (the gate-deferred multi-asset half):** multi-asset fetch/analyze (loop the
-manifest), the occurrence **asset-dimension migration**, secret-reveal routing to
+## Slice Y — multi-asset analyze
+
+Slice Y is **"multi-asset fetch/analyze"** (loop the discovery manifest), completing
+multi-asset coverage (REQ-C1/C2), the occurrence **asset-dimension identity** (REQ-D3),
+**PARTIAL** completeness on a failed asset (REQ-D5), and secret-reveal routing to
+per-asset blobs (REQ-S2). Both §4 gates passed: adversarial design review returned
+**BUILD WITH CHANGES** (five code-verified blockers all folded into the spec; see
+`docs/superpowers/specs/2026-07-26-slice-y-multi-asset-design.md` §13); higher-model
+code review returned **MERGE AFTER FIXES** — one existing integration test unrelated to
+Slice Y was fixed, and all amendments are documented in the spec's §15.
+
+**Surfaced issues and deferred debt:**
+
+| Item | Priority | Why deferred / safe now | Trigger to revisit |
+|---|---|---|---|
+| Per-asset fetch retry (transient 5xx/429) | SHOULD | Best-effort drops failed asset (→ `failed` status, run → `PARTIAL`); queue's retry/backoff not applied per-asset | When partial-fetch robustness at scale becomes load-bearing |
+| Analyze mid-scan heartbeat | SHOULD | A per-asset `kingfisher.scan` (up to `engine_timeout_seconds`=120s) can exceed the 30s job lease with no mid-scan beat, so a peer can reclaim and re-run the analyze loop. Correctness-safe (REQ-A3 outbox upserts are idempotent + analyze-terminal assets are skipped), only wasteful. Pre-existing in single-asset analyze; Slice Y amplifies it ×N | When avoiding duplicate work on long scans matters; fix mirrors the crawl harness's in-subprocess beat (`harness.py:67-74`) |
+| Long-stage stream-reclaim strand | SHOULD | `progress.beat` renews the DB job lease but never touches the Redis stream, so `reclaim_stalled` can hand a long stage's message to a peer that loses `claim_job` and acks it (removing it from the PEL); if the original then crashes the job is stranded. Pre-existing with Slice X crawl; Slice Y inherits it on fetch + analyze stages (two more long-running stages) | Stabilize at scale when message reclaim coordination must be bulletproof |
+| Commit-time DB error inside per-asset analyze transaction | SHOULD | Recorded as permanent per-asset `analyze_failed` (→ run `PARTIAL`) rather than propagating to job-level retry. Structural tension with the per-asset-commit requirement (findings + status must share one txn); `fetch.py` avoids it by keeping blob-store + status commit outside any `try`. Post-commit `publish` failure already handled correctly (try/except/else) | When analyzing per-asset infra-error handling for robustness |
+| Dual asset-list source of truth | SHOULD | The discovery manifest blob (URL list, for the API/UI) and the `run_asset` rows (per-asset processing state) both list assets. Each serves a distinct purpose (read-only manifest vs. mutable status); unify only if drift occurs | If manifest/`run_asset` versioning causes observable inconsistency |
+| Queue fan-out / crawl parallelism (model C) | SHOULD | Fetch/analyze loop assets sequentially in one job (required by the fetch DNS-pin single-thread invariant); parallel per-asset jobs deferred to scale | M3 parallelism milestone when per-asset throughput dominates the path |
+| OpenAPI/Swagger export | SHOULD | The other half of "complete the first chunk" (multi-asset coverage) — not yet wired | Slice after Y, or on demand when tooling/integration partners need OpenAPI export |
+| Per-asset secret scanning of recovered source-map files | SHOULD | Pre-existing analyze follow-up (source maps recovered from bundles), now also relevant per-asset | When decompiled-map secret-scanning is prioritized after the main path |
+| Live in-UI multi-asset walkthrough | SHOULD | Not done; needs the SPA baked into the api image (a multi-hour rebuild), same deferral as Slice UI-0. The FE components + Vitest coverage shipped | When the UI image is rebuilt; meantime, standard crawl proven at the backend layer |
+| Multi-asset end-to-end automated test is host-partial | SHOULD | A real katana crawl→fetch→findings e2e cannot be automated here: `egress.validate_target` rejects the fixture-site's private Docker IP (empty manifest) and we must not auto-crawl a public domain. `multi_asset_integration_test.py` Part A proves the fetch+analyze+finalize pipeline with the network stubbed (host-green); Part B (katana/parse ≥2 .js) is engine-gated and runs only in CI/container | Pre-prod constraint; when deploying to a gated staging environment with real domain access, run Part B |
+
+**Slice Y (the second half of the gate-deferred multi-asset build):** fetch/analyze loop
+the manifest, the occurrence **asset-dimension migration**, secret-reveal routing to
 per-asset blobs, and **PARTIAL** completeness (REQ-D5). **OpenAPI/Swagger export** is
 the other half of "complete the first chunk".

@@ -430,4 +430,25 @@ To `docs/slice2-deferred-debt.md` on landing:
 
 ## 15. As-built amendments
 
-_(none yet — filled in during implementation.)_
+- **Migration `0005` column-add refinement:** the `run_asset_id` FK inline-adds in the
+  incremental migration path: `ADD COLUMN IF NOT EXISTS run_asset_id uuid REFERENCES
+  run_asset(id) ON DELETE SET NULL` — so the incremental-migration (0003 pattern) also
+  gets the FK/cascade guard. The spec/plan snippet had a bare column.
+- **Control-check centralization:** the per-loop pause/cancel check is a shared
+  `recon.runs.queries.raise_if_control_requested` (raising `retry.ControlInterrupt`),
+  not duplicated per-file `_check_control` functions. Both fetch and analyze use it.
+- **Job ID propagation:** `job_id` was added to `fetch_run`/`analyze_run` signatures in
+  the cooperative-interrupt task (accepted-and-ignored by both) so the worker's `job_id`
+  passing is safe before the loops use it for heartbeating.
+- **Analyze transaction boundary (try/except/else):** the per-asset transaction covers
+  findings + `analyze_status` commit in the `try` block; `publish`/log/coverage-merge
+  moved to `else`, so a post-commit publish failure propagates to job-level retry instead
+  of overwriting a committed success. Honors the commit-then-publish invariant.
+- **Reveal pick refinement:** pick the first *resolvable* offset-bearing occurrence (not
+  just the sort-first one), so `revealable` and the reveal call agree for multi-asset
+  partial-fetch findings. The read-side `revealable` gate + the reveal `RunAsset` lookup
+  are both scoped per-run.
+- **Task 12 redefinition:** host-runnable cross-stage pipeline test (network stubbed) +
+  engine-gated katana/parse assertion (Part B in CI/container), instead of the infeasible
+  real-crawl-of-fixture e2e. Multi-asset integration coverage: Part A (host-green) proves
+  fetch+analyze+finalize pipeline; Part B engine-gated for multi-asset crawl.
