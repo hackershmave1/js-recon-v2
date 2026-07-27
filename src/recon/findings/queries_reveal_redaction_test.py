@@ -132,3 +132,35 @@ def test_endpoint_evidence_is_preserved():
     endpoint = next(f for f in result.findings if f.type == "endpoint")
     assert endpoint.occurrences[0].evidence == 'fetch("/orders")'
     assert endpoint.revealable is False
+
+
+def test_occurrence_asset_url_for_crawl_run_and_none_for_legacy():
+    # Slice Y (Task 11): the FE needs to know which discovered asset an occurrence
+    # came from. asset_url is resolved from the occurrence's run_asset_id ->
+    # run_asset.url; a legacy occurrence (no run_asset_id, e.g. a single-file
+    # upload run) has no asset to attribute to, so it must read back as None.
+    tenant = sessions_service.create_tenant("rd-5")
+    session_id = sessions_service.create_session(
+        tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
+    ).id
+
+    crawl_run = _run(tenant, session_id, input_ref=None)
+    with tenant_session(tenant) as session:
+        assets.seed_pending(
+            session, tenant_id=tenant, run_id=crawl_run, urls=["https://acme.io/a.js"]
+        )
+    asset = assets.list_for_run(tenant, crawl_run)[0]
+    crawl_hash = _add_secret(tenant, crawl_run, offsets=(10, 30), run_asset_id=asset.id)
+    crawl_result = queries.list_findings(tenant, crawl_run)
+    crawl_occurrence = next(
+        f for f in crawl_result.findings if f.finding_hash == crawl_hash
+    ).occurrences[0]
+    assert crawl_occurrence.asset_url == "https://acme.io/a.js"
+
+    legacy_run = _run(tenant, session_id, input_ref=f"{tenant}/z/input/legacy")
+    legacy_hash = _add_secret(tenant, legacy_run, offsets=(10, 30))
+    legacy_result = queries.list_findings(tenant, legacy_run)
+    legacy_occurrence = next(
+        f for f in legacy_result.findings if f.finding_hash == legacy_hash
+    ).occurrences[0]
+    assert legacy_occurrence.asset_url is None

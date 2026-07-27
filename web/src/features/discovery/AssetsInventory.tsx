@@ -17,7 +17,13 @@ export function AssetsInventory({ tenantId, runId }: { tenantId: string; runId: 
       <h3>Discovered JavaScript</h3>
       <p className="muted">{manifest.assets.length} asset{manifest.assets.length === 1 ? "" : "s"} · crawl status: {manifest.status}</p>
       <ul>
-        {manifest.assets.map((a) => (<li key={a.url}><code>{a.url}</code></li>))}
+        {manifest.assets.map((a) => (
+          <li key={a.url}>
+            <code>{a.url}</code>{" "}
+            <span className={`chip chip-${a.fetch_status}`}>fetch: {a.fetch_status}</span>{" "}
+            <span className={`chip chip-${a.analyze_status}`}>analyze: {a.analyze_status}</span>
+          </li>
+        ))}
       </ul>
     </section>
   );

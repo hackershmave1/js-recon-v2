@@ -62,6 +62,7 @@ def get_run_findings(
                         "engine": occurrence.engine,
                         "confidence": occurrence.confidence,
                         "verified": occurrence.verified,
+                        "asset_url": occurrence.asset_url,
                     }
                     for occurrence in finding.occurrences
                 ],

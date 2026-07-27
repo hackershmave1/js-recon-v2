@@ -32,6 +32,9 @@ class OccurrenceView:
     engine: str | None
     confidence: str | None
     verified: bool | None
+    # Slice Y: which discovered asset this sighting came from, resolved from
+    # run_asset_id -> run_asset.url. None for legacy (pre-crawl) occurrences.
+    asset_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,15 @@ class FindingsView:
     coverage: CoverageView | None
 
 
+@dataclass(frozen=True)
+class _AssetRef:
+    """A run_asset's blob pointer and URL, keyed by run_asset_id — one lookup
+    serves both `revealable`'s blob resolution and the occurrence's asset_url."""
+
+    input_ref: str | None
+    url: str
+
+
 def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
     """Every finding for a run with its occurrences and the analyze coverage
     counters, or ``None`` if the run does not exist for this tenant. Ordered
@@ -111,9 +123,10 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
         ).all()
         # Slice Y: a crawl run's bytes live per-asset (run.input_ref is NULL for
         # those runs), so `revealable` must be computed from each occurrence's own
-        # asset blob, not the run-level ref. One query for every asset the run owns.
+        # asset blob, not the run-level ref — and the FE needs the asset's URL for
+        # attribution. One query for every asset the run owns serves both.
         asset_refs = {
-            str(a.id): a.input_ref
+            str(a.id): _AssetRef(input_ref=a.input_ref, url=a.url)
             for a in session.scalars(
                 select(RunAsset).where(RunAsset.run_id == str(run_id))
             ).all()
@@ -166,14 +179,25 @@ def _finding_view(
     finding: Finding,
     triage_row: FindingTriage | None = None,
     run_input_ref: str | None = None,
-    asset_refs: dict[str, str | None] | None = None,
+    asset_refs: dict[str, _AssetRef] | None = None,
 ) -> FindingView:
     # REQ-S2: a secret's raw evidence is never served; the value comes only from the
     # audited reveal endpoint. Endpoint/param evidence (a code snippet) is kept.
     is_secret = finding.type == FindingType.SECRET.value
     asset_refs = asset_refs or {}
+
+    def _asset_url_for(occurrence: FindingOccurrence) -> str | None:
+        # Slice Y: resolve the occurrence's own asset URL for FE attribution.
+        # None for legacy occurrences (run_asset_id NULL, pre-crawl runs).
+        if occurrence.run_asset_id is None:
+            return None
+        ref = asset_refs.get(str(occurrence.run_asset_id))
+        return ref.url if ref else None
+
     occurrences = [
-        _occurrence_view(occurrence, redact_evidence=is_secret)
+        _occurrence_view(
+            occurrence, redact_evidence=is_secret, asset_url=_asset_url_for(occurrence)
+        )
         for occurrence in sorted(
             finding.occurrences,
             key=lambda o: (o.source_path or "", o.offset_start or 0, o.occurrence_hash),
@@ -184,7 +208,8 @@ def _finding_view(
         # Slice Y: an asset-tagged occurrence reveals from its own asset blob;
         # a legacy occurrence (run_asset_id NULL) falls back to run.input_ref.
         if occurrence.run_asset_id is not None:
-            return asset_refs.get(str(occurrence.run_asset_id))
+            ref = asset_refs.get(str(occurrence.run_asset_id))
+            return ref.input_ref if ref else None
         return run_input_ref
 
     revealable = bool(
@@ -218,7 +243,9 @@ def _triage_view(row: FindingTriage | None) -> TriageView | None:
 
 
 def _occurrence_view(
-    occurrence: FindingOccurrence, redact_evidence: bool = False
+    occurrence: FindingOccurrence,
+    redact_evidence: bool = False,
+    asset_url: str | None = None,
 ) -> OccurrenceView:
     return OccurrenceView(
         host=occurrence.host,
@@ -232,4 +259,5 @@ def _occurrence_view(
         engine=occurrence.engine,
         confidence=occurrence.confidence,
         verified=occurrence.verified,
+        asset_url=asset_url,
     )

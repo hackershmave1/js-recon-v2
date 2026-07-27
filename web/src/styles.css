@@ -1,4 +1,4 @@
-:root { color-scheme: dark; --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --border:#30363d; --danger:#f85149; }
+:root { color-scheme: dark; --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --border:#30363d; --danger:#f85149; --ok:#3fb950; --warn:#d29922; }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 ui-sans-serif,system-ui,sans-serif; }
 button { background:var(--accent); color:#0d1117; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; }
@@ -6,3 +6,11 @@ button:disabled { opacity:.5; cursor:not-allowed; }
 input, textarea, select { background:#010409; color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:6px 8px; }
 .card { border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; }
 .sev-high{color:var(--danger)} .muted{color:var(--muted)}
+/* Slice Y: one small pill language for both per-asset fetch/analyze status
+   (pending/ok/failed) and the run terminal-state badge (done/partial/failed/
+   cancelled) — "failed" is shared by both, "done"/"ok" share one color. */
+.chip { display:inline-block; padding:1px 7px; border-radius:999px; font-size:11px; font-weight:600; border:1px solid var(--border); margin-left:4px; }
+.chip-pending, .chip-cancelled { color:var(--muted); border-color:var(--muted); }
+.chip-ok, .chip-done { color:var(--ok); border-color:var(--ok); }
+.chip-failed { color:var(--danger); border-color:var(--danger); }
+.chip-partial { color:var(--warn); border-color:var(--warn); }
