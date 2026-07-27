@@ -42,7 +42,8 @@ def get_assets_with_status(tenant_id: str, run_id: str) -> dict | None:
         return None
     status_by_url = {a.url: a for a in run_assets.list_for_run(tenant_id, run_id)}
     for entry in manifest.get("assets", []):
-        row = status_by_url.get(entry["url"])
+        url = entry.get("url")
+        row = status_by_url.get(url) if url else None
         entry["fetch_status"] = row.fetch_status if row else "pending"
         entry["analyze_status"] = row.analyze_status if row else "pending"
     return manifest

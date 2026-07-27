@@ -59,23 +59,28 @@ def test_assets_unknown_run_is_404():
 @pytest.mark.integration
 def test_assets_includes_per_asset_status(authorized_session, redis):
     """Assets endpoint returns each asset with fetch_status and
-    analyze_status merged from run_assets table."""
+    analyze_status merged from run_assets table. Manifest URLs without
+    corresponding run_asset rows default to "pending" on both dimensions."""
     tenant_id, session_id = authorized_session
-    urls = [
+    seeded_urls = [
         "https://acme.io/a.js",
         "https://acme.io/b.js",
         "https://acme.io/c.js",
     ]
+    unseeded_url = "https://acme.io/unseen.js"
+    all_urls = seeded_urls + [unseeded_url]
     run = runs_service.create_run(
         redis, tenant_id=tenant_id, session_id=session_id, target="acme.io"
     )
-    # Seed assets and create manifest
+    # Seed only 3 assets; the 4th (unseeded_url) will have no run_asset row
     with tenant_session(tenant_id) as s:
-        assets.seed_pending(s, tenant_id=tenant_id, run_id=run.id, urls=urls)
+        assets.seed_pending(
+            s, tenant_id=tenant_id, run_id=run.id, urls=seeded_urls
+        )
     manifest = {
         "domain": "acme.io",
         "status": "ok",
-        "assets": [{"url": u, "source": "katana"} for u in urls],
+        "assets": [{"url": u, "source": "katana"} for u in all_urls],
     }
     manifest_ref = storage.put_blob(
         tenant_id, run.id, "assets", json.dumps(manifest).encode()
@@ -86,7 +91,8 @@ def test_assets_includes_per_asset_status(authorized_session, redis):
             tenant_id=tenant_id,
             run_id=run.id,
             event_type="discover.assets",
-            payload={"count": len(urls), "assets_ref": manifest_ref, "status": "ok"},
+            payload={"count": len(all_urls), "assets_ref": manifest_ref,
+                     "status": "ok"},
         )
     # Set mixed statuses: ok, failed, pending (unchanged)
     asset_list = assets.list_for_run(tenant_id, run.id)
@@ -105,14 +111,18 @@ def test_assets_includes_per_asset_status(authorized_session, redis):
     body = res.json()
     assert body["domain"] == "acme.io"
     assert body["status"] == "ok"
-    assert len(body["assets"]) == 3
+    assert len(body["assets"]) == 4
     # Verify each asset includes fetch_status and analyze_status
-    assert body["assets"][0]["url"] == urls[0]
+    assert body["assets"][0]["url"] == seeded_urls[0]
     assert body["assets"][0]["fetch_status"] == "ok"
     assert body["assets"][0]["analyze_status"] == "ok"
-    assert body["assets"][1]["url"] == urls[1]
+    assert body["assets"][1]["url"] == seeded_urls[1]
     assert body["assets"][1]["fetch_status"] == "ok"
     assert body["assets"][1]["analyze_status"] == "pending"
-    assert body["assets"][2]["url"] == urls[2]
+    assert body["assets"][2]["url"] == seeded_urls[2]
     assert body["assets"][2]["fetch_status"] == "failed"
     assert body["assets"][2]["analyze_status"] == "pending"
+    # Verify unseeded asset defaults to pending on both dimensions
+    assert body["assets"][3]["url"] == unseeded_url
+    assert body["assets"][3]["fetch_status"] == "pending"
+    assert body["assets"][3]["analyze_status"] == "pending"
