@@ -157,7 +157,13 @@ def _parse(raw: bytes) -> object:
         return yaml.load(text, Loader=_NoAliasSafeLoader)
     except SpecError:
         raise  # our own hardening guard - never mistaken for a generic parse error
-    except yaml.YAMLError as exc:
+    except (yaml.YAMLError, RecursionError) as exc:
+        # A deeply-nested-but-tiny body (no anchors, well under the byte/node
+        # caps) blows PyYAML's composer recursion *during* this yaml.load
+        # call, before _check_bounds's own depth check ever runs against the
+        # already-parsed structure -- RecursionError is not a yaml.YAMLError
+        # subclass, so it must be caught explicitly here or it escapes
+        # ingest_spec uncaught instead of being cleanly rejected.
         raise SpecError(f"spec is not valid JSON or YAML: {exc}") from exc
 
 

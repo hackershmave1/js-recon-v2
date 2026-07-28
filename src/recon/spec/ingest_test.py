@@ -62,6 +62,24 @@ def test_yaml_alias_bomb_rejected():
         ingest_spec(bomb)  # anchors/aliases denied by the hardened loader
 
 
+# --- fix round 1: review finding on Task 4 -- a deeply-nested-but-tiny YAML
+# body (no anchors, well under the _MAX_SOURCE_BYTES/_MAX_NODES caps) blows
+# PyYAML's composer recursion *during* `yaml.load` inside `_parse`, before
+# `_check_bounds`'s own depth check ever gets a chance to run against the
+# already-parsed structure. Must surface as `SpecError`, not a raw
+# `RecursionError` escaping `ingest_spec` uncaught. ---
+def test_deeply_nested_yaml_raises_specerror_not_recursionerror():
+    depth = 5000  # comfortably past CPython's default 1000-frame recursion
+    # limit (empirically confirmed to raise RecursionError at this depth in
+    # this environment). The "[" * N + "]" * N flow-sequence nests one level
+    # per character pair with no anchors and no exponential blow-up -- the
+    # "tiny but deep" shape the finding describes, distinct from the
+    # size/breadth bomb _check_bounds already guards against.
+    bomb = b"paths:\n  " + b"[" * depth + b"]" * depth
+    with pytest.raises(SpecError):
+        ingest_spec(bomb)
+
+
 # --- bonus (beyond the brief's 5): design §4.1 names cyclic in-document $ref
 # as a required gate B4 mitigation ("handled with a visited-set"). Our own
 # $ref scan never dereferences (it only reads the literal string, so a
