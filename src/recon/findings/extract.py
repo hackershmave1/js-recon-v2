@@ -23,6 +23,7 @@ positive since the receiver's type isn't tracked.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl
 
@@ -332,11 +333,26 @@ def _endpoint(kind: str, method: str, url: str, params: list[RawParam], call: No
 # isn't a recognized instance/constant falls through to the pre-Task-2
 # verbatim/unattributed behavior, unchanged.
 
+# Any RFC 3986 scheme (a letter, then letters/digits/`+`/`.`/`-`), anchored at
+# the START of the string — used by `_join_base` below. Fix round 1 (review
+# Minor): the prior check was a bare `"://" in path` substring test, which
+# wrongly matched a *relative* path that merely embeds a URL later on, e.g. a
+# redirect query param (`/redirect?next=http://evil.com`), silently dropping
+# the base. Anchoring at position 0 fixes that while still recognizing a real
+# absolute URL or a protocol-relative one (`//host/x`, checked separately below).
+# NOTE: named `_ABSOLUTE_SCHEME_RE` (not `_SCHEME_RE`) to avoid reader confusion
+# with `normalize.py`'s own, differently-shaped `_SCHEME_RE` (captures
+# scheme/slashes/rest for path normalization) — no import relationship between
+# the two modules, but they sit in the same package and a shared name for two
+# different patterns invites mix-ups.
+_ABSOLUTE_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+
+
 def _join_base(base: str, path: str) -> str:
     """Prepend `base` to `path`, unless `path` is already absolute (own scheme/host)."""
     if not base:
         return path
-    if "://" in path or path.startswith("//"):
+    if path.startswith("//") or _ABSOLUTE_SCHEME_RE.match(path):
         return path  # absolute path wins
     return base.rstrip("/") + "/" + path.lstrip("/")
 
@@ -371,7 +387,12 @@ def _fold_const_prefix(node: Node, env: BaseEnv) -> str | None:
     text = _text(node)
     body = text[1:-1] if text.startswith("`") and text.endswith("`") else text
     leading = _text(named[0])  # e.g. "${API}"
-    return prefix + body[len(leading):]
+    # Fix round 1 (review Important): reuse `_join_base`'s de-dupe instead of a
+    # naive `prefix + remainder` concatenation — `const_prefixes` stores the
+    # literal verbatim, so a prefix with a trailing slash (`'/v3/'`) would
+    # otherwise double up against a remainder that also starts with one
+    # (`/v3//pets`).
+    return _join_base(prefix, body[len(leading):])
 
 
 def _resolve_url(node: Node | None, env: BaseEnv, base: str) -> str | None:

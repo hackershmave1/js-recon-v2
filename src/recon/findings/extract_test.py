@@ -271,3 +271,30 @@ def test_open_on_instance_still_routes_to_xhr():
     # `.open(METHOD, url)` on any receiver keeps the XHR shape, not axios-join
     assert ("GET", "/raw") in _urls(
         "const loc = axios.create({ baseURL: '/location' }); loc.open('GET', '/raw');")
+
+
+# --- fix round 1: Task-2 review findings on the URL-resolution helpers -------
+# 1. (Important) `_fold_const_prefix` concatenated `prefix + remainder` directly,
+#    bypassing `_join_base`'s de-dupe — a prefix stored with a trailing slash
+#    (`const API = '/v3/'`) doubled the slash (`/v3//pets`).
+# 2. (Minor) `_join_base` detected "absolute" via a bare `"://" in path`
+#    substring test, so a *relative* path that merely embeds a URL later on
+#    (e.g. a redirect query param) was wrongly treated as absolute and the
+#    base was silently dropped instead of joined.
+
+def test_const_prefix_trailing_slash_does_not_double_up():  # review Important
+    assert ("GET", "/v3/pets") in _urls("const API = '/v3/'; fetch(`${API}/pets`);")
+
+
+def test_relative_path_with_url_in_query_still_joins_base():  # review Minor
+    assert ("GET", "/location/redirect?next=http://evil.com") in _urls(
+        "const loc = axios.create({ baseURL: '/location' }); "
+        "loc.get('/redirect?next=http://evil.com');"
+    )
+
+
+def test_const_prefix_fold_generalizes_to_axios_get():  # generalization coverage
+    # Same fold-then-join machinery (`_resolve_url` -> `_fold_const_prefix` ->
+    # `_join_base`) reused by `_axios_member`, not just `_fetch` — guards both
+    # the Important fix above and Task 2's 4-handler extension together.
+    assert ("GET", "/v3/pets") in _urls("const API='/v3'; axios.get(`${API}/pets`);")
