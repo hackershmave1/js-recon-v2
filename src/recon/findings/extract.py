@@ -133,6 +133,110 @@ def _object_pairs(node: Node | None) -> dict[str, Node]:
     return pairs
 
 
+# --- base-environment collection (scope-safe pre-pass; Task 1) ---------------
+#
+# A pure, read-only pass that records only statically-certain, unshadowed
+# base-URL bindings (spec REQ §3.1/§3.3 gate B1) so a later pass (Task 2) can
+# resolve `instance.get(...)` calls back to a full URL. Honesty over guessing,
+# same principle as REQ-C2 above: a name that is ambiguous anywhere in the
+# file — redeclared, shadowed by a parameter, or reassigned — is EXCLUDED
+# rather than resolved to a possibly-wrong base. Not yet wired into
+# `extract()`; sink handlers are untouched until Task 2.
+
+@dataclass(frozen=True)
+class BaseEnv:
+    instances: dict[str, str | None]  # axios.create var -> base literal, or None if dynamic
+    default_base: str | None  # axios.defaults.baseURL literal
+    const_prefixes: dict[str, str]  # const name -> string literal (for `${NAME}` prefixes)
+
+
+def _declared_names(root: Node) -> set[str]:
+    """Every identifier bound — or reassigned — anywhere in the tree.
+
+    This pass has no real lexical scoping, so a name touched more than once
+    (redeclared in a nested scope, shadowed by a parameter, or reassigned) is
+    ambiguous and must not resolve. That's the whole point of the param-
+    shadowing test: `items.forEach((loc) => ...)` re-binds `loc`, poisoning
+    any outer `loc` even though the two are in different scopes.
+
+    NOTE: this file parses plain JavaScript (`tree_sitter_javascript`), not
+    TypeScript — a bare parameter is a plain `identifier` child of
+    `formal_parameters`; the grammar never wraps it in `required_parameter`/
+    `optional_parameter` (those node types are TS-only and don't exist here).
+
+    NOTE: tree-sitter's Python bindings return a fresh wrapper object on every
+    `.parent` / `.child_by_field_name` access, so `is` identity checks across
+    separately-fetched nodes are unreliable even when they denote the same
+    underlying node. Every check below matches on node type/field membership
+    instead of identity.
+    """
+    seen: dict[str, int] = {}
+
+    def mark(candidate: Node | None) -> None:
+        if candidate is not None and candidate.type == "identifier":
+            name = _text(candidate)
+            seen[name] = seen.get(name, 0) + 1
+
+    for node in _walk(root):
+        if node.type in ("variable_declarator", "function_declaration"):
+            mark(node.child_by_field_name("name"))
+        elif node.type == "catch_clause":
+            mark(node.child_by_field_name("parameter"))
+        elif node.type == "arrow_function":
+            mark(node.child_by_field_name("parameter"))  # bare single param: `x => ...`
+        elif node.type == "identifier" and node.parent is not None \
+                and node.parent.type == "formal_parameters":
+            mark(node)  # parenthesized param(s): `(x) => ...` / `function f(x) {}`
+        elif node.type == "assignment_expression":
+            mark(node.child_by_field_name("left"))  # plain reassignment: `loc = other`
+    return {name for name, count in seen.items() if count > 1}
+
+
+def collect_base_env(root: Node, data: bytes) -> BaseEnv:
+    # `data` isn't read here — every helper resolves text via `node.text` — but
+    # stays part of the signature to match the interface Task 2 will call.
+    poisoned = _declared_names(root)
+    instances: dict[str, str | None] = {}
+    default_base: str | None = None
+    const_prefixes: dict[str, str] = {}
+    for node in _walk(root):
+        if node.type == "variable_declarator":
+            name_node = node.child_by_field_name("name")
+            value = node.child_by_field_name("value")
+            if name_node is None or name_node.type != "identifier" or value is None:
+                continue
+            name = _text(name_node)
+            if name in poisoned:
+                continue
+            if _is_axios_create(value):
+                instances[name] = _base_url_arg(value)
+            else:
+                lit = _string_value(value)
+                if lit is not None:
+                    const_prefixes[name] = lit
+        elif node.type == "assignment_expression":
+            left = _text(node.child_by_field_name("left"))
+            if left in ("axios.defaults.baseURL",):
+                default_base = _string_value(node.child_by_field_name("right"))
+    return BaseEnv(instances=instances, default_base=default_base, const_prefixes=const_prefixes)
+
+
+def _is_axios_create(node: Node) -> bool:
+    if node.type != "call_expression":
+        return False
+    fn = node.child_by_field_name("function")
+    return fn is not None and fn.type == "member_expression" \
+        and _text(fn.child_by_field_name("object")) == "axios" \
+        and _text(fn.child_by_field_name("property")) == "create"
+
+
+def _base_url_arg(create_call: Node) -> str | None:
+    args = _args(create_call)
+    if args and args[0].type == "object":
+        return _string_value(_object_pairs(args[0]).get("baseURL"))
+    return None
+
+
 # --- param extraction --------------------------------------------------------
 
 def _query_params(url: str) -> list[RawParam]:

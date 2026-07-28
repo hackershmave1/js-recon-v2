@@ -5,7 +5,7 @@ Pure unit tests — parse JS strings, assert the reconstructed calls. No infra.
 
 from __future__ import annotations
 
-from recon.findings.extract import extract
+from recon.findings.extract import _PARSER, collect_base_env, extract
 
 
 def _only(source: str):
@@ -142,3 +142,48 @@ def test_jquery_shorthand_mines_data():  # review MEDIUM-2
 def test_json_stringify_body_is_mined():  # review MEDIUM-3
     ep = _only('fetch("/x", {method:"POST", body:JSON.stringify({a:1, b:2})})')
     assert {(p.name, p.location) for p in ep.params} == {("a", "body"), ("b", "body")}
+
+
+# --- base-environment collection (Task 1: scope-safe pre-pass) ---------------
+# Pure pre-pass: records only statically-certain, unshadowed base-URL bindings.
+# Not yet wired into `extract()` — that's Task 2.
+
+def _env(src: str):
+    return collect_base_env(_PARSER.parse(src.encode()).root_node, src.encode())
+
+
+def test_collect_base_env_axios_create_literal():
+    env = _env("const loc = axios.create({ baseURL: '/location' });")
+    assert env.instances == {"loc": "/location"}
+
+
+def test_collect_base_env_defaults_and_const_prefix():
+    env = _env("axios.defaults.baseURL = 'https://h/api'; const API = '/v3';")
+    assert env.default_base == "https://h/api"
+    assert env.const_prefixes["API"] == "/v3"
+
+
+def test_collect_base_env_unknown_base_is_none_not_dropped():
+    env = _env("const c = window.cfg; const loc = axios.create({ baseURL: c });")
+    assert env.instances["loc"] is None  # recognized instance, base unknown
+
+
+def test_collect_base_env_scope_collision_poisons_name():
+    env = _env(
+        "const loc = axios.create({ baseURL: '/a' }); "
+        "items.forEach((loc) => loc.get('/x'));"
+    )
+    assert "loc" not in env.instances  # param `loc` shadows -> unresolvable
+
+
+def test_collect_base_env_reassignment_poisons_name():
+    env = _env("let loc = axios.create({ baseURL: '/a' }); loc = other;")
+    assert "loc" not in env.instances
+
+
+def test_collect_base_env_function_declaration_poisons_name():
+    # The brief's own interface note lists "function declaration" as a
+    # shadowing source alongside params/redeclaration — a later `function
+    # loc(){}` must poison an earlier `const loc = axios.create(...)` too.
+    env = _env("const loc = axios.create({ baseURL: '/a' }); function loc() {}")
+    assert "loc" not in env.instances
