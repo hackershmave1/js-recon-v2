@@ -21,17 +21,20 @@ dependencies are `operation_of_endpoint_value` and `HTTP_METHODS` (design
 internals for something that isn't actually its concern (the same call
 `recon.spec.ingest` already made for its own `_PATH_ITEM_METHODS`).
 
-Pure, stdlib-only, no DB/network -- both `recon.spec.classify`'s own §5.3
-decision-order dispatcher (a later task in this slice) and this module's
+Pure, stdlib-only, no DB/network -- both `classify_operation` (this
+module's own §5.3 decision-order dispatcher, below) and this module's
 tests call these three functions directly.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 from recon.findings.extract import HTTP_METHODS
 from recon.findings.normalize import operation_of_endpoint_value
+from recon.spec.ingest import DocumentedOp
 
 # A spec placeholder (`{petId}`) or a `normalize` value-template
 # (`{id}`/`{uuid}`/`{hash}`) -- both share this brace shape and both are
@@ -115,3 +118,92 @@ def is_non_http(operation: str) -> bool:
     structurally undocumentable in OpenAPI and must never reach `shadow`."""
     method, _ = _method_and_path(operation)
     return method not in HTTP_METHODS
+
+
+@dataclass(frozen=True)
+class Classification:
+    """The §5.3 decision-order verdict for one client-finding operation.
+
+    `matched_operation` is the documented op's own raw `"METHOD /path"` --
+    braces intact, never the wildcarded compare-key -- so a human reviewing
+    `finding_spec_status` sees the actual spec entry that was matched, not
+    its canonicalized shape."""
+
+    status: str  # "documented" | "shadow" | "unresolved"
+    reason: str
+    matched_operation: str | None
+
+
+def _doc_operation(doc: DocumentedOp) -> str:
+    """Render a `DocumentedOp` as `"METHOD /path"` -- the same shape
+    `compare_key` takes on the client side (design §5.1: one compare-key,
+    both sides), and also the human-readable form stored as
+    `matched_operation`."""
+    return f"{doc.method} {doc.path}"
+
+
+def _key_parts(key: str) -> tuple[str, list[str]]:
+    """Split a `compare_key()` output (`"METHOD /wildcarded/path"`) into
+    `(METHOD, path-segments)`. `compare_key` already uppercased the method
+    and stripped the query, so this is a cheap re-split, not a second pass
+    through `_method_and_path`/`operation_of_endpoint_value`."""
+    method, _, path = key.partition(" ")
+    return method, _segments(path)
+
+
+def _is_proper_suffix(shorter: list[str], longer: list[str]) -> bool:
+    """True if `shorter`'s segments are a genuine, non-empty trailing run of
+    `longer`'s -- one direction of step 4's bidirectional check (design
+    §5.3, gate B2).
+
+    Requires `shorter` to be non-empty: without this guard, a bare `/` root
+    path (zero segments) would satisfy "proper suffix of everything" the
+    moment any documented path is longer, silently swallowing every
+    undocumented root-path finding into `unresolved`. The suffix rule exists
+    to catch a genuinely SHARED trailing fragment (e.g. "search"); an empty
+    fragment shares no literal content with anything, so it must not count."""
+    if not shorter or len(shorter) >= len(longer):
+        return False
+    return longer[len(longer) - len(shorter) :] == shorter
+
+
+def classify_operation(operation: str, documented: Sequence[DocumentedOp]) -> Classification:
+    """Bucket `operation` against `documented` per design §5.3 -- FIRST MATCH
+    WINS, and suffix-verify (step 4) runs before either shadow verdict (gate
+    B2): a client path missing its base (e.g. `/search` for a spec's
+    `/location/address/search`) must never be misclassified as an
+    undocumented verb or path just because a *different* documented op
+    happens to share its bare tail."""
+    if is_non_http(operation):
+        return Classification("unresolved", "non-http", None)
+    if is_partial(operation):
+        return Classification("unresolved", "partial", None)
+
+    method, segments = _key_parts(compare_key(operation))
+    doc_entries = [(doc, *_key_parts(compare_key(_doc_operation(doc)))) for doc in documented]
+
+    # Step 3: exact compare-key match (same method, same wildcarded path).
+    for doc, doc_method, doc_segments in doc_entries:
+        if doc_method == method and doc_segments == segments:
+            return Classification("documented", "documented", _doc_operation(doc))
+
+    # Step 4: proper-suffix match, either direction -- MUST precede both
+    # shadow branches below (gate B2's whole point).
+    for doc, _doc_method, doc_segments in doc_entries:
+        if _is_proper_suffix(segments, doc_segments) or _is_proper_suffix(doc_segments, segments):
+            return Classification("unresolved", "suffix-verify", _doc_operation(doc))
+
+    # Step 5: same wildcarded path, different method.
+    for doc, doc_method, doc_segments in doc_entries:
+        if doc_segments == segments and doc_method != method:
+            return Classification("shadow", "undocumented-method", _doc_operation(doc))
+
+    # Step 6: complete + statically-certain (not partial), no match at all.
+    if not is_partial(operation):
+        return Classification("shadow", "undocumented-path", None)
+
+    # Step 7: unreachable given step 2's earlier return on the same,
+    # side-effect-free `is_partial(operation)` check -- kept explicit for a
+    # literal 1:1 correspondence with the design's 7 numbered branches (§5.3)
+    # rather than silently relying on that coupling holding forever.
+    return Classification("unresolved", "unresolved", None)
