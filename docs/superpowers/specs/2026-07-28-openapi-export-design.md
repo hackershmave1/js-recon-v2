@@ -111,25 +111,51 @@ For each `ReconstructedRequest`:
 - **Operation gate.** Include only `method ∈ extract.HTTP_METHODS` (`extract.py:36`). WS/WSS
   (`probeable=False`, method synthesized `WS`/`WSS` at `extract.py:594`) are **excluded from `paths`**
   and surfaced under a top-level `x-recon-websocket-endpoints` list so they are not silently lost.
-- **`paths` + operation.** `path` (already templated) → the OpenAPI path; `method.lower()` → the
-  operation.
-- **Path parameters.** Each `{id}`/`{uuid}`/`{hash}` token becomes a path parameter. Names are
-  **synthesized deterministically** (`id`, `uuid`, `hash`; a repeated type gets `id2`, `id3`, … and the
-  path string is rewritten to match, so the document stays valid). Type is inferred: `{id}`→`integer`,
-  `{uuid}`→`string`+`format: uuid`, `{hash}`→`string`. Each carries `description: "Name synthesized and
-  type inferred from a templated path segment; the original parameter name is not recoverable from
-  static analysis."`
+- **`paths` + operation.** `method.lower()` → the operation. The `path` is **canonicalized first**
+  (below) — it is *not* safe to emit as-is.
+- **Path parameters — canonicalize EVERY interpolation, not just the three tokens (gate Blocker 1).**
+  `normalize.py` only collapses recognized segments to `{id}`/`{uuid}`/`{hash}` and passes **every other
+  interpolation through verbatim** (`template_segment`, `normalize.py:182-196`); static extraction stores
+  `${…}` literally (`extract.py:96-112`, `extract_test.py:34-35`). So a real `path` routinely contains
+  `${user.id}`, `{userId}`, `v${n}`, or an unbalanced `{` — each an **undeclared path-template variable
+  that `openapi-spec-validator` rejects** (empirically `UnresolvableParameterError`), which would make the
+  §4 self-validation 500 on the common case. The builder therefore canonicalizes each path segment before
+  emit:
+  - A segment that is **exactly one** recognized token (`{id}`/`{uuid}`/`{hash}`) → a path param with the
+    inferred type (`{id}`→`integer`, `{uuid}`→`string`+`format: uuid`, `{hash}`→`string`).
+  - A segment containing **any other** interpolation — `${expr}`, a bare `{name}`, or a mixed
+    literal+interp (`v${n}`, `${a}${b}`) — → **one** synthesized path param: strip the literal `$`, and if
+    the whole segment is a single clean identifier reuse it as the name (`${userId}`→`userId`), otherwise
+    synthesize a positional legal name (`p1`, `p2`, …). Type defaults to `string`. The **entire segment**
+    is replaced by `{<name>}`, so no stray/partial brace survives.
+  - **Every** synthesized `{name}` gets a matching `parameters` entry (`required: true`); names are made
+    **unique within the path** (`id`, `id2`, …); each carries an honest description ("Name synthesized /
+    type inferred from a templated path segment; original name not recoverable from static analysis").
+  - **Collision guard:** canonicalization can map two operations onto the same `(method, path)` (e.g.
+    `GET /users/${id}` and `GET /users/{id}`) — dedupe/**merge** them (union params + body), never let one
+    silently overwrite the other (loss of attack surface is worse than a merge).
+  The invariant this buys: after canonicalization a path contains only balanced `{legalName}` tokens, each
+  with a declared parameter — so the emitted document always validates.
 - **Query parameters.** From `query_params`: `in: query`, `required: false`, `schema: {type: string}`
-  (inferred), `example` when present, `description: "Name observed; type inferred."`
-- **Request body.** When `body_params` is non-empty: a `requestBody` (`required: false`) with the
-  request's `content_type` (or `application/json` if unknown, marked inferred) → `schema: {type: object,
-  properties: {<name>: {type: string, description: "Name observed; type inferred."}}}` and a schema-level
-  note: `"Property names observed statically; types inferred; not exhaustive."`
+  (inferred), `description: "Name observed; type inferred."`. The `example` key is emitted **only when
+  non-null** (`QueryParam.example` is often `None`, `reconstruct.py:100`) — never `example: null`.
+- **Request body — never assert an unobserved content-type (gate note 1).** When `body_params` is
+  non-empty:
+  - `content_type` **set** (reconstruct sets `application/json` only for `fetch`/`axios`,
+    `reconstruct.py:121`) → a `requestBody` (`required: false`) under that media type →
+    `schema: {type: object, properties: {<name>: {type: string, description: "Name observed; type
+    inferred."}}}` + schema note `"Property names observed statically; types inferred; not exhaustive."`
+  - `content_type` **None** (jQuery/xhr — the type was *not* observed, and `ReconstructedRequest` carries
+    no `kind` to guess from, `reconstruct.py:34-45`) → do **not** invent `application/json`. Surface the
+    body property names honestly instead — in the operation `description` and an `x-recon-body-params`
+    extension — with **no** `requestBody.content` media type asserted.
 - **Responses.** OpenAPI requires ≥1 response; we observed none →
   `responses: {default: {description: "Not observed — static analysis does not capture responses."}}`.
-- **`servers`.** Derived from the union of observed `hosts` (prefer a scheme from `example_url` when it
-  carries one; otherwise default `https://` and mark it inferred in the server `description`). If no host
-  is known (all relative), omit `servers` and note in the top-level description that paths are as-authored.
+- **`servers`.** Derived from the union of observed `hosts` (prefer scheme **and port** from `example_url`
+  when it carries them — `normalize.py:229` stores `hostname` only, dropping scheme/port; otherwise
+  default `https://` and mark it inferred in the server `description`). **Exclude WS/WSS hosts** — a
+  `wss://` host must not become an HTTP server URL. If no host is known (all relative), omit `servers` and
+  note in the top-level description that paths are as-authored.
 - **`info`.** `title: "Reconstructed API — run <short id>"`, `version: "0.0.0"`, and a top-level
   `description` preamble stating: reconstructed statically from JavaScript; paths/methods/param-names are
   observed; param/body types and schemas are inferred; responses were not observed; no authentication is
@@ -195,16 +221,22 @@ alongside the other routers. This is the app's first file-download route — a s
 - Run with zero endpoint findings → **200** with a valid document, `paths: {}`, and a description note
   that nothing was reconstructed (honest, not an error).
 - Bad `format` value → **422**.
-- Self-validation failure → **500** (an internal bug; host-lane tests assert it cannot happen).
+- Self-validation is wrapped in a **broad `except Exception`** (mirroring `ingest.py:129-132`) → **500**,
+  because `openapi-spec-validator.validate()` can raise a bare `ValueError` — not only
+  `OpenAPIValidationError` — on a malformed template (gate Blocker 2). With §5's canonicalization this is
+  expected to be unreachable; host-lane tests assert emitted docs always validate.
 
 ## 8. Testing (host-lane, pure — no katana/engines)
 
 - `probe/openapi_test.py`: each mapping rule of §5; **every emitted fixture passes
-  `openapi_spec_validator.validate`** (the core correctness guarantee); deterministic path-param
-  renaming for repeated type tokens; query params; body → inferred `requestBody` incl. unknown
-  content-type; WS/WSS excluded from `paths` but present in `x-recon-websocket-endpoints`; `servers`
-  from hosts (scheme inferred) and the no-host case; empty-run document; JSON + YAML `dump_openapi`
-  round-trip.
+  `openapi_spec_validator.validate`** (the core correctness guarantee). Path canonicalization corpus
+  (gate Blocker 1/2): `${user.id}`, `{userId}`, mixed `v${n}`, and an unbalanced `/a/{b` all canonicalize
+  to a validating doc; the `${id}` vs `{id}` collision **merges** rather than drops; repeated same-type
+  tokens get unique names (`id`, `id2`). Query params (incl. null-`example` omission); body → typed
+  `requestBody` when `content_type` set, and jQuery/xhr (None) → `x-recon-body-params` with **no** media
+  type asserted; WS/WSS excluded from `paths` but present in `x-recon-websocket-endpoints`; `servers`
+  from hosts (scheme/port from `example_url`, WS hosts excluded) and the no-host case; empty-run document;
+  JSON + YAML `dump_openapi` round-trip.
 - `api/export_router_test.py` (integration): 200 + `Content-Disposition` + a valid body; `format=yaml`;
   unknown run → 404; other-tenant run → 404; bad `format` → 422.
 
@@ -227,8 +259,8 @@ alongside the other routers. This is the app's first file-download route — a s
   a consumer sees `id`/`uuid`/`hash`. Mitigated by the per-parameter description + `x-recon-confidence`.
 - **Server scheme.** When only a bare host is known, the emitted `servers[].url` defaults to `https://`
   and says so; `example_url` is preferred when it carries a scheme.
-- **Body content-type** is unknown for non-fetch/axios kinds (xhr/jQuery) → defaults to
-  `application/json`, marked inferred.
+- **Body content-type** is asserted **only when observed** (fetch/axios → `application/json`); jQuery/xhr
+  bodies (`content_type` None) are surfaced via `x-recon-body-params` with no media type, never guessed.
 - **Burp import** is asserted only by producing a valid 3.0.3 document + the validator; an actual Burp
   round-trip is a manual check, not an automated test.
 
@@ -241,3 +273,25 @@ alongside the other routers. This is the app's first file-download route — a s
 | REQ-P1 / REQ-P2 | Respected — pure static serialization of stored findings; no active traffic, no new egress. The deferred runtime path (§9) is where these would consciously change. |
 | REQ-D2 | Produces an API artifact — on-demand, not stored (deferred approach B would store it as a blob). |
 | — (extension) | OpenAPI export itself: an approved capability beyond the 40 REQ-* IDs, the inverse of spec-ingest. |
+
+## 12. §4 adversarial design gate (2026-07-28)
+
+Opus adversarial reviewer, proof-bound (each objection cited exact code lines or empirical
+`openapi-spec-validator==0.9.0` behavior). **Verdict: BUILD WITH CHANGES.** The architecture (pure
+serializer + thin validated route, inverse of ingest), the RLS/404 seam, the route-registration order vs
+the SPA catch-all (`app.py:29-33` before `_mount_spa` at `:42`), the "no security asserted" honesty claim,
+and every `file:line` citation were attacked and held. Two blockers were folded into §5/§7 before this
+record:
+
+| # | Finding (proof) | Resolution |
+|---|---|---|
+| **B1** | §5 mapped only `{id}`/`{uuid}`/`{hash}`, but `normalize.py:182-196` passes every *other* interpolation through verbatim and `extract.py:96-112` (+ `extract_test.py:34-35`) stores `${…}` literally — so real paths carry `${user.id}`, `{userId}`, `v${n}`, unbalanced `{`, each an undeclared template variable that `validate()` rejects (`UnresolvableParameterError`) → self-validation 500 on the common case. | §5 path-parameter rule rewritten: canonicalize **every** interpolation to one balanced `{legalName}` param (+ matching declaration, per-path uniqueness, collision-merge). Invariant: emitted paths always validate. |
+| **B2** | `validate()` can raise a bare `ValueError` (not `OpenAPIValidationError`) on a malformed template (e.g. `/a/{b`), so a narrow guard would leak an uncaught 500/traceback. | Brace-balancing folded into B1's canonicalization + a **broad `except Exception`** around self-validation (§7), mirroring `ingest.py:129-132`. |
+
+Non-blocking, folded: never assert `application/json` for unobserved jQuery/xhr bodies → `x-recon-body-params`
+(§5); `servers` scheme+port from `example_url` and WS-host exclusion (§5); omit null query `example` (§5).
+Noted, not folded: YAML `sort_keys=False, allow_unicode=True` cosmetics; the pre-existing non-UUID
+`run_id` behavior → mirror sibling `/runs/{run_id}/*` routes (out of scope). Confirmed sound (attacked,
+held): RLS 404 via `tenant_session` GUC → `list_findings` None → `reconstruct_run` None → 404; SPA
+catch-all cannot shadow the route; headers/auth genuinely uncaptured (`extract.py:49-59`, `_fetch`
+`:475-479`); `default`-only responses, root/operation `x-` extensions, and empty `paths` all validate.
