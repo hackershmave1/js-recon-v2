@@ -90,3 +90,69 @@ def test_legacy_run_without_discover_assets_event_is_done(redis, authorized_sess
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id, target="acme.io")
     _walk_to_correlating(redis, tenant, view.id)
     assert _finalize(redis, tenant, view.id) == "done"
+
+
+def _run_ready_to_finalize(redis, tenant, session_id):
+    # A plain (legacy, non-crawl) run walked to CORRELATING -- ready for advance
+    # to finalize. The reclassify hook doesn't care about DONE vs PARTIAL, only
+    # that finalize completes, so the simplest run shape is enough here.
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id, target="acme.io")
+    _walk_to_correlating(redis, tenant, view.id)
+    return view.id
+
+
+def test_advance_reclassifies_when_session_spec_present(monkeypatch, redis, authorized_session):
+    # Task 11 (REQ-D5 gate N3): a fresh finalize triggers reclassification
+    # against the session's already-attached spec. reclassify_run itself is a
+    # no-op without a spec (Task 8), so recording the call args is enough to
+    # prove the hook fires -- no need to seed a real SessionSpec here.
+    tenant, session_id = authorized_session
+    run_id = _run_ready_to_finalize(redis, tenant, session_id)
+    called = {}
+    monkeypatch.setattr(
+        "recon.spec.service.reclassify_run",
+        lambda t, r: called.setdefault("hit", (t, r)),
+    )
+    assert _finalize(redis, tenant, run_id) == "done"
+    assert called["hit"] == (tenant, run_id)
+
+
+def test_advance_no_reclassify_without_spec(redis, authorized_session):
+    # No SessionSpec exists for this session, so the real reclassify_run takes
+    # its no-op path (returns None) -- finalize must proceed exactly as before,
+    # unaffected by the new hook.
+    tenant, session_id = authorized_session
+    run_id = _run_ready_to_finalize(redis, tenant, session_id)
+    assert _finalize(redis, tenant, run_id) == "done"
+
+
+def test_advance_reclassify_failure_does_not_break_finalize(
+    monkeypatch, redis, authorized_session
+):
+    # Classification is best-effort: even if reclassify_run blows up, advance()
+    # must swallow it and let the run reach its terminal state rather than the
+    # exception surfacing and failing the whole finalize (and thus the job).
+    tenant, session_id = authorized_session
+    run_id = _run_ready_to_finalize(redis, tenant, session_id)
+
+    def _boom(_tenant_id, _run_id):
+        raise RuntimeError("classification exploded")
+
+    monkeypatch.setattr("recon.spec.service.reclassify_run", _boom)
+    assert _finalize(redis, tenant, run_id) == "done"
+
+
+def test_advance_does_not_reclassify_on_duplicate_finalize(monkeypatch, redis, authorized_session):
+    # The reclassify hook must sit on the fresh-finalize path only. A second
+    # advance() for the same completed stage takes the TransitionConflict/
+    # idempotent branch, which must not call reclassify_run again.
+    tenant, session_id = authorized_session
+    run_id = _run_ready_to_finalize(redis, tenant, session_id)
+    calls = []
+    monkeypatch.setattr(
+        "recon.spec.service.reclassify_run",
+        lambda t, r: calls.append((t, r)),
+    )
+    assert _finalize(redis, tenant, run_id) == "done"
+    coordinator.advance(redis, tenant_id=tenant, run_id=run_id, completed=RunStage.CORRELATING)
+    assert calls == [(tenant, run_id)]
