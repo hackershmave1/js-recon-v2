@@ -29,7 +29,7 @@ tests call these three functions directly.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from recon.findings.extract import HTTP_METHODS
@@ -207,3 +207,67 @@ def classify_operation(operation: str, documented: Sequence[DocumentedOp]) -> Cl
     # literal 1:1 correspondence with the design's 7 numbered branches (§5.3)
     # rather than silently relying on that coupling holding forever.
     return Classification("unresolved", "unresolved", None)
+
+
+@dataclass(frozen=True)
+class SpecSummary:
+    """The §5.4/§6.4 run-scoped summary: one bucket count per `Classification`
+    status, plus `base_url_incompleteness_ratio` -- the self-audit signal
+    (design §5.4, gate N7). See `summarize`'s docstring for why this ratio is
+    NOT the write-up's literal "suffix-shadow ratio" and what it measures
+    instead."""
+
+    documented: int
+    shadow: int
+    unresolved: int
+    suffix_verify: int
+    base_url_incompleteness_ratio: float
+
+
+def summarize(classifications: Iterable[Classification]) -> SpecSummary:
+    """Bucket-count `classifications` and compute the run's self-audit ratio.
+
+    AS-BUILT DIVERGENCE from the design write-up (§5.4): the write-up defines
+    the ratio as "the fraction of this run's `shadow` findings whose path is
+    a proper suffix of some documented path". That metric is uncomputable by
+    construction, not merely often zero -- `classify_operation`'s step 4
+    (§5.3, gate B2) diverts EVERY proper-suffix match to
+    `unresolved`/`suffix-verify` BEFORE either shadow branch (steps 5-6) ever
+    runs, so a `Classification` with `status == "shadow"` can never carry
+    `reason == "suffix-verify"`. A ratio defined over that intersection is
+    always 0/0.
+
+    This computes the same self-audit INTENT (flag when the shadow list is
+    likely inflated by missing base-URL resolution) over the data that CAN
+    vary: of the run's unmatched "shadow candidates" -- everything the
+    suffix safety net actually caught (`suffix_verify`) plus everything left
+    in `shadow` after it ran -- the fraction the net rescued:
+
+        base_url_incompleteness_ratio = suffix_verify / (shadow + suffix_verify)
+
+    A high ratio means the suffix net is rescuing most of what would
+    otherwise look undocumented, i.e. base-URL resolution (REQ-C2) is likely
+    incomplete and the remaining `shadow` entries are suspect. `0.0` covers
+    both "nothing to be suspicious of" and the zero-denominator case (no
+    `shadow` and no `suffix_verify` at all) identically -- there is nothing
+    for the ratio to flag either way.
+
+    `suffix_verify` only counts rows with BOTH `status == "unresolved"` AND
+    `reason == "suffix-verify"` -- matching `status` alone would double-count
+    against `unresolved`'s own tally, and matching `reason` alone would (per
+    the paragraph above) accept a `status == "shadow"` row that real
+    `classify_operation` output can never produce."""
+    documented = shadow = unresolved = suffix_verify = 0
+    for c in classifications:
+        if c.status == "documented":
+            documented += 1
+        elif c.status == "shadow":
+            shadow += 1
+        elif c.status == "unresolved":
+            unresolved += 1
+            if c.reason == "suffix-verify":
+                suffix_verify += 1
+
+    denominator = shadow + suffix_verify
+    ratio = suffix_verify / denominator if denominator else 0.0
+    return SpecSummary(documented, shadow, unresolved, suffix_verify, ratio)

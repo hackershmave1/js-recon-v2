@@ -16,10 +16,12 @@ from __future__ import annotations
 
 from recon.spec.classify import (
     Classification,
+    SpecSummary,
     classify_operation,
     compare_key,
     is_non_http,
     is_partial,
+    summarize,
 )
 from recon.spec import classify
 from recon.spec.ingest import DocumentedOp
@@ -194,3 +196,90 @@ def test_root_path_is_not_a_vacuous_suffix_match():
 def test_no_documented_ops_still_shadows_a_complete_path():
     result = classify_operation("GET /anything", [])
     assert result == Classification("shadow", "undocumented-path", None)
+
+
+# --- summarize (§5.4, gate N7 self-audit) --------------------------------------
+#
+# The plan's original metric ("shadows whose reason indicates a suffix
+# relationship / total shadows") is uncomputable: `classify_operation`'s step 4
+# diverts every suffix match to `unresolved` before any `shadow` verdict is
+# ever returned (see `test_suffix_before_verb_mismatch` above), so a `status
+# == "shadow"` `Classification` can never carry `reason == "suffix-verify"`.
+# These tests exercise the controller-redefined `base_url_incompleteness_ratio`
+# instead (see `summarize`'s docstring for the full rationale). Inputs are
+# `Classification(...)` literals built directly -- `summarize` is a pure
+# aggregation over whatever `Classification`s it's handed, never routed
+# through `classify_operation`.
+
+def test_summarize_returns_spec_summary_with_expected_fields():
+    # Keyword-args pin the exact field names of the frozen dataclass contract,
+    # not just their values by position.
+    s = summarize([Classification("documented", "documented", "GET /pets")])
+    assert s == SpecSummary(
+        documented=1,
+        shadow=0,
+        unresolved=0,
+        suffix_verify=0,
+        base_url_incompleteness_ratio=0.0,
+    )
+
+
+def test_summary_counts_by_status():
+    cs = [
+        Classification("documented", "documented", "GET /pets"),
+        Classification("documented", "documented", "GET /orders"),
+        Classification("shadow", "undocumented-path", None),
+        Classification("unresolved", "partial", None),
+        Classification("unresolved", "non-http", None),
+    ]
+    s = summarize(cs)
+    assert (s.documented, s.shadow, s.unresolved) == (2, 1, 2)
+
+
+def test_summary_suffix_verify_requires_both_unresolved_status_and_reason():
+    # The one row real `classify_operation` output can never produce
+    # (status="shadow", reason="suffix-verify") must NOT count toward
+    # `suffix_verify` -- only toward `shadow` -- proving the ratio can't be
+    # silently re-broken by matching on `reason` alone.
+    cs = [
+        Classification("unresolved", "suffix-verify", "GET /a/b"),
+        Classification("unresolved", "suffix-verify", "GET /c/d"),
+        Classification("unresolved", "partial", None),  # unresolved, wrong reason
+        Classification("shadow", "suffix-verify", None),  # unreachable via real classify_operation
+    ]
+    s = summarize(cs)
+    assert s.suffix_verify == 2
+    assert s.shadow == 1
+    assert s.unresolved == 3
+
+
+def test_summary_ratio_zero_when_no_shadow_or_suffix_verify():
+    cs = [
+        Classification("documented", "documented", "GET /pets"),
+        Classification("unresolved", "partial", None),
+        Classification("unresolved", "non-http", None),
+    ]
+    s = summarize(cs)
+    assert (s.shadow, s.suffix_verify) == (0, 0)
+    assert s.base_url_incompleteness_ratio == 0.0
+
+
+def test_summary_ratio_all_documented_is_zero():
+    cs = [
+        Classification("documented", "documented", "GET /a"),
+        Classification("documented", "documented", "GET /b"),
+    ]
+    s = summarize(cs)
+    assert s.base_url_incompleteness_ratio == 0.0
+
+
+def test_summary_ratio_computes_expected_fraction():
+    cs = [
+        Classification("shadow", "undocumented-path", None),
+        Classification("shadow", "undocumented-method", "GET /x"),
+        Classification("shadow", "undocumented-path", None),
+        Classification("unresolved", "suffix-verify", "GET /y"),
+    ]
+    s = summarize(cs)
+    assert (s.shadow, s.suffix_verify) == (3, 1)
+    assert s.base_url_incompleteness_ratio == 0.25
