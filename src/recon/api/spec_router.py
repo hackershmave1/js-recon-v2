@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 
 from recon.api.deps import get_tenant_id
 from recon.spec import service
@@ -36,7 +37,18 @@ async def attach_spec(
     # target JS).
     raw_spec = await request.body()
     try:
-        summary = service.attach_and_classify(tenant_id, run_id, raw_spec)
+        # attach_and_classify is a blocking call (sync DB session, a blob-store
+        # write, and -- for a hostile/maximal spec -- up to a 5MB parse and a
+        # 200k-node validation walk, ingest.py's own gate B4 bounds). This is
+        # the ONLY async route in the API package (every sibling router is a
+        # sync `def`, which FastAPI already runs in its threadpool for free);
+        # calling that blocking work directly here would run it ON the event
+        # loop instead, stalling every other tenant's request for the
+        # duration -- run_in_threadpool restores the same off-loop guarantee
+        # sync routes get automatically.
+        summary = await run_in_threadpool(
+            service.attach_and_classify, tenant_id, run_id, raw_spec
+        )
     except SpecError as exc:
         raise HTTPException(status_code=422, detail=f"invalid spec: {exc}") from exc
     if summary is None:
