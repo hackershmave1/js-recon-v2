@@ -80,6 +80,21 @@ def test_deeply_nested_yaml_raises_specerror_not_recursionerror():
         ingest_spec(bomb)
 
 
+# --- fix round 2: JSON deep-nesting gap (mirrors fix round 1 for YAML) --
+# The C-accelerated json.loads hits the recursion limit on deeply-nested
+# valid JSON (e.g. "[" * 5000 + "]" * 5000) and raises RecursionError during
+# parse, before _check_bounds' depth scan runs. Must surface as SpecError,
+# not escape uncaught. ---
+def test_deeply_nested_json_raises_specerror_not_recursionerror():
+    depth = 5000
+    # Syntactically valid JSON but pathologically deep; json.loads raises
+    # RecursionError during parsing, before _check_bounds runs against the
+    # already-parsed structure.
+    bomb = ("[" * depth + "]" * depth).encode()
+    with pytest.raises(SpecError):
+        ingest_spec(bomb)
+
+
 # --- bonus (beyond the brief's 5): design §4.1 names cyclic in-document $ref
 # as a required gate B4 mitigation ("handled with a visited-set"). Our own
 # $ref scan never dereferences (it only reads the literal string, so a

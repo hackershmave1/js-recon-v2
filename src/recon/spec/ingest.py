@@ -152,6 +152,14 @@ def _parse(raw: bytes) -> object:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
+    except RecursionError as exc:
+        # A deeply-nested-but-tiny body (valid JSON structure, well under
+        # the byte cap) hits the C-accelerated json.loads' recursion limit
+        # *during* parsing, before _check_bounds's own depth check ever runs
+        # against the already-parsed structure -- RecursionError must be
+        # caught explicitly here or it escapes ingest_spec uncaught instead
+        # of being cleanly rejected.
+        raise SpecError(f"spec is not valid JSON or YAML: {exc}") from exc
 
     try:
         return yaml.load(text, Loader=_NoAliasSafeLoader)
