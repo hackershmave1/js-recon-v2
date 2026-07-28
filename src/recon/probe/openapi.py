@@ -167,6 +167,7 @@ _SERVER_DESCRIPTION = "Host observed; scheme/port inferred where not seen in a c
 
 
 def _merge_operations(existing: dict, other: dict) -> dict:
+    # Union parameters by (name, in); existing wins on a name+location conflict.
     seen = {(p["name"], p["in"]) for p in existing.get("parameters", [])}
     merged = list(existing.get("parameters", []))
     for param in other.get("parameters", []):
@@ -176,26 +177,76 @@ def _merge_operations(existing: dict, other: dict) -> dict:
             seen.add(key)
     if merged:
         existing["parameters"] = merged
-    for key in ("requestBody", "x-recon-body-params"):
-        if key not in existing and key in other:
-            existing[key] = other[key]
+    _merge_bodies(existing, other)
     return existing
 
 
-def _server_bases(request: ReconstructedRequest) -> set[str]:
-    if request.example_url:
-        split = urlsplit(request.example_url)
-        if split.scheme and split.netloc:
-            return {f"{split.scheme}://{split.netloc}"}
-    return {f"https://{host}" for host in request.hosts}
+def _body_property_names(operation: dict) -> set[str]:
+    names: set[str] = set(operation.get("x-recon-body-params", []))
+    for media in operation.get("requestBody", {}).get("content", {}).values():
+        names |= set(media.get("schema", {}).get("properties", {}))
+    return names
+
+
+def _content_types(operation: dict) -> set[str]:
+    return set(operation.get("requestBody", {}).get("content", {}))
+
+
+def _merge_bodies(existing: dict, other: dict) -> None:
+    """Union both operations' request-body evidence so no body property name is ever
+    dropped on a canonicalization collision, and keep the honesty tag + description
+    consistent with the merged result. `description` is only ever set from a body
+    (names-only branch of _operation_object), so clearing it here is safe."""
+    names = sorted(_body_property_names(existing) | _body_property_names(other))
+    content_types = sorted(_content_types(existing) | _content_types(other))
+    existing.pop("requestBody", None)
+    existing.pop("x-recon-body-params", None)
+    existing.pop("description", None)
+    if not names:
+        existing["x-recon-confidence"]["body"] = "absent"
+        return
+    if content_types:
+        # Build a FRESH schema per media type (never share a dict reference — a shared
+        # ref makes yaml.safe_dump emit anchors/aliases).
+        existing["requestBody"] = {
+            "required": False,
+            "content": {
+                ct: {
+                    "schema": {
+                        "type": "object",
+                        "description": "Property names observed statically; types inferred; not exhaustive.",
+                        "properties": {
+                            name: {"type": "string", "description": "Name observed; type inferred."}
+                            for name in names
+                        },
+                    }
+                }
+                for ct in content_types
+            },
+        }
+        existing["x-recon-confidence"]["body"] = "inferred"
+    else:
+        existing["x-recon-body-params"] = names
+        existing["description"] = (
+            "Request body observed with property names: "
+            + ", ".join(names)
+            + "; content-type not observed, so no request-body schema is asserted."
+        )
+        existing["x-recon-confidence"]["body"] = "names-only"
 
 
 def _servers(requests: list[ReconstructedRequest]) -> list[dict]:
-    bases: set[str] = set()
+    by_host: dict[str, str] = {}
     for request in requests:
-        if request.probeable:  # WS/WSS hosts must never become HTTP server URLs
-            bases |= _server_bases(request)
-    return [{"url": base, "description": _SERVER_DESCRIPTION} for base in sorted(bases)]
+        if not request.probeable:
+            continue
+        if request.example_url:
+            split = urlsplit(request.example_url)
+            if split.scheme and split.netloc and split.hostname:
+                by_host[split.hostname] = f"{split.scheme}://{split.netloc}"
+        for host in request.hosts:
+            by_host.setdefault(host, f"https://{host}")
+    return [{"url": url, "description": _SERVER_DESCRIPTION} for url in sorted(by_host.values())]
 
 
 def build_openapi(requests: list[ReconstructedRequest], *, run_id: str) -> dict:
@@ -227,7 +278,7 @@ def build_openapi(requests: list[ReconstructedRequest], *, run_id: str) -> dict:
     if servers:
         document["servers"] = servers
     if websockets:
-        document["x-recon-websocket-endpoints"] = sorted(websockets)
+        document["x-recon-websocket-endpoints"] = sorted(set(websockets))
 
     validate(document)  # honesty guarantee — never return an invalid document
     return document

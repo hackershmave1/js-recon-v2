@@ -153,3 +153,39 @@ def test_no_host_omits_servers():
                         run_id="00000000-0000-0000-0000-000000000000")
     validate(doc)
     assert "servers" not in doc
+
+
+def test_collision_merges_request_bodies():
+    a = _req(operation="POST /users/${id}", method="POST", path="/users/${id}",
+             body_params=("name", "email"), content_type="application/json")
+    b = _req(operation="POST /users/{id}", method="POST", path="/users/{id}",
+             body_params=("token", "secret"), content_type="application/json")
+    doc = build_openapi([a, b], run_id="00000000-0000-0000-0000-000000000000")
+    validate(doc)
+    props = doc["paths"]["/users/{id}"]["post"]["requestBody"]["content"]["application/json"]["schema"]["properties"]
+    assert set(props) == {"name", "email", "token", "secret"}  # no body field dropped
+    assert doc["paths"]["/users/{id}"]["post"]["x-recon-confidence"]["body"] == "inferred"
+
+
+def test_collision_merges_names_only_bodies():
+    a = _req(operation="POST /users/${id}", method="POST", path="/users/${id}",
+             body_params=("a",), content_type=None)
+    b = _req(operation="POST /users/{id}", method="POST", path="/users/{id}",
+             body_params=("b",), content_type=None)
+    doc = build_openapi([a, b], run_id="00000000-0000-0000-0000-000000000000")
+    validate(doc)
+    op = doc["paths"]["/users/{id}"]["post"]
+    assert "requestBody" not in op
+    assert op["x-recon-body-params"] == ["a", "b"]
+    assert op["x-recon-confidence"]["body"] == "names-only"
+
+
+def test_servers_deduped_per_host():
+    a = _req(operation="GET /x", path="/x", hosts=("api.example.com",),
+             example_url="https://api.example.com:8443/x")
+    b = _req(operation="GET /y", path="/y", hosts=("api.example.com",), example_url=None)
+    doc = build_openapi([a, b], run_id="00000000-0000-0000-0000-000000000000")
+    assert doc["servers"] == [
+        {"url": "https://api.example.com:8443",
+         "description": "Host observed; scheme/port inferred where not seen in a concrete URL."}
+    ]
