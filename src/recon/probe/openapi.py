@@ -151,3 +151,83 @@ def _operation_object(request: ReconstructedRequest, path_params: list[dict]) ->
             + "; content-type not observed, so no request-body schema is asserted."
         )
     return operation
+
+
+from urllib.parse import urlsplit
+
+from openapi_spec_validator import validate
+
+_INFO_DESCRIPTION = (
+    "Statically reconstructed from JavaScript by the recon platform. Paths, HTTP "
+    "methods, and parameter names are OBSERVED. Parameter and body TYPES and schemas "
+    "are INFERRED. Response bodies were not observed. No authentication is asserted — "
+    "request headers are not captured by static analysis."
+)
+_SERVER_DESCRIPTION = "Host observed; scheme/port inferred where not seen in a concrete URL."
+
+
+def _merge_operations(existing: dict, other: dict) -> dict:
+    seen = {(p["name"], p["in"]) for p in existing.get("parameters", [])}
+    merged = list(existing.get("parameters", []))
+    for param in other.get("parameters", []):
+        key = (param["name"], param["in"])
+        if key not in seen:
+            merged.append(param)
+            seen.add(key)
+    if merged:
+        existing["parameters"] = merged
+    for key in ("requestBody", "x-recon-body-params"):
+        if key not in existing and key in other:
+            existing[key] = other[key]
+    return existing
+
+
+def _server_bases(request: ReconstructedRequest) -> set[str]:
+    if request.example_url:
+        split = urlsplit(request.example_url)
+        if split.scheme and split.netloc:
+            return {f"{split.scheme}://{split.netloc}"}
+    return {f"https://{host}" for host in request.hosts}
+
+
+def _servers(requests: list[ReconstructedRequest]) -> list[dict]:
+    bases: set[str] = set()
+    for request in requests:
+        if request.probeable:  # WS/WSS hosts must never become HTTP server URLs
+            bases |= _server_bases(request)
+    return [{"url": base, "description": _SERVER_DESCRIPTION} for base in sorted(bases)]
+
+
+def build_openapi(requests: list[ReconstructedRequest], *, run_id: str) -> dict:
+    paths: dict[str, dict] = {}
+    websockets: list[str] = []
+    for request in requests:
+        if not request.probeable:
+            websockets.append(f"{request.method} {request.example_url or request.path}")
+            continue
+        canon_path, path_params = _canonicalize_path(request.path)
+        operation = _operation_object(request, path_params)
+        method = request.method.lower()
+        path_item = paths.setdefault(canon_path, {})
+        if method in path_item:
+            path_item[method] = _merge_operations(path_item[method], operation)
+        else:
+            path_item[method] = operation
+
+    document: dict = {
+        "openapi": "3.0.3",
+        "info": {
+            "title": f"Reconstructed API — run {run_id[:8]}",
+            "version": "0.0.0",
+            "description": _INFO_DESCRIPTION,
+        },
+        "paths": paths,
+    }
+    servers = _servers(requests)
+    if servers:
+        document["servers"] = servers
+    if websockets:
+        document["x-recon-websocket-endpoints"] = sorted(websockets)
+
+    validate(document)  # honesty guarantee — never return an invalid document
+    return document
