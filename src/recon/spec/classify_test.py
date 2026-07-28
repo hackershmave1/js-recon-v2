@@ -10,6 +10,20 @@ interpolation example (`${a}${b}`). Pure unit tests -- no infra.
 from __future__ import annotations
 
 from recon.spec.classify import compare_key, is_non_http, is_partial
+from recon.spec import classify
+from recon.findings import normalize, extract
+
+
+# --- Regex parity (drift guard) -----------------------------------------------
+
+def test_numeric_uuid_regexes_match_normalize():
+    """Guard against accidental drift of the _INT_RE and _UUID_RE regexes
+    between classify.py and normalize.py (design §11 risk: a mismatch silently
+    re-introduces false positives in the shadow diff). Both modules keep
+    independent copies to avoid cross-feature coupling; this test ensures they
+    stay synchronized."""
+    assert classify._INT_RE.pattern == normalize._INT_RE.pattern
+    assert classify._UUID_RE.pattern == normalize._UUID_RE.pattern
 
 
 # --- compare_key (§5.1) -------------------------------------------------------
@@ -85,7 +99,7 @@ def test_is_non_http():
 
 
 def test_is_non_http_recognizes_every_documented_http_method():
-    for method in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"):
+    for method in extract.HTTP_METHODS:
         assert is_non_http(f"{method} /x") is False
 
 
