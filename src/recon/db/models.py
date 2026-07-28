@@ -370,6 +370,71 @@ class FindingTriage(Base):
     updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
 
+class SessionSpec(Base):
+    """The active OpenAPI/Swagger spec attached to a session (shadow-API slice).
+
+    Keyed by ``session_id`` (one live spec per engagement, replaced on re-upload)
+    rather than by run, mirroring :class:`FindingTriage`'s session-scoping so the
+    spec survives re-runs the same way a triage verdict does. The parsed bytes
+    live in object storage (kind ``"spec"``); this row is the pointer + summary
+    metadata (REQ-D2 pattern)."""
+
+    __tablename__ = "session_spec"
+    __table_args__ = (
+        UniqueConstraint("session_id", name="uq_session_spec_session"),
+        CheckConstraint("spec_format IN ('openapi-3', 'swagger-2')", name="ck_session_spec_format"),
+        Index("ix_session_spec_tenant", "tenant_id", "session_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("session.id", ondelete="CASCADE"), nullable=False
+    )
+    spec_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    spec_format: Mapped[str] = mapped_column(String(16), nullable=False)
+    server_bases: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    operation_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    actor: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+    updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
+
+
+class FindingSpecStatus(Base):
+    """Whether a finding is documented in the attached spec or a shadow endpoint.
+
+    Keyed by (session_id, finding_hash) — NOT by run — for the same reason as
+    :class:`FindingTriage`: the spec-diff verdict on a stable finding identity
+    (REQ-D3) must survive re-runs (REQ-D5 continuous rescan). ``finding_hash`` is
+    intentionally not a foreign key, mirroring ``FindingTriage``."""
+
+    __tablename__ = "finding_spec_status"
+    __table_args__ = (
+        UniqueConstraint("session_id", "finding_hash", name="uq_spec_status_session_finding"),
+        CheckConstraint("status IN ('documented', 'shadow', 'unresolved')", name="ck_spec_status"),
+        Index("ix_spec_status_session", "tenant_id", "session_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("session.id", ondelete="CASCADE"), nullable=False
+    )
+    finding_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(32))
+    matched_operation: Mapped[str | None] = mapped_column(Text)
+    spec_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+    updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
+
+
 # Tables carrying a tenant_id get FORCE RLS in the migration.
 TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "app_user",
@@ -391,3 +456,6 @@ TRIAGE_TABLES: tuple[str, ...] = ("finding_triage",)
 
 # Slice-Y addition, RLS-enabled by migration 0005.
 ASSET_TABLES: tuple[str, ...] = ("run_asset",)
+
+# Shadow-API spec-diff addition, RLS-enabled by migration 0006.
+SPEC_TABLES: tuple[str, ...] = ("session_spec", "finding_spec_status")

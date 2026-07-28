@@ -15,8 +15,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from recon.db.base import tenant_session
-from recon.db.models import Finding, FindingOccurrence, FindingTriage, Run, RunAsset, RunEvent
+from recon.db.models import (
+    Finding,
+    FindingOccurrence,
+    FindingSpecStatus,
+    FindingTriage,
+    Run,
+    RunAsset,
+    RunEvent,
+    SessionSpec,
+)
 from recon.domain import FindingType
+from recon.spec.classify import Classification, SpecSummary, summarize
 
 
 @dataclass(frozen=True)
@@ -46,6 +56,19 @@ class TriageView:
 
 
 @dataclass(frozen=True)
+class SpecStatusView:
+    """The shadow-API verdict (design §6.4) for one endpoint finding, read
+    straight off its stored ``FindingSpecStatus`` row. Absent entirely
+    (``FindingView.spec_status is None``) means "never classified" -- either
+    no spec is attached to the session, or this finding is not an endpoint --
+    which the API renders as ``unclassified``, distinct from any real verdict."""
+
+    status: str
+    reason: str | None
+    matched_operation: str | None
+
+
+@dataclass(frozen=True)
 class FindingView:
     finding_hash: str
     type: str
@@ -57,6 +80,7 @@ class FindingView:
     occurrences: list[OccurrenceView]
     triage: TriageView | None = None
     revealable: bool = False
+    spec_status: SpecStatusView | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +111,10 @@ class FindingsView:
     run_id: str
     findings: list[FindingView]
     coverage: CoverageView | None
+    # Design §6.4: run-scoped shadow-API bucket counts. `None` until a spec is
+    # attached to the run's session at all (distinct from "attached but every
+    # bucket is 0") -- mirrors `coverage`'s "null until analyze has run" shape.
+    spec_summary: SpecSummary | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +140,18 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
                 select(FindingTriage).where(FindingTriage.session_id == str(run.session_id))
             ).all()
         }
+        # Session-scoped, exactly like triage_by_hash above: a spec-status verdict
+        # outlives any one run (REQ-D5 continuous rescan), keyed off finding_hash,
+        # so it's read once for the whole session and matched to THIS run's own
+        # findings below (the same finding recurring across runs shares a verdict).
+        spec_status_by_hash = {
+            row.finding_hash: row
+            for row in session.scalars(
+                select(FindingSpecStatus).where(
+                    FindingSpecStatus.session_id == str(run.session_id)
+                )
+            ).all()
+        }
         findings = session.scalars(
             select(Finding)
             .where(Finding.run_id == str(run_id))
@@ -131,6 +171,17 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
                 select(RunAsset).where(RunAsset.run_id == str(run_id))
             ).all()
         }
+        # Design §6.4: a real (possibly all-zero) summary once a spec is attached
+        # to the session at all; `None` distinguishes "never attached" from
+        # "attached, nothing classified yet" -- an existence check, not a row read,
+        # since spec_status_by_hash above already carries every verdict this
+        # session has.
+        has_session_spec = (
+            session.scalar(
+                select(SessionSpec.id).where(SessionSpec.session_id == str(run.session_id))
+            )
+            is not None
+        )
         return FindingsView(
             run_id=str(run_id),
             findings=[
@@ -139,10 +190,14 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
                     triage_by_hash.get(finding.finding_hash),
                     run.input_ref,
                     asset_refs,
+                    spec_status_by_hash.get(finding.finding_hash),
                 )
                 for finding in findings
             ],
             coverage=_latest_coverage(session, run_id, is_multi_asset=bool(asset_refs)),
+            spec_summary=(
+                _run_spec_summary(findings, spec_status_by_hash) if has_session_spec else None
+            ),
         )
 
 
@@ -225,11 +280,36 @@ def _merge_coverage_payloads(payloads: list[dict]) -> dict:
     }
 
 
+def _run_spec_summary(
+    findings: list[Finding], spec_status_by_hash: dict[str, FindingSpecStatus]
+) -> SpecSummary:
+    """The design §5.4/§6.4 run-scoped summary — bucket-count the verdicts
+    already stored for THIS run's own endpoint findings.
+
+    Mirrors ``recon.spec.service._run_scoped_summary``'s run-narrowing (storage
+    is session-scoped, but the summary a caller sees is run-scoped), but reuses
+    the ``findings``/``spec_status_by_hash`` this query already loaded rather
+    than a second round-trip. A finding with no row in ``spec_status_by_hash``
+    (not yet classified, e.g. it postdates the last attach/reclassify) is
+    simply excluded from the count — the same "no verdict yet" gap
+    ``spec_status`` itself leaves as ``None`` on that finding.
+    """
+    classifications = (
+        Classification(row.status, row.reason, row.matched_operation)
+        for finding in findings
+        if finding.type == FindingType.ENDPOINT.value
+        for row in [spec_status_by_hash.get(finding.finding_hash)]
+        if row is not None
+    )
+    return summarize(classifications)
+
+
 def _finding_view(
     finding: Finding,
     triage_row: FindingTriage | None = None,
     run_input_ref: str | None = None,
     asset_refs: dict[str, _AssetRef] | None = None,
+    spec_status_row: FindingSpecStatus | None = None,
 ) -> FindingView:
     # REQ-S2: a secret's raw evidence is never served; the value comes only from the
     # audited reveal endpoint. Endpoint/param evidence (a code snippet) is kept.
@@ -280,6 +360,7 @@ def _finding_view(
         occurrences=occurrences,
         triage=_triage_view(triage_row),
         revealable=revealable,
+        spec_status=_spec_status_view(spec_status_row),
     )
 
 
@@ -289,6 +370,14 @@ def _triage_view(row: FindingTriage | None) -> TriageView | None:
     return TriageView(
         status=row.status, note=row.note, actor=row.actor,
         updated_at=row.updated_at.isoformat(),
+    )
+
+
+def _spec_status_view(row: FindingSpecStatus | None) -> SpecStatusView | None:
+    if row is None:
+        return None
+    return SpecStatusView(
+        status=row.status, reason=row.reason, matched_operation=row.matched_operation
     )
 
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ApiError, getFindings, createSession, startRun, getAssets } from "./apiClient";
+import { ApiError, getFindings, createSession, startRun, getAssets, attachSpec } from "./apiClient";
 
 beforeEach(() => vi.restoreAllMocks());
 
@@ -56,6 +56,17 @@ describe("apiClient", () => {
     await getAssets("t", "run-1");
     const [path, init] = f.mock.calls[0];
     expect(path).toBe("/runs/run-1/assets");
+    expect((init.headers as Record<string, string>)["X-Tenant-Id"]).toBe("t");
+  });
+
+  it("POSTs the raw body (not JSON-wrapped) to /runs/{id}/spec for attachSpec", async () => {
+    const f = mockFetch(200, { documented: 1, shadow: 0, unresolved: 0, suffix_verify: 0, base_url_incompleteness_ratio: 0 });
+    vi.stubGlobal("fetch", f);
+    await attachSpec("t", "run-1", "openapi: 3.0.0");
+    const [path, init] = f.mock.calls[0];
+    expect(path).toBe("/runs/run-1/spec");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe("openapi: 3.0.0");
     expect((init.headers as Record<string, string>)["X-Tenant-Id"]).toBe("t");
   });
 });

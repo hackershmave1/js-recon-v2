@@ -16,9 +16,12 @@ from recon.db.base import tenant_session
 from recon.db.models import Job, Run
 from recon.discover import queries as discover_queries
 from recon.domain import AssetStatus, JobState, QueueName, RunStage, RunState
+from recon.observability import get_logger
 from recon.queue import streams
 from recon.runs import assets as run_assets, service, state_machine as sm
 from recon.runs.service import RunView
+
+log = get_logger("recon.runs.coordinator")
 
 # Which queue carries each stage's work (REQ-Q1). Ingest/analyze/correlate all
 # run on the CPU-bound analyze pool.
@@ -131,6 +134,22 @@ def advance(redis: Redis, *, tenant_id: str, run_id: str, completed: RunStage) -
             to_state=to_state,
             extra_values={"completeness": completeness},
         )
+
+        # Fresh finalize only: a duplicate/concurrent delivery raises out of
+        # `transition` above and lands in the `except` below, so a re-delivered
+        # "stage finished" message never reaches this point and can't re-run
+        # classification. Imported lazily (not at module load) to avoid a
+        # recon.spec <-> recon.runs import cycle. Best-effort: a continuous
+        # rescan (REQ-D5 gate N3) should keep new findings classified against
+        # an already-attached spec without a manual re-POST, but classification
+        # must never fail or roll back a run's finalize, so any error here is
+        # logged and swallowed rather than raised.
+        from recon.spec import service as spec_service
+
+        try:
+            spec_service.reclassify_run(tenant_id, run_id)
+        except Exception:  # noqa: BLE001 - best-effort, must never fail finalize
+            log.exception("runs.reclassify_failed", run_id=run_id, tenant_id=tenant_id)
     except (service.TransitionConflict, sm.InvalidTransition):
         # Already finalized by a concurrent/duplicate delivery — idempotent.
         pass

@@ -1,4 +1,4 @@
-import type { AssetsManifest, FindingsResponse, RunRef, RunStatus, SessionView, Triage } from "./types";
+import type { AssetsManifest, FindingsResponse, RunRef, RunStatus, SessionView, SpecSummary, Triage } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -74,4 +74,11 @@ export function revealSecret(
     `/runs/${encodeURIComponent(runId)}/findings/${encodeURIComponent(hash)}/reveal`,
     json("POST", body), tenantId,
   );
+}
+
+// Raw body, not JSON-wrapped: the spec router reads the request body verbatim
+// (JSON or YAML text, whatever the caller uploaded/pasted) regardless of
+// Content-Type, mirroring uploadRun's non-JSON POST shape.
+export function attachSpec(tenantId: string, runId: string, body: string | File): Promise<SpecSummary> {
+  return request(`/runs/${encodeURIComponent(runId)}/spec`, { method: "POST", body }, tenantId);
 }
