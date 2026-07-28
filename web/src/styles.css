@@ -14,3 +14,13 @@ input, textarea, select { background:#010409; color:var(--fg); border:1px solid 
 .chip-ok, .chip-done { color:var(--ok); border-color:var(--ok); }
 .chip-failed { color:var(--danger); border-color:var(--danger); }
 .chip-partial { color:var(--warn); border-color:var(--warn); }
+/* Task 12 (shadow-API UI): same pill language, one modifier per spec_status
+   verdict (design §6.4) -- documented mirrors chip-ok/chip-done's green,
+   shadow mirrors chip-failed's red (an undocumented call is the one worth
+   attention), unresolved mirrors chip-partial's amber (ambiguous, not a clean
+   verdict either way), unclassified mirrors chip-pending's muted grey (no
+   spec attached yet, nothing to compare against). */
+.chip-documented { color:var(--ok); border-color:var(--ok); }
+.chip-shadow { color:var(--danger); border-color:var(--danger); }
+.chip-unresolved { color:var(--warn); border-color:var(--warn); }
+.chip-unclassified { color:var(--muted); border-color:var(--muted); }

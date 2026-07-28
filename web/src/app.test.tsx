@@ -15,8 +15,8 @@ vi.mock("./features/progress/RunProgress", () => ({
   RunProgress: ({ onFindings }: { runId: string; onFindings: (f: FindingsResponse) => void }) => {
     useEffect(() => {
       onFindings({
-        run_id: "r1", count: 1, coverage: null,
-        findings: [{ finding_hash: "h1", type: "endpoint", value: "/api/x", path: null, severity: "info", attributes: {}, first_stage: "analyze", revealable: false, triage: null, occurrences: [] }],
+        run_id: "r1", count: 1, coverage: null, spec: null,
+        findings: [{ finding_hash: "h1", type: "endpoint", value: "/api/x", path: null, severity: "info", attributes: {}, first_stage: "analyze", revealable: false, triage: null, spec_status: null, occurrences: [] }],
       });
     }, [onFindings]);
     return <div>PROGRESS</div>;

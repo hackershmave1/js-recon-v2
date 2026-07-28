@@ -11,7 +11,7 @@ beforeEach(() => { vi.restoreAllMocks(); localStorage.setItem("recon.tenantId", 
 describe("RunProgress", () => {
   it("renders streamed events and fetches findings on open", async () => {
     vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "analyzing", stage: "analyze", done: 1, total: 2, pct: 50, eta_seconds: null, heartbeat_at: null, stalled: false });
-    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, findings: [] });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
     vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
       h.onOpen?.();
       h.onEvent({ id: "1", event: "run.progress", data: '{"stage":"analyze"}' });
@@ -32,7 +32,7 @@ describe("RunProgress", () => {
 
   it("shows a DONE badge for a fully completed run", async () => {
     vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "done", stage: null, done: 2, total: 2, pct: 100, eta_seconds: null, heartbeat_at: null, stalled: false });
-    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, findings: [] });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
     vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => { h.onOpen?.(); });
     render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
     const badge = await screen.findByText("DONE");
@@ -41,7 +41,7 @@ describe("RunProgress", () => {
 
   it("shows a distinct PARTIAL badge (Slice Y) when the run finishes incompletely", async () => {
     vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "partial", stage: null, done: 1, total: 2, pct: 50, eta_seconds: null, heartbeat_at: null, stalled: false });
-    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, findings: [] });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
     vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => { h.onOpen?.(); });
     render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
     const badge = await screen.findByText("PARTIAL");

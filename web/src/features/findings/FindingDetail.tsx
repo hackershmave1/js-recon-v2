@@ -4,11 +4,16 @@ import { RevealButton } from "./RevealButton";
 
 export function FindingDetail({ finding, runId }: { finding: Finding; runId: string }) {
   const isSecret = finding.type === "secret";
+  // null -> never classified (no spec attached to the session, or this
+  // finding isn't an endpoint) -- rendered as its own "unclassified" verdict,
+  // distinct from the three real classify_operation outcomes.
+  const specStatus = finding.spec_status?.status ?? "unclassified";
   return (
     <div className="card">
       <div>
         <strong className={finding.severity === "high" ? "sev-high" : ""}>{finding.type}</strong>{" "}
-        <span className="muted">{finding.path ?? finding.value ?? ""}</span>
+        <span className="muted">{finding.path ?? finding.value ?? ""}</span>{" "}
+        <span className={`chip chip-${specStatus}`}>{specStatus}</span>
       </div>
       <ul>
         {finding.occurrences.map((o, i) => (
