@@ -230,3 +230,44 @@ def test_collect_base_env_rest_param_poisons_name():
         "const loc = axios.create({ baseURL: '/a' }); function f(...loc) {}"
     )
     assert "loc" not in env.instances
+
+
+# --- base-URL joining at the sink (Task 2) ------------------------------------
+# `collect_base_env`'s output wired into `extract()`: instance calls, bare
+# axios+defaults, and `${CONST}` template prefixes should all produce full
+# paths; an unknown-base instance is attributed (relative), never dropped;
+# `.open` on any receiver still routes to XHR, not an axios join.
+
+def _urls(src: str):
+    return [(e.method, e.url) for e in extract(src).endpoints]
+
+
+def test_axios_create_instance_call_joins_base():
+    assert ("POST", "/location/address/search") in _urls(
+        "const loc = axios.create({ baseURL: '/location' }); loc.post('/address/search', b);")
+
+
+def test_axios_defaults_base_joins_bare_call():
+    assert ("GET", "https://h/api/pets") in _urls(
+        "axios.defaults.baseURL = 'https://h/api'; axios.get('/pets');")
+
+
+def test_const_prefix_template_folds():
+    assert ("GET", "/v3/pets") in _urls("const API = '/v3'; fetch(`${API}/pets`);")
+
+
+def test_unknown_base_instance_attributed_relative_not_dropped():
+    # recognized instance, base unknown -> endpoint present with the relative path
+    assert ("GET", "/x") in _urls(
+        "const c = w.c; const a = axios.create({ baseURL: c }); a.get('/x');")
+
+
+def test_absolute_url_ignores_base():
+    assert ("GET", "https://other/z") in _urls(
+        "const loc = axios.create({ baseURL: '/location' }); loc.get('https://other/z');")
+
+
+def test_open_on_instance_still_routes_to_xhr():
+    # `.open(METHOD, url)` on any receiver keeps the XHR shape, not axios-join
+    assert ("GET", "/raw") in _urls(
+        "const loc = axios.create({ baseURL: '/location' }); loc.open('GET', '/raw');")

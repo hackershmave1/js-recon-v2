@@ -8,6 +8,9 @@ method, URL, and statically-determinable params.
 Honesty over guessing (REQ-C2): a sink we detect but whose URL is not statically
 resolvable (a bare variable, a runtime concatenation) is NOT invented — it is
 counted in ``Extraction.unattributed`` so coverage can be reported truthfully.
+An axios instance (``axios.create(...)``) is always attributed once recognized,
+even when its base isn't statically known — the path is kept relative rather
+than guessed, but the call still lands in ``endpoints``, never a silent drop.
 Downstream, each :class:`RawEndpoint` is normalized (recon.findings.normalize)
 and written through the outbox (recon.findings.store).
 
@@ -65,10 +68,11 @@ def extract(source: str | bytes) -> Extraction:
     """Extract network endpoints from JavaScript source."""
     data = source.encode("utf-8") if isinstance(source, str) else source
     tree = _PARSER.parse(data)
+    env = collect_base_env(tree.root_node, data)
     result = Extraction()
     for node in _walk(tree.root_node):
         if node.type == "call_expression":
-            _handle_call(node, result)
+            _handle_call(node, result, env)
         elif node.type == "new_expression":
             _handle_new(node, result)
     return result
@@ -136,12 +140,12 @@ def _object_pairs(node: Node | None) -> dict[str, Node]:
 # --- base-environment collection (scope-safe pre-pass; Task 1) ---------------
 #
 # A pure, read-only pass that records only statically-certain, unshadowed
-# base-URL bindings (spec REQ §3.1/§3.3 gate B1) so a later pass (Task 2) can
-# resolve `instance.get(...)` calls back to a full URL. Honesty over guessing,
+# base-URL bindings (spec REQ §3.1/§3.3 gate B1) so a later pass (Task 2)
+# resolves `instance.get(...)` calls back to a full URL. Honesty over guessing,
 # same principle as REQ-C2 above: a name that is ambiguous anywhere in the
 # file — redeclared, shadowed by a parameter, or reassigned — is EXCLUDED
-# rather than resolved to a possibly-wrong base. Not yet wired into
-# `extract()`; sink handlers are untouched until Task 2.
+# rather than resolved to a possibly-wrong base. Wired into `extract()` and
+# the sink handlers below by "URL resolution at the sink (Task 2)".
 
 @dataclass(frozen=True)
 class BaseEnv:
@@ -318,18 +322,87 @@ def _endpoint(kind: str, method: str, url: str, params: list[RawParam], call: No
     )
 
 
+# --- URL resolution at the sink (Task 2) --------------------------------------
+#
+# Wires `BaseEnv` (above) into the sink handlers below: an axios instance
+# call, a bare axios/defaults call, and a leading `${CONST}` template prefix
+# all resolve to a full path here. Honesty is preserved throughout — an
+# instance with an unknown base (`env.instances[name] is None`) joins against
+# `""` (path stays relative, still attributed), never guessed; a name that
+# isn't a recognized instance/constant falls through to the pre-Task-2
+# verbatim/unattributed behavior, unchanged.
+
+def _join_base(base: str, path: str) -> str:
+    """Prepend `base` to `path`, unless `path` is already absolute (own scheme/host)."""
+    if not base:
+        return path
+    if "://" in path or path.startswith("//"):
+        return path  # absolute path wins
+    return base.rstrip("/") + "/" + path.lstrip("/")
+
+
+def _fold_const_prefix(node: Node, env: BaseEnv) -> str | None:
+    """Fold a LEADING ``${NAME}`` template substitution to its literal value.
+
+    Grammar (verified via `_PARSER`): a `template_string`'s backtick tokens are
+    unnamed, so ``named_children`` is just its fragments/substitutions in
+    order; a `template_substitution`'s `${`/`}` tokens are likewise unnamed,
+    leaving only the wrapped expression as its named child.
+
+    Only the leading interpolation folds — a substitution elsewhere in the
+    template (`` `prefix${API}/x` ``, or the trailing ``${id}`` in
+    `` `${API}/pets/${id}` ``) is left verbatim, same as before, since only
+    the first segment is a statically-certain base-style prefix (spec
+    §3.1/§3.2). Returns ``None`` (caller falls back to `_string_value`'s
+    normal verbatim result) unless `node` is a `template_string` that
+    *starts* with a `${NAME}` substitution and `NAME` is a known constant.
+    """
+    if node.type != "template_string":
+        return None
+    named = node.named_children
+    if not named or named[0].type != "template_substitution":
+        return None
+    substitution = named[0].named_children
+    if len(substitution) != 1 or substitution[0].type != "identifier":
+        return None
+    prefix = env.const_prefixes.get(_text(substitution[0]))
+    if prefix is None:
+        return None
+    text = _text(node)
+    body = text[1:-1] if text.startswith("`") and text.endswith("`") else text
+    leading = _text(named[0])  # e.g. "${API}"
+    return prefix + body[len(leading):]
+
+
+def _resolve_url(node: Node | None, env: BaseEnv, base: str) -> str | None:
+    """Resolve a sink's URL-argument node to a base-joined, prefix-folded string.
+
+    ``None`` means "not statically resolvable" (REQ-C2 honesty) — identical to
+    what `_string_value` alone would say; folding/joining only ever turns a
+    resolvable relative path into a fuller one, never turns an unresolvable
+    node into a guessed one.
+    """
+    if node is None:
+        return None
+    folded = _fold_const_prefix(node, env)
+    url = folded if folded is not None else _string_value(node)
+    if url is None:
+        return None
+    return _join_base(base, url)
+
+
 # --- sink handlers -----------------------------------------------------------
 
-def _handle_call(call: Node, result: Extraction) -> None:
+def _handle_call(call: Node, result: Extraction, env: BaseEnv) -> None:
     fn = call.child_by_field_name("function")
     if fn is None:
         return
     if fn.type == "identifier":
         name = _text(fn)
         if name == "fetch":
-            _fetch(call, result)
+            _fetch(call, result, env)
         elif name == "axios":
-            _axios_call(call, result)
+            _axios_call(call, result, env, base=env.default_base or "")
         return
     # Member access, dotted (axios.get) or computed (axios["get"]) — the latter is
     # common in property-mangled bundles and must not be silently dropped (C2).
@@ -343,23 +416,26 @@ def _handle_call(call: Node, result: Extraction) -> None:
             return
     else:
         return
-    _dispatch_member(call, obj, prop, result)
+    _dispatch_member(call, obj, prop, result, env)
 
 
-def _dispatch_member(call: Node, obj: str, prop: str, result: Extraction) -> None:
+def _dispatch_member(call: Node, obj: str, prop: str, result: Extraction, env: BaseEnv) -> None:
     if prop == "fetch" and obj in _GLOBAL_OBJECTS:
-        _fetch(call, result)
-    elif prop == "open":
+        _fetch(call, result, env)
+    elif prop == "open":  # ANY receiver's `.open(method, url)` is XHR, checked before instances
         _xhr_open(call, result)
     elif obj == "axios":
-        _axios_member(call, prop, result)
+        _axios_member(call, prop, result, env, base=env.default_base or "")
     elif obj in _JQUERY:
         _jquery(call, prop, result)
+    elif obj in env.instances:
+        base = env.instances[obj]  # may be None (recognized instance, unknown base)
+        _axios_member(call, prop, result, env, base=base or "")
 
 
-def _fetch(call: Node, result: Extraction) -> None:
+def _fetch(call: Node, result: Extraction, env: BaseEnv, base: str = "") -> None:
     args = _args(call)
-    url = _string_value(args[0]) if args else None
+    url = _resolve_url(args[0], env, base) if args else None
     if url is None:
         result.unattributed += 1
         return
@@ -386,13 +462,13 @@ def _xhr_open(call: Node, result: Extraction) -> None:
     result.endpoints.append(_endpoint("xhr", method, url, _query_params(url), call))
 
 
-def _axios_call(call: Node, result: Extraction) -> None:
+def _axios_call(call: Node, result: Extraction, env: BaseEnv, base: str = "") -> None:
     # axios(config) or axios(url, config)
     args = _args(call)
     if args and args[0].type == "object":
-        _axios_from_config(args[0], call, result)
+        _axios_from_config(args[0], call, result, env, base=base)
     elif args:
-        url = _string_value(args[0])
+        url = _resolve_url(args[0], env, base)
         if url is None:
             result.unattributed += 1
             return
@@ -402,14 +478,14 @@ def _axios_call(call: Node, result: Extraction) -> None:
         result.endpoints.append(_endpoint("axios", method, url, _query_params(url), call))
 
 
-def _axios_member(call: Node, prop: str, result: Extraction) -> None:
+def _axios_member(call: Node, prop: str, result: Extraction, env: BaseEnv, base: str = "") -> None:
     args = _args(call)
     if prop == "request" and args and args[0].type == "object":
-        _axios_from_config(args[0], call, result)
+        _axios_from_config(args[0], call, result, env, base=base)
         return
     if prop.upper() not in HTTP_METHODS:
         return
-    url = _string_value(args[0]) if args else None
+    url = _resolve_url(args[0], env, base) if args else None
     if url is None:
         result.unattributed += 1
         return
@@ -426,9 +502,11 @@ def _axios_member(call: Node, prop: str, result: Extraction) -> None:
     result.endpoints.append(_endpoint("axios", prop, url, params, call))
 
 
-def _axios_from_config(config: Node, call: Node, result: Extraction) -> None:
+def _axios_from_config(
+    config: Node, call: Node, result: Extraction, env: BaseEnv, base: str = ""
+) -> None:
     pairs = _object_pairs(config)
-    url = _string_value(pairs.get("url"))
+    url = _resolve_url(pairs.get("url"), env, base)
     if url is None:
         result.unattributed += 1
         return
