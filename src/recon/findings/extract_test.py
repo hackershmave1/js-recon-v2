@@ -298,3 +298,25 @@ def test_const_prefix_fold_generalizes_to_axios_get():  # generalization coverag
     # `_join_base`) reused by `_axios_member`, not just `_fetch` — guards both
     # the Important fix above and Task 2's 4-handler extension together.
     assert ("GET", "/v3/pets") in _urls("const API='/v3'; axios.get(`${API}/pets`);")
+
+
+# --- fix round 2: `_fold_const_prefix` must concatenate, not base-join --------
+# Round 1 fixed the trailing-slash double-up by delegating to `_join_base`, but
+# `_join_base` ALWAYS inserts a separating `/` for a non-absolute remainder —
+# correct for joining a *base URL* to a *path*, wrong for folding a template
+# literal, where JS just concatenates strings: `'/v' + '2/pets'` is `/v2/pets`,
+# not `/v/2/pets`. `_join_base` remains correct and untouched for its actual
+# base/instance-join callers; only `_fold_const_prefix`'s use of it was wrong.
+
+def test_const_prefix_folds_as_plain_concatenation():  # RED against round-1 code
+    # JS evaluates `` `${API}2/pets` `` with API='/v' as `'/v' + '2/pets'`
+    # = "/v2/pets". Round-1 code routes through `_join_base`, which inserts a
+    # slash the remainder never had, yielding the wrong endpoint "/v/2/pets".
+    assert ("GET", "/v2/pets") in _urls("const API = '/v'; fetch(`${API}2/pets`);")
+
+
+def test_const_prefix_substitution_only_stays_verbatim():  # RED against round-1 code
+    # No trailing text after the substitution -> the fold must reproduce the
+    # constant verbatim ("/v3"), not append a slash ("/v3/") that `_join_base`
+    # would insert for an empty remainder.
+    assert ("GET", "/v3") in _urls("const API = '/v3'; fetch(`${API}`);")

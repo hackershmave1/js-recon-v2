@@ -387,12 +387,23 @@ def _fold_const_prefix(node: Node, env: BaseEnv) -> str | None:
     text = _text(node)
     body = text[1:-1] if text.startswith("`") and text.endswith("`") else text
     leading = _text(named[0])  # e.g. "${API}"
-    # Fix round 1 (review Important): reuse `_join_base`'s de-dupe instead of a
-    # naive `prefix + remainder` concatenation — `const_prefixes` stores the
-    # literal verbatim, so a prefix with a trailing slash (`'/v3/'`) would
-    # otherwise double up against a remainder that also starts with one
-    # (`/v3//pets`).
-    return _join_base(prefix, body[len(leading):])
+    # Fix round 2: this is template-literal folding, not base/path joining —
+    # JS evaluates `` `${API}2/pets` `` as plain string concatenation
+    # (`'/v' + '2/pets'` = `/v2/pets`), never inserting a slash. Round 1
+    # delegated to `_join_base` for its de-dupe behavior, but `_join_base`
+    # ALWAYS inserts a separating `/` before a non-absolute remainder — right
+    # for its real callers (joining a base URL to a path), wrong here, where
+    # it fabricated a slash the source never had (`/v` + `2/pets` wrongly
+    # became `/v/2/pets`) and appended one to a bare substitution with no
+    # trailing text (`/v3` + `` wrongly became `/v3/`). The only case that
+    # still needs de-duping is the genuinely ambiguous boundary where the
+    # remainder itself starts with `/` (a prefix stored with its own trailing
+    # slash, e.g. `const API = '/v3/'`, joined against `${API}/pets`) — handle
+    # that one case directly instead of routing through `_join_base`.
+    remainder = body[len(leading):]
+    if remainder.startswith("/"):
+        return prefix.rstrip("/") + remainder  # de-dupe only the ambiguous boundary
+    return prefix + remainder  # pure template concatenation, no inserted slash
 
 
 def _resolve_url(node: Node | None, env: BaseEnv, base: str) -> str | None:
