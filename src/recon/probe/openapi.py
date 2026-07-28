@@ -75,3 +75,79 @@ def _canonicalize_path(path: str) -> tuple[str, list[dict]]:
         else:
             out_segments.append(segment)
     return "/".join(out_segments), params
+
+
+from recon.probe.reconstruct import ReconstructedRequest
+
+_RESPONSES = {
+    "default": {"description": "Not observed — static analysis does not capture responses."}
+}
+
+
+def _query_param(param) -> dict:
+    obj = {
+        "name": param.name,
+        "in": "query",
+        "required": False,
+        "schema": {"type": "string"},
+        "description": "Name observed; type inferred.",
+    }
+    if param.example is not None:
+        obj["example"] = param.example
+    return obj
+
+
+def _request_body(request: ReconstructedRequest) -> dict | None:
+    # Only assert a media type we actually observed (fetch/axios -> json). jQuery/xhr
+    # bodies leave content_type None; those are surfaced via x-recon-body-params instead.
+    if not request.body_params or request.content_type is None:
+        return None
+    properties = {
+        name: {"type": "string", "description": "Name observed; type inferred."}
+        for name in request.body_params
+    }
+    return {
+        "required": False,
+        "content": {
+            request.content_type: {
+                "schema": {
+                    "type": "object",
+                    "description": "Property names observed statically; types inferred; not exhaustive.",
+                    "properties": properties,
+                }
+            }
+        },
+    }
+
+
+def _body_confidence(request: ReconstructedRequest) -> str:
+    if not request.body_params:
+        return "absent"
+    return "inferred" if request.content_type else "names-only"
+
+
+def _operation_object(request: ReconstructedRequest, path_params: list[dict]) -> dict:
+    parameters = list(path_params) + [_query_param(p) for p in request.query_params]
+    operation: dict = {
+        "x-recon-confidence": {
+            "path": "certain",
+            "methods": "observed-only",
+            "param-names": "synthesized" if path_params else "observed",
+            "param-types": "inferred",
+            "body": _body_confidence(request),
+        },
+        "responses": dict(_RESPONSES),
+    }
+    if parameters:
+        operation["parameters"] = parameters
+    body = _request_body(request)
+    if body is not None:
+        operation["requestBody"] = body
+    elif request.body_params:  # names known, content-type not observed
+        operation["x-recon-body-params"] = list(request.body_params)
+        operation["description"] = (
+            "Request body observed with property names: "
+            + ", ".join(request.body_params)
+            + "; content-type not observed, so no request-body schema is asserted."
+        )
+    return operation

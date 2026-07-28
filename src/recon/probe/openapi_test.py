@@ -39,3 +39,52 @@ def test_plain_path_has_no_params():
     path, params = _canonicalize_path("/location/address/search")
     assert path == "/location/address/search"
     assert params == []
+
+
+from recon.probe.openapi import _operation_object
+from recon.probe.reconstruct import QueryParam, ReconstructedRequest
+
+
+def _req(**kw):
+    base = dict(
+        operation="GET /x", method="GET", path="/x", hosts=(),
+        query_params=(), body_params=(), content_type=None,
+        example_url=None, probeable=True, endpoint_hashes=(),
+    )
+    base.update(kw)
+    return ReconstructedRequest(**base)
+
+
+def test_query_params_omit_null_example():
+    req = _req(query_params=(QueryParam("page", None), QueryParam("q", "hello")))
+    op = _operation_object(req, [])
+    params = {p["name"]: p for p in op["parameters"]}
+    assert params["page"]["in"] == "query" and params["page"]["required"] is False
+    assert "example" not in params["page"]
+    assert params["q"]["example"] == "hello"
+
+
+def test_body_with_content_type_is_typed_request_body():
+    req = _req(method="POST", operation="POST /x", body_params=("street", "city"),
+               content_type="application/json")
+    op = _operation_object(req, [])
+    schema = op["requestBody"]["content"]["application/json"]["schema"]
+    assert schema["type"] == "object"
+    assert set(schema["properties"]) == {"street", "city"}
+    assert "x-recon-body-params" not in op
+    assert op["x-recon-confidence"]["body"] == "inferred"
+
+
+def test_body_without_content_type_is_extension_not_json():
+    req = _req(method="POST", operation="POST /x", body_params=("a", "b"), content_type=None)
+    op = _operation_object(req, [])
+    assert "requestBody" not in op
+    assert op["x-recon-body-params"] == ["a", "b"]
+    assert "content-type not observed" in op["description"]
+    assert op["x-recon-confidence"]["body"] == "names-only"
+
+
+def test_default_response_always_present():
+    op = _operation_object(_req(), [])
+    assert set(op["responses"]) == {"default"}
+    assert "not capture responses" in op["responses"]["default"]["description"]
