@@ -157,7 +157,12 @@ def _declared_names(root: Node) -> set[str]:
     (redeclared in a nested scope, shadowed by a parameter, or reassigned) is
     ambiguous and must not resolve. That's the whole point of the param-
     shadowing test: `items.forEach((loc) => ...)` re-binds `loc`, poisoning
-    any outer `loc` even though the two are in different scopes.
+    any outer `loc` even though the two are in different scopes. The same
+    holds when the shadow arrives via destructuring/default/rest instead of
+    a bare name (`({ loc }) => ...`, `function f(loc = 1)`,
+    `function f(...loc)`, `const { loc } = require(...)`) — `mark()` below
+    recurses into those patterns so none of them can smuggle a shadow past
+    this pass (review finding, fix round 1).
 
     NOTE: this file parses plain JavaScript (`tree_sitter_javascript`), not
     TypeScript — a bare parameter is a plain `identifier` child of
@@ -171,11 +176,35 @@ def _declared_names(root: Node) -> set[str]:
     instead of identity.
     """
     seen: dict[str, int] = {}
+    # Grammar-verified via `_PARSER`: object-pattern shorthand (`{ loc }`)
+    # binds through a `shorthand_property_identifier_pattern` leaf, not
+    # `identifier` — it doubles as both the key and the bound name.
+    binding_leaf_types = ("identifier", "shorthand_property_identifier_pattern")
 
     def mark(candidate: Node | None) -> None:
-        if candidate is not None and candidate.type == "identifier":
+        """Mark every binding name `candidate` introduces.
+
+        A plain `identifier` (or an object-pattern shorthand leaf) is marked
+        directly. Anything else is a destructuring/default/rest pattern:
+        recurse into it and mark every binding leaf found inside. An
+        object-pattern renaming key (`{ a: loc }`'s `a`) and a default
+        value's expression (`x = value`'s `value`) are *references*, not
+        bindings, so those subtrees are deliberately not walked — only
+        `pair_pattern`'s `value` field and `assignment_pattern` /
+        `object_assignment_pattern`'s `left` field are.
+        """
+        if candidate is None:
+            return
+        if candidate.type in binding_leaf_types:
             name = _text(candidate)
             seen[name] = seen.get(name, 0) + 1
+        elif candidate.type == "pair_pattern":  # `{ key: value }` -- only `value` binds
+            mark(candidate.child_by_field_name("value"))
+        elif candidate.type in ("assignment_pattern", "object_assignment_pattern"):
+            mark(candidate.child_by_field_name("left"))  # `x = default`; `default` is a read
+        elif candidate.type in ("object_pattern", "array_pattern", "rest_pattern"):
+            for child in candidate.named_children:
+                mark(child)
 
     for node in _walk(root):
         if node.type in ("variable_declarator", "function_declaration"):
@@ -184,9 +213,8 @@ def _declared_names(root: Node) -> set[str]:
             mark(node.child_by_field_name("parameter"))
         elif node.type == "arrow_function":
             mark(node.child_by_field_name("parameter"))  # bare single param: `x => ...`
-        elif node.type == "identifier" and node.parent is not None \
-                and node.parent.type == "formal_parameters":
-            mark(node)  # parenthesized param(s): `(x) => ...` / `function f(x) {}`
+        elif node.parent is not None and node.parent.type == "formal_parameters":
+            mark(node)  # any param shape: plain/destructured/default/rest
         elif node.type == "assignment_expression":
             mark(node.child_by_field_name("left"))  # plain reassignment: `loc = other`
     return {name for name, count in seen.items() if count > 1}

@@ -187,3 +187,46 @@ def test_collect_base_env_function_declaration_poisons_name():
     # loc(){}` must poison an earlier `const loc = axios.create(...)` too.
     env = _env("const loc = axios.create({ baseURL: '/a' }); function loc() {}")
     assert "loc" not in env.instances
+
+
+# --- fix round 1: shadows introduced via destructuring/default/rest params ---
+# Review finding: `_declared_names` only recognized a plain `identifier` as a
+# binding, so a name shadowed via destructuring, a default, or a rest param
+# escaped poisoning — `collect_base_env` would then guess a base for it,
+# violating the "never guess a base" invariant.
+
+def test_collect_base_env_destructured_param_poisons_name():
+    # `{ loc }` is a destructured parameter — a shorthand `loc` inside it
+    # shadows the outer `loc` axios instance just as a bare param would.
+    env = _env(
+        "const loc = axios.create({ baseURL: '/a' }); "
+        "function useApi({ loc }) { return loc.get('/b'); }"
+    )
+    assert "loc" not in env.instances
+
+
+def test_collect_base_env_destructured_declaration_poisons_name():
+    # `const { loc } = require(...)` redeclares `loc` via destructuring —
+    # must poison exactly like `const loc = require(...)` would.
+    env = _env(
+        "const loc = axios.create({ baseURL: '/a' }); "
+        "const { loc } = require('./x');"
+    )
+    assert "loc" not in env.instances
+
+
+def test_collect_base_env_default_param_poisons_name():
+    # `function f(loc = 1)` binds `loc` via an `assignment_pattern` — the
+    # default value itself (`1`) must not be mistaken for a binding.
+    env = _env(
+        "const loc = axios.create({ baseURL: '/a' }); function f(loc = 1) {}"
+    )
+    assert "loc" not in env.instances
+
+
+def test_collect_base_env_rest_param_poisons_name():
+    # `function f(...loc)` binds `loc` via a `rest_pattern`.
+    env = _env(
+        "const loc = axios.create({ baseURL: '/a' }); function f(...loc) {}"
+    )
+    assert "loc" not in env.instances
