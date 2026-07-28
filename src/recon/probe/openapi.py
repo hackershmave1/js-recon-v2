@@ -155,6 +155,10 @@ def _operation_object(request: ReconstructedRequest, path_params: list[dict]) ->
 
 from urllib.parse import urlsplit
 
+import json
+
+import yaml
+
 from openapi_spec_validator import validate
 
 _INFO_DESCRIPTION = (
@@ -282,3 +286,12 @@ def build_openapi(requests: list[ReconstructedRequest], *, run_id: str) -> dict:
 
     validate(document)  # honesty guarantee — never return an invalid document
     return document
+
+
+def dump_openapi(document: dict, fmt: str) -> tuple[bytes, str]:
+    if fmt == "json":
+        return json.dumps(document, indent=2).encode("utf-8"), "application/json"
+    if fmt == "yaml":
+        text = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+        return text.encode("utf-8"), "application/yaml"
+    raise ValueError(f"unsupported format: {fmt!r}")

@@ -189,3 +189,31 @@ def test_servers_deduped_per_host():
         {"url": "https://api.example.com:8443",
          "description": "Host observed; scheme/port inferred where not seen in a concrete URL."}
     ]
+
+
+import json
+
+import pytest
+import yaml
+
+from recon.probe.openapi import dump_openapi
+
+
+def test_dump_json_is_default_and_round_trips():
+    doc = {"openapi": "3.0.3", "info": {"title": "t", "version": "0.0.0"}, "paths": {}}
+    body, media_type = dump_openapi(doc, "json")
+    assert media_type == "application/json"
+    assert json.loads(body) == doc
+
+
+def test_dump_yaml_round_trips_and_preserves_key_order():
+    doc = {"openapi": "3.0.3", "info": {"title": "t", "version": "0.0.0"}, "paths": {}}
+    body, media_type = dump_openapi(doc, "yaml")
+    assert media_type == "application/yaml"
+    assert yaml.safe_load(body) == doc
+    assert body.decode("utf-8").splitlines()[0].startswith("openapi:")  # sort_keys=False
+
+
+def test_dump_rejects_unknown_format():
+    with pytest.raises(ValueError):
+        dump_openapi({}, "xml")
