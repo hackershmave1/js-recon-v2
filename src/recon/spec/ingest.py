@@ -181,12 +181,11 @@ def _check_bounds(parsed: object) -> None:
 
     NOTE: this walks the structure the parser already built, so it bounds
     everything downstream (validation, ref-scan, our own extraction) but not
-    the parse call's own peak memory. Known accepted gap (see task report):
-    CPython's C-accelerated `json` scanner recurses natively for nested
-    containers and has no built-in depth limit, so a pathologically deep-but-
-    narrow JSON body could exhaust the C stack during `json.loads` itself,
-    before this check ever runs. The pure-Python YAML path does not share
-    this risk (a `RecursionError` there is a catchable Python exception)."""
+    the parse call's own peak memory. Recursion-depth exhaustion during parsing
+    (`json.loads` or the YAML composer) is caught in `_parse` and re-raised as
+    `SpecError`, so both JSON and YAML paths uniformly honor the over-bounds→
+    SpecError contract; `_check_bounds` provides the explicit, lower node-count/
+    depth bound on top of that."""
     node_count = 0
 
     def walk(node: object, depth: int) -> None:

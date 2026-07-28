@@ -1,8 +1,9 @@
 """Colocated tests for the hardened spec-ingest guards (design §4, §4.1 —
-gates B4/B5). The brief's 5 required cases, plus one bonus proving the
-cyclic-$ref concern named in §4.1 is actually handled. Pure unit tests — no
-infra, no network (that's the point: gate B4 forbids the module from ever
-making one).
+gates B4/B5). 8 unit tests covering: 2 baseline format/path resolution cases,
+3 hardening gates (invalid spec, external $ref, YAML anchors), 2 recursion-
+depth regression cases (JSON and YAML deep-nesting), and 1 bonus confirming
+cyclic in-document $ref is handled. Pure unit tests — no infra, no network
+(that's the point: gate B4 forbids the module from ever making one).
 
 NOTE: the brief's swagger2 fixture is corrected here to add the (mandatory)
 `info` object and a non-empty `responses` entry — openapi-spec-validator
