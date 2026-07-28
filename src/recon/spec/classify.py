@@ -167,6 +167,22 @@ def _is_proper_suffix(shorter: list[str], longer: list[str]) -> bool:
     return longer[len(longer) - len(shorter) :] == shorter
 
 
+# SAFETY INVARIANT (final-review Fix 2 — comment only, do not weaken
+# silently): "a dynamic-base relative client call is never a false shadow"
+# (e.g. `fetch('/search')` when the real endpoint is a spec's
+# `/location/address/search`) is NOT enforced by any single check here — it
+# is the joint effect of two things living in two different modules:
+#   (a) below, step 4 (suffix-verify) MUST keep running BEFORE both shadow
+#       branches (steps 5-6, design §5.3, gate B2), so a bare-tail match
+#       against a *different* documented op is caught before either shadow
+#       verdict can fire; and
+#   (b) `recon.findings.extract._join_base` must keep only ever PREPENDING a
+#       resolved base to a path, never rewriting/truncating the path itself,
+#       so a resolved-base client path still ends in the same literal suffix
+#       the spec's path does.
+# A future change to either half — reordering the steps below, or changing
+# `_join_base` to do anything other than prepend — must re-verify the other
+# side, or false shadows (write-up #3) can reappear.
 def classify_operation(operation: str, documented: Sequence[DocumentedOp]) -> Classification:
     """Bucket `operation` against `documented` per design §5.3 -- FIRST MATCH
     WINS, and suffix-verify (step 4) runs before either shadow verdict (gate

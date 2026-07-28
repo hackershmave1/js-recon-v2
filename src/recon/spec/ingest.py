@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import yaml
 from openapi_spec_validator import validate
@@ -246,7 +247,22 @@ def _resolve_server_url(server: object) -> str:
     """Resolve a 3.x `servers[]` entry's `{variable}` templates via each
     variable's `default` BEFORE prefixing (gate B5) — taking the template
     literally would flag every documented call under it as an undocumented
-    shadow endpoint."""
+    shadow endpoint.
+
+    Returns the PATH component ONLY — never `scheme://host` — via
+    `urlsplit(...).path` after variable resolution. Design §4 says "prepend
+    the base PATH from the spec's servers", and the client side of the diff
+    (`recon.findings.normalize.endpoint_operation`) builds its operation from
+    `urlsplit(url).path`, i.e. host-free by construction. A real OpenAPI 3.x
+    `servers[].url` is almost always host-ful (`https://api.example.com/v1`);
+    keeping the host here would make `_documented_ops` below produce a path
+    like `https://api.example.com/v1/pets`, whose wildcarded segments
+    (`compare_key`, in `recon.spec.classify`) can NEVER equal the client
+    side's host-free segments — permanently emptying the `documented` bucket
+    for any spec that uses a real server URL (final-review Fix 1). A
+    host-only URL (`https://host`, no path) or an absent/empty `servers`
+    resolves to `""`, same as before; a relative URL (`/api/{v}`) is
+    unaffected since it was already path-only."""
     if not isinstance(server, dict):
         return ""
     url = server.get("url") or ""
@@ -255,7 +271,7 @@ def _resolve_server_url(server: object) -> str:
         default = variable.get("default") if isinstance(variable, dict) else None
         if default is not None:
             url = url.replace("{" + name + "}", str(default))
-    return url
+    return urlsplit(url).path
 
 
 def _documented_ops(parsed: dict, server_bases: list[str]) -> tuple[DocumentedOp, ...]:

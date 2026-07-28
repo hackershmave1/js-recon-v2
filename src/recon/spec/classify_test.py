@@ -24,7 +24,7 @@ from recon.spec.classify import (
     summarize,
 )
 from recon.spec import classify
-from recon.spec.ingest import DocumentedOp
+from recon.spec.ingest import DocumentedOp, ingest_spec
 from recon.findings import normalize, extract
 
 
@@ -283,3 +283,37 @@ def test_summary_ratio_computes_expected_fraction():
     s = summarize(cs)
     assert (s.shadow, s.suffix_verify) == (3, 1)
     assert s.base_url_incompleteness_ratio == 0.25
+
+
+# --- ingest -> classify seam (final-review Fix 1 regression) ------------------
+#
+# `ingest_spec` and `classify_operation` are exercised together, not just each
+# in isolation: a REAL OpenAPI 3.x spec almost always gives `servers[].url` as
+# a full `scheme://host/basePath` string (design §4 says "prepend the base
+# PATH from the spec's servers"), while the client side
+# (`normalize.endpoint_operation`, via `urlsplit(url).path`) is host-free by
+# construction. If `ingest`'s server-base resolution ever regresses to keeping
+# the host, every documented op's compare-key would carry a
+# `https:`/`api.example.com`-shaped segment the client side can never produce,
+# and the `documented` bucket would silently empty for any spec that uses a
+# real, host-ful server URL -- exactly the bug this test pins.
+
+def test_hostful_server_url_documented_op_matches_client_operation():
+    ingested = ingest_spec(
+        b"openapi: 3.0.0\n"
+        b"info: {title: t, version: '1'}\n"
+        b"servers: [{url: 'https://api.example.com/v1'}]\n"
+        b"paths: {/pets: {get: {responses: {'200': {description: ok}}}}}\n"
+    )
+    # The documented op's path must be PATH-ONLY (`/v1/pets`), never
+    # host-prefixed (`https://api.example.com/v1/pets`).
+    assert ("GET", "/v1/pets") in [(o.method, o.path) for o in ingested.documented]
+
+    # What `normalize.endpoint_operation` produces for a real client call to
+    # https://api.example.com/v1/pets -- path-only, no host, per its own
+    # `urlsplit(url).path` implementation.
+    client_operation = normalize.endpoint_operation("GET", "https://api.example.com/v1/pets")
+    assert client_operation == "GET /v1/pets"
+
+    result = classify_operation(client_operation, ingested.documented)
+    assert result.status == "documented"
