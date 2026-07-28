@@ -14,6 +14,7 @@ from recon.domain import RunState
 from recon.findings import queries as findings_queries
 from recon.runs import coordinator, queries
 from recon.sessions import service as sessions_service
+from recon.spec import service as spec_service
 from recon.worker import main as worker
 
 pytestmark = pytest.mark.integration
@@ -21,6 +22,14 @@ pytestmark = pytest.mark.integration
 _JS = 'fetch("/api/health"); axios.post("/api/login", {u:1});'
 
 _TERMINAL = {s.value for s in (RunState.DONE, RunState.PARTIAL, RunState.FAILED, RunState.CANCELLED)}
+
+# A minimal, schema-valid OpenAPI 3.0 doc documenting exactly `_JS`'s "GET
+# /api/health" call and nothing else, so its sibling "POST /api/login" finding
+# comes back `shadow` -- mirrors `spec/service_test.py`'s OPENAPI_WITH_LOCATION.
+_OPENAPI_WITH_HEALTH = b"""openapi: 3.0.0
+info: {title: t, version: '1'}
+paths: {/api/health: {get: {responses: {'200': {description: ok}}}}}
+"""
 
 
 def _drive(redis, tenant: str, run_id: str, *, max_passes: int = 30) -> None:
@@ -105,3 +114,58 @@ def test_list_findings_is_tenant_isolated(redis, authorized_session):
     # A different tenant cannot even see the run (RLS) -> None, not an empty list.
     intruder = sessions_service.create_tenant("intruder")
     assert findings_queries.list_findings(intruder, view.id) is None
+
+
+def test_list_findings_spec_status_and_summary_none_without_session_spec(
+    redis, authorized_session
+):
+    # Design §6.4: no spec was ever attached to the run's session -> every
+    # finding is unclassified (spec_status is None, the API renders
+    # "unclassified") and the run-scoped summary itself is None -- NOT an
+    # all-zero SpecSummary, which would misrepresent "never attached" as
+    # "attached, all shadow/unresolved".
+    tenant, session_id = authorized_session
+    view = coordinator.start_run_with_input(
+        redis, tenant_id=tenant, session_id=session_id, js_source=_JS
+    )
+    _drive(redis, tenant, view.id)
+
+    result = findings_queries.list_findings(tenant, view.id)
+    assert result is not None
+    assert any(f.type == "endpoint" for f in result.findings)  # sanity: something to classify
+    assert all(f.spec_status is None for f in result.findings)
+    assert result.spec_summary is None
+
+
+def test_list_findings_includes_spec_status_and_run_scoped_summary(redis, authorized_session):
+    # Design §6.4: once a spec is attached to the run's session and its endpoint
+    # findings classified, each finding carries the verdict and the run gets a
+    # bucket-count summary scoped to its OWN endpoint findings.
+    tenant, session_id = authorized_session
+    view = coordinator.start_run_with_input(
+        redis, tenant_id=tenant, session_id=session_id, js_source=_JS
+    )
+    _drive(redis, tenant, view.id)
+
+    classify_summary = spec_service.attach_and_classify(tenant, view.id, _OPENAPI_WITH_HEALTH)
+    assert classify_summary is not None
+
+    result = findings_queries.list_findings(tenant, view.id)
+    assert result is not None
+
+    health = next(f for f in result.findings if f.value == "GET /api/health")
+    assert health.spec_status is not None
+    assert health.spec_status.status == "documented"
+    assert health.spec_status.matched_operation == "GET /api/health"
+
+    login = next(f for f in result.findings if f.value == "POST /api/login")
+    assert login.spec_status is not None
+    assert login.spec_status.status == "shadow"
+    assert login.spec_status.matched_operation is None
+
+    assert result.spec_summary is not None
+    assert result.spec_summary.documented == 1
+    assert result.spec_summary.shadow == 1
+    assert result.spec_summary.unresolved == 0
+    assert result.spec_summary.suffix_verify == 0
+    assert result.spec_summary.base_url_incompleteness_ratio == 0.0

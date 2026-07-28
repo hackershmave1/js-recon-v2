@@ -29,6 +29,9 @@ def get_run_findings(
         # REQ-C2: coverage is reported honestly alongside the findings it qualifies;
         # null until the analyze stage has run. Completeness is NOT guaranteed.
         "coverage": _coverage_dict(result.coverage),
+        # Design §6.4: null until a spec is attached to the run's session at all —
+        # distinct from an attached spec whose buckets are all zero.
+        "spec": _spec_summary_dict(result.spec_summary),
         "findings": [
             {
                 "finding_hash": finding.finding_hash,
@@ -47,6 +50,17 @@ def get_run_findings(
                         "note": finding.triage.note,
                         "actor": finding.triage.actor,
                         "updated_at": finding.triage.updated_at,
+                    }
+                ),
+                # None -> the FE renders "unclassified" (never classified: no spec
+                # attached to the session, or this finding predates attach/reclassify).
+                "spec_status": (
+                    None
+                    if finding.spec_status is None
+                    else {
+                        "status": finding.spec_status.status,
+                        "reason": finding.spec_status.reason,
+                        "matched_operation": finding.spec_status.matched_operation,
                     }
                 ),
                 "occurrences": [
@@ -86,4 +100,16 @@ def _coverage_dict(coverage: queries.CoverageView | None) -> dict | None:
             {"path": f.path, "attributed": f.attributed, "unattributed": f.unattributed}
             for f in coverage.files
         ],
+    }
+
+
+def _spec_summary_dict(summary: queries.SpecSummary | None) -> dict | None:
+    if summary is None:
+        return None
+    return {
+        "documented": summary.documented,
+        "shadow": summary.shadow,
+        "unresolved": summary.unresolved,
+        "suffix_verify": summary.suffix_verify,
+        "base_url_incompleteness_ratio": summary.base_url_incompleteness_ratio,
     }
