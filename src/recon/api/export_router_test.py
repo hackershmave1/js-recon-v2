@@ -64,6 +64,7 @@ def test_export_openapi_yaml(client, authorized_session):
 
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/yaml")
+    assert resp.headers["content-disposition"] == f'attachment; filename="openapi-{run_id}.yaml"'
     validate(yaml.safe_load(resp.content))
 
 
