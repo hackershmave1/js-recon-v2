@@ -248,7 +248,8 @@ def _servers(requests: list[ReconstructedRequest]) -> list[dict]:
         if request.example_url:
             split = urlsplit(request.example_url)
             if split.scheme and split.hostname:
-                origin = f"{split.scheme}://{split.hostname}"
+                host = f"[{split.hostname}]" if ":" in split.hostname else split.hostname
+                origin = f"{split.scheme}://{host}"
                 if split.port:
                     origin += f":{split.port}"
                 by_host[split.hostname] = origin

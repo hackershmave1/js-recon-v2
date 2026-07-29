@@ -244,3 +244,20 @@ def test_yaml_has_no_anchors_for_multi_operation_doc():
 def test_dump_rejects_unknown_format():
     with pytest.raises(ValueError):
         dump_openapi({}, "xml")
+
+
+def test_servers_strips_userinfo_and_brackets_ipv6():
+    creds = _req(operation="GET /a", path="/a", hosts=(),
+                 example_url="https://user:pass@evil.example.com:9000/a")
+    doc = build_openapi([creds], run_id="00000000-0000-0000-0000-000000000000")
+    assert doc["servers"] == [
+        {"url": "https://evil.example.com:9000",
+         "description": "Host observed; scheme/port inferred where not seen in a concrete URL."}
+    ]  # no user:pass@ leaked
+
+    v6 = _req(operation="GET /b", path="/b", hosts=(), example_url="http://[::1]:8080/b")
+    doc6 = build_openapi([v6], run_id="00000000-0000-0000-0000-000000000000")
+    assert doc6["servers"] == [
+        {"url": "http://[::1]:8080",
+         "description": "Host observed; scheme/port inferred where not seen in a concrete URL."}
+    ]  # IPv6 brackets preserved
