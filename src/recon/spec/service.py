@@ -38,6 +38,7 @@ from recon.db import models
 from recon.db.base import tenant_session
 from recon.domain import FindingType
 from recon.events.log import record_event
+from recon.findings import base_url, normalize, queries
 from recon.spec.classify import Classification, SpecSummary, classify_operation, summarize
 from recon.spec.ingest import DocumentedOp, IngestedSpec, ingest_spec
 
@@ -189,9 +190,35 @@ def _classify_session(
         )
     ).all()
 
+    # REQ-C2 gate B1: a stored Finding.value is always host-less (the host lives
+    # only on its occurrences), so without this set an originally-ABSOLUTE op
+    # would get re-based by a broad prefix rule and flipped to a false shadow.
+    # host_bearing_hashes restricts the overlay below to genuinely relative
+    # endpoints, mirroring reconstruct.py's `bool(request.hosts)` candidate gate.
+    rules = queries.base_url_rules_in_session(session, session_id)
+    host_bearing_hashes = {
+        finding_hash
+        for (finding_hash,) in session.execute(
+            select(models.Finding.finding_hash)
+            .distinct()
+            .join(models.FindingOccurrence, models.FindingOccurrence.finding_id == models.Finding.id)
+            .join(models.Run, models.Run.id == models.Finding.run_id)
+            .where(
+                models.Run.session_id == session_id,
+                models.Finding.type == FindingType.ENDPOINT.value,
+                models.FindingOccurrence.host.isnot(None),
+            )
+        ).all()
+    }
+
     verdicts: dict[str, Classification] = {}
     for row_tenant_id, finding_hash, value in rows:
-        classification = classify_operation(value, documented)
+        operation = normalize.operation_of_endpoint_value(value)
+        method, _sep, path = operation.partition(" ")
+        resolved = base_url.resolve_operation(
+            method, path or "/", (finding_hash,), finding_hash in host_bearing_hashes, rules
+        )
+        classification = classify_operation(f"{method} {resolved.path}", documented)
         verdicts[finding_hash] = classification
 
         insert_stmt = pg_insert(models.FindingSpecStatus).values(
