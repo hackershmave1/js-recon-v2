@@ -304,6 +304,7 @@ this slice rather than refactored into a shared session.
 - **Static request-header/auth extraction (the paired C2 thread, `docs/slice2-deferred-debt.md:69`).** Still
   the manual tester's to add; unchanged by this slice.
 - **Per-run / per-source coarse base.** Rejected as too blunt for multi-service bundles.
+- **Reconcile the reconstruct (op-group, run-scoped) vs classify (per-hash, session-scoped) base-gate granularity** so the export and the shadow verdict never diverge on a multi-file mixed relative/absolute operation — e.g. make classify skip re-basing any operation observed absolute anywhere ("observed absolute beats the prefix guess"). Safe-direction today (documented in §12), so deferred.
 
 ## 10. Open items / risks
 
@@ -352,3 +353,5 @@ Non-blocking, folded: host-bearing base must synthesize `example_url` + reuse IP
 §5/§7); a new order-independent `ReconstructedRequest` merge + `build_requests` permutation test — not the
 openapi dict merge (N3, §5/§8); FE surfaces `matched_operation` beside the unchanged value (N4, §8);
 two-transaction set-base accepted as idempotent (N5, §6). Migration-path fix also covers gate note N1.
+
+**Post-build note (final whole-branch review, 2026-07-30, Opus — accepted, option C):** the two application points gate candidacy at different granularity — `reconstruct.build_requests` on the op-group's host union (`bool(request.hosts)`, run-scoped), `_classify_session` per finding-hash (session-scoped). When the SAME operation value is called relative in one file and absolute in another, reconstruct treats the whole op-group as host-bearing (not re-based → export keeps the observed path) while classify re-bases only the host-less hash (→ documented), so the export and that hash's finding-view verdict differ. This is **safe-direction** — no false shadow and no false-documented beyond the already-accepted prefix foot-gun (a directly-observed absolute path is simply left as observed). Pinned by tests on both sides (`reconstruct_base_url_test.py::test_mixed_relative_absolute_group_is_not_rebased`, `base_url_classify_test.py::test_mixed_relative_absolute_diverges_safely`). Full reconciliation is the fast-follow in §9.

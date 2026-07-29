@@ -84,3 +84,20 @@ def test_no_rules_is_unchanged_behavior():
     findings = [_view("h1", "endpoint", "GET /a/b", {"method": "GET", "kind": "fetch"}, [_occ()])]
     (req,) = build_requests(findings)  # default rules=()
     assert req.path == "/a/b" and req.operation == "GET /a/b"
+
+
+def test_mixed_relative_absolute_group_is_not_rebased():
+    # Same op value from two files: one relative (no host), one absolute (host).
+    # The op-group's host union is non-empty, so reconstruct's op-group gate treats
+    # the whole operation as host-bearing and does NOT re-base it (export keeps the
+    # observed path). Pins the safe divergence from the classify side (which re-bases
+    # the host-less hash per-hash). Final-review option C.
+    findings = [
+        _view("hA", "endpoint", "GET /address/search", {"method": "GET", "kind": "fetch"}, [_occ()]),
+        _view("hB", "endpoint", "GET /address/search", {"method": "GET", "kind": "fetch"},
+              [_occ(host="acme.io", raw_url="https://acme.io/address/search")]),
+    ]
+    (req,) = build_requests(findings, [_prefix("/address", "/location")])
+    assert req.path == "/address/search"          # not re-based (group has an absolute member)
+    assert req.hosts == ("acme.io",)
+    assert set(req.endpoint_hashes) == {"hA", "hB"}

@@ -81,3 +81,40 @@ def test_absolute_op_stays_documented_under_broad_prefix(authorized_session):
         ))
     service.reclassify_run(tenant, run_id)
     assert _status(tenant, session_id, "GET /location/address/search") == "documented"
+
+
+def test_mixed_relative_absolute_diverges_safely(authorized_session):
+    # Same op value in two files: a.js relative (host-less hash) + b.js absolute (host-bearing hash).
+    # After a /address -> /location rule + reclassify: the host-less hash is re-based -> documented;
+    # the host-bearing hash is NOT re-based -> stays unresolved. Pins the safe divergence (final-review C).
+    tenant, session_id = authorized_session
+    with tenant_session(tenant) as session:
+        run = models.Run(tenant_id=tenant, session_id=session_id, state="done")
+        session.add(run)
+        session.flush()
+        run_id = str(run.id)
+        for src, host, raw in [("a.js", None, "/address/search"),
+                               ("b.js", "acme.io", "https://acme.io/address/search")]:
+            store.record_finding(
+                session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.ENDPOINT,
+                value="GET /address/search", path=src,
+                occurrence=store.Occurrence(host=host, raw_url=raw),
+                attributes={"method": "GET", "kind": "fetch"}, first_stage="analyzing",
+            )
+    service.attach_and_classify(tenant, run_id, _SPEC)
+    with tenant_session(tenant) as session:
+        session.add(models.SessionBaseUrl(
+            tenant_id=tenant, session_id=session_id, kind="prefix",
+            path_prefix="/address", base_url="/location",
+        ))
+    service.reclassify_run(tenant, run_id)
+    from recon.findings.normalize import finding_hash
+    h_rel = finding_hash("endpoint", "GET /address/search", "a.js")
+    h_abs = finding_hash("endpoint", "GET /address/search", "b.js")
+    with tenant_session(tenant) as session:
+        status = {
+            r.finding_hash: r.status
+            for r in session.query(models.FindingSpecStatus).filter_by(session_id=session_id).all()
+        }
+    assert status[h_rel] == "documented"     # host-less hash re-based per the rule
+    assert status[h_abs] == "unresolved"     # host-bearing hash NOT re-based (safe divergence)
