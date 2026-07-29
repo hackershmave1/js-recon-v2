@@ -39,9 +39,16 @@ export function BaseUrlPanel({ runId }: { runId: string }) {
   }
 
   async function remove(id: string) {
-    if (!tenantId) return;
-    await deleteBaseUrlRule(tenantId, runId, id);
-    setRules((prev) => prev.filter((r) => r.id !== id));
+    if (!tenantId || busy) return;
+    setBusy(true); setError(null);
+    try {
+      await deleteBaseUrlRule(tenantId, runId, id);
+      setRules((prev) => prev.filter((r) => r.id !== id));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to delete rule");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -66,8 +73,8 @@ export function BaseUrlPanel({ runId }: { runId: string }) {
       <ul>
         {rules.map((r) => (
           <li key={r.id}>
-            <code>{r.path_prefix}</code> → <code>{r.base_url}</code>
-            <button type="button" onClick={() => remove(r.id)} aria-label={`Delete rule ${r.path_prefix}`}>Delete</button>
+            <code>{r.path_prefix ?? "(selection)"}</code> → <code>{r.base_url}</code>
+            <button type="button" onClick={() => remove(r.id)} aria-label={`Delete rule ${r.path_prefix ?? r.base_url}`}>Delete</button>
           </li>
         ))}
       </ul>
