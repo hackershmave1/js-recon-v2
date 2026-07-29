@@ -54,5 +54,18 @@ export interface AssetsManifest {
   status: "pending" | "ok" | "capped" | "timeout";
   assets: { url: string; source: string; fetch_status: AssetStatus; analyze_status: AssetStatus }[];
 }
+// Cross-file base-URL rule (design REQ-C2): an analyst-supplied prefix or
+// finding-set mapping that prepends a base to relative paths missing one,
+// before resolve_operation compares against the attached spec. `rule.actor`
+// is who added it (audit trail), not who it applies to.
+export interface BaseUrlRule {
+  id: string;
+  kind: "prefix" | "selection";
+  path_prefix: string | null;
+  finding_hashes: string[];
+  base_url: string;
+  actor: string | null;
+}
+export interface BaseUrlRuleResult { rule: BaseUrlRule; summary: SpecSummary | null; }
 export const TERMINAL_STATES = new Set(["done", "partial", "failed", "cancelled"]);
 export const TRIAGE_STATUSES = ["open", "confirmed", "dismissed"] as const;

@@ -1,4 +1,6 @@
-import type { AssetsManifest, FindingsResponse, RunRef, RunStatus, SessionView, SpecSummary, Triage } from "./types";
+import type {
+  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, FindingsResponse, RunRef, RunStatus, SessionView, SpecSummary, Triage,
+} from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -81,4 +83,22 @@ export function revealSecret(
 // Content-Type, mirroring uploadRun's non-JSON POST shape.
 export function attachSpec(tenantId: string, runId: string, body: string | File): Promise<SpecSummary> {
   return request(`/runs/${encodeURIComponent(runId)}/spec`, { method: "POST", body }, tenantId);
+}
+
+export function listBaseUrlRules(tenantId: string, runId: string): Promise<BaseUrlRule[]> {
+  return request(`/runs/${encodeURIComponent(runId)}/base-url`, {}, tenantId);
+}
+
+export function addBaseUrlRule(
+  tenantId: string, runId: string,
+  body: { kind: "prefix" | "selection"; base_url: string; path_prefix?: string; finding_hashes?: string[] },
+): Promise<BaseUrlRuleResult> {
+  return request(`/runs/${encodeURIComponent(runId)}/base-url`, json("POST", body), tenantId);
+}
+
+export function deleteBaseUrlRule(tenantId: string, runId: string, ruleId: string): Promise<void> {
+  return request(
+    `/runs/${encodeURIComponent(runId)}/base-url/${encodeURIComponent(ruleId)}`,
+    { method: "DELETE" }, tenantId,
+  );
 }
