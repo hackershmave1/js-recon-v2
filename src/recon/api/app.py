@@ -13,7 +13,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
-from recon.api import findings_router, probe_router, runs_router, sessions_router, spec_router
+from recon.api import (
+    export_router,
+    findings_router,
+    probe_router,
+    runs_router,
+    sessions_router,
+    spec_router,
+)
 from recon.api.deps import get_redis
 from recon.config import get_settings
 from recon.db.base import engine
@@ -31,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(findings_router.router)
     app.include_router(probe_router.router)
     app.include_router(spec_router.router)
+    app.include_router(export_router.router)
 
     @app.get("/healthz", tags=["ops"])
     def healthz() -> dict:
