@@ -88,3 +88,15 @@ def test_export_other_tenant_run_is_404(client, authorized_session):
     other_tenant = sessions_service.create_tenant("export-router-other")
     resp = client.get(f"/runs/{run_id}/export/openapi", headers=_headers(other_tenant))
     assert resp.status_code == 404
+
+
+def test_export_build_failure_is_500(client, authorized_session, monkeypatch):
+    tenant, session_id = authorized_session
+    run_id = _seed(tenant, session_id)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("forced build failure")
+
+    monkeypatch.setattr("recon.probe.openapi.build_openapi", _boom)
+    resp = client.get(f"/runs/{run_id}/export/openapi", headers=_headers(tenant))
+    assert resp.status_code == 500

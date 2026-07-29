@@ -10,7 +10,14 @@ returned, so a caller never receives an invalid spec.
 
 from __future__ import annotations
 
+import json
 import re
+from urllib.parse import urlsplit
+
+import yaml
+from openapi_spec_validator import validate
+
+from recon.probe.reconstruct import ReconstructedRequest
 
 # Path tokens ``normalize.py`` emits for value-templated segments, mapped to an
 # inferred OpenAPI schema. Every OTHER interpolation is handled generically.
@@ -28,6 +35,12 @@ _PARAM_DESCRIPTION = (
     "Name synthesized and type inferred from a templated path segment; "
     "the original parameter name is not recoverable from static analysis."
 )
+
+# Methods OpenAPI 3.x allows as path-item operation keys. A client call using any
+# other verb (PURGE, PROPFIND, SUBSCRIBE, ...) is real attack surface but is not a
+# valid OpenAPI operation, so — like WS/WSS — it is surfaced in a root extension
+# instead of written into `paths` (which would fail validation and 500 the export).
+_OPENAPI_METHODS = frozenset({"get", "put", "post", "delete", "options", "head", "patch", "trace"})
 
 
 def _unique(base: str, used: set[str]) -> str:
@@ -77,11 +90,7 @@ def _canonicalize_path(path: str) -> tuple[str, list[dict]]:
     return "/".join(out_segments), params
 
 
-from recon.probe.reconstruct import ReconstructedRequest
-
-_RESPONSES = {
-    "default": {"description": "Not observed — static analysis does not capture responses."}
-}
+_RESPONSE_DESCRIPTION = "Not observed — static analysis does not capture responses."
 
 
 def _query_param(param) -> dict:
@@ -136,7 +145,7 @@ def _operation_object(request: ReconstructedRequest, path_params: list[dict]) ->
             "param-types": "inferred",
             "body": _body_confidence(request),
         },
-        "responses": dict(_RESPONSES),
+        "responses": {"default": {"description": _RESPONSE_DESCRIPTION}},
     }
     if parameters:
         operation["parameters"] = parameters
@@ -152,14 +161,6 @@ def _operation_object(request: ReconstructedRequest, path_params: list[dict]) ->
         )
     return operation
 
-
-from urllib.parse import urlsplit
-
-import json
-
-import yaml
-
-from openapi_spec_validator import validate
 
 _INFO_DESCRIPTION = (
     "Statically reconstructed from JavaScript by the recon platform. Paths, HTTP "
@@ -246,8 +247,11 @@ def _servers(requests: list[ReconstructedRequest]) -> list[dict]:
             continue
         if request.example_url:
             split = urlsplit(request.example_url)
-            if split.scheme and split.netloc and split.hostname:
-                by_host[split.hostname] = f"{split.scheme}://{split.netloc}"
+            if split.scheme and split.hostname:
+                origin = f"{split.scheme}://{split.hostname}"
+                if split.port:
+                    origin += f":{split.port}"
+                by_host[split.hostname] = origin
         for host in request.hosts:
             by_host.setdefault(host, f"https://{host}")
     return [{"url": url, "description": _SERVER_DESCRIPTION} for url in sorted(by_host.values())]
@@ -256,13 +260,17 @@ def _servers(requests: list[ReconstructedRequest]) -> list[dict]:
 def build_openapi(requests: list[ReconstructedRequest], *, run_id: str) -> dict:
     paths: dict[str, dict] = {}
     websockets: list[str] = []
+    nonstandard: list[str] = []
     for request in requests:
         if not request.probeable:
             websockets.append(f"{request.method} {request.example_url or request.path}")
             continue
+        method = request.method.lower()
+        if method not in _OPENAPI_METHODS:
+            nonstandard.append(f"{request.method} {request.example_url or request.path}")
+            continue
         canon_path, path_params = _canonicalize_path(request.path)
         operation = _operation_object(request, path_params)
-        method = request.method.lower()
         path_item = paths.setdefault(canon_path, {})
         if method in path_item:
             path_item[method] = _merge_operations(path_item[method], operation)
@@ -283,15 +291,22 @@ def build_openapi(requests: list[ReconstructedRequest], *, run_id: str) -> dict:
         document["servers"] = servers
     if websockets:
         document["x-recon-websocket-endpoints"] = sorted(set(websockets))
+    if nonstandard:
+        document["x-recon-nonstandard-operations"] = sorted(set(nonstandard))
 
     validate(document)  # honesty guarantee — never return an invalid document
     return document
+
+
+class _NoAliasDumper(yaml.SafeDumper):
+    def ignore_aliases(self, data):  # never emit &anchor/*alias
+        return True
 
 
 def dump_openapi(document: dict, fmt: str) -> tuple[bytes, str]:
     if fmt == "json":
         return json.dumps(document, indent=2).encode("utf-8"), "application/json"
     if fmt == "yaml":
-        text = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+        text = yaml.dump(document, Dumper=_NoAliasDumper, sort_keys=False, allow_unicode=True)
         return text.encode("utf-8"), "application/yaml"
     raise ValueError(f"unsupported format: {fmt!r}")

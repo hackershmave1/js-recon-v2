@@ -119,6 +119,24 @@ def test_websocket_excluded_from_paths_and_surfaced():
     assert doc["x-recon-websocket-endpoints"] == ["WSS wss://api.example.com/live"]
 
 
+def test_nonstandard_method_excluded_from_paths_and_surfaced():
+    req = _req(operation="PURGE /cache/x", method="PURGE", path="/cache/x",
+               example_url="https://cdn.example.com/cache/x")
+    doc = build_openapi([req], run_id="00000000-0000-0000-0000-000000000000")
+    validate(doc)  # must NOT raise
+    assert doc["paths"] == {}
+    assert doc["x-recon-nonstandard-operations"] == ["PURGE https://cdn.example.com/cache/x"]
+
+
+def test_mixed_valid_and_nonstandard_still_exports_valid():
+    ok = _req(operation="GET /a", method="GET", path="/a")
+    bad = _req(operation="PROPFIND /dav", method="PROPFIND", path="/dav")
+    doc = build_openapi([ok, bad], run_id="00000000-0000-0000-0000-000000000000")
+    validate(doc)
+    assert "/a" in doc["paths"] and "/dav" not in doc["paths"]  # valid endpoint NOT lost
+    assert any("PROPFIND" in s for s in doc["x-recon-nonstandard-operations"])
+
+
 def test_canonicalization_collision_merges():
     a = _req(operation="GET /users/${id}", method="GET", path="/users/${id}",
              query_params=(QueryParam("a", None),))
@@ -212,6 +230,15 @@ def test_dump_yaml_round_trips_and_preserves_key_order():
     assert media_type == "application/yaml"
     assert yaml.safe_load(body) == doc
     assert body.decode("utf-8").splitlines()[0].startswith("openapi:")  # sort_keys=False
+
+
+def test_yaml_has_no_anchors_for_multi_operation_doc():
+    a = _req(operation="GET /a", method="GET", path="/a")
+    b = _req(operation="GET /b", method="GET", path="/b")
+    doc = build_openapi([a, b], run_id="00000000-0000-0000-0000-000000000000")
+    body, _ = dump_openapi(doc, "yaml")
+    assert b"&id" not in body and b"*id" not in body
+    assert yaml.safe_load(body) == doc  # still round-trips
 
 
 def test_dump_rejects_unknown_format():
