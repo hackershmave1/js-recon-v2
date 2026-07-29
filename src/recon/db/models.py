@@ -26,11 +26,19 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from recon.db.base import Base
-from recon.domain import AssetStatus, FindingType, JobState, QueueName, RunStage, RunState
+from recon.domain import (
+    AssetStatus,
+    BaseUrlRuleKind,
+    FindingType,
+    JobState,
+    QueueName,
+    RunStage,
+    RunState,
+)
 
 _UUID_PK = {
     "primary_key": True,
@@ -435,6 +443,41 @@ class FindingSpecStatus(Base):
     updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
 
+class SessionBaseUrl(Base):
+    """A manual base-URL rule for a session (REQ-C2). Read-time overlay only —
+    applied by recon.findings.base_url at reconstruct/classify time; findings are
+    never rewritten (identity non-churn). Session-scoped like session_spec."""
+
+    __tablename__ = "session_base_url"
+    __table_args__ = (
+        # Prefix rules upsert on their prefix; selection rows have NULL path_prefix
+        # and (NULLS DISTINCT) never collide here.
+        UniqueConstraint("session_id", "path_prefix", name="uq_base_url_session_prefix"),
+        CheckConstraint(_enum_check("kind", BaseUrlRuleKind), name="ck_base_url_kind"),
+        CheckConstraint(
+            "(kind = 'prefix' AND path_prefix IS NOT NULL AND finding_hashes IS NULL) "
+            "OR (kind = 'selection' AND finding_hashes IS NOT NULL AND path_prefix IS NULL)",
+            name="ck_base_url_match_field",
+        ),
+        Index("ix_base_url_session", "tenant_id", "session_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("session.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    path_prefix: Mapped[str | None] = mapped_column(Text)
+    finding_hashes: Mapped[list | None] = mapped_column(ARRAY(Text))
+    base_url: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+    updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
+
+
 # Tables carrying a tenant_id get FORCE RLS in the migration.
 TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "app_user",
@@ -459,3 +502,6 @@ ASSET_TABLES: tuple[str, ...] = ("run_asset",)
 
 # Shadow-API spec-diff addition, RLS-enabled by migration 0006.
 SPEC_TABLES: tuple[str, ...] = ("session_spec", "finding_spec_status")
+
+# REQ-C2 manual base-URL addition, RLS-enabled by migration 0007.
+BASE_URL_TABLES: tuple[str, ...] = ("session_base_url",)
