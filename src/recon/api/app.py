@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from recon.api import (
+    base_url_router,
     export_router,
     findings_router,
     probe_router,
@@ -39,6 +40,7 @@ def create_app() -> FastAPI:
     app.include_router(probe_router.router)
     app.include_router(spec_router.router)
     app.include_router(export_router.router)
+    app.include_router(base_url_router.router)
 
     @app.get("/healthz", tags=["ops"])
     def healthz() -> dict:

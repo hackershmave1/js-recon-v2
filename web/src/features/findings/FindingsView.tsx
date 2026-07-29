@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { FindingsResponse, Finding } from "../../api/types";
 import { FindingDetail } from "./FindingDetail";
 import { SpecUpload } from "./SpecUpload";
+import { BaseUrlPanel } from "./BaseUrlPanel";
 
 function groupByType(findings: Finding[]): Record<string, Finding[]> {
   const out: Record<string, Finding[]> = {};
@@ -21,6 +22,7 @@ export function FindingsView({ data, runId }: { data: FindingsResponse; runId: s
   return (
     <div>
       <SpecUpload runId={runId} initialSummary={data.spec} />
+      <BaseUrlPanel runId={runId} />
       <div className="card">
         <h3>Coverage</h3>
         {c ? (

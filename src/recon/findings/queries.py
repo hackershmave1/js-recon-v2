@@ -23,9 +23,11 @@ from recon.db.models import (
     Run,
     RunAsset,
     RunEvent,
+    SessionBaseUrl,
     SessionSpec,
 )
 from recon.domain import FindingType
+from recon.findings.base_url import BaseUrlRule
 from recon.spec.classify import Classification, SpecSummary, summarize
 
 
@@ -199,6 +201,34 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
                 _run_spec_summary(findings, spec_status_by_hash) if has_session_spec else None
             ),
         )
+
+
+def base_url_rules_in_session(session, session_id: str) -> list[BaseUrlRule]:
+    """Every manual base-URL rule for a session, as pure BaseUrlRule values.
+    Takes an OPEN tenant session so a caller (e.g. _classify_session) can load
+    rules inside its own transaction."""
+    rows = session.scalars(
+        select(SessionBaseUrl).where(SessionBaseUrl.session_id == session_id)
+    ).all()
+    return [
+        BaseUrlRule(
+            kind=row.kind,
+            base_url=row.base_url,
+            path_prefix=row.path_prefix,
+            finding_hashes=tuple(row.finding_hashes or ()),
+        )
+        for row in rows
+    ]
+
+
+def list_base_url_rules(tenant_id: str, run_id: str) -> list[BaseUrlRule]:
+    """The base-URL rules for a run's session, opening a tenant transaction.
+    Empty list if the run is invisible to the tenant (RLS) or does not exist."""
+    with tenant_session(tenant_id) as session:
+        run = session.get(Run, run_id)
+        if run is None:
+            return []
+        return base_url_rules_in_session(session, str(run.session_id))
 
 
 def _latest_coverage(session, run_id: str, *, is_multi_asset: bool) -> CoverageView | None:

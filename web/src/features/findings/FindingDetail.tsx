@@ -14,6 +14,12 @@ export function FindingDetail({ finding, runId }: { finding: Finding; runId: str
         <strong className={finding.severity === "high" ? "sev-high" : ""}>{finding.type}</strong>{" "}
         <span className="muted">{finding.path ?? finding.value ?? ""}</span>{" "}
         <span className={`chip chip-${specStatus}`}>{specStatus}</span>
+        {/* Resolved documented op (post base-URL-rule resolution, REQ-C2) next to
+            the finding's own unchanged raw value above -- expected non-churn:
+            the finding's `value`/`path` never rewrites, only the comparison does. */}
+        {finding.spec_status?.matched_operation && (
+          <span className="muted"> → {finding.spec_status.matched_operation}</span>
+        )}
       </div>
       <ul>
         {finding.occurrences.map((o, i) => (
