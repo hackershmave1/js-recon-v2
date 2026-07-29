@@ -20,15 +20,15 @@ def test_add_list_delete_prefix_rule(authorized_session):
     tenant, session_id = authorized_session
     run_id = _run(tenant, session_id)
 
-    rule = base_url_service.add_rule(
+    res = base_url_service.add_rule(
         tenant, run_id, kind="prefix", base_url="/location", path_prefix="/address",
     )
-    assert rule["kind"] == "prefix" and rule["base_url"] == "/location"
+    assert res["rule"]["kind"] == "prefix" and res["rule"]["base_url"] == "/location"
 
     rules = base_url_service.list_rules(tenant, run_id)
     assert len(rules) == 1 and rules[0]["path_prefix"] == "/address"
 
-    assert base_url_service.delete_rule(tenant, run_id, rule["id"]) is True
+    assert base_url_service.delete_rule(tenant, run_id, res["rule"]["id"]) is True
     assert base_url_service.list_rules(tenant, run_id) == []
 
 

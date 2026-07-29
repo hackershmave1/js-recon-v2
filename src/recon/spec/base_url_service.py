@@ -13,6 +13,7 @@ reflect rules live and reclassify is idempotent and re-runnable.
 from __future__ import annotations
 
 import uuid
+from dataclasses import asdict
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -44,6 +45,8 @@ def add_rule(
     finding_hashes: list[str] | None = None,
     actor: str | None = None,
 ) -> dict | None:
+    """Returns ``{"rule": <rule dict>, "summary": <asdict(SpecSummary) | None>}``,
+    or ``None`` if `run_id` is invisible to `tenant_id` (RLS)."""
     validate_base_url(base_url)  # InvalidBaseUrl -> router 422
     with tenant_session(tenant_id) as session:
         run = session.get(models.Run, run_id)
@@ -64,8 +67,8 @@ def add_rule(
             stmt = pg_insert(models.SessionBaseUrl).values(**values).returning(models.SessionBaseUrl)
         row = session.scalars(stmt).one()
         result = _as_dict(row)
-    reclassify_run(tenant_id, run_id)  # own transaction (gate N5)
-    return result
+    run_summary = reclassify_run(tenant_id, run_id)  # own transaction (gate N5)
+    return {"rule": result, "summary": asdict(run_summary) if run_summary else None}
 
 
 def list_rules(tenant_id: str, run_id: str) -> list[dict] | None:
