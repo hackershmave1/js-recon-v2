@@ -11,10 +11,10 @@ never invented; the serializer renders them as explicit ``<name>`` placeholders.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import parse_qsl, urlsplit
 
-from recon.findings import normalize, queries
+from recon.findings import base_url, normalize, queries
 
 # WebSocket "endpoints" are not HTTP requests, so curl/raw-HTTP do not apply.
 _WEBSOCKET_METHODS = frozenset({"WS", "WSS"})
@@ -50,12 +50,67 @@ def _method_and_path(operation: str) -> tuple[str, str]:
     return method, path or "/"
 
 
-def build_requests(findings: list[queries.FindingView]) -> list[ReconstructedRequest]:
+def _apply_rule(request: ReconstructedRequest, rules: list[base_url.BaseUrlRule]) -> ReconstructedRequest:
+    """Apply the base-URL overlay to one assembled request (post param-join, gate
+    B2). Candidate gate uses request.hosts (empty == host-less)."""
+    if not request.probeable:
+        return request
+    resolved = base_url.resolve_operation(
+        request.method, request.path, request.endpoint_hashes, bool(request.hosts), rules
+    )
+    if not resolved.changed:
+        return request
+    hosts = request.hosts
+    example_url = request.example_url
+    if resolved.host:
+        hosts = tuple(sorted(set(request.hosts) | {resolved.host}))
+        example_url = f"{resolved.scheme}://{resolved.host}{resolved.path}"
+    return replace(
+        request,
+        path=resolved.path,
+        operation=f"{request.method} {resolved.path}",
+        hosts=hosts,
+        example_url=example_url,
+    )
+
+
+def _merge(a: ReconstructedRequest, b: ReconstructedRequest) -> ReconstructedRequest:
+    """Order-independent merge of two requests that resolved onto the same
+    operation: union query/body params, hosts, endpoint_hashes; deterministic
+    example_url."""
+    by_name = {p.name: p for p in a.query_params}
+    for param in b.query_params:
+        by_name.setdefault(param.name, param)
+    query_params = tuple(by_name[name] for name in sorted(by_name))
+    body_params = tuple(sorted(set(a.body_params) | set(b.body_params)))
+    hosts = tuple(sorted(set(a.hosts) | set(b.hosts)))
+    endpoint_hashes = tuple(sorted(set(a.endpoint_hashes) | set(b.endpoint_hashes)))
+    example_url = min(filter(None, (a.example_url, b.example_url)), default=None)
+    return replace(
+        a,
+        hosts=hosts,
+        query_params=query_params,
+        body_params=body_params,
+        content_type=a.content_type or b.content_type,
+        example_url=example_url,
+        endpoint_hashes=endpoint_hashes,
+    )
+
+
+def build_requests(
+    findings: list[queries.FindingView],
+    rules: list[base_url.BaseUrlRule] = (),
+) -> list[ReconstructedRequest]:
     """Group endpoint + param findings into one request per operation.
 
     Output is deterministic regardless of input order: params are sorted by name,
     endpoint_hashes is the sorted tuple of every contributing endpoint finding's
     hash, and example_url is selected in sorted-by-finding_hash order.
+
+    ``rules`` (REQ-C2 manual base-URL overlay) is applied AFTER this grouping, so
+    the resolver sees requests with params already joined (gate B2). Empty
+    ``rules`` (the default) returns ``requests`` unchanged -- today's behavior is
+    preserved exactly.
     """
     endpoints: dict[str, list[queries.FindingView]] = {}
     params: dict[str, list[queries.FindingView]] = {}
@@ -124,7 +179,16 @@ def build_requests(findings: list[queries.FindingView]) -> list[ReconstructedReq
                 endpoint_hashes=tuple(sorted(f.finding_hash for f in endpoint_findings)),
             )
         )
-    return requests
+
+    if not rules:
+        return requests
+    merged: dict[str, ReconstructedRequest] = {}
+    for request in (_apply_rule(r, rules) for r in requests):
+        if request.operation in merged:
+            merged[request.operation] = _merge(merged[request.operation], request)
+        else:
+            merged[request.operation] = request
+    return [merged[operation] for operation in sorted(merged)]
 
 
 def reconstruct_run(tenant_id: str, run_id: str) -> list[ReconstructedRequest] | None:
@@ -133,4 +197,5 @@ def reconstruct_run(tenant_id: str, run_id: str) -> list[ReconstructedRequest] |
     view = queries.list_findings(tenant_id, run_id)
     if view is None:
         return None
-    return build_requests(view.findings)
+    rules = queries.list_base_url_rules(tenant_id, run_id)
+    return build_requests(view.findings, rules)
