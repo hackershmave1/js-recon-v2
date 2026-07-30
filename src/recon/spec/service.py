@@ -197,8 +197,12 @@ def _classify_session(
     # operation was observed absolute ANYWHERE (any file/hash), no hash of it is
     # re-based -- "observed absolute beats the prefix guess." This mirrors
     # reconstruct.py's op-group `bool(request.hosts)` gate (hosts unioned across the
-    # operation), so the shadow verdict and the exported/probed request can't diverge
-    # on a multi-file mixed relative/absolute operation.
+    # operation), so WITHIN A RUN the shadow verdict and the exported/probed request
+    # agree on a multi-file mixed relative/absolute op. (This host set is
+    # session-scoped while reconstruct's union is run-scoped, so across different runs
+    # of one session they can still differ — but only with classify MORE conservative,
+    # i.e. skipping a re-base reconstruct would apply: safe-direction, never a false
+    # shadow.)
     rules = queries.base_url_rules_in_session(session, session_id)
     host_bearing_operations = {
         normalize.operation_of_endpoint_value(value)

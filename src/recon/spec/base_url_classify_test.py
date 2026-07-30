@@ -132,3 +132,44 @@ def test_mixed_relative_absolute_op_not_rebased_matches_reconstruct(authorized_s
     operations = {r.operation for r in reconstruct_run(tenant, run_id)}
     assert "GET /address/search" in operations
     assert not any(op.startswith("GET /location") for op in operations)
+
+
+def test_selection_rule_on_relative_hash_overridden_when_op_seen_absolute(authorized_session):
+    # The subtlest B1 consequence: an explicit SELECTION rule targeting the relative
+    # hash is IGNORED when the SAME operation was observed absolute elsewhere — the
+    # per-operation host gate short-circuits before rule matching (base_url.py:103),
+    # exactly as reconstruct's bool(hosts) gate does. So "observed absolute beats the
+    # prefix guess" extends to selection rules too (parity, not just prefix rules).
+    tenant, session_id = authorized_session
+    with tenant_session(tenant) as session:
+        run = models.Run(tenant_id=tenant, session_id=session_id, state="done")
+        session.add(run)
+        session.flush()
+        run_id = str(run.id)
+        for src, host, raw in [("a.js", None, "/address/search"),
+                               ("b.js", "acme.io", "https://acme.io/address/search")]:
+            store.record_finding(
+                session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.ENDPOINT,
+                value="GET /address/search", path=src,
+                occurrence=store.Occurrence(host=host, raw_url=raw),
+                attributes={"method": "GET", "kind": "fetch"}, first_stage="analyzing",
+            )
+    service.attach_and_classify(tenant, run_id, _SPEC)
+
+    from recon.findings.normalize import finding_hash
+    h_rel = finding_hash("endpoint", "GET /address/search", "a.js")
+    with tenant_session(tenant) as session:
+        session.add(models.SessionBaseUrl(
+            tenant_id=tenant, session_id=session_id, kind="selection",
+            finding_hashes=[h_rel], base_url="/location",
+        ))
+    service.reclassify_run(tenant, run_id)
+    with tenant_session(tenant) as session:
+        status = {
+            r.finding_hash: r.status
+            for r in session.query(models.FindingSpecStatus).filter_by(session_id=session_id).all()
+        }
+    # Selection ignored (op seen absolute) -> not re-based -> unresolved, matching export.
+    assert status[h_rel] == "unresolved"
+    from recon.probe.reconstruct import reconstruct_run
+    assert not any(r.operation.startswith("GET /location") for r in reconstruct_run(tenant, run_id))

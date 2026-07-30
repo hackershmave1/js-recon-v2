@@ -90,8 +90,9 @@ def test_mixed_relative_absolute_group_is_not_rebased():
     # Same op value from two files: one relative (no host), one absolute (host).
     # The op-group's host union is non-empty, so reconstruct's op-group gate treats
     # the whole operation as host-bearing and does NOT re-base it (export keeps the
-    # observed path). Pins the safe divergence from the classify side (which re-bases
-    # the host-less hash per-hash). Final-review option C.
+    # observed path). Since B1 (REQ-C2 §9) classify uses the same op-group gate, so
+    # within a run both sides now agree here (see base_url_classify_test.py's mixed-op
+    # test); this pins reconstruct's half of that parity.
     findings = [
         _view("hA", "endpoint", "GET /address/search", {"method": "GET", "kind": "fetch"}, [_occ()]),
         _view("hB", "endpoint", "GET /address/search", {"method": "GET", "kind": "fetch"},
