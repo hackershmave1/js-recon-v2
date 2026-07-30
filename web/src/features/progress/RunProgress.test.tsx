@@ -57,4 +57,12 @@ describe("RunProgress", () => {
     render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} onState={onState} /></TenantProvider>);
     await waitFor(() => expect(onState).toHaveBeenCalledWith("done"));
   });
+
+  it("shows run controls (Pause) for an active run", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "analyzing", stage: "analyze", done: 1, total: 2, pct: 50, eta_seconds: null, heartbeat_at: null, stalled: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => { h.onOpen?.(); });
+    render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
+    expect(await screen.findByRole("button", { name: /pause/i })).toBeInTheDocument();
+  });
 });

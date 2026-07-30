@@ -3,6 +3,7 @@ import { useTenant } from "../../tenant/TenantContext";
 import { streamRunEvents, type SseEvent } from "../../api/sseClient";
 import { getFindings, getStatus, ApiError } from "../../api/apiClient";
 import { TERMINAL_STATES, type FindingsResponse } from "../../api/types";
+import { RunControls } from "./RunControls";
 
 export function RunProgress(
   { runId, onFindings, onState }: { runId: string; onFindings: (f: FindingsResponse) => void; onState?: (state: string) => void },
@@ -68,6 +69,7 @@ export function RunProgress(
         )}
         {stage ? ` · ${stage}` : ""}{pct != null ? ` · ${pct}%` : ""}
       </p>
+      {state !== "…" && <RunControls runId={runId} state={state} onStateChange={applyState} />}
       {error && <p className="sev-high">{error}</p>}
       <ul>{events.map((e, i) => <li key={i} className="muted">{e.event}: {e.data}</li>)}</ul>
     </div>
