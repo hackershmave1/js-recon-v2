@@ -53,6 +53,15 @@ describe("RunControls", () => {
     expect(screen.queryByRole("button", { name: /^pause$/i })).not.toBeInTheDocument();
   });
 
+  // An immediate QUEUED→PAUSED pause keeps pause_requested set through the PAUSED
+  // transition, so `paused` must win the gate over `pauseRequested` — a resumable
+  // run must offer Resume, never a dead-end disabled "Pausing…".
+  it("prefers Resume over the pending-pause label when a paused run still has pause_requested", () => {
+    ui("paused", { pauseRequested: true });
+    expect(screen.getByRole("button", { name: /resume/i })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /pausing/i })).not.toBeInTheDocument();
+  });
+
   it("confirms before cancelling and lifts the new state", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     const res = { run_id: "r", state: "cancelled", cancel_requested: true };

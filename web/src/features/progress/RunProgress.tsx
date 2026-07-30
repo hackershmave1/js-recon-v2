@@ -57,8 +57,12 @@ export function RunProgress(
         else if (e.event === "run.transition") {
           try {
             const to = (JSON.parse(e.data) as { to?: unknown }).to;
-            // Any transition resolves a pending pause (effected → paused, resumed,
-            // or finished); state precedence in RunControls handles the paused case.
+            // Clear the pending-pause hint on any transition. Most transitions
+            // resolve it (effected → paused, resumed, or finished). A stage-advance
+            // while a pause is still pending clears it momentarily, but the worker
+            // honors the pause on its next instruction and the following
+            // run.transition{to:paused} restores it (usually coalesced into one
+            // render). State precedence in RunControls keeps the paused case right.
             if (typeof to === "string") { applyState(to); setPauseRequested(false); }
           } catch { /* non-JSON payload */ }
         }
