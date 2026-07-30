@@ -11,13 +11,18 @@ beforeEach(() => { vi.restoreAllMocks(); localStorage.setItem("recon.tenantId", 
 function ui() { return render(<TenantProvider><ExportSpecButton runId="r" /></TenantProvider>); }
 
 describe("ExportSpecButton", () => {
-  it("downloads the spec via a blob anchor on click", async () => {
-    vi.spyOn(api, "exportOpenApi").mockResolvedValue(new Blob(["{}"], { type: "application/json" }));
+  it("downloads the spec via a blob anchor and revokes the object URL", async () => {
+    const blob = new Blob(["{}"], { type: "application/json" });
+    vi.spyOn(api, "exportOpenApi").mockResolvedValue(blob);
+    const createUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mock");
+    const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     ui();
     await userEvent.click(screen.getByRole("button", { name: /export spec/i }));
     expect(api.exportOpenApi).toHaveBeenCalledWith(TENANT, "r", "json");
+    expect(createUrl).toHaveBeenCalledWith(blob);
     expect(clickSpy).toHaveBeenCalled();
+    expect(revokeUrl).toHaveBeenCalledWith("blob:mock"); // released — no blob-URL leak
   });
 
   it("exports yaml when the format is switched", async () => {
