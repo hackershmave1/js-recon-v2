@@ -63,6 +63,12 @@ class StatusView:
     eta_seconds: int | None
     heartbeat_at: str | None
     stalled: bool
+    # Cooperative-control intent (REQ-A4): a pause/cancel can be *requested* while
+    # the run stays in an active state until the worker next checkpoints, so these
+    # are distinct from `state`. Exposed here (and folded into the ETag below) so the
+    # UI's control gating survives a page reload mid-pause.
+    pause_requested: bool
+    cancel_requested: bool
     etag: str
 
 
@@ -90,8 +96,12 @@ def get_status(tenant_id: str, run_id: str, *, now: dt.datetime | None = None) -
         )
         state = run.state
         stage = run.stage
+        pause_requested = run.pause_requested
+        cancel_requested = run.cancel_requested
     hb_iso = heartbeat.isoformat() if heartbeat else None
-    raw = f"{state}:{stage}:{done}:{total}:{hb_iso}:{stalled}"
+    # The flags participate in the ETag: a cooperative pause flips pause_requested
+    # without moving `state`, and a polling client must still see that change.
+    raw = f"{state}:{stage}:{done}:{total}:{hb_iso}:{stalled}:{pause_requested}:{cancel_requested}"
     etag = hashlib.sha256(raw.encode()).hexdigest()[:16]
     return StatusView(
         run_id=str(run_id),
@@ -103,5 +113,7 @@ def get_status(tenant_id: str, run_id: str, *, now: dt.datetime | None = None) -
         eta_seconds=eta,
         heartbeat_at=hb_iso,
         stalled=stalled,
+        pause_requested=pause_requested,
+        cancel_requested=cancel_requested,
         etag=etag,
     )

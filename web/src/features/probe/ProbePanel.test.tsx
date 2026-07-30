@@ -30,6 +30,21 @@ describe("ProbePanel", () => {
     expect(writeText).toHaveBeenCalledWith(REQ.artifacts!.curl);
   });
 
+  it("copies the raw HTTP request and shows a copied tick", async () => {
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    ui([REQ]);
+    await screen.findByText("/api/users");
+    await userEvent.click(screen.getByRole("button", { name: /copy raw-http/i }));
+    expect(writeText).toHaveBeenCalledWith(REQ.artifacts!.http);
+    expect(await screen.findByRole("button", { name: /copied/i })).toBeInTheDocument();
+  });
+
+  it("shows an error when the requests fetch fails", async () => {
+    vi.spyOn(api, "getRequests").mockRejectedValue(new api.ApiError(404, "run not found"));
+    render(<TenantProvider><ProbePanel runId="r" /></TenantProvider>);
+    expect(await screen.findByText(/run not found/i)).toBeInTheDocument();
+  });
+
   it("marks a non-probeable request", async () => {
     ui([{ ...REQ, probeable: false, artifacts: null }]);
     expect(await screen.findByText(/not probeable/i)).toBeInTheDocument();

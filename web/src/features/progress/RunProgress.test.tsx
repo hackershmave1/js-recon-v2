@@ -10,7 +10,7 @@ beforeEach(() => { vi.restoreAllMocks(); localStorage.setItem("recon.tenantId", 
 
 describe("RunProgress", () => {
   it("renders streamed events and fetches findings on open", async () => {
-    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "analyzing", stage: "analyze", done: 1, total: 2, pct: 50, eta_seconds: null, heartbeat_at: null, stalled: false });
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "analyzing", stage: "analyze", done: 1, total: 2, pct: 50, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
     vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
     vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
       h.onOpen?.();
@@ -31,7 +31,7 @@ describe("RunProgress", () => {
   });
 
   it("shows a DONE badge for a fully completed run", async () => {
-    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "done", stage: null, done: 2, total: 2, pct: 100, eta_seconds: null, heartbeat_at: null, stalled: false });
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "done", stage: null, done: 2, total: 2, pct: 100, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
     vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
     vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => { h.onOpen?.(); });
     render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
@@ -40,7 +40,7 @@ describe("RunProgress", () => {
   });
 
   it("shows a distinct PARTIAL badge (Slice Y) when the run finishes incompletely", async () => {
-    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "partial", stage: null, done: 1, total: 2, pct: 50, eta_seconds: null, heartbeat_at: null, stalled: false });
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "partial", stage: null, done: 1, total: 2, pct: 50, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
     vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
     vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => { h.onOpen?.(); });
     render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
@@ -50,7 +50,7 @@ describe("RunProgress", () => {
   });
 
   it("lifts the run state to onState when status resolves", async () => {
-    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "done", stage: null, done: 2, total: 2, pct: 100, eta_seconds: null, heartbeat_at: null, stalled: false });
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "done", stage: null, done: 2, total: 2, pct: 100, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
     vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
     vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => { h.onOpen?.(); });
     const onState = vi.fn();
@@ -59,10 +59,32 @@ describe("RunProgress", () => {
   });
 
   it("shows run controls (Pause) for an active run", async () => {
-    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "analyzing", stage: "analyze", done: 1, total: 2, pct: 50, eta_seconds: null, heartbeat_at: null, stalled: false });
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "analyzing", stage: "analyze", done: 1, total: 2, pct: 50, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
     vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
     vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => { h.onOpen?.(); });
     render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
     expect(await screen.findByRole("button", { name: /pause/i })).toBeInTheDocument();
+  });
+
+  it("reflects a live pause request from an SSE signal (A2)", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "analyzing", stage: "analyze", done: 1, total: 2, pct: 50, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onEvent({ id: "1", event: "run.transition", data: '{"to":"analyzing"}' });
+      h.onEvent({ id: "2", event: "run.pause_requested", data: "{}" });
+    });
+    render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
+    const btn = await screen.findByRole("button", { name: /pausing/i });
+    expect(btn).toBeDisabled();
+  });
+
+  it("reflects a live transition to paused from an SSE event (A2)", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "analyzing", stage: "analyze", done: 1, total: 2, pct: 50, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onEvent({ id: "1", event: "run.transition", data: '{"to":"paused"}' });
+    });
+    render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
+    expect(await screen.findByRole("button", { name: /resume/i })).toBeInTheDocument();
   });
 });
