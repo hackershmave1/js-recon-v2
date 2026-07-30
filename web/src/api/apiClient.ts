@@ -11,6 +11,12 @@ export class ApiError extends Error {
   }
 }
 
+async function readErrorDetail(res: Response): Promise<string> {
+  let detail = `HTTP ${res.status}`;
+  try { detail = (await res.json()).detail ?? detail; } catch { /* non-JSON body */ }
+  return detail;
+}
+
 async function request<T>(path: string, init: RequestInit, tenantId: string): Promise<T> {
   const headers: Record<string, string> = {
     "X-Tenant-Id": tenantId,
@@ -18,11 +24,7 @@ async function request<T>(path: string, init: RequestInit, tenantId: string): Pr
     ...(init.headers as Record<string, string> | undefined),
   };
   const res = await fetch(path, { ...init, headers });
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try { detail = (await res.json()).detail ?? detail; } catch { /* non-JSON body */ }
-    throw new ApiError(res.status, detail);
-  }
+  if (!res.ok) throw new ApiError(res.status, await readErrorDetail(res));
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
@@ -125,10 +127,6 @@ export async function exportOpenApi(tenantId: string, runId: string, format: "js
     `/runs/${encodeURIComponent(runId)}/export/openapi?format=${format}`,
     { headers: { "X-Tenant-Id": tenantId } },
   );
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try { detail = (await res.json()).detail ?? detail; } catch { /* non-JSON body */ }
-    throw new ApiError(res.status, detail);
-  }
+  if (!res.ok) throw new ApiError(res.status, await readErrorDetail(res));
   return res.blob();
 }
