@@ -212,5 +212,12 @@ Citation fix: the mockup "Export spec" button is `Recon Workspace.dc.html:430` (
 ## 10. Fast-follows
 
 - Add `pause_requested`/`cancel_requested` to `GET /status` so control gating survives a reload.
+- **Live control-state reflection (flagged by the final whole-branch review).** `RunControls` gates off each
+  POST's returned `state` (F1 — satisfied) but omits §5-C's "explicit `getStatus` refetch," and `RunProgress`
+  applies run `state` only in `refresh()`/`checkTerminal`, never from a non-terminal `run.transition` SSE event
+  (`RunProgress.tsx:34`). So a **cooperative** pause/resume mid-crawl may not flip the controls until the run
+  reaches a terminal state or the page reloads. Complete fix: apply the `run.transition` `to`-state inside
+  `RunProgress`'s SSE `onEvent` — this makes pause/resume reflect live and removes the dropped-SSE-during-Cancel
+  staleness. Deferred as scope-expansion beyond this FE-only slice.
 - Postman/Burp/mitmproxy export buttons once those serializers get routes (pairs with the Export & Report modal).
 - Promote the manual-probe panel into a per-endpoint finding drawer if/when the UI moves to the richer mockup.
