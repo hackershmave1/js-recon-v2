@@ -320,3 +320,62 @@ def test_const_prefix_substitution_only_stays_verbatim():  # RED against round-1
     # constant verbatim ("/v3"), not append a slash ("/v3/") that `_join_base`
     # would insert for an empty remainder.
     assert ("GET", "/v3") in _urls("const API = '/v3'; fetch(`${API}`);")
+
+
+# --- taught wrapper recognition (Task 1) -------------------------------------
+# A named wrapper callee's member calls are recognized via the existing axios
+# path, tagged with `RawEndpoint.wrapper`; `kind` stays "axios". Dispatch order
+# is load-bearing: a callee colliding with a native target keeps the native path.
+
+from recon.findings.wrappers import WrapperRule  # noqa: E402
+
+
+def _wrapped(src: str, callees: list[str]):
+    return extract(src, wrappers=[WrapperRule(c) for c in callees]).endpoints
+
+
+def test_wrapper_member_call_is_recognized():
+    eps = _wrapped("const api = makeClient(); api.get('/users');", ["api"])
+    assert len(eps) == 1
+    assert (eps[0].kind, eps[0].method, eps[0].url, eps[0].wrapper) == (
+        "axios", "GET", "/users", "api",
+    )
+
+
+def test_wrapper_request_config_is_recognized():
+    # `api.request({url, method})` falls out of the axios reuse for free (spec §4/§12 Minor 6).
+    eps = _wrapped("api.request({url:'/x', method:'post'});", ["api"])
+    assert (eps[0].method, eps[0].url, eps[0].wrapper) == ("POST", "/x", "api")
+
+
+def test_wrapper_post_body_params_are_mined():
+    eps = _wrapped("api.post('/login', {user:1});", ["api"])
+    assert ("user", "body") in {(p.name, p.location) for p in eps[0].params}
+
+
+def test_untaught_wrapper_still_leaves_no_trace():
+    # Regression: without a rule, a wrapper call is dropped exactly as today.
+    result = extract("api.get('/users');")
+    assert result.endpoints == [] and result.unattributed == 0
+
+
+def test_native_axios_collision_takes_native_path_not_wrapper():
+    # `axios` taught as a callee must still resolve via the native branch
+    # (dispatch-last), so NO wrapper tag is attached (spec §4/§12 Minor 7).
+    eps = _wrapped("axios.get('/x');", ["axios"])
+    assert (eps[0].kind, eps[0].url, eps[0].wrapper) == ("axios", "/x", None)
+
+
+def test_axios_create_instance_collision_keeps_base_not_wrapper():
+    # An axios.create instance var named like the wrapper keeps its real base
+    # (instance branch precedes the wrapper branch); tag stays None, base applies.
+    eps = _wrapped(
+        "const api = axios.create({baseURL:'/b'}); api.get('/x');", ["api"]
+    )
+    assert ("GET", "/b/x", None) in [(e.method, e.url, e.wrapper) for e in eps]
+
+
+def test_wrapper_dynamic_arg_is_unattributed_like_axios():
+    # A non-static URL leaves the same honest trace axios would (REQ-C2).
+    result = extract("api.get(dynamicUrl);", wrappers=[WrapperRule("api")])
+    assert result.endpoints == [] and result.unattributed == 1

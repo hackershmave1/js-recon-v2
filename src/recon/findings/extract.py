@@ -24,11 +24,14 @@ positive since the receiver's type isn't tracked.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl
 
 from tree_sitter import Language, Node, Parser
 import tree_sitter_javascript as tsjs
+
+from recon.findings.wrappers import WrapperRule, wrapper_callees
 
 _LANGUAGE = Language(tsjs.language())
 _PARSER = Parser(_LANGUAGE)
@@ -57,6 +60,10 @@ class RawEndpoint:
     start_byte: int
     end_byte: int
     snippet: str
+    # Provenance: the callee of the taught wrapper this endpoint came from, else
+    # None. NOT folded into `kind` — `kind` stays "axios" so the POST-body
+    # Content-Type gate at reconstruct.py:176 still fires (spec §7 / §12 Imp 3).
+    wrapper: str | None = None
 
 
 @dataclass
@@ -65,15 +72,20 @@ class Extraction:
     unattributed: int = 0  # sinks detected but URL not statically resolvable (REQ-C2)
 
 
-def extract(source: str | bytes) -> Extraction:
-    """Extract network endpoints from JavaScript source."""
+def extract(source: str | bytes, wrappers: Sequence[WrapperRule] = ()) -> Extraction:
+    """Extract network endpoints from JavaScript source.
+
+    `wrappers` names custom HTTP-client callees (`api`, `apiClient`) whose member
+    calls are recognized via the axios path (spec §4); empty = today's fixed set only.
+    """
     data = source.encode("utf-8") if isinstance(source, str) else source
     tree = _PARSER.parse(data)
     env = collect_base_env(tree.root_node, data)
+    callees = wrapper_callees(wrappers)
     result = Extraction()
     for node in _walk(tree.root_node):
         if node.type == "call_expression":
-            _handle_call(node, result, env)
+            _handle_call(node, result, env, callees)
         elif node.type == "new_expression":
             _handle_new(node, result)
     return result
@@ -307,7 +319,10 @@ def _config_query_params(config: Node | None) -> list[RawParam]:
     return [RawParam(name, "query") for name in _object_pairs(params_obj)]
 
 
-def _endpoint(kind: str, method: str, url: str, params: list[RawParam], call: Node) -> RawEndpoint:
+def _endpoint(
+    kind: str, method: str, url: str, params: list[RawParam], call: Node,
+    wrapper: str | None = None,
+) -> RawEndpoint:
     row, col = call.start_point
     deduped = list(dict.fromkeys(params))  # preserve order, drop repeats
     return RawEndpoint(
@@ -320,6 +335,7 @@ def _endpoint(kind: str, method: str, url: str, params: list[RawParam], call: No
         start_byte=call.start_byte,
         end_byte=call.end_byte,
         snippet=_text(call)[:200],
+        wrapper=wrapper,
     )
 
 
@@ -425,7 +441,7 @@ def _resolve_url(node: Node | None, env: BaseEnv, base: str) -> str | None:
 
 # --- sink handlers -----------------------------------------------------------
 
-def _handle_call(call: Node, result: Extraction, env: BaseEnv) -> None:
+def _handle_call(call: Node, result: Extraction, env: BaseEnv, callees: frozenset[str]) -> None:
     fn = call.child_by_field_name("function")
     if fn is None:
         return
@@ -448,10 +464,12 @@ def _handle_call(call: Node, result: Extraction, env: BaseEnv) -> None:
             return
     else:
         return
-    _dispatch_member(call, obj, prop, result, env)
+    _dispatch_member(call, obj, prop, result, env, callees)
 
 
-def _dispatch_member(call: Node, obj: str, prop: str, result: Extraction, env: BaseEnv) -> None:
+def _dispatch_member(
+    call: Node, obj: str, prop: str, result: Extraction, env: BaseEnv, callees: frozenset[str]
+) -> None:
     if prop == "fetch" and obj in _GLOBAL_OBJECTS:
         _fetch(call, result, env)
     elif prop == "open":  # ANY receiver's `.open(method, url)` is XHR, checked before instances
@@ -463,6 +481,8 @@ def _dispatch_member(call: Node, obj: str, prop: str, result: Extraction, env: B
     elif obj in env.instances:
         base = env.instances[obj]  # may be None (recognized instance, unknown base)
         _axios_member(call, prop, result, env, base=base or "")
+    elif obj in callees:  # taught wrapper — MUST be last so native/instance collisions win
+        _axios_member(call, prop, result, env, base="", wrapper=obj)
 
 
 def _fetch(call: Node, result: Extraction, env: BaseEnv, base: str = "") -> None:
@@ -510,10 +530,13 @@ def _axios_call(call: Node, result: Extraction, env: BaseEnv, base: str = "") ->
         result.endpoints.append(_endpoint("axios", method, url, _query_params(url), call))
 
 
-def _axios_member(call: Node, prop: str, result: Extraction, env: BaseEnv, base: str = "") -> None:
+def _axios_member(
+    call: Node, prop: str, result: Extraction, env: BaseEnv, base: str = "",
+    wrapper: str | None = None,
+) -> None:
     args = _args(call)
     if prop == "request" and args and args[0].type == "object":
-        _axios_from_config(args[0], call, result, env, base=base)
+        _axios_from_config(args[0], call, result, env, base=base, wrapper=wrapper)
         return
     if prop.upper() not in HTTP_METHODS:
         return
@@ -531,11 +554,12 @@ def _axios_member(call: Node, prop: str, result: Extraction, env: BaseEnv, base:
     elif len(args) >= 2:
         # axios.get/delete/head(url[, config]) — query params live in the config
         params += _config_query_params(args[1])
-    result.endpoints.append(_endpoint("axios", prop, url, params, call))
+    result.endpoints.append(_endpoint("axios", prop, url, params, call, wrapper=wrapper))
 
 
 def _axios_from_config(
-    config: Node, call: Node, result: Extraction, env: BaseEnv, base: str = ""
+    config: Node, call: Node, result: Extraction, env: BaseEnv, base: str = "",
+    wrapper: str | None = None,
 ) -> None:
     pairs = _object_pairs(config)
     url = _resolve_url(pairs.get("url"), env, base)
@@ -548,7 +572,7 @@ def _axios_from_config(
         + _config_query_params(config)  # axios `params` -> query, not body
         + _body_params_from_value(pairs.get("data"))
     )
-    result.endpoints.append(_endpoint("axios", method, url, params, call))
+    result.endpoints.append(_endpoint("axios", method, url, params, call, wrapper=wrapper))
 
 
 def _jquery(call: Node, prop: str, result: Extraction) -> None:
