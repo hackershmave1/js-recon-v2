@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, FindingsResponse, RunRef, RunStatus, SessionView, SpecSummary, Triage,
+  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, FindingsResponse, RequestsResponse, RunRef, RunStatus, RunControlResult, SessionView, SpecSummary, Triage,
 } from "./types";
 
 export class ApiError extends Error {
@@ -101,4 +101,34 @@ export function deleteBaseUrlRule(tenantId: string, runId: string, ruleId: strin
     `/runs/${encodeURIComponent(runId)}/base-url/${encodeURIComponent(ruleId)}`,
     { method: "DELETE" }, tenantId,
   );
+}
+
+export function getRequests(tenantId: string, runId: string): Promise<RequestsResponse> {
+  return request(`/runs/${encodeURIComponent(runId)}/requests`, {}, tenantId);
+}
+
+export function pauseRun(tenantId: string, runId: string): Promise<RunControlResult> {
+  return request(`/runs/${encodeURIComponent(runId)}/pause`, { method: "POST" }, tenantId);
+}
+export function cancelRun(tenantId: string, runId: string): Promise<RunControlResult> {
+  return request(`/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }, tenantId);
+}
+export function resumeRun(tenantId: string, runId: string): Promise<RunControlResult> {
+  return request(`/runs/${encodeURIComponent(runId)}/resume`, { method: "POST" }, tenantId);
+}
+
+// Blob variant: the export route streams a file (Content-Disposition), not JSON, so it
+// bypasses request<T> (which forces Accept: application/json + res.json()). A bare
+// <a href> can't carry X-Tenant-Id, so we fetch + trigger the download in JS.
+export async function exportOpenApi(tenantId: string, runId: string, format: "json" | "yaml"): Promise<Blob> {
+  const res = await fetch(
+    `/runs/${encodeURIComponent(runId)}/export/openapi?format=${format}`,
+    { headers: { "X-Tenant-Id": tenantId } },
+  );
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try { detail = (await res.json()).detail ?? detail; } catch { /* non-JSON body */ }
+    throw new ApiError(res.status, detail);
+  }
+  return res.blob();
 }
