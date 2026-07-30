@@ -215,3 +215,30 @@ Slice Y was fixed, and all amendments are documented in the spec's §15.
 the manifest, the occurrence **asset-dimension migration**, secret-reveal routing to
 per-asset blobs, and **PARTIAL** completeness (REQ-D5). **OpenAPI/Swagger export** is
 the other half of "complete the first chunk".
+
+---
+
+## Live in-UI walkthroughs — DRAINED (2026-07-30, UI catch-up slice)
+
+The deferred "Live in-UI walkthrough" rows above (Slice UI-0, Slice X crawl-mode, Slice Y
+multi-asset) are **discharged**. With the SPA rebuilt into the api image — a warm
+`docker compose build` is ~1–2 min, not the feared multi-hour bake (see
+`docs/superpowers/specs/2026-07-30-ui-catch-up-design.md` §1) — every UI surface was driven
+live against the baked container image. Verified:
+
+- **New surfaces:** OpenAPI export (`Export spec`, json + yaml → `GET /export/openapi` 200),
+  manual-probe panel (`GET /requests` → curl + raw-HTTP per reconstructed request), run
+  controls (`Pause`→`Resume`→`Pause` toggling live purely off the POST responses **with the
+  worker stopped — no SSE** — proving the read-time state lift, §4-gate fold F1).
+- **Previously-unwalked debt:** shadow spec-attach (documented/shadow chips + the REQ-C2
+  `matched_operation` "→ POST /v1/orders" display), the base-URL panel (add-rule → persisted
+  across reload), and `AssetsInventory` in both upload (`0 assets · pending`) and crawl
+  (`0 assets · crawl status: ok`) modes.
+
+**Residual env-only constraints (NOT UI gaps):** (1) crawl→**populated** manifest + multi-asset
+findings still can't complete here — `egress.validate_target` rejects the fixture-site's private
+Docker IP (the same Slice-Y constraint above), so the crawl runs and the manifest renders but
+stays empty; (2) this session's Browser pane couldn't composite frames, so proof is the
+accessibility tree + network 200s, not pixel screenshots; (3) the pane gates
+`navigator.clipboard`, so the copy-buttons' wiring is proven by Vitest + the per-task live check
+rather than re-observed here.

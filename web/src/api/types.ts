@@ -67,5 +67,18 @@ export interface BaseUrlRule {
   actor: string | null;
 }
 export interface BaseUrlRuleResult { rule: BaseUrlRule; summary: SpecSummary | null; }
+// One reconstructed request from GET /runs/{id}/requests (probe_router::_request_dict).
+// `artifacts` is null when `probeable` is false.
+export interface ReconstructedRequest {
+  operation: string; method: string; path: string; hosts: string[];
+  query_params: { name: string; example: string | null }[];
+  body_params: string[]; content_type: string | null; example_url: string | null;
+  probeable: boolean; endpoint_hashes: string[];
+  artifacts: { curl: string; http: string } | null;
+}
+export interface RequestsResponse { run_id: string; count: number; requests: ReconstructedRequest[]; }
+// Result of POST pause/cancel/resume. pause returns pause_requested; cancel returns
+// cancel_requested; resume returns neither — all three return the authoritative state.
+export interface RunControlResult { run_id: string; state: string; pause_requested?: boolean; cancel_requested?: boolean; }
 export const TERMINAL_STATES = new Set(["done", "partial", "failed", "cancelled"]);
 export const TRIAGE_STATUSES = ["open", "confirmed", "dismissed"] as const;
