@@ -207,8 +207,17 @@ def base_url_rules_in_session(session, session_id: str) -> list[BaseUrlRule]:
     """Every manual base-URL rule for a session, as pure BaseUrlRule values.
     Takes an OPEN tenant session so a caller (e.g. _classify_session) can load
     rules inside its own transaction."""
+    # Order most-recently-updated first so the resolver's "first matching selection
+    # wins" (base_url._match) realizes the spec §6 tie-break — most-recent updated_at
+    # — for OVERLAPPING selection rules. Each rule is its own POST/transaction, so
+    # updated_at (transaction time) is distinct in practice and true ties don't arise;
+    # the id secondary only makes the order total/deterministic (it is a random UUID,
+    # not a recency signal). Prefix rules are unique per prefix and resolved
+    # longest-wins, so their order here is moot.
     rows = session.scalars(
-        select(SessionBaseUrl).where(SessionBaseUrl.session_id == session_id)
+        select(SessionBaseUrl)
+        .where(SessionBaseUrl.session_id == session_id)
+        .order_by(SessionBaseUrl.updated_at.desc(), SessionBaseUrl.id.desc())
     ).all()
     return [
         BaseUrlRule(
