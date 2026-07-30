@@ -85,6 +85,17 @@ def test_status_etag_returns_304_when_unchanged(client, authorized_session):
     assert second.status_code == 304
 
 
+def test_status_exposes_control_flags(client, authorized_session):
+    tenant, session_id = authorized_session
+    run_id = client.post(
+        "/runs", json={"session_id": session_id}, headers=_headers(tenant)
+    ).json()["run_id"]
+
+    body = client.get(f"/runs/{run_id}/status", headers=_headers(tenant)).json()
+    assert body["pause_requested"] is False
+    assert body["cancel_requested"] is False
+
+
 def test_sse_replays_events_including_terminal(client, authorized_session, redis):
     tenant, session_id = authorized_session
     run_id = client.post(

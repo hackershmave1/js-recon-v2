@@ -144,6 +144,8 @@ def get_status(
         "eta_seconds": status.eta_seconds,
         "heartbeat_at": status.heartbeat_at,
         "stalled": status.stalled,
+        "pause_requested": status.pause_requested,
+        "cancel_requested": status.cancel_requested,
     }
 
 
