@@ -48,4 +48,13 @@ describe("RunProgress", () => {
     expect(badge.className).toContain("chip-partial");
     expect(badge.className).not.toContain("chip-done");
   });
+
+  it("lifts the run state to onState when status resolves", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "done", stage: null, done: 2, total: 2, pct: 100, eta_seconds: null, heartbeat_at: null, stalled: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => { h.onOpen?.(); });
+    const onState = vi.fn();
+    render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} onState={onState} /></TenantProvider>);
+    await waitFor(() => expect(onState).toHaveBeenCalledWith("done"));
+  });
 });

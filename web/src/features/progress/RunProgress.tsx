@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTenant } from "../../tenant/TenantContext";
 import { streamRunEvents, type SseEvent } from "../../api/sseClient";
 import { getFindings, getStatus, ApiError } from "../../api/apiClient";
 import { TERMINAL_STATES, type FindingsResponse } from "../../api/types";
 
-export function RunProgress({ runId, onFindings }: { runId: string; onFindings: (f: FindingsResponse) => void }) {
+export function RunProgress(
+  { runId, onFindings, onState }: { runId: string; onFindings: (f: FindingsResponse) => void; onState?: (state: string) => void },
+) {
   const { tenantId } = useTenant();
   const [events, setEvents] = useState<SseEvent[]>([]);
   const [state, setState] = useState<string>("…");
@@ -13,6 +15,9 @@ export function RunProgress({ runId, onFindings }: { runId: string; onFindings: 
   const [error, setError] = useState<string | null>(null);
   const onFindingsRef = useRef(onFindings);
   onFindingsRef.current = onFindings;
+  const onStateRef = useRef(onState);
+  onStateRef.current = onState;
+  const applyState = useCallback((s: string) => { setState(s); onStateRef.current?.(s); }, []);
 
   useEffect(() => {
     if (!tenantId) return;
@@ -21,7 +26,7 @@ export function RunProgress({ runId, onFindings }: { runId: string; onFindings: 
       try {
         const [s, f] = await Promise.all([getStatus(tenantId, runId), getFindings(tenantId, runId)]);
         if (controller.signal.aborted) return;
-        setState(s.state); setStage(s.stage); setPct(s.pct);
+        applyState(s.state); setStage(s.stage); setPct(s.pct);
         onFindingsRef.current(f);
       } catch (e) {
         if (controller.signal.aborted) return;
@@ -36,7 +41,7 @@ export function RunProgress({ runId, onFindings }: { runId: string; onFindings: 
         try {
           const s = await getStatus(tenantId, runId);
           if (controller.signal.aborted) return true;
-          setState(s.state);
+          applyState(s.state);
           if (TERMINAL_STATES.has(s.state)) { void refresh(); return true; }
           return false;
         } catch (e) {

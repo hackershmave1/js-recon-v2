@@ -11,10 +11,11 @@ export function RunWorkspace() {
   const { id } = useParams();
   const { tenantId } = useTenant();
   const [findings, setFindings] = useState<FindingsResponse | null>(null);
+  const [_state, setState] = useState<string | null>(null);
   if (!id) return null;
   return (
     <div>
-      <RunProgress runId={id} onFindings={setFindings} />
+      <RunProgress runId={id} onFindings={setFindings} onState={setState} />
       {tenantId && <AssetsInventory tenantId={tenantId} runId={id} />}
       {findings && <FindingsView data={findings} runId={id} />}
     </div>
