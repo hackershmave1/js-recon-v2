@@ -64,6 +64,26 @@ def test_idempotent_when_already_under_base():
     assert twice.path == once.path  # '/location/address/search' no longer matches '/address'
 
 
+def test_selection_rule_idempotent():
+    # A selection rule matches by hash regardless of path, so idempotence rests on
+    # the segment-prefix guard, not on the path ceasing to match (as it does for a
+    # prefix rule). Re-applying must not double-prepend the base.
+    rule = _selection(["h1"], "/location")
+    once = resolve_operation("GET", "/address/search", ("h1",), False, [rule])
+    twice = resolve_operation("GET", once.path, ("h1",), False, [rule])
+    assert once.path == "/location/address/search"
+    assert twice.path == once.path and twice.changed is False
+
+
+def test_overlapping_selection_first_in_list_wins():
+    # At most one rule applies; among OVERLAPPING selection rules _match returns the
+    # first in the given order (asymmetric — the caller must order them, and the
+    # query layer orders by most-recent updated_at so the newest rule wins).
+    hi, lo = _selection(["h1"], "/new"), _selection(["h1"], "/old")
+    assert resolve_operation("GET", "/x", ("h1",), False, [hi, lo]).path == "/new/x"
+    assert resolve_operation("GET", "/x", ("h1",), False, [lo, hi]).path == "/old/x"
+
+
 def test_no_matching_rule_is_unchanged():
     r = resolve_operation("GET", "/other", ("h1",), False, [_prefix("/address", "/location")])
     assert r.path == "/other" and r.changed is False

@@ -55,6 +55,27 @@ def test_post_prefix_rule_documents_the_endpoint(client, authorized_session):
     assert body["summary"]["documented"] == 1  # unresolved -> documented after the rule
 
 
+def test_post_selection_rule_documents_the_endpoint(client, authorized_session):
+    # The selection KIND end-to-end: POST kind=selection with the endpoint's own
+    # finding_hash -> the resolver re-bases /address/search -> /location/address/search,
+    # which the spec documents. Complements the prefix-kind integration above.
+    from recon.findings.normalize import finding_hash
+
+    tenant, session_id = authorized_session
+    run_id = _seed_relative(tenant, session_id)
+    client.post(f"/runs/{run_id}/spec", headers=_headers(tenant), content=_SPEC)
+
+    h = finding_hash("endpoint", "GET /address/search", "app.js")
+    resp = client.post(
+        f"/runs/{run_id}/base-url", headers=_headers(tenant),
+        json={"kind": "selection", "finding_hashes": [h], "base_url": "/location"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["rule"]["kind"] == "selection" and body["rule"]["finding_hashes"] == [h]
+    assert body["summary"]["documented"] == 1  # selection re-based -> documented
+
+
 def test_get_lists_rules(client, authorized_session):
     tenant, session_id = authorized_session
     run_id = _seed_relative(tenant, session_id)

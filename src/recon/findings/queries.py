@@ -207,8 +207,15 @@ def base_url_rules_in_session(session, session_id: str) -> list[BaseUrlRule]:
     """Every manual base-URL rule for a session, as pure BaseUrlRule values.
     Takes an OPEN tenant session so a caller (e.g. _classify_session) can load
     rules inside its own transaction."""
+    # Order most-recently-updated first so the resolver's "first matching selection
+    # wins" (base_url._match) realizes the spec §6 tie-break — most-recent updated_at
+    # — for OVERLAPPING selection rules; id is a stable secondary for same-timestamp
+    # rows. Prefix rules are unique per prefix and resolved longest-wins, so their
+    # order here is moot.
     rows = session.scalars(
-        select(SessionBaseUrl).where(SessionBaseUrl.session_id == session_id)
+        select(SessionBaseUrl)
+        .where(SessionBaseUrl.session_id == session_id)
+        .order_by(SessionBaseUrl.updated_at.desc(), SessionBaseUrl.id.desc())
     ).all()
     return [
         BaseUrlRule(
