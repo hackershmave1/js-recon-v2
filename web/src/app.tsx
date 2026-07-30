@@ -5,6 +5,7 @@ import { RunProgress } from "./features/progress/RunProgress";
 import { FindingsView } from "./features/findings/FindingsView";
 import { AssetsInventory } from "./features/discovery/AssetsInventory";
 import { ExportSpecButton } from "./features/export/ExportSpecButton";
+import { ProbePanel } from "./features/probe/ProbePanel";
 import { useTenant } from "./tenant/TenantContext";
 import { TERMINAL_STATES, type FindingsResponse } from "./api/types";
 
@@ -21,6 +22,7 @@ export function RunWorkspace() {
       {tenantId && <AssetsInventory tenantId={tenantId} runId={id} />}
       {terminal && <ExportSpecButton runId={id} />}
       {findings && <FindingsView data={findings} runId={id} />}
+      {terminal && <ProbePanel runId={id} />}
     </div>
   );
 }

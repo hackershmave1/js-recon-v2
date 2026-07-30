@@ -5,6 +5,7 @@ import { createMemoryRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { TenantProvider } from "./tenant/TenantContext";
 import { Home, RunWorkspace } from "./app";
+import * as api from "./api/apiClient";
 import type { FindingsResponse } from "./api/types";
 
 // Mock RunProgress: no streaming/fetching. Feed findings up via an effect (NOT during
@@ -50,5 +51,11 @@ describe("app routes", () => {
   it("shows the Export spec button once the run is terminal", async () => {
     renderAt("/runs/r1");
     expect(await screen.findByRole("button", { name: /export spec/i })).toBeInTheDocument();
+  });
+
+  it("shows the manual-probe panel once the run is terminal", async () => {
+    vi.spyOn(api, "getRequests").mockResolvedValue({ run_id: "r1", count: 0, requests: [] });
+    renderAt("/runs/r1");
+    expect(await screen.findByText(/no probeable requests/i)).toBeInTheDocument();
   });
 });
