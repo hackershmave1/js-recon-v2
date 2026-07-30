@@ -16,6 +16,7 @@ unit, unchanged. Both paths share the per-blob work via ``_analyze_blob``.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from botocore.exceptions import ClientError
@@ -30,6 +31,7 @@ from recon.events.log import RecordedEvent, publish, record_event
 from recon.findings import engines, kingfisher, normalize, sourcemapper, store
 from recon.findings.extract import RawEndpoint, extract
 from recon.findings.kingfisher import RawSecret
+from recon.findings.wrappers import WrapperRule
 from recon.observability import get_logger
 from recon.progress import heartbeat as progress
 from recon.runs import assets as run_assets
@@ -227,6 +229,69 @@ def _analyze_assets(
     return agg
 
 
+@dataclass(frozen=True)
+class _EndpointExtraction:
+    """Endpoint-loop result for one blob (no secrets, no coverage event). The
+    coverage counters ride along so `_analyze_blob` can still build its
+    `analyze.coverage` payload; the out-of-band re-extract ignores them."""
+
+    written: int
+    attributed: int
+    unattributed: int
+    sources_recovered: int
+    source_map: str
+    files: tuple[FileCoverage, ...]
+
+
+def _extract_endpoints(
+    session,
+    *,
+    tenant_id: str,
+    run_id: str,
+    source: str,
+    source_map_ref: str | None,
+    run_asset_id: str | None,
+    asset_url: str | None,
+    wrappers: Sequence[WrapperRule] = (),
+) -> _EndpointExtraction:
+    """Extract + record ONLY endpoint/param findings for one blob.
+
+    Shared core of the analyze stage (`_analyze_blob`, which additionally scans
+    secrets + emits coverage) and the out-of-band wrapper re-extract
+    (`recon.findings.reextract`, which calls this directly so a wrapper POST
+    records findings WITHOUT re-emitting the run's coverage counters — spec
+    §2.6/§12 Blocker 1 — and WITHOUT the Kingfisher subprocess — §12 Blocker 2).
+    Retains `_analysis_units(source_map_ref, source)` so a re-emitted native
+    endpoint keeps its source-map-recovered path and thus its stable
+    `finding_hash` (§12 Imp 4)."""
+    units, source_map_status, sources_recovered = _analysis_units(source_map_ref, source)
+    attributed = 0
+    unattributed = 0
+    written = 0
+    per_file: dict[str, list[int]] = {}
+    for source_name, unit_text in units:
+        extraction = extract(unit_text, wrappers=wrappers)
+        path = normalize.normalize_source_path(source_name)
+        attributed += len(extraction.endpoints)
+        unattributed += extraction.unattributed
+        bucket = per_file.setdefault(path, [0, 0])
+        bucket[0] += len(extraction.endpoints)
+        bucket[1] += extraction.unattributed
+        for endpoint in extraction.endpoints:
+            written += _record_endpoint(
+                session, tenant_id, run_id, path, source_name, endpoint,
+                run_asset_id=run_asset_id, asset_url=asset_url,
+            )
+    files = tuple(
+        FileCoverage(path=path, attributed=counts[0], unattributed=counts[1])
+        for path, counts in sorted(per_file.items())
+    )
+    return _EndpointExtraction(
+        written=written, attributed=attributed, unattributed=unattributed,
+        sources_recovered=sources_recovered, source_map=source_map_status, files=files,
+    )
+
+
 def _analyze_blob(
     session,
     *,
@@ -236,6 +301,7 @@ def _analyze_blob(
     source_map_ref: str | None,
     run_asset_id: str | None,
     asset_url: str | None,
+    wrappers: Sequence[WrapperRule] = (),
 ) -> tuple[Coverage, RecordedEvent]:
     """Analyze one blob — the legacy single input OR one crawled asset — and
     persist its findings inside the caller's OPEN ``session``.
@@ -256,71 +322,46 @@ def _analyze_blob(
     # fails/retries the stage rather than under-reporting secrets.
     scan = kingfisher.scan(raw)
 
-    # Prefer recovered original sources (real per-source paths) when a source map
-    # is available; otherwise analyze the bundle under the input.js placeholder.
-    # We can't union the two — the source path is part of finding identity, so the
-    # same endpoint hashes differently per path (that is why coverage records the
-    # map status: map-scoped coverage is NOT full-bundle coverage, REQ-D5).
-    units, source_map_status, sources_recovered = _analysis_units(source_map_ref, source)
+    endpoints = _extract_endpoints(
+        session, tenant_id=tenant_id, run_id=run_id, source=source,
+        source_map_ref=source_map_ref, run_asset_id=run_asset_id, asset_url=asset_url,
+        wrappers=wrappers,
+    )
+    written = endpoints.written
 
-    attributed = 0
-    unattributed = 0
-    written = 0
-    # Per normalized path (== finding.path), so coverage joins 1:1 to findings and
-    # several source names that collapse to one path aggregate together (REQ-C2).
-    per_file: dict[str, list[int]] = {}
-    for source_name, unit_text in units:
-        extraction = extract(unit_text)
-        path = normalize.normalize_source_path(source_name)
-        attributed += len(extraction.endpoints)
-        unattributed += extraction.unattributed
-        bucket = per_file.setdefault(path, [0, 0])
-        bucket[0] += len(extraction.endpoints)
-        bucket[1] += extraction.unattributed
-        for endpoint in extraction.endpoints:
-            written += _record_endpoint(
-                session, tenant_id, run_id, path, source_name, endpoint,
-                run_asset_id=run_asset_id, asset_url=asset_url,
-            )
     # Secrets are scanned on the original bundle this slice (input.js path).
-    # NOTE (follow-up): scanning recovered sources for secrets (real per-source
-    # paths for secrets too) is deferred; endpoint/param paths are the D3 win here.
-    secret_path = normalize.normalize_source_path(_SOURCE_NAME)
     # Per (rule, snippet) search cursor so N identical secret sightings map to N
     # distinct byte offsets (distinct occurrences, REQ-C2) instead of collapsing.
+    secret_path = normalize.normalize_source_path(_SOURCE_NAME)
     secret_cursors: dict[tuple[str, str], int] = {}
     for secret in scan.secrets:
         written += _record_secret(
             session, tenant_id, run_id, secret_path, source, secret, secret_cursors,
             run_asset_id=run_asset_id, asset_url=asset_url,
         )
-    files = tuple(
-        FileCoverage(path=path, attributed=counts[0], unattributed=counts[1])
-        for path, counts in sorted(per_file.items())
-    )
     coverage_event = record_event(
         session,
         tenant_id=tenant_id,
         run_id=run_id,
         event_type="analyze.coverage",
         payload={
-            "attributed": attributed,
-            "unattributed": unattributed,
+            "attributed": endpoints.attributed,
+            "unattributed": endpoints.unattributed,
             "secrets": len(scan.secrets),
             "secrets_engine": scan.status,
-            "sources_recovered": sources_recovered,
-            "source_map": source_map_status,
+            "sources_recovered": endpoints.sources_recovered,
+            "source_map": endpoints.source_map,
             "files": [
                 {"path": f.path, "attributed": f.attributed, "unattributed": f.unattributed}
-                for f in files
+                for f in endpoints.files
             ],
         },
     )
     coverage = Coverage(
-        attributed, unattributed, written,
+        endpoints.attributed, endpoints.unattributed, written,
         secrets=len(scan.secrets), secrets_engine=scan.status,
-        sources_recovered=sources_recovered, source_map=source_map_status,
-        files=files,
+        sources_recovered=endpoints.sources_recovered, source_map=endpoints.source_map,
+        files=endpoints.files,
     )
     return coverage, coverage_event
 
@@ -406,7 +447,11 @@ def _record_endpoint(
             evidence=ep.snippet, engine="vespasian",
             run_asset_id=run_asset_id, asset_url=asset_url,
         ),
-        attributes={"kind": ep.kind, "method": ep.method},
+        attributes=(
+            {"kind": ep.kind, "method": ep.method, "wrapper": ep.wrapper}
+            if ep.wrapper
+            else {"kind": ep.kind, "method": ep.method}
+        ),
     )
     operation = normalize.endpoint_operation(ep.method, ep.url)
     for param in ep.params:
