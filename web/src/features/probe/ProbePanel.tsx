@@ -31,9 +31,11 @@ export function ProbePanel({ runId }: { runId: string }) {
 
   useEffect(() => {
     if (!tenantId) return;
+    let live = true;
     getRequests(tenantId, runId)
-      .then(setData)
-      .catch((e) => setError(e instanceof ApiError ? e.message : "Failed to load requests"));
+      .then((d) => { if (live) setData(d); })
+      .catch((e) => { if (live) setError(e instanceof ApiError ? e.message : "Failed to load requests"); });
+    return () => { live = false; };
   }, [tenantId, runId]);
 
   if (error) return <div className="card"><h3>Manual probe</h3><p className="sev-high">{error}</p></div>;
