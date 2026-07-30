@@ -5,7 +5,11 @@ import { TERMINAL_STATES } from "../../api/types";
 import type { RunControlResult } from "../../api/types";
 
 export function RunControls(
-  { runId, state, onStateChange }: { runId: string; state: string; onStateChange: (s: string) => void },
+  { runId, state, pauseRequested, cancelRequested, onControlResult }: {
+    runId: string; state: string;
+    pauseRequested: boolean; cancelRequested: boolean;
+    onControlResult: (res: RunControlResult) => void;
+  },
 ) {
   const { tenantId } = useTenant();
   const [busy, setBusy] = useState(false);
@@ -17,8 +21,9 @@ export function RunControls(
     if (confirmMsg && !window.confirm(confirmMsg)) return;
     setBusy(true); setError(null);
     try {
-      const res = await fn(tenantId, runId);
-      onStateChange(res.state);
+      // Gating is driven by the POST's authoritative result (state + flags),
+      // lifted to RunProgress — not by SSE, which never moves a non-terminal state.
+      onControlResult(await fn(tenantId, runId));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Action failed");
     } finally {
@@ -26,11 +31,23 @@ export function RunControls(
     }
   }
 
+  // A cancel, once requested, is in flight until the run reaches a terminal state
+  // (the worker cancels at its next checkpoint), so no other control is meaningful.
+  if (cancelRequested) return <div className="muted">Cancelling…</div>;
+
+  // A pause is cooperative: pause_requested can be set while the run stays active
+  // until the worker checkpoints. Show it as pending (disabled) rather than a fresh
+  // "Pause" that invites a redundant click — this is what survives a reload (A1).
+  const paused = state === "paused";
   return (
     <div>
-      {state === "paused"
+      {paused
         ? <button type="button" onClick={() => act(resumeRun)} disabled={busy}>Resume</button>
-        : <button type="button" onClick={() => act(pauseRun)} disabled={busy}>Pause</button>}
+        : (
+          <button type="button" onClick={() => act(pauseRun)} disabled={busy || pauseRequested}>
+            {pauseRequested ? "Pausing…" : "Pause"}
+          </button>
+        )}
       <button type="button" onClick={() => act(cancelRun, "Cancel this run? This cannot be undone.")} disabled={busy}>Cancel</button>
       {error && <span className="sev-high"> {error}</span>}
     </div>

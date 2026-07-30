@@ -3,6 +3,9 @@ export interface RunRef { run_id: string; state: string; }
 export interface RunStatus {
   run_id: string; state: string; stage: string | null; done: number; total: number;
   pct: number | null; eta_seconds: number | null; heartbeat_at: string | null; stalled: boolean;
+  // Cooperative-control intent (REQ-A4): requested but not necessarily effected yet.
+  // Lets run-control gating survive a page reload mid-pause (ui-catch-up §10, A1).
+  pause_requested: boolean; cancel_requested: boolean;
 }
 export interface Occurrence {
   host: string | null; raw_url: string | null; source_path: string | null;
