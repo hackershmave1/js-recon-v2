@@ -21,6 +21,7 @@ from recon.api import (
     runs_router,
     sessions_router,
     spec_router,
+    wrappers_router,
 )
 from recon.api.deps import get_redis
 from recon.config import get_settings
@@ -41,6 +42,7 @@ def create_app() -> FastAPI:
     app.include_router(spec_router.router)
     app.include_router(export_router.router)
     app.include_router(base_url_router.router)
+    app.include_router(wrappers_router.router)
 
     @app.get("/healthz", tags=["ops"])
     def healthz() -> dict:

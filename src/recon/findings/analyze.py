@@ -28,7 +28,7 @@ from recon.db.base import tenant_session
 from recon.db.models import Run
 from recon.domain import AssetStatus, FindingType
 from recon.events.log import RecordedEvent, publish, record_event
-from recon.findings import engines, kingfisher, normalize, sourcemapper, store
+from recon.findings import engines, kingfisher, normalize, queries, sourcemapper, store
 from recon.findings.extract import RawEndpoint, extract
 from recon.findings.kingfisher import RawSecret
 from recon.findings.wrappers import WrapperRule
@@ -93,9 +93,12 @@ def analyze_run(
     An upload/single-URL run (no ``run_asset`` rows) falls through unchanged to
     the legacy path below: analyze ``run.input_ref`` as one unit. No input ->
     no-op."""
+    wrappers = _session_wrappers(tenant_id, run_id)  # REQ-D5: recognize taught wrappers live
     rows = run_assets.list_for_run(tenant_id, run_id)
     if rows:
-        return _analyze_assets(redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, rows=rows)
+        return _analyze_assets(
+            redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, rows=rows, wrappers=wrappers
+        )
     # ---- legacy single-blob path below (unchanged) ----
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
@@ -113,6 +116,7 @@ def analyze_run(
             source_map_ref=source_map_ref,
             run_asset_id=None,
             asset_url=None,
+            wrappers=wrappers,
         )
     publish(redis, coverage_event)
     log.info(
@@ -129,9 +133,21 @@ def analyze_run(
     return coverage
 
 
+def _session_wrappers(tenant_id: str, run_id: str) -> list[WrapperRule]:
+    """Load the taught wrapper callees for the run's session so the analyze stage
+    recognizes them live on this and every future run (REQ-D5). Empty when the run
+    is invisible (RLS) or has no rules."""
+    with tenant_session(tenant_id) as session:
+        run = session.get(Run, run_id)
+        if run is None:
+            return []
+        return queries.wrapper_rules_in_session(session, str(run.session_id))
+
+
 def _analyze_assets(
     redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None,
     rows: list[run_assets.AssetRow],
+    wrappers: Sequence[WrapperRule] = (),
 ) -> Coverage:
     """Analyze every fetched-but-not-yet-analyzed asset of a crawl run, best-effort.
 
@@ -202,6 +218,7 @@ def _analyze_assets(
                     source_map_ref=None,  # a crawled asset carries no source map this slice
                     run_asset_id=asset.id,
                     asset_url=asset.url,
+                    wrappers=wrappers,
                 )
                 run_assets.set_analyze_ok(session, asset.id)
         except (ClientError, SQLAlchemyError):
