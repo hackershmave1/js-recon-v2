@@ -478,6 +478,33 @@ class SessionBaseUrl(Base):
     updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
 
+class SessionWrapper(Base):
+    """A taught HTTP-client wrapper for a session (REQ-C2 first clause).
+
+    Session-scoped (survives continuous rescans, REQ-D5) like ``session_spec`` /
+    ``session_base_url``: the analyze stage and the out-of-band re-extract both read
+    it to recognize ``<callee>.<method>(...)`` calls. ``UNIQUE(session_id, callee)``
+    — one rule per callee; the POST upserts on it."""
+
+    __tablename__ = "session_wrapper"
+    __table_args__ = (
+        UniqueConstraint("session_id", "callee", name="uq_session_wrapper_session_callee"),
+        Index("ix_session_wrapper_session", "tenant_id", "session_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("session.id", ondelete="CASCADE"), nullable=False
+    )
+    callee: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+    updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
+
+
 # Tables carrying a tenant_id get FORCE RLS in the migration.
 TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "app_user",
@@ -505,3 +532,6 @@ SPEC_TABLES: tuple[str, ...] = ("session_spec", "finding_spec_status")
 
 # REQ-C2 manual base-URL addition, RLS-enabled by migration 0007.
 BASE_URL_TABLES: tuple[str, ...] = ("session_base_url",)
+
+# REQ-C2 wrapper-teaching addition, RLS-enabled by migration 0008.
+WRAPPER_TABLES: tuple[str, ...] = ("session_wrapper",)
