@@ -70,6 +70,15 @@ export interface BaseUrlRule {
   actor: string | null;
 }
 export interface BaseUrlRuleResult { rule: BaseUrlRule; summary: SpecSummary | null; }
+// Taught HTTP-client wrapper (design REQ-C2 first clause): a callee whose member
+// calls (`api.get('/x')`) the extractor treats as endpoints. `recovered` is the
+// number of finding/occurrence rows the re-extract wrote (0 when nothing is new).
+export interface WrapperRule {
+  id: string;
+  callee: string;
+  actor: string | null;
+}
+export interface WrapperRuleResult { rule: WrapperRule; recovered: number; }
 // One reconstructed request from GET /runs/{id}/requests (probe_router::_request_dict).
 // `artifacts` is null when `probeable` is false.
 export interface ReconstructedRequest {

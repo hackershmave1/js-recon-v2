@@ -85,10 +85,10 @@ def test_analyze_loop_records_ok_and_failed_per_asset(redis, authorized_session,
 
     real_extract = analyze.extract
 
-    def fake_extract(text):
+    def fake_extract(text, **kwargs):
         if text == "BOOM_TRIGGER":
             raise ValueError("simulated per-asset analyze failure")
-        return real_extract(text)
+        return real_extract(text, **kwargs)
 
     monkeypatch.setattr(analyze, "extract", fake_extract)
     analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
@@ -212,10 +212,10 @@ def test_analyze_loop_honors_cancel(redis, authorized_session, monkeypatch):
     real_extract = analyze.extract
     calls = []
 
-    def fake_extract(text):
+    def fake_extract(text, **kwargs):
         calls.append(text)
         run_service.request_cancel(redis, tenant_id=tenant, run_id=run_id)
-        return real_extract(text)
+        return real_extract(text, **kwargs)
 
     monkeypatch.setattr(analyze, "extract", fake_extract)
     with pytest.raises(retry.ControlInterrupt) as ci:
