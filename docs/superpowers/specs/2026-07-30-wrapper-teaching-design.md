@@ -228,6 +228,19 @@ All §4-gate blockers are resolved by the folds above; residuals, none blocking:
 - **Fuzzier matcher shapes:** factory-tracking, callable wrappers, dotted receivers (§4).
 - **Automatic cross-file base inference by unknown symbol** — the *other* §9 deferral from the base-URL slice;
   unrelated, stays deferred.
+- **409 partial-success on `add_rule`** (final-review Minor): the rule is committed in transaction 1, then
+  re-extract runs in its own transaction, so a vanished source blob returns 409 (`SourceBlobMissing`) even
+  though the rule persisted (it still applies to future runs and appears on GET). Safe-direction and rare;
+  a fully-consistent fix shares one transaction between persist + re-extract, or the FE reflects the saved
+  rule on a 409. Mirrors `base_url_service`'s two-transaction shape.
+- **`reextract_run` per-blob failure containment** (final-review Minor): re-extract catches only
+  `ClientError` (→ `SourceBlobMissing`); a non-infra exception mid-loop aborts the whole re-extract (unlike
+  `_analyze_assets`' per-asset containment). Acceptable for the synchronous MVP (idempotent outbox makes a
+  manual retry safe); the enqueue-to-worker path (§2.7) or per-blob try/except would harden it.
+- **Malformed `run_id` path param → 500 not 404** (final-review Minor, repo-wide chore, NOT introduced here):
+  `wrapper_service` resolves the run via `session.get(models.Run, run_id)` over an unvalidated path string,
+  so a non-UUID id raises a coercion 500 instead of a clean 404 — identical to the shipped
+  `base_url_service`/`spec` services. A shared UUID-path-param guard is a cross-cutting fix across all three.
 
 ## 11. REQ traceability
 
