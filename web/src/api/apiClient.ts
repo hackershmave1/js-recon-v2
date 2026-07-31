@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, FindingsResponse, RequestsResponse, RunRef, RunStatus, RunControlResult, SessionView, SpecSummary, Triage,
+  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, FindingsResponse, RequestsResponse, RunRef, RunStatus, RunControlResult, SessionView, SpecSummary, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -101,6 +101,23 @@ export function addBaseUrlRule(
 export function deleteBaseUrlRule(tenantId: string, runId: string, ruleId: string): Promise<void> {
   return request(
     `/runs/${encodeURIComponent(runId)}/base-url/${encodeURIComponent(ruleId)}`,
+    { method: "DELETE" }, tenantId,
+  );
+}
+
+export function listWrapperRules(tenantId: string, runId: string): Promise<WrapperRule[]> {
+  return request(`/runs/${encodeURIComponent(runId)}/wrappers`, {}, tenantId);
+}
+
+export function addWrapperRule(
+  tenantId: string, runId: string, body: { callee: string; actor?: string },
+): Promise<WrapperRuleResult> {
+  return request(`/runs/${encodeURIComponent(runId)}/wrappers`, json("POST", body), tenantId);
+}
+
+export function deleteWrapperRule(tenantId: string, runId: string, ruleId: string): Promise<void> {
+  return request(
+    `/runs/${encodeURIComponent(runId)}/wrappers/${encodeURIComponent(ruleId)}`,
     { method: "DELETE" }, tenantId,
   );
 }
