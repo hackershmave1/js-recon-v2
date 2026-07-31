@@ -347,9 +347,11 @@ def _analyze_blob(
     written = endpoints.written
 
     # Secrets are scanned on the original bundle this slice (input.js path).
+    # NOTE (follow-up): scanning recovered sources for secrets (real per-source
+    # paths for secrets too) is deferred; endpoint/param paths are the D3 win here.
+    secret_path = normalize.normalize_source_path(_SOURCE_NAME)
     # Per (rule, snippet) search cursor so N identical secret sightings map to N
     # distinct byte offsets (distinct occurrences, REQ-C2) instead of collapsing.
-    secret_path = normalize.normalize_source_path(_SOURCE_NAME)
     secret_cursors: dict[tuple[str, str], int] = {}
     for secret in scan.secrets:
         written += _record_secret(
