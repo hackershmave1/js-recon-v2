@@ -25,9 +25,11 @@ from recon.db.models import (
     RunEvent,
     SessionBaseUrl,
     SessionSpec,
+    SessionWrapper,
 )
 from recon.domain import FindingType
 from recon.findings.base_url import BaseUrlRule
+from recon.findings.wrappers import WrapperRule
 from recon.spec.classify import Classification, SpecSummary, summarize
 
 
@@ -228,6 +230,18 @@ def base_url_rules_in_session(session, session_id: str) -> list[BaseUrlRule]:
         )
         for row in rows
     ]
+
+
+def wrapper_rules_in_session(session, session_id: str) -> list[WrapperRule]:
+    """Every taught wrapper callee for a session, as pure WrapperRule values. Takes
+    an OPEN tenant session so a caller can load rules inside its own transaction
+    (mirrors ``base_url_rules_in_session``)."""
+    rows = session.scalars(
+        select(SessionWrapper)
+        .where(SessionWrapper.session_id == session_id)
+        .order_by(SessionWrapper.created_at)
+    ).all()
+    return [WrapperRule(callee=row.callee) for row in rows]
 
 
 def list_base_url_rules(tenant_id: str, run_id: str) -> list[BaseUrlRule]:
