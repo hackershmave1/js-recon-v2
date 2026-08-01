@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from recon.db.base import admin_session, tenant_session
-from recon.db.models import EngagementSession, Finding, Run, RunAsset, Tenant
+from recon.db.models import Engagement, EngagementSession, Finding, Run, RunAsset, Tenant
 from recon.domain import FindingType
 from recon.findings.queries import _latest_coverage
 
@@ -96,6 +96,12 @@ def create_session(
     if not authorized_by:
         raise AuthorizationRequired("an authorization acknowledgment is required")
     with tenant_session(tenant_id) as session:
+        if engagement_id is not None and session.get(Engagement, engagement_id) is None:
+            # RLS confines this lookup to the tenant's own engagements, so a miss means
+            # the engagement isn't this tenant's. Reject cleanly: an FK check bypasses
+            # RLS, so without this the insert would silently store an inert cross-tenant
+            # reference (and mislabel the failure as "unknown tenant").
+            raise SessionInvalid("unknown engagement")
         row = EngagementSession(
             tenant_id=tenant_id,
             name=name,

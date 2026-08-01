@@ -130,11 +130,18 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
       {error && <div className="sx-error">{error}</div>}
       {sessions == null && !error && <div className="sx-empty">Loading sessions…</div>}
       {sessions != null && visible.length === 0 && !error && (
-        <div className="sx-empty">
-          <div className="sx-empty-title">No sessions yet</div>
-          <div>Start a recon run to create your first session.</div>
-          <a className="sx-new" href="/"><Icon name="plus" size={14} />New Recon</a>
-        </div>
+        sessions.length === 0 ? (
+          <div className="sx-empty">
+            <div className="sx-empty-title">No sessions yet</div>
+            <div>Start a recon run to create your first session.</div>
+            <a className="sx-new" href="/"><Icon name="plus" size={14} />New Recon</a>
+          </div>
+        ) : (
+          <div className="sx-empty">
+            <div className="sx-empty-title">No sessions in this engagement</div>
+            <div>Switch engagement in the sidebar, or start a new recon run.</div>
+          </div>
+        )
       )}
 
       <div className="sx-grid">

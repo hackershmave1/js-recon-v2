@@ -181,6 +181,22 @@ def test_empty_engagement_name_is_400(tenant, redis):
     assert r.status_code == 400
 
 
+def test_session_rejects_another_tenants_engagement(tenant, redis):
+    client = _client()
+    other = sessions_service.create_tenant(f"other-{uuid.uuid4().hex[:8]}")
+    foreign = client.post(
+        "/engagements", headers=_hdr(other), json={"name": "Theirs"}
+    ).json()["engagement_id"]
+    # RLS hides the engagement from `tenant`, so attaching a session to it is rejected
+    # (a clean 400, not a silent inert cross-tenant FK reference).
+    r = client.post(
+        "/sessions",
+        headers=_hdr(tenant),
+        json={"scope_hosts": ["acme.io"], "authorized_by": "tester", "engagement_id": foreign},
+    )
+    assert r.status_code == 400
+
+
 def test_session_carries_its_engagement_id(tenant, redis):
     client = _client()
     engagement_id = client.post(

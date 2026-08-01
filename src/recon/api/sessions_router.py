@@ -48,7 +48,7 @@ def create_session(
             authorized_by=body.authorized_by,
             engagement_id=body.engagement_id,
         )
-    except service.AuthorizationRequired as exc:
+    except (service.AuthorizationRequired, service.SessionInvalid) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except IntegrityError as exc:
         # A syntactically-valid tenant id that isn't provisioned violates the FK.
