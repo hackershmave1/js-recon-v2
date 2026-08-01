@@ -1,9 +1,11 @@
+import { useNavigate } from "react-router";
 import { Icon } from "./icons";
+import { EngagementSwitcher } from "../features/sessions/EngagementSwitcher";
 
-// Left-nav sections. `soon` items have no backend/page yet (Threat Model = Slice 4;
-// Sessions = its own GET /sessions slice) — they render inert with a SOON tag rather
-// than linking to a fake page. The non-soon ids match the <section id> wrappers in
-// app.tsx so a click can scroll the matching panel into view.
+// Left-nav sections. ANALYZE items view a run's data, so they navigate (scroll to the
+// matching <section id> in app.tsx) only when a run is open; on the Sessions route they
+// render inert. "Sessions" is a real cross-run route (its own GET /sessions page);
+// "Threat Model" stays SOON (Slice 4) with no backend/page yet.
 export type NavItem = { id: string; label: string; icon: string; soon?: boolean };
 export const NAV_ITEMS: NavItem[] = [
   { id: "overview", label: "Overview", icon: "grid" },
@@ -11,14 +13,16 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "api-spec", label: "API Spec", icon: "code" },
   { id: "threat-model", label: "Threat Model", icon: "shield", soon: true },
   { id: "sources", label: "Sources", icon: "folder" },
-  { id: "sessions", label: "Sessions", icon: "layers", soon: true },
 ];
 
-export function Sidebar({ runId, active, onNavigate }: {
-  runId: string;
+export function Sidebar({ mode, runId, active, onNavigate }: {
+  mode: "run" | "sessions";
+  runId?: string;
   active: string;
   onNavigate: (id: string) => void;
 }) {
+  const navigate = useNavigate();
+  const inRun = mode === "run";
   return (
     <aside className="shell-side">
       <div className="shell-brand">
@@ -31,14 +35,27 @@ export function Sidebar({ runId, active, onNavigate }: {
 
       <nav className="shell-nav" aria-label="Analyze">
         <div className="shell-nav-label">ANALYZE</div>
-        {NAV_ITEMS.map((item) =>
-          item.soon ? (
-            <div key={item.id} className="shell-nav-item is-soon" aria-disabled="true">
-              <span className="shell-nav-ico"><Icon name={item.icon} /></span>
-              <span className="shell-nav-txt">{item.label}</span>
-              <span className="shell-soon">SOON</span>
-            </div>
-          ) : (
+        {NAV_ITEMS.map((item) => {
+          if (item.soon) {
+            return (
+              <div key={item.id} className="shell-nav-item is-soon" aria-disabled="true">
+                <span className="shell-nav-ico"><Icon name={item.icon} /></span>
+                <span className="shell-nav-txt">{item.label}</span>
+                <span className="shell-soon">SOON</span>
+              </div>
+            );
+          }
+          if (!inRun) {
+            // The analysis views need a selected run; on /sessions they are inert.
+            return (
+              <div key={item.id} className="shell-nav-item is-inert" aria-disabled="true"
+                title="Open a session to view its analysis">
+                <span className="shell-nav-ico"><Icon name={item.icon} /></span>
+                <span className="shell-nav-txt">{item.label}</span>
+              </div>
+            );
+          }
+          return (
             <button
               key={item.id}
               type="button"
@@ -49,19 +66,33 @@ export function Sidebar({ runId, active, onNavigate }: {
               <span className="shell-nav-ico"><Icon name={item.icon} /></span>
               <span className="shell-nav-txt">{item.label}</span>
             </button>
-          ),
-        )}
+          );
+        })}
+        {/* Sessions is a real cross-run route, not a scroll target within a run. */}
+        <button
+          type="button"
+          className={"shell-nav-item" + (mode === "sessions" ? " is-active" : "")}
+          aria-current={mode === "sessions" ? "page" : undefined}
+          onClick={() => navigate("/sessions")}
+        >
+          <span className="shell-nav-ico"><Icon name="layers" /></span>
+          <span className="shell-nav-txt">Sessions</span>
+        </button>
       </nav>
 
       <div className="shell-eng">
         <div className="shell-nav-label">ENGAGEMENT</div>
-        <div className="shell-eng-card">
-          <span className="shell-eng-mark"><Icon name="folder" size={15} /></span>
-          <span className="shell-eng-body">
-            <span className="shell-eng-name">Current run</span>
-            <span className="shell-eng-id" title={runId}>{runId.slice(0, 8)}</span>
-          </span>
-        </div>
+        {inRun ? (
+          <div className="shell-eng-card">
+            <span className="shell-eng-mark"><Icon name="folder" size={15} /></span>
+            <span className="shell-eng-body">
+              <span className="shell-eng-name">Current run</span>
+              <span className="shell-eng-id" title={runId}>{runId ? runId.slice(0, 8) : "—"}</span>
+            </span>
+          </div>
+        ) : (
+          <EngagementSwitcher />
+        )}
       </div>
     </aside>
   );

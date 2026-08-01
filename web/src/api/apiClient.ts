@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, FindingsResponse, RequestsResponse, RunRef, RunStatus, RunControlResult, SessionView, SourceContent, SourcesResponse, SpecSummary, Triage, WrapperRule, WrapperRuleResult,
+  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, Engagement, EngagementsListResponse, FindingsResponse, RequestsResponse, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SpecSummary, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -34,9 +34,53 @@ function json(method: string, body: unknown): RequestInit {
 }
 
 export function createSession(
-  tenantId: string, body: { scope_hosts: string[]; authorized_by: string; name?: string },
+  tenantId: string,
+  body: { scope_hosts: string[]; authorized_by: string; name?: string; engagement_id?: string },
 ): Promise<SessionView> {
   return request("/sessions", json("POST", body), tenantId);
+}
+
+// --- R6 Sessions surface --------------------------------------------------- //
+
+export function listSessions(
+  tenantId: string, opts: { archived?: boolean } = {},
+): Promise<SessionsListResponse> {
+  return request(`/sessions${opts.archived ? "?archived=true" : ""}`, {}, tenantId);
+}
+
+export function getSessionRuns(tenantId: string, sessionId: string): Promise<SessionRunsResponse> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/runs`, {}, tenantId);
+}
+
+export function renameSession(tenantId: string, sessionId: string, name: string): Promise<SessionDetail> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}`, json("PATCH", { name }), tenantId);
+}
+
+export function archiveSession(tenantId: string, sessionId: string, archived: boolean): Promise<SessionDetail> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}`, json("PATCH", { archived }), tenantId);
+}
+
+export function deleteSession(tenantId: string, sessionId: string): Promise<void> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }, tenantId);
+}
+
+// Re-run reproduces the session's latest run (crawl re-fetch / upload re-analyze) as a
+// new run under the same session; returns the new RunRef, like POST /runs.
+export function rerunSession(tenantId: string, sessionId: string): Promise<RunRef> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/rerun`, { method: "POST" }, tenantId);
+}
+
+// --- R6 Engagement tier ---------------------------------------------------- //
+
+export function listEngagements(tenantId: string): Promise<EngagementsListResponse> {
+  return request("/engagements", {}, tenantId);
+}
+
+export function createEngagement(
+  tenantId: string,
+  body: { name: string; in_scope_domains: string[]; out_of_scope_domains: string[] },
+): Promise<Engagement> {
+  return request("/engagements", json("POST", body), tenantId);
 }
 
 export function uploadRun(tenantId: string, form: FormData): Promise<RunRef> {

@@ -40,9 +40,11 @@
   text-align: left; cursor: pointer;
   transition: background .12s ease, color .12s ease;
 }
-.shell-nav-item:hover:not(.is-soon) { background: var(--surface); color: var(--text-2); }
+.shell-nav-item:hover:not(.is-soon):not(.is-inert) { background: var(--surface); color: var(--text-2); }
 .shell-nav-item.is-active { background: var(--accent-soft); color: var(--accent); border-left-color: var(--accent); }
 .shell-nav-item.is-soon { color: var(--faint); cursor: default; }
+/* an analysis view with no run selected (Sessions route): visible but not clickable */
+.shell-nav-item.is-inert { color: var(--faint); cursor: default; }
 .shell-nav-ico { width: 18px; height: 18px; flex: 0 0 18px; display: inline-flex; }
 .shell-nav-txt { flex: 1; }
 .shell-soon {

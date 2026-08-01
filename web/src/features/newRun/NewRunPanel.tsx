@@ -24,8 +24,12 @@ export function NewRunPanel() {
     if (!ready || !tenantId) return;
     setBusy(true); setError(null);
     try {
+      // Attach the active engagement (picked in the Sessions engagement switcher) so a
+      // new run's session rolls up under it. Absent -> body stays {scope_hosts, authorized_by}.
+      const engagementId = localStorage.getItem("recon.engagementId");
       const session = await createSession(tenantId, {
         scope_hosts: [scopeHost.trim()], authorized_by: authorizedBy.trim(),
+        ...(engagementId ? { engagement_id: engagementId } : {}),
       });
       if (mode === "crawl") {
         const run = await startRun(tenantId, { session_id: session.session_id, target: domain.trim() });
