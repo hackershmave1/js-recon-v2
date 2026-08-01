@@ -1,0 +1,93 @@
+import type { FindingsResponse, Finding } from "../../api/types";
+import "./overview.css";
+
+// The workspace lays each panel out as a <section id>; the Overview metric cards
+// are shortcuts that scroll to the matching detail section. Called only from a
+// click handler, never at render, so jsdom (no scrollIntoView) is never exercised.
+function goToSection(sectionId: string) {
+  document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+const DASH = "—"; // shown when the underlying metric isn't available yet
+
+function countType(findings: Finding[], type: string): number {
+  return findings.filter((f) => f.type === type).length;
+}
+
+// Production findings carry severity = null, so there is no severity to rank by.
+// Priority instead follows recon value: an undocumented (shadow) endpoint first,
+// then secrets, then other endpoints, then everything else.
+function priorityRank(f: Finding): number {
+  if (f.type === "endpoint" && f.spec_status?.status === "shadow") return 0;
+  if (f.type === "secret") return 1;
+  if (f.type === "endpoint") return 2;
+  return 3;
+}
+
+export function OverviewPanel({ data }: { data: FindingsResponse }) {
+  const c = data.coverage;
+  const attributedTotal = c ? c.attributed + c.unattributed : 0;
+  const attributionPct = attributedTotal > 0 ? Math.round((c!.attributed / attributedTotal) * 100) : null;
+  const endpoints = countType(data.findings, "endpoint");
+  const secrets = c ? c.secrets : countType(data.findings, "secret");
+  const files = c ? c.files.length : null;
+
+  const metrics = [
+    { key: "files", label: "Files", section: "sources",
+      value: files == null ? DASH : String(files),
+      sub: c ? `${c.sources_recovered} via source maps` : "awaiting analysis" },
+    { key: "endpoints", label: "Endpoints", section: "findings",
+      value: String(endpoints),
+      sub: data.spec ? `${data.spec.shadow} shadow` : "API surface" },
+    { key: "secrets", label: "Secrets", section: "findings",
+      value: String(secrets),
+      sub: c?.secrets_engine ? `secrets engine ${c.secrets_engine}` : "hardcoded values" },
+    { key: "coverage", label: "Attribution", section: "findings",
+      value: attributionPct == null ? DASH : `${attributionPct}%`,
+      sub: c ? `${c.attributed} attributed · ${c.unattributed} not` : "awaiting analysis" },
+  ];
+
+  const top = [...data.findings].sort((a, b) => priorityRank(a) - priorityRank(b)).slice(0, 6);
+
+  return (
+    <div className="ov">
+      <div className="ov-metrics">
+        {metrics.map((m) => (
+          <button key={m.key} type="button" className="ov-card" onClick={() => goToSection(m.section)}>
+            <span className="ov-metric-label">{m.label}</span>
+            <span className="ov-metric-value">{m.value}</span>
+            <span className="ov-metric-sub">{m.sub}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="ov-panel">
+        <div className="ov-panel-head">
+          <span className="ov-panel-title">Top findings</span>
+          <button type="button" className="ov-link" onClick={() => goToSection("findings")}>View all</button>
+        </div>
+        {top.length === 0 ? (
+          <p className="muted ov-empty">No findings yet.</p>
+        ) : (
+          <ul className="ov-list">
+            {top.map((f) => {
+              const occ = f.occurrences[0];
+              const where = occ?.source_path
+                ? `${occ.source_path}${occ.line != null ? `:${occ.line}` : ""}`
+                : null;
+              const isShadow = f.type === "endpoint" && f.spec_status?.status === "shadow";
+              return (
+                <li key={f.finding_hash} className="ov-row">
+                  <span className={`ov-type ov-type-${f.type}`}>{f.type}</span>
+                  {isShadow && <span className="chip chip-shadow">shadow</span>}
+                  <span className="ov-val">{f.value ?? f.path ?? "(unnamed)"}</span>
+                  {where && <span className="ov-where">{where}</span>}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
