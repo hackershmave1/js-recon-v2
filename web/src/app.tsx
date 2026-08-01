@@ -4,7 +4,7 @@ import { NewRunPanel } from "./features/newRun/NewRunPanel";
 import { RunProgress } from "./features/progress/RunProgress";
 import { FindingsPage } from "./features/findings/FindingsPage";
 import { AssetsInventory } from "./features/discovery/AssetsInventory";
-import { ExportSpecButton } from "./features/export/ExportSpecButton";
+import { ApiSpecPage } from "./features/apispec/ApiSpecPage";
 import { ProbePanel } from "./features/probe/ProbePanel";
 import { OverviewPanel } from "./features/overview/OverviewPanel";
 import { Shell } from "./shell/Shell";
@@ -33,7 +33,7 @@ export function RunWorkspace() {
       )}
       {terminal && (
         <section id="api-spec">
-          <ExportSpecButton runId={id} />
+          <ApiSpecPage data={findings} runId={id} />
         </section>
       )}
       {findings && (
