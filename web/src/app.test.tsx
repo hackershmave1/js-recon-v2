@@ -9,7 +9,7 @@ import * as api from "./api/apiClient";
 import type { FindingsResponse } from "./api/types";
 
 // Mock RunProgress: no streaming/fetching. Feed findings up via an effect (NOT during
-// render) so RunWorkspace's onFindings->FindingsView wiring is exercised without a
+// render) so RunWorkspace's onFindings->FindingsPage wiring is exercised without a
 // setState-in-render warning. NOTE: define the fixture INLINE here — a top-level const
 // would be in the TDZ when this hoisted factory runs.
 vi.mock("./features/progress/RunProgress", () => ({
@@ -44,8 +44,8 @@ describe("app routes", () => {
   it("renders RunWorkspace at /runs/:id and surfaces findings via onFindings", async () => {
     renderAt("/runs/r1");
     expect(screen.getByText("PROGRESS")).toBeInTheDocument();
-    expect(await screen.findByRole("heading", { name: /coverage/i })).toBeInTheDocument(); // FindingsView rendered
-    expect(screen.getAllByText("endpoint").length).toBeGreaterThan(0);      // grouped finding rendered
+    expect(await screen.findByRole("heading", { name: "Findings" })).toBeInTheDocument(); // FindingsPage rendered
+    expect(screen.getAllByText("endpoint").length).toBeGreaterThan(0);      // finding surfaced (facet + row)
   });
 
   it("shows the Export spec button once the run is terminal", async () => {

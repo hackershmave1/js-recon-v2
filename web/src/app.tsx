@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useParams } from "react-router";
 import { NewRunPanel } from "./features/newRun/NewRunPanel";
 import { RunProgress } from "./features/progress/RunProgress";
-import { FindingsView } from "./features/findings/FindingsView";
+import { FindingsPage } from "./features/findings/FindingsPage";
 import { AssetsInventory } from "./features/discovery/AssetsInventory";
 import { ExportSpecButton } from "./features/export/ExportSpecButton";
 import { ProbePanel } from "./features/probe/ProbePanel";
@@ -38,7 +38,7 @@ export function RunWorkspace() {
       )}
       {findings && (
         <section id="findings">
-          <FindingsView data={findings} runId={id} />
+          <FindingsPage data={findings} runId={id} />
         </section>
       )}
       {terminal && (
