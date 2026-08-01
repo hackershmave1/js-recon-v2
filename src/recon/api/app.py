@@ -20,6 +20,7 @@ from recon.api import (
     probe_router,
     runs_router,
     sessions_router,
+    sources_router,
     spec_router,
     wrappers_router,
 )
@@ -39,6 +40,7 @@ def create_app() -> FastAPI:
     app.include_router(runs_router.router)
     app.include_router(findings_router.router)
     app.include_router(probe_router.router)
+    app.include_router(sources_router.router)
     app.include_router(spec_router.router)
     app.include_router(export_router.router)
     app.include_router(base_url_router.router)
