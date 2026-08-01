@@ -8,7 +8,7 @@ one place means the API and the worker never hand-wire queues themselves.
 from __future__ import annotations
 
 from redis import Redis
-from sqlalchemy import update
+from sqlalchemy import desc, select, update
 
 from recon import storage
 from recon.config import get_settings
@@ -117,6 +117,49 @@ def start_run_with_input(
         session.execute(update(Run).where(Run.id == view.id).values(**values))
     enqueue_stage(redis, tenant_id=tenant_id, run_id=view.id, stage=RunStage.DISCOVERING)
     return view
+
+
+class NoRunToRerun(Exception):
+    """The session has no prior run whose input can be reproduced."""
+
+
+def rerun(redis: Redis, *, tenant_id: str, session_id: str) -> RunView:
+    """Start a fresh run reproducing the session's most recent run (R6 re-run).
+
+    A crawl run is reproduced by re-fetching its ``target``; an upload/legacy run
+    by re-analyzing the SAME stored bytes (a fresh blob copy, plus any source map),
+    so an extraction change (e.g. a newly taught wrapper) is picked up on the new
+    run. Raises :class:`NoRunToRerun` when the latest run carries neither a reusable
+    input blob nor a target to re-fetch.
+    """
+    with tenant_session(tenant_id) as session:
+        latest = session.scalars(
+            select(Run)
+            .where(Run.session_id == str(session_id))
+            .order_by(desc(Run.created_at))
+            .limit(1)
+        ).first()
+        if latest is None:
+            raise NoRunToRerun("session has no run to re-run")
+        input_ref = latest.input_ref
+        source_map_ref = latest.source_map_ref
+        target = latest.target
+    if input_ref:
+        js_source = storage.get_blob(input_ref)
+        map_source = storage.get_blob(source_map_ref) if source_map_ref else None
+        return start_run_with_input(
+            redis,
+            tenant_id=tenant_id,
+            session_id=str(session_id),
+            js_source=js_source,
+            map_source=map_source,
+            target=target,
+        )
+    if target:
+        return start_run(
+            redis, tenant_id=tenant_id, session_id=str(session_id), target=target
+        )
+    raise NoRunToRerun("latest run has neither stored input nor a target to re-run")
 
 
 def advance(redis: Redis, *, tenant_id: str, run_id: str, completed: RunStage) -> None:

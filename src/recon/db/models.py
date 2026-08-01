@@ -78,6 +78,33 @@ class AppUser(Base):
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
 
+class Engagement(Base):
+    """A named scope umbrella grouping sessions (design R6: Engagement -> Session -> Run).
+
+    Holds the analyst-facing scope statement (in/out-of-scope domains) shown in the
+    UI's engagement switcher. It is organizational metadata only: the *enforced*
+    egress scope for a run still comes from its session's ``scope_hosts`` (REQ-P2),
+    never derived from an engagement here. Tenant-scoped (RLS) like every table."""
+
+    __tablename__ = "engagement"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    in_scope_domains: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    out_of_scope_domains: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+    updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
+
+    sessions: Mapped[list["EngagementSession"]] = relationship(back_populates="engagement")
+
+
 class EngagementSession(Base):
     """An engagement grouping runs; owns the scope lock (REQ-P3, REQ-C1).
 
@@ -104,7 +131,16 @@ class EngagementSession(Base):
     authorized_by: Mapped[str | None] = mapped_column(Text)
     authorized_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+    # Optional grouping under an engagement (design R6). Nullable so pre-engagement
+    # sessions stay valid; SET NULL on engagement delete orphans the session rather
+    # than cascade-deleting its recon history.
+    engagement_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("engagement.id", ondelete="SET NULL")
+    )
+    # Soft-hide from the default Sessions list (R6 archive); recon data is retained.
+    archived_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
+    engagement: Mapped["Engagement | None"] = relationship(back_populates="sessions")
     runs: Mapped[list["Run"]] = relationship(back_populates="session")
 
 
@@ -535,3 +571,6 @@ BASE_URL_TABLES: tuple[str, ...] = ("session_base_url",)
 
 # REQ-C2 wrapper-teaching addition, RLS-enabled by migration 0008.
 WRAPPER_TABLES: tuple[str, ...] = ("session_wrapper",)
+
+# R6 engagement-tier addition, RLS-enabled by migration 0009.
+ENGAGEMENT_TABLES: tuple[str, ...] = ("engagement",)

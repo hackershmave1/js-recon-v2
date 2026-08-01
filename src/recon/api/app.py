@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from recon.api import (
     base_url_router,
+    engagements_router,
     export_router,
     findings_router,
     probe_router,
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
     configure_logging(settings.log_level, json=settings.env != "local")
     app = FastAPI(title="Recon platform", version="0.1.0")
     app.include_router(sessions_router.router)
+    app.include_router(engagements_router.router)
     app.include_router(runs_router.router)
     app.include_router(findings_router.router)
     app.include_router(probe_router.router)
