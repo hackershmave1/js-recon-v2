@@ -1,26 +1,96 @@
-:root { color-scheme: dark; --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --border:#30363d; --danger:#f85149; --ok:#3fb950; --warn:#d29922; }
+/* Recon Workspace design system — tokens pulled from the design mockup
+   (Javascript recon app redesign/Recon Workspace.dc.html). The class contract
+   here (.card / .muted / .sev-high / .chip[-*] + base button/input) is the one
+   the existing feature components already use, so restyling in place re-skins
+   the whole app without touching component markup. Shell/layout classes are
+   added on top of these primitives in the app-shell slice. */
+
+:root {
+  color-scheme: dark;
+
+  /* surfaces — deepest bg to raised card */
+  --bg:#0B0D13; --panel:#11141d; --surface:#161b26; --card:#1c2230; --raised:#232b3b;
+  --field:#0c0f16;
+  --border:#2a3243; --border-strong:#3d465c;
+
+  /* text — brightest to faintest */
+  --text:#ECEFF6; --text-2:#C7D0E0; --muted:#98A2B8; --dim:#7E8AA3; --faint:#5C6680;
+
+  /* signature lime accent */
+  --accent:#CDEB45; --accent-hi:#D9F25E; --accent-ink:#0B0D13;
+  --accent-soft:rgba(205,235,69,0.13); --accent-line:rgba(205,235,69,0.35);
+
+  /* semantic — critical/warn/info/llm/ok */
+  --danger:#FF4D5E; --warn:#FFC73D; --info:#6BA8FF; --purple:#C792EA;
+  --teal:#5BD6C0; --ok:#5BD6C0; --orange:#FF8A47; --pink:#FF6B8A;
+
+  /* type — display / body / code */
+  --font-sans:'IBM Plex Sans', system-ui, -apple-system, Segoe UI, sans-serif;
+  --font-display:'Space Grotesk', var(--font-sans);
+  --font-mono:'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* radii */
+  --r-sm:6px; --r:8px; --r-lg:12px; --r-pill:999px;
+}
+
 * { box-sizing: border-box; }
-body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 ui-sans-serif,system-ui,sans-serif; }
-button { background:var(--accent); color:#0d1117; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; }
-button:disabled { opacity:.5; cursor:not-allowed; }
-input, textarea, select { background:#010409; color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:6px 8px; }
-.card { border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; }
-.sev-high{color:var(--danger)} .muted{color:var(--muted)}
-/* Slice Y: one small pill language for both per-asset fetch/analyze status
-   (pending/ok/failed) and the run terminal-state badge (done/partial/failed/
-   cancelled) — "failed" is shared by both, "done"/"ok" share one color. */
-.chip { display:inline-block; padding:1px 7px; border-radius:999px; font-size:11px; font-weight:600; border:1px solid var(--border); margin-left:4px; }
-.chip-pending, .chip-cancelled { color:var(--muted); border-color:var(--muted); }
-.chip-ok, .chip-done { color:var(--ok); border-color:var(--ok); }
-.chip-failed { color:var(--danger); border-color:var(--danger); }
-.chip-partial { color:var(--warn); border-color:var(--warn); }
-/* Task 12 (shadow-API UI): same pill language, one modifier per spec_status
-   verdict (design §6.4) -- documented mirrors chip-ok/chip-done's green,
-   shadow mirrors chip-failed's red (an undocumented call is the one worth
-   attention), unresolved mirrors chip-partial's amber (ambiguous, not a clean
-   verdict either way), unclassified mirrors chip-pending's muted grey (no
-   spec attached yet, nothing to compare against). */
-.chip-documented { color:var(--ok); border-color:var(--ok); }
-.chip-shadow { color:var(--danger); border-color:var(--danger); }
-.chip-unresolved { color:var(--warn); border-color:var(--warn); }
-.chip-unclassified { color:var(--muted); border-color:var(--muted); }
+html, body { margin:0; }
+body {
+  background:var(--bg); color:var(--text);
+  font-family:var(--font-sans); font-size:14px; line-height:1.55;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+}
+html, body, #root { height: 100%; }
+
+h1, h2, h3, h4 { font-family:var(--font-display); font-weight:600; line-height:1.2; margin:0 0 .5em; color:var(--text); letter-spacing:-0.01em; }
+h1 { font-size:24px; } h2 { font-size:18px; } h3 { font-size:15px; }
+p { margin:.4em 0; }
+a { color:var(--accent); text-decoration:none; }
+a:hover { text-decoration:underline; }
+code, pre, .mono { font-family:var(--font-mono); }
+::selection { background:var(--accent-line); color:var(--text); }
+
+/* thin dark scrollbars so panels don't sprout bright native bars */
+* { scrollbar-width:thin; scrollbar-color:var(--border-strong) transparent; }
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-thumb { background:var(--border-strong); border-radius:8px; border:2px solid var(--bg); }
+::-webkit-scrollbar-track { background:transparent; }
+
+/* Base button is the NEUTRAL/secondary action (most buttons in the app are
+   utility actions like copy/save/triage). Primary CTAs opt into .btn-primary. */
+button {
+  font-family:var(--font-sans); font-size:13px; font-weight:500;
+  color:var(--text); background:var(--raised);
+  border:1px solid var(--border-strong); border-radius:var(--r-sm);
+  padding:7px 13px; cursor:pointer;
+  transition:background .12s ease, border-color .12s ease;
+}
+button:hover:not(:disabled) { background:#2b3446; border-color:var(--faint); }
+button:disabled { opacity:.45; cursor:not-allowed; }
+.btn-primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+.btn-primary:hover:not(:disabled) { background:var(--accent-hi); border-color:var(--accent-hi); }
+
+input, textarea, select {
+  font-family:var(--font-sans); font-size:13px; color:var(--text);
+  background:var(--field); border:1px solid var(--border); border-radius:var(--r-sm);
+  padding:7px 10px;
+}
+input:focus, textarea:focus, select:focus {
+  outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft);
+}
+label { display:block; font-size:12px; color:var(--muted); margin:0 0 4px; }
+
+.card { background:var(--card); border:1px solid var(--border); border-radius:var(--r-lg); padding:16px; margin:12px 0; }
+
+.muted { color:var(--muted); }
+.sev-high { color:var(--danger); }
+
+/* One pill language for run terminal-state + per-asset fetch/analyze status +
+   spec_status verdicts. Colour encodes outcome, not identity: green = clean/done,
+   red = failed/shadow (an undocumented call is the one worth attention), amber =
+   partial/unresolved (ambiguous), grey = pending/unclassified (nothing to judge). */
+.chip { display:inline-block; padding:1px 9px; border-radius:var(--r-pill); font-size:11px; font-weight:500; border:1px solid var(--border-strong); margin-left:6px; color:var(--muted); background:var(--surface); }
+.chip-pending, .chip-cancelled, .chip-unclassified { color:var(--dim); border-color:var(--border-strong); background:var(--surface); }
+.chip-ok, .chip-done, .chip-documented { color:var(--ok); border-color:rgba(91,214,192,0.4); background:rgba(91,214,192,0.1); }
+.chip-failed, .chip-shadow { color:var(--danger); border-color:rgba(255,77,94,0.4); background:rgba(255,77,94,0.1); }
+.chip-partial, .chip-unresolved { color:var(--warn); border-color:rgba(255,199,61,0.4); background:rgba(255,199,61,0.1); }

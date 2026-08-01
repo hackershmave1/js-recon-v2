@@ -6,6 +6,7 @@ import { FindingsView } from "./features/findings/FindingsView";
 import { AssetsInventory } from "./features/discovery/AssetsInventory";
 import { ExportSpecButton } from "./features/export/ExportSpecButton";
 import { ProbePanel } from "./features/probe/ProbePanel";
+import { Shell } from "./shell/Shell";
 import { useTenant } from "./tenant/TenantContext";
 import { TERMINAL_STATES, type FindingsResponse } from "./api/types";
 
@@ -16,14 +17,34 @@ export function RunWorkspace() {
   const [state, setState] = useState<string | null>(null);
   if (!id) return null;
   const terminal = state != null && TERMINAL_STATES.has(state);
+  // Each panel is wrapped in a <section id> matching a Sidebar nav item so the shell
+  // can scroll to it. Render conditions are unchanged from before the shell landed.
   return (
-    <div>
-      <RunProgress runId={id} onFindings={setFindings} onState={setState} />
-      {tenantId && <AssetsInventory tenantId={tenantId} runId={id} />}
-      {terminal && <ExportSpecButton runId={id} />}
-      {findings && <FindingsView data={findings} runId={id} />}
-      {terminal && <ProbePanel runId={id} />}
-    </div>
+    <Shell runId={id}>
+      <section id="overview">
+        <RunProgress runId={id} onFindings={setFindings} onState={setState} />
+      </section>
+      {tenantId && (
+        <section id="sources">
+          <AssetsInventory tenantId={tenantId} runId={id} />
+        </section>
+      )}
+      {terminal && (
+        <section id="api-spec">
+          <ExportSpecButton runId={id} />
+        </section>
+      )}
+      {findings && (
+        <section id="findings">
+          <FindingsView data={findings} runId={id} />
+        </section>
+      )}
+      {terminal && (
+        <section id="probe">
+          <ProbePanel runId={id} />
+        </section>
+      )}
+    </Shell>
   );
 }
 
