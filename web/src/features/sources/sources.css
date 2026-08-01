@@ -1,0 +1,43 @@
+/* Sources page (design "Sources"): a file tree + a code viewer over the run's
+   stored JavaScript, served by GET /runs/{id}/sources(/content). Real data only:
+   the tree is the actual stored source files (legacy bundle or crawl assets),
+   the viewer shows their real bytes with finding markers joined from the run's
+   occurrences. The design's Deobfuscate action + source-map "reconstructed from
+   source maps" file set are omitted — neither is produced by the backend. */
+
+.sv { display: flex; align-items: stretch; min-height: 460px; }
+
+/* ---- file tree ---- */
+.sv-rail { width: 300px; flex: 0 0 300px; border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+.sv-rail-head { padding: 2px 16px 10px; }
+.sv-rail-title { font-family: var(--font-display); font-weight: 700; font-size: 18px; margin: 0; }
+.sv-rail-sub { font-size: 12px; color: var(--faint); margin-top: 2px; }
+.sv-tree { flex: 1; overflow-y: auto; padding: 6px 8px 24px; }
+.sv-node { width: 100%; display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: none; background: transparent; font-family: var(--font-mono); font-size: 12px; color: var(--muted); text-align: left; border-radius: var(--r-sm); }
+.sv-dir { font-weight: 600; }
+button.sv-node { cursor: pointer; color: var(--text-2); }
+button.sv-node:hover { background: var(--surface); }
+button.sv-node.sel { background: var(--accent-soft); color: var(--accent); }
+.sv-node-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-node-badge { font-family: var(--font-sans); font-size: 9.5px; font-weight: 700; color: var(--orange); background: rgba(255,138,71,0.12); padding: 1px 6px; border-radius: var(--r-pill); flex: 0 0 auto; }
+.sv-node-status { font-size: 9.5px; color: var(--warn); flex: 0 0 auto; }
+.sv-ico { flex: 0 0 14px; height: 14px; color: var(--faint); display: inline-flex; }
+
+/* ---- code viewer ---- */
+.sv-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sv-file-head { display: flex; align-items: center; gap: 12px; padding: 11px 20px; border-bottom: 1px solid var(--border); }
+.sv-file-path { font-family: var(--font-mono); font-size: 12.5px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-file-count { font-size: 11.5px; color: var(--orange); background: rgba(255,138,71,0.1); padding: 3px 10px; border-radius: var(--r-pill); font-weight: 600; flex: 0 0 auto; }
+.sv-spacer { flex: 1; }
+.sv-note { padding: 9px 20px; font-size: 12px; border-bottom: 1px solid var(--border); }
+.sv-warn { color: var(--warn); }
+.sv-code { flex: 1; overflow: auto; background: var(--field); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; }
+.sv-line { display: flex; border-left: 3px solid transparent; }
+.sv-line.marked { background: rgba(255,77,94,0.08); border-left-color: var(--danger); }
+.sv-ln { flex: 0 0 52px; text-align: right; padding: 0 14px 0 0; color: var(--faint); user-select: none; }
+.sv-line.marked .sv-ln { color: var(--danger); }
+.sv-code-txt { color: var(--text-2); white-space: pre; padding-right: 20px; }
+.sv-mark { margin-left: auto; flex: 0 0 auto; padding: 0 14px; color: var(--danger); font-size: 10.5px; }
+
+.sv-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--faint); padding: 40px; text-align: center; }
+.sv-empty-title { font-family: var(--font-display); font-size: 15px; color: var(--muted); }

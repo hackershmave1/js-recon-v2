@@ -89,6 +89,15 @@ export interface ReconstructedRequest {
   artifacts: { curl: string; http: string } | null;
 }
 export interface RequestsResponse { run_id: string; count: number; requests: ReconstructedRequest[]; }
+// One stored source file for a run (GET /runs/{id}/sources). `path` is "input.js"
+// for a legacy single-bundle run, or the asset URL for a crawl asset; `kind`
+// distinguishes them. `fetch_status` === "ok" means the bytes are viewable — a
+// pending/failed crawl asset is listed but has no content to fetch.
+export interface SourceFile { path: string; kind: "asset" | "upload"; fetch_status: string; }
+export interface SourcesResponse { run_id: string; count: number; sources: SourceFile[]; }
+// One source file's decoded text (GET /runs/{id}/sources/content?path=).
+// `truncated` is true when the raw blob exceeded the server's response cap.
+export interface SourceContent { path: string; content: string; truncated: boolean; }
 // Result of POST pause/cancel/resume. pause returns pause_requested; cancel returns
 // cancel_requested; resume returns neither — all three return the authoritative state.
 export interface RunControlResult { run_id: string; state: string; pause_requested?: boolean; cancel_requested?: boolean; }

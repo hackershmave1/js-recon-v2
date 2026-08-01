@@ -3,7 +3,7 @@ import { useParams } from "react-router";
 import { NewRunPanel } from "./features/newRun/NewRunPanel";
 import { RunProgress } from "./features/progress/RunProgress";
 import { FindingsPage } from "./features/findings/FindingsPage";
-import { AssetsInventory } from "./features/discovery/AssetsInventory";
+import { SourcesPage } from "./features/sources/SourcesPage";
 import { ApiSpecPage } from "./features/apispec/ApiSpecPage";
 import { ProbePanel } from "./features/probe/ProbePanel";
 import { OverviewPanel } from "./features/overview/OverviewPanel";
@@ -28,7 +28,7 @@ export function RunWorkspace() {
       </section>
       {tenantId && (
         <section id="sources">
-          <AssetsInventory tenantId={tenantId} runId={id} />
+          <SourcesPage data={findings} tenantId={tenantId} runId={id} />
         </section>
       )}
       {terminal && (

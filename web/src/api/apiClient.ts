@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, FindingsResponse, RequestsResponse, RunRef, RunStatus, RunControlResult, SessionView, SpecSummary, Triage, WrapperRule, WrapperRuleResult,
+  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, FindingsResponse, RequestsResponse, RunRef, RunStatus, RunControlResult, SessionView, SourceContent, SourcesResponse, SpecSummary, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -55,6 +55,17 @@ export function getAssets(tenantId: string, runId: string): Promise<AssetsManife
 
 export function getStatus(tenantId: string, runId: string): Promise<RunStatus> {
   return request(`/runs/${encodeURIComponent(runId)}/status`, {}, tenantId);
+}
+
+export function getSources(tenantId: string, runId: string): Promise<SourcesResponse> {
+  return request(`/runs/${encodeURIComponent(runId)}/sources`, {}, tenantId);
+}
+
+export function getSourceContent(tenantId: string, runId: string, path: string): Promise<SourceContent> {
+  return request(
+    `/runs/${encodeURIComponent(runId)}/sources/content?path=${encodeURIComponent(path)}`,
+    {}, tenantId,
+  );
 }
 
 export function getFindings(tenantId: string, runId: string): Promise<FindingsResponse> {
