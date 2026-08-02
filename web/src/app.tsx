@@ -7,6 +7,7 @@ import { SourcesPage } from "./features/sources/SourcesPage";
 import { ApiSpecPage } from "./features/apispec/ApiSpecPage";
 import { ProbePanel } from "./features/probe/ProbePanel";
 import { OverviewPanel } from "./features/overview/OverviewPanel";
+import { DiscoveryEmpty } from "./features/discovery/DiscoveryEmpty";
 import { Shell } from "./shell/Shell";
 import { useTenant } from "./tenant/TenantContext";
 import { TERMINAL_STATES, type FindingsResponse } from "./api/types";
@@ -25,6 +26,7 @@ export function RunWorkspace() {
       <section id="overview">
         {findings && <OverviewPanel data={findings} />}
         <RunProgress runId={id} onFindings={setFindings} onState={setState} />
+        <DiscoveryEmpty runId={id} state={state} />
       </section>
       {tenantId && (
         <section id="sources">
