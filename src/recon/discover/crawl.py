@@ -2,11 +2,13 @@
 """Discover stage — crawl the run's domain into an in-scope .js assets manifest.
 
 Idempotent: returns without re-crawling if a discover.assets event already exists
-(a headless crawl must not repeat on redelivery). Every URL katana emits is
-independently re-validated through the fetch stage's egress guard before it can
-enter the manifest, so a scope-escape in katana output can never surface an
-internal/out-of-scope URL (REQ-P2 / SSRF). The crawl's own subresource loads are
-NOT guarded — accepted residual risk documented in the design spec.
+(a headless crawl must not repeat on redelivery). The crawl SEED is gated through
+the same egress guard (scope + public-IP) BEFORE katana launches, and every URL
+katana emits is independently re-validated before it can enter the manifest — so
+neither the seed nor a scope-escape in katana output can point the crawler at an
+internal/out-of-scope address (REQ-P2 / SSRF). Residual: katana resolves the host
+and loads subresources itself with no IP pin, so DNS-rebinding mid-crawl remains
+an accepted residual risk, closed only by the deferred egress-proxy slice.
 """
 
 from __future__ import annotations
@@ -35,9 +37,13 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
     if queries.latest_assets_event(tenant_id, run_id) is not None:
         return  # already discovered (stage retry / redelivery)
 
-    target, session_id = _load_target(tenant_id, run_id)
+    target, session_id, input_ref = _load_target(tenant_id, run_id)
+    # An upload run carries a `target` only as a base-URL hint (REQ-C2), never as a
+    # crawl seed — analyze reads the uploaded blob, so we must not crawl it.
+    if input_ref is not None:
+        return
     if not target:
-        return  # nothing to crawl (e.g. an upload run with no domain target)
+        return  # a target-less crawl run — nothing to discover
 
     if not _is_bare_domain(target):
         return  # a single asset URL, not a domain crawl — legacy path handles it
@@ -45,8 +51,18 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
     engagement = sessions_service.get_session(tenant_id, session_id)
     if engagement is None or not engagement.authorization_ack:
         raise retry.FatalError("session is not authorized for recon")
-    if not egress.host_in_scope(_host(target), engagement.scope_hosts):
-        raise retry.FatalError(f"crawl target not in engagement scope: {target}")
+    # SSRF: gate the crawl SEED through the full egress guard (scope + DNS +
+    # public-IP), not just host_in_scope, so an in-scope host that resolves to an
+    # internal address, or an IP-literal / localhost / bad-scheme seed, is rejected
+    # BEFORE katana (a raw subprocess with no IP check of its own) launches. Any
+    # block is fatal: a bad seed never succeeds on retry, and a transient DNS
+    # failure surfaces loudly in the DLQ instead of silently completing with 0
+    # assets. (Katana still resolves the host itself, so rebinding mid-crawl stays
+    # a residual risk — see the module docstring / the deferred egress-proxy slice.)
+    try:
+        egress.validate_target(_seed_url(target), engagement.scope_hosts)
+    except egress.EgressBlocked as exc:
+        raise retry.FatalError(f"crawl seed blocked by egress guard: {exc}") from exc
 
     settings = get_settings()
     argv = katana.build_argv(
@@ -99,12 +115,14 @@ def _revalidate(urls: list[str], scope_hosts: list[str]) -> list[str]:
     return kept
 
 
-def _load_target(tenant_id: str, run_id: str) -> tuple[str | None, str | None]:
+def _load_target(
+    tenant_id: str, run_id: str
+) -> tuple[str | None, str | None, str | None]:
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
         if run is None:
-            return None, None
-        return run.target, str(run.session_id)
+            return None, None, None
+        return run.target, str(run.session_id), run.input_ref
 
 
 def _is_bare_domain(target: str) -> bool:
@@ -116,6 +134,7 @@ def _is_bare_domain(target: str) -> bool:
     return path in ("", "/")
 
 
-def _host(target: str) -> str:
-    t = target if "://" in target else f"https://{target}"
-    return urlsplit(t).hostname or ""
+def _seed_url(target: str) -> str:
+    """A bare-domain crawl target as a fetchable URL (default https) so the egress
+    guard's scheme + host checks apply to the seed."""
+    return target if "://" in target else f"https://{target}"

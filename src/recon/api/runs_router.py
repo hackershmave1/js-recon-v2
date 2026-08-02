@@ -27,6 +27,7 @@ from recon.config import get_settings
 from recon.discover import queries as discover_queries
 from recon.domain import TERMINAL_STATES
 from recon.events import stream
+from recon.fetch import egress
 from recon.runs import coordinator, queries, service
 from recon.sessions import service as sessions_service
 
@@ -54,6 +55,15 @@ def start_run(
     if not session.authorization_ack:
         raise HTTPException(
             status_code=403, detail="session is not authorized for recon"
+        )
+    # Fail fast: a crawl target outside the session scope (or under a scopeless
+    # upload session) is refused here with a clear 400 instead of dying later in
+    # the worker's seed guard. This is the cheap name-only check; the worker still
+    # does the full DNS/public-IP SSRF check on the seed (S2).
+    if body.target and not egress.host_in_scope(egress.host_of(body.target), session.scope_hosts):
+        raise HTTPException(
+            status_code=400,
+            detail=f"crawl target {body.target!r} is not in the session scope",
         )
     view = coordinator.start_run(
         redis, tenant_id=tenant_id, session_id=body.session_id, target=body.target
