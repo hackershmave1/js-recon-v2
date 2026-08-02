@@ -89,8 +89,49 @@ export interface ReconstructedRequest {
   artifacts: { curl: string; http: string } | null;
 }
 export interface RequestsResponse { run_id: string; count: number; requests: ReconstructedRequest[]; }
+// One stored source file for a run (GET /runs/{id}/sources). `path` is "input.js"
+// for a legacy single-bundle run, or the asset URL for a crawl asset; `kind`
+// distinguishes them. `fetch_status` === "ok" means the bytes are viewable — a
+// pending/failed crawl asset is listed but has no content to fetch.
+export interface SourceFile { path: string; kind: "asset" | "upload"; fetch_status: string; }
+export interface SourcesResponse { run_id: string; count: number; sources: SourceFile[]; }
+// One source file's decoded text (GET /runs/{id}/sources/content?path=).
+// `truncated` is true when the raw blob exceeded the server's response cap.
+export interface SourceContent { path: string; content: string; truncated: boolean; }
 // Result of POST pause/cancel/resume. pause returns pause_requested; cancel returns
 // cancel_requested; resume returns neither — all three return the authoritative state.
 export interface RunControlResult { run_id: string; state: string; pause_requested?: boolean; cancel_requested?: boolean; }
+// R6 Sessions surface. One card from GET /sessions (recon.sessions.service.SessionSummary):
+// the session plus its LATEST run's real stats (a finding_hash recurs across runs, so
+// summing would double-count). A `null` stat means "no run yet" or "analyze hasn't
+// emitted" — the UI renders those as "—", never a faked number.
+export interface SessionRunRef {
+  run_id: string; state: string;
+  created_at: string | null; started_at: string | null; ended_at: string | null; target: string | null;
+}
+export interface SessionSummary {
+  session_id: string; name: string | null; host: string; scope_hosts: string[];
+  engagement_id: string | null; archived: boolean; created_at: string | null;
+  latest_run: SessionRunRef | null;
+  files: number | null; endpoints: number | null; secrets: number | null;
+  coverage_pct: number | null; // attribution coverage %, null until analyze emits
+}
+export interface SessionsListResponse { count: number; sessions: SessionSummary[]; }
+export interface SessionRunsResponse { session_id: string; count: number; runs: SessionRunRef[]; }
+// The widened session view returned by POST/PATCH /sessions (superset of SessionView).
+export interface SessionDetail {
+  session_id: string; name: string | null; scope_hosts: string[]; authorization_ack: boolean;
+  created_at: string | null; engagement_id: string | null; archived: boolean;
+}
+// R6 Engagement tier (recon.engagements.service.EngagementView): a named scope umbrella
+// grouping sessions. Scope here is organizational metadata; a run's enforced egress
+// scope still comes from its session's scope_hosts (REQ-P2), never an engagement.
+export interface Engagement {
+  engagement_id: string; name: string;
+  in_scope_domains: string[]; out_of_scope_domains: string[];
+  created_at: string; updated_at: string;
+}
+export interface EngagementsListResponse { count: number; engagements: Engagement[]; }
+
 export const TERMINAL_STATES = new Set(["done", "partial", "failed", "cancelled"]);
 export const TRIAGE_STATUSES = ["open", "confirmed", "dismissed"] as const;

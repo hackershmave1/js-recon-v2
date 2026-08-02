@@ -25,14 +25,16 @@ export function ExportSpecButton({ runId }: { runId: string }) {
     }
   }
 
+  // Inline (not a .card): this control lives in the API Spec page header, so it
+  // sits as a small button + format select rather than a standalone panel.
   return (
-    <div className="card">
-      <button type="button" onClick={download} disabled={busy}>{busy ? "Exporting…" : "Export spec"}</button>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+      <button type="button" className="btn-primary" onClick={download} disabled={busy}>{busy ? "Exporting…" : "Export spec"}</button>
       <select value={format} onChange={(e) => setFormat(e.target.value as "json" | "yaml")} aria-label="Export format">
         <option value="json">JSON</option>
         <option value="yaml">YAML</option>
       </select>
       {error && <span className="sev-high"> {error}</span>}
-    </div>
+    </span>
   );
 }

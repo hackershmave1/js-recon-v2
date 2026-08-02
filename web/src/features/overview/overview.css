@@ -1,0 +1,41 @@
+/* Overview page — the run-summary view (design "Overview"). Real data only:
+   the four metric cards and the priority list derive entirely from the
+   FindingsResponse the workspace already holds. Colours/type come from the
+   design tokens in styles.css. The design's attack-surface graph and
+   "since last run" diff are intentionally absent — we don't produce that data. */
+
+.ov { display: flex; flex-direction: column; gap: 16px; }
+
+.ov-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+@media (max-width: 760px) { .ov-metrics { grid-template-columns: repeat(2, 1fr); } }
+
+.ov-card {
+  display: flex; flex-direction: column; gap: 9px; width: 100%; text-align: left;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg);
+  padding: 16px 17px; cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+.ov-card:hover { border-color: var(--border-strong); background: var(--surface); }
+.ov-metric-label { font-size: 11.5px; color: var(--muted); font-weight: 600; letter-spacing: .3px; }
+.ov-metric-value { font-family: var(--font-display); font-weight: 700; font-size: 30px; line-height: 1; letter-spacing: -1px; color: var(--text); }
+.ov-metric-sub { font-size: 11.5px; color: var(--faint); }
+
+.ov-panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
+.ov-panel-head { display: flex; align-items: center; justify-content: space-between; padding: 13px 18px; border-bottom: 1px solid var(--border); }
+.ov-panel-title { font-family: var(--font-display); font-weight: 600; font-size: 15px; color: var(--text); }
+.ov-link { background: none; border: none; color: var(--accent); font-weight: 600; font-size: 12.5px; cursor: pointer; padding: 0; }
+.ov-link:hover { text-decoration: underline; }
+.ov-empty { padding: 18px; margin: 0; }
+
+.ov-list { list-style: none; margin: 0; padding: 0; }
+.ov-row { display: flex; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--surface); }
+.ov-row:last-child { border-bottom: none; }
+.ov-type {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+  color: var(--info); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  padding: 2px 7px; flex: 0 0 auto;
+}
+.ov-type-secret { color: var(--pink); }
+.ov-type-param { color: var(--purple); }
+.ov-val { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-where { font-family: var(--font-mono); font-size: 11px; color: var(--dim); flex: 0 0 auto; max-width: 40%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

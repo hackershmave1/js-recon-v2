@@ -1,0 +1,108 @@
+/* App shell — fixed sidebar + top bar wrapping a single scrolling view area for
+   the run workspace. This file is LAYOUT ONLY; every colour/font comes from the
+   design tokens in styles.css so the shell stays in lockstep with the panels it
+   frames. Class names are prefixed `shell-` to avoid colliding with the feature
+   components' own `.card`/`.chip` primitives. */
+
+:root { --topbar-h: 58px; }
+
+.shell { display: flex; height: 100vh; overflow: hidden; }
+
+/* ---------- sidebar ---------- */
+.shell-side {
+  width: 236px; flex: 0 0 236px; min-height: 0;
+  background: var(--panel); border-right: 1px solid var(--card);
+  display: flex; flex-direction: column;
+}
+
+.shell-brand {
+  height: var(--topbar-h); flex: 0 0 var(--topbar-h);
+  display: flex; align-items: center; gap: 11px;
+  padding: 0 20px; border-bottom: 1px solid var(--card);
+}
+.shell-brand-mark {
+  width: 30px; height: 30px; border-radius: var(--r); flex: 0 0 30px;
+  background: var(--accent); color: var(--accent-ink);
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 18px var(--accent-line);
+}
+.shell-brand-name { font-family: var(--font-display); font-weight: 700; font-size: 15px; letter-spacing: -0.3px; line-height: 1.05; }
+.shell-brand-sub { font-size: 10px; color: var(--faint); letter-spacing: 1.5px; font-weight: 600; }
+
+.shell-nav { padding: 14px 12px; display: flex; flex-direction: column; gap: 2px; }
+.shell-nav-label { font-size: 10px; color: var(--faint); font-weight: 700; letter-spacing: 1px; padding: 6px 10px 4px; }
+
+.shell-nav-item {
+  display: flex; align-items: center; gap: 11px; width: 100%;
+  padding: 9px 11px; border: none; border-left: 2px solid transparent;
+  border-radius: var(--r); background: transparent; color: var(--muted);
+  font-family: var(--font-sans); font-size: 13.5px; font-weight: 500;
+  text-align: left; cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.shell-nav-item:hover:not(.is-soon):not(.is-inert) { background: var(--surface); color: var(--text-2); }
+.shell-nav-item.is-active { background: var(--accent-soft); color: var(--accent); border-left-color: var(--accent); }
+.shell-nav-item.is-soon { color: var(--faint); cursor: default; }
+/* an analysis view with no run selected (Sessions route): visible but not clickable */
+.shell-nav-item.is-inert { color: var(--faint); cursor: default; }
+.shell-nav-ico { width: 18px; height: 18px; flex: 0 0 18px; display: inline-flex; }
+.shell-nav-txt { flex: 1; }
+.shell-soon {
+  font-family: var(--font-mono); font-size: 9px; font-weight: 500; letter-spacing: .5px;
+  color: var(--faint); background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--r-pill); padding: 1px 6px;
+}
+
+/* engagement / current-run context */
+.shell-eng { margin-top: 6px; padding: 14px 12px; border-top: 1px solid var(--card); }
+.shell-eng-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 11px; border-radius: var(--r-lg);
+  border: 1px solid var(--raised); background: var(--surface);
+}
+.shell-eng-mark {
+  width: 26px; height: 26px; border-radius: 7px; flex: 0 0 26px;
+  background: var(--accent-soft); color: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.shell-eng-body { flex: 1; min-width: 0; }
+.shell-eng-name { display: block; font-size: 12.5px; color: var(--text); font-weight: 600; }
+.shell-eng-id { display: block; font-family: var(--font-mono); font-size: 10px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- main column ---------- */
+.shell-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+.shell-top {
+  height: var(--topbar-h); flex: 0 0 var(--topbar-h);
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 22px; border-bottom: 1px solid var(--card); background: var(--panel);
+}
+.shell-search {
+  flex: 1; max-width: 520px; display: flex; align-items: center; gap: 10px;
+  padding: 9px 13px; border-radius: var(--r-lg);
+  border: 1px solid var(--raised); background: var(--field); color: var(--faint);
+}
+.shell-search-txt { flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shell-kbd {
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--dim);
+  border: 1px solid var(--border); border-radius: var(--r-sm); padding: 1px 6px; background: var(--surface);
+}
+
+.shell-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.shell-btn {
+  display: inline-flex; align-items: center; gap: 8px; line-height: 1;
+  padding: 8px 14px; border-radius: var(--r-lg);
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-2);
+  font-family: var(--font-sans); font-size: 13px; font-weight: 600;
+  cursor: pointer; text-decoration: none;
+}
+.shell-btn:hover { background: var(--raised); text-decoration: none; }
+.shell-btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); box-shadow: 0 0 20px var(--accent-line); }
+.shell-btn-primary:hover { background: var(--accent-hi); border-color: var(--accent-hi); }
+
+/* ---------- scrolling view area ---------- */
+.shell-view { flex: 1; overflow-y: auto; }
+.shell-view-inner { max-width: 1280px; padding: 20px 30px 60px; }
+/* sections are the scroll targets for the nav; keep a little breathing room so a
+   scrolled-to section's heading isn't flush against the top bar */
+.shell-view-inner > section { scroll-margin-top: 16px; }

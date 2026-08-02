@@ -8,18 +8,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from recon.api import (
     base_url_router,
+    engagements_router,
     export_router,
     findings_router,
     probe_router,
     runs_router,
     sessions_router,
+    sources_router,
     spec_router,
     wrappers_router,
 )
@@ -36,9 +38,11 @@ def create_app() -> FastAPI:
     configure_logging(settings.log_level, json=settings.env != "local")
     app = FastAPI(title="Recon platform", version="0.1.0")
     app.include_router(sessions_router.router)
+    app.include_router(engagements_router.router)
     app.include_router(runs_router.router)
     app.include_router(findings_router.router)
     app.include_router(probe_router.router)
+    app.include_router(sources_router.router)
     app.include_router(spec_router.router)
     app.include_router(export_router.router)
     app.include_router(base_url_router.router)
@@ -69,13 +73,39 @@ def _mount_spa(app: FastAPI, settings) -> None:
     app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
     index = dist / "index.html"
 
+    # A few client-side routes share a path with an API GET of the same name (the
+    # Sessions page vs `GET /sessions`). The catch-all below can't cover those — the
+    # API route matches first — so a full-page load or refresh of /sessions would hit
+    # the JSON API instead of the SPA. This guard runs before routing and serves the
+    # shell for a browser *navigation* (Accept: text/html), while the app's own fetch
+    # (Accept: application/json) still reaches the API. Non-colliding routes like
+    # /runs/:id keep relying on the catch-all fallback.
+    spa_routes = {"/sessions"}
+    # The shell is served `no-store` so the browser never reuses this text/html
+    # response for a later SAME-URL fetch. Without it, the SPA's first
+    # `fetch('/sessions')` (Accept: application/json) right after a full-page
+    # navigation can be answered from cache with the HTML shell (the nav response
+    # has no `Vary: Accept`), and JSON parsing then fails. Hashed assets stay
+    # cacheable; only the shell is no-store.
+    shell_headers = {"Cache-Control": "no-store"}
+
+    @app.middleware("http")
+    async def spa_navigation(request: Request, call_next):
+        if (
+            request.method == "GET"
+            and request.url.path in spa_routes
+            and "text/html" in request.headers.get("accept", "")
+        ):
+            return FileResponse(index, headers=shell_headers)
+        return await call_next(request)
+
     # Registered last → real API routes match first. Browser navigations (Accept
     # includes text/html) get the SPA shell so client-side routes like /runs/:id
     # deep-link; anything else (e.g. a typo'd API path from fetch) stays JSON 404.
     @app.get("/{full_path:path}")
     def spa_fallback(full_path: str, accept: str = Header(default="")) -> FileResponse:
         if "text/html" in accept:
-            return FileResponse(index)
+            return FileResponse(index, headers=shell_headers)
         raise HTTPException(status_code=404, detail="not found")
 
 

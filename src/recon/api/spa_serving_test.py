@@ -34,6 +34,27 @@ def test_unknown_api_path_stays_json_404(tmp_path, monkeypatch):
     assert r.headers["content-type"].startswith("application/json")
 
 
+def test_browser_navigation_to_colliding_sessions_route_gets_index_html(tmp_path, monkeypatch):
+    client = _client_with_dist(tmp_path, monkeypatch)
+    # /sessions collides with the API's `GET /sessions`; a browser navigation (or a
+    # refresh/deep-link) must still get the SPA shell, not the JSON list.
+    r = client.get("/sessions", headers={"accept": "text/html"})
+    assert r.status_code == 200
+    assert "<div id=root>" in r.text
+    # no-store so the browser never reuses this HTML for the SPA's later
+    # `fetch('/sessions')` (application/json), which would then fail to parse.
+    assert r.headers["cache-control"] == "no-store"
+
+
+def test_sessions_json_fetch_still_reaches_the_api(tmp_path, monkeypatch):
+    client = _client_with_dist(tmp_path, monkeypatch)
+    # The app's own fetch (application/json) must NOT be shadowed by the SPA guard —
+    # it reaches the API route, which rejects the missing tenant header (401).
+    r = client.get("/sessions", headers={"accept": "application/json"})
+    assert r.status_code == 401
+    assert r.headers["content-type"].startswith("application/json")
+
+
 def test_assets_are_served(tmp_path, monkeypatch):
     client = _client_with_dist(tmp_path, monkeypatch)
     assert client.get("/assets/app.js").status_code == 200
