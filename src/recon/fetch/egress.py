@@ -17,11 +17,17 @@ connection to the IP validated here (see ``recon.fetch.fetch``).
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
+
+# One DNS label: 1-63 chars of letters/digits/hyphen, not leading/trailing hyphen
+# (LDH rule). An allowlist, not a denylist — so control chars, whitespace, and any
+# punctuation are rejected structurally rather than needing enumeration.
+_LABEL_RE = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
 
 # Multi-label public suffixes where subdomain-scoping would authorize hosts the
 # engagement never declared (e.g. every ``*.github.io`` site). NOT a full public-
@@ -63,25 +69,26 @@ def is_valid_scope_entry(entry: str) -> bool:
     from the allow-set so egress fails closed no matter how ``scope_hosts`` was
     populated (create, rerun, default-from-target, a direct DB write).
 
-    Rejects: empty/whitespace; anything carrying a scheme, port, path, userinfo,
-    wildcard, or whitespace (``/ : @ ? # *`` or space — i.e. not a bare host); a
-    single-label name (a bare TLD like ``com`` or an internal name like
-    ``localhost``); an IP literal (IPs are judged by :func:`is_public_ip`, not
-    scope); and a known multi-label public suffix (``github.io``, ``co.uk`` …),
-    under which a subdomain rule would authorize every tenant of that shared host.
+    Requires >= 2 LDH labels (letters/digits/hyphen). This rejects, structurally:
+    empty/whitespace; anything carrying a scheme, port, path, userinfo, wildcard,
+    control char, or whitespace (not a bare host); an empty label (``a..b``,
+    leading/trailing dot); a single-label name (a bare TLD like ``com`` or an
+    internal name like ``localhost``); an IP literal, including dotted-decimal and
+    short forms like ``127.1`` (a real host's final label is never all-digits — IPs
+    are judged by :func:`is_public_ip`, not scope); and a known multi-label public
+    suffix (``github.io``, ``co.uk`` …), under which a subdomain rule would
+    authorize every tenant of that shared host.
     """
     host = _normalize_host(entry)
     if not host:
         return False
-    if any(ch in host for ch in "/:@?#* \t"):
+    labels = host.split(".")
+    if len(labels) < 2:  # single label -> bare TLD or internal name
         return False
-    if "." not in host:  # single label -> bare TLD or internal name
-        return False
-    try:
-        ipaddress.ip_address(host)
-        return False  # an IP literal is not a host-scope entry
-    except ValueError:
-        pass
+    if not all(_LABEL_RE.match(label) for label in labels):
+        return False  # a non-LDH char, or an empty label
+    if labels[-1].isdigit():
+        return False  # all-numeric final label -> an IPv4 literal / short form
     return host not in _PUBLIC_SUFFIX_DENYLIST
 
 
@@ -107,7 +114,10 @@ def host_of(target: str | None) -> str:
     if not target or not target.strip():
         return ""
     t = target if "://" in target else f"https://{target.strip()}"
-    return (urlsplit(t).hostname or "").lower()
+    try:
+        return (urlsplit(t).hostname or "").lower()
+    except ValueError:
+        return ""  # malformed (e.g. a bad IPv6 literal) -> no host -> out of scope
 
 
 def host_in_scope(host: str | None, scope_hosts: list[str]) -> bool:
@@ -142,8 +152,15 @@ def is_public_ip(ip_str: str) -> bool:
         ip: ipaddress.IPv4Address | ipaddress.IPv6Address = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
+    if isinstance(ip, ipaddress.IPv6Address):
+        # Unwrap an embedded IPv4 and judge THAT, or an internal address hides
+        # behind an is_global=True wrapper. ::ffff:127.0.0.1 (IPv4-mapped) and
+        # 2002:a9fe:a9fe:: (6to4 of 169.254.169.254) both report is_global=True but
+        # route to the embedded IPv4. Teredo (2001::/32) is already is_global=False.
+        if ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        elif ip.sixtofour is not None:
+            ip = ip.sixtofour
     return ip.is_global and not ip.is_reserved and not ip.is_multicast
 
 
@@ -153,19 +170,28 @@ def validate_target(url: str, scope_hosts: list[str]) -> ValidatedTarget:
     Resolves the host and requires ALL resolved addresses to be public — a single
     internal address (e.g. a split-horizon or rebinding record) blocks the fetch.
     """
-    parts = urlsplit(url)
-    if parts.scheme.lower() not in _ALLOWED_SCHEMES:
+    try:
+        # urlsplit AND every netloc-derived access can raise ValueError on a
+        # malformed URL — a bad IPv6 literal (http://[), an out-of-range port
+        # (:99999). Fold them into the guard's own EgressBlocked so a crafted
+        # target is a clean block, not an uncaught 500 / retry crash-loop.
+        parts = urlsplit(url)
+        scheme = parts.scheme.lower()
+        username, password = parts.username, parts.password
+        host = parts.hostname  # excludes port + userinfo; strips IPv6 brackets; lowercased
+        port = parts.port or (443 if scheme == "https" else 80)
+    except ValueError as exc:
+        raise EgressBlocked(f"malformed URL: {exc}") from exc
+    if scheme not in _ALLOWED_SCHEMES:
         raise EgressBlocked(f"scheme not allowed: {parts.scheme!r}")
-    if parts.username or parts.password:
+    if username or password:
         # http://acme.io@evil.example/ — urlsplit.hostname is 'evil.example', but
         # reject userinfo outright so no credential-confusion trick gets close.
         raise EgressBlocked("userinfo is not allowed in a fetch URL")
-    host = parts.hostname  # excludes port + userinfo; strips IPv6 brackets; lowercased
     if not host:
         raise EgressBlocked("missing host in URL")
     if not host_in_scope(host, scope_hosts):
         raise EgressBlocked(f"host not in engagement scope: {host}")
-    port = parts.port or (443 if parts.scheme.lower() == "https" else 80)
 
     try:
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
