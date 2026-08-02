@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SourcesPage } from "./SourcesPage";
 import * as api from "../../api/apiClient";
@@ -63,6 +63,34 @@ describe("SourcesPage", () => {
   it("shows an empty state when the run has no source", async () => {
     mount([]);
     expect(await screen.findByText(/no source captured/i)).toBeInTheDocument();
+  });
+
+  it("auto pretty-prints a minified source and toggles back to raw", async () => {
+    // One giant line (the minified-bundle shape) -> auto-formatted into many lines.
+    const MIN = "(function(){var a=1;function foo(){return a+2}return foo()})();" + "0;".repeat(300);
+    vi.spyOn(api, "getSources").mockResolvedValue({
+      run_id: "r", count: 1,
+      sources: [{ path: "https://acme.io/app.js", kind: "asset", fetch_status: "ok" }],
+    });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({
+      path: "https://acme.io/app.js", content: MIN, truncated: false,
+    });
+    render(<SourcesPage data={null} tenantId="t" runId="r" />);
+
+    const toggle = await screen.findByRole("button", { name: /pretty print/i });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");  // auto-on for minified
+    await waitFor(() => expect(document.querySelectorAll(".sv-line").length).toBeGreaterThan(1));
+
+    await userEvent.click(toggle);  // back to raw: the one-line bundle
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(document.querySelectorAll(".sv-line")).toHaveLength(1);
+  });
+
+  it("does not pretty-print already-readable source", async () => {
+    mount([UPLOAD]);
+    const toggle = await screen.findByRole("button", { name: /pretty print/i });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");  // CODE is not minified
+    expect(screen.getByText("endpoint")).toBeInTheDocument();  // marks still shown
   });
 
   it("flags a truncated file", async () => {

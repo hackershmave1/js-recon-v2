@@ -29,6 +29,10 @@ button.sv-node.sel { background: var(--accent-soft); color: var(--accent); }
 .sv-file-path { font-family: var(--font-mono); font-size: 12.5px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sv-file-count { font-size: 11.5px; color: var(--orange); background: rgba(255,138,71,0.1); padding: 3px 10px; border-radius: var(--r-pill); font-weight: 600; flex: 0 0 auto; }
 .sv-spacer { flex: 1; }
+.sv-pretty { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.sv-pretty-glyph { font-family: var(--font-mono); font-weight: 700; letter-spacing: -1px; }
+.sv-pretty.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.sv-pretty.on:hover:not(:disabled) { border-color: var(--accent); }
 .sv-note { padding: 9px 20px; font-size: 12px; border-bottom: 1px solid var(--border); }
 .sv-warn { color: var(--warn); }
 .sv-code { flex: 1; overflow: auto; background: var(--field); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; }
