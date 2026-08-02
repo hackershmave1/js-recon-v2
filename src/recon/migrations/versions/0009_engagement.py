@@ -8,15 +8,16 @@ Mirrors 0008 for the brand-new table: build it from live model metadata
 (``create_all`` is idempotent — only what's missing), then FORCE row-level
 security + the tenant_isolation policy + an explicit GRANT (REQ-S1). ``create_all``
 does NOT alter existing tables, so the two new columns on the already-RLS'd
-``session`` table are added explicitly (the session FK deliberately SET NULL, not
-CASCADE, so deleting an engagement never destroys a session's recon history).
+``session`` table are added explicitly, guarded with ``IF NOT EXISTS`` (0003's
+fresh-DB trap: a from-scratch ``create_all`` already builds ``session`` WITH them,
+so a plain ``add_column`` fails DuplicateColumn on a fresh DB / CI). The session FK
+is deliberately SET NULL, not CASCADE, so deleting an engagement never destroys a
+session's recon history.
 """
 
 from __future__ import annotations
 
-import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects import postgresql
 
 from recon.db import models
 from recon.db.base import Base
@@ -45,25 +46,20 @@ def upgrade() -> None:
         op.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON "{table}" TO {APP_ROLE}')
 
     # The session table already exists (RLS'd since 0001); create_all won't add
-    # columns to it, so add the engagement FK + archive marker explicitly.
-    op.add_column(
-        "session",
-        sa.Column(
-            "engagement_id",
-            postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("engagement.id", ondelete="SET NULL"),
-            nullable=True,
-        ),
+    # columns to it, so add the engagement FK + archive marker explicitly —
+    # guarded with IF NOT EXISTS because a from-scratch ``upgrade head`` already
+    # built ``session`` WITH these columns via 0001's create_all (see 0003), so a
+    # plain add_column would fail DuplicateColumn on a fresh DB / CI.
+    op.execute(
+        "ALTER TABLE session ADD COLUMN IF NOT EXISTS engagement_id UUID "
+        "REFERENCES engagement(id) ON DELETE SET NULL"
     )
-    op.add_column(
-        "session",
-        sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True),
-    )
+    op.execute("ALTER TABLE session ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ")
 
 
 def downgrade() -> None:
-    op.drop_column("session", "archived_at")
-    op.drop_column("session", "engagement_id")
+    op.execute("ALTER TABLE session DROP COLUMN IF EXISTS archived_at")
+    op.execute("ALTER TABLE session DROP COLUMN IF EXISTS engagement_id")
     for table in models.ENGAGEMENT_TABLES:
         op.execute(f'DROP POLICY IF EXISTS tenant_isolation ON "{table}"')
-    op.drop_table("engagement")
+    op.execute("DROP TABLE IF EXISTS engagement")
