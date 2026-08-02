@@ -81,6 +81,13 @@ def _mount_spa(app: FastAPI, settings) -> None:
     # (Accept: application/json) still reaches the API. Non-colliding routes like
     # /runs/:id keep relying on the catch-all fallback.
     spa_routes = {"/sessions"}
+    # The shell is served `no-store` so the browser never reuses this text/html
+    # response for a later SAME-URL fetch. Without it, the SPA's first
+    # `fetch('/sessions')` (Accept: application/json) right after a full-page
+    # navigation can be answered from cache with the HTML shell (the nav response
+    # has no `Vary: Accept`), and JSON parsing then fails. Hashed assets stay
+    # cacheable; only the shell is no-store.
+    shell_headers = {"Cache-Control": "no-store"}
 
     @app.middleware("http")
     async def spa_navigation(request: Request, call_next):
@@ -89,7 +96,7 @@ def _mount_spa(app: FastAPI, settings) -> None:
             and request.url.path in spa_routes
             and "text/html" in request.headers.get("accept", "")
         ):
-            return FileResponse(index)
+            return FileResponse(index, headers=shell_headers)
         return await call_next(request)
 
     # Registered last → real API routes match first. Browser navigations (Accept
@@ -98,7 +105,7 @@ def _mount_spa(app: FastAPI, settings) -> None:
     @app.get("/{full_path:path}")
     def spa_fallback(full_path: str, accept: str = Header(default="")) -> FileResponse:
         if "text/html" in accept:
-            return FileResponse(index)
+            return FileResponse(index, headers=shell_headers)
         raise HTTPException(status_code=404, detail="not found")
 
 

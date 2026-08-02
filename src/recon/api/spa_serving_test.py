@@ -41,6 +41,9 @@ def test_browser_navigation_to_colliding_sessions_route_gets_index_html(tmp_path
     r = client.get("/sessions", headers={"accept": "text/html"})
     assert r.status_code == 200
     assert "<div id=root>" in r.text
+    # no-store so the browser never reuses this HTML for the SPA's later
+    # `fetch('/sessions')` (application/json), which would then fail to parse.
+    assert r.headers["cache-control"] == "no-store"
 
 
 def test_sessions_json_fetch_still_reaches_the_api(tmp_path, monkeypatch):
