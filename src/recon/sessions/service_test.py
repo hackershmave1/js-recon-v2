@@ -20,9 +20,15 @@ def test_explicit_scope_is_normalized_and_deduped():
 
 
 def test_invalid_scope_entry_is_rejected():
-    for bad in ["localhost", "com", "10.0.0.1", "github.io", "https://acme.io", "*.acme.io"]:
+    for bad in ["localhost", "com", "10.0.0.1", "github.io", "https://acme.io", "*"]:
         with pytest.raises(SessionInvalid, match="invalid scope host"):
             _resolve_scope_hosts([bad], None)
+
+
+def test_wildcard_scope_entry_reduces_to_base_host():
+    # "*.acme.io" is accepted and stored as the base host (covers subdomains, S1).
+    assert _resolve_scope_hosts(["*.acme.io"], None) == ["acme.io"]
+    assert _resolve_scope_hosts(["*.acme.io", "acme.io"], None) == ["acme.io"]  # deduped
 
 
 def test_blank_scope_defaults_to_target_host():

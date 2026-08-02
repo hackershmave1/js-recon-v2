@@ -93,16 +93,22 @@ def is_valid_scope_entry(entry: str) -> bool:
 
 
 def normalize_scope_entry(entry: str) -> str | None:
-    """The normalized host for a VALID scope entry, or ``None`` if the entry is not
-    a usable host-scope declaration (see :func:`is_valid_scope_entry`).
+    """The normalized host for a VALID user-supplied scope entry, or ``None`` if it
+    is not a usable host-scope declaration (see :func:`is_valid_scope_entry`).
 
-    Lets a caller persist a clean, deduped allow-list and reject a bad entry at the
-    edge (a create-time 400) instead of silently dropping it at egress time. The
-    egress decision still fails closed on its own, so this is a UX/hygiene layer,
-    not the security boundary."""
-    if not is_valid_scope_entry(entry):
+    Accepts a leading ``*.`` wildcard and reduces it to the base host: a bare host
+    already authorizes its subdomains (S1), so ``*.acme.io`` and ``acme.io`` are
+    equivalent in scope. A bare ``*`` (match anything) is NOT accepted — that is the
+    deferred unrestricted-crawl case. Lets a caller persist a clean, deduped
+    allow-list and reject a bad entry at the edge (a create-time 400) instead of
+    silently dropping it at egress time; the egress decision fails closed on its own,
+    so this is a UX/hygiene layer, not the security boundary."""
+    host = _normalize_host(entry)
+    if host.startswith("*."):
+        host = host[2:]  # "*.acme.io" -> "acme.io"; the bare host covers subdomains
+    if not is_valid_scope_entry(host):
         return None
-    return _normalize_host(entry)
+    return host
 
 
 def host_of(target: str | None) -> str:

@@ -110,7 +110,16 @@ def test_is_valid_scope_entry_rejects_control_chars_and_numeric_shortforms():
 def test_normalize_scope_entry():
     assert egress.normalize_scope_entry("ACME.IO") == "acme.io"
     assert egress.normalize_scope_entry("  cdn.acme.io.  ") == "cdn.acme.io"  # trim + FQDN dot
-    for bad in ["", "com", "localhost", "github.io", "10.0.0.1", "https://acme.io", "*.acme.io"]:
+    for bad in ["", "com", "localhost", "github.io", "10.0.0.1", "https://acme.io"]:
+        assert egress.normalize_scope_entry(bad) is None, bad
+
+
+def test_normalize_scope_entry_accepts_wildcard_prefix():
+    # A leading "*." reduces to the base host (which already covers subdomains, S1).
+    assert egress.normalize_scope_entry("*.acme.io") == "acme.io"
+    assert egress.normalize_scope_entry("*.CDN.acme.io") == "cdn.acme.io"
+    # A bare "*" or a wildcard over a public suffix is still rejected.
+    for bad in ["*", "*.", "*.com", "*.co.uk"]:
         assert egress.normalize_scope_entry(bad) is None, bad
 
 
