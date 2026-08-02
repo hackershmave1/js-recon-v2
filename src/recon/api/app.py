@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
@@ -72,6 +72,25 @@ def _mount_spa(app: FastAPI, settings) -> None:
         return
     app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
     index = dist / "index.html"
+
+    # A few client-side routes share a path with an API GET of the same name (the
+    # Sessions page vs `GET /sessions`). The catch-all below can't cover those — the
+    # API route matches first — so a full-page load or refresh of /sessions would hit
+    # the JSON API instead of the SPA. This guard runs before routing and serves the
+    # shell for a browser *navigation* (Accept: text/html), while the app's own fetch
+    # (Accept: application/json) still reaches the API. Non-colliding routes like
+    # /runs/:id keep relying on the catch-all fallback.
+    spa_routes = {"/sessions"}
+
+    @app.middleware("http")
+    async def spa_navigation(request: Request, call_next):
+        if (
+            request.method == "GET"
+            and request.url.path in spa_routes
+            and "text/html" in request.headers.get("accept", "")
+        ):
+            return FileResponse(index)
+        return await call_next(request)
 
     # Registered last → real API routes match first. Browser navigations (Accept
     # includes text/html) get the SPA shell so client-side routes like /runs/:id
