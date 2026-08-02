@@ -4,6 +4,7 @@ import { streamRunEvents, type SseEvent } from "../../api/sseClient";
 import { getFindings, getStatus, ApiError } from "../../api/apiClient";
 import { TERMINAL_STATES, type FindingsResponse, type RunControlResult } from "../../api/types";
 import { RunControls } from "./RunControls";
+import { RunPipeline } from "./RunPipeline";
 
 export function RunProgress(
   { runId, onFindings, onState }: { runId: string; onFindings: (f: FindingsResponse) => void; onState?: (state: string) => void },
@@ -13,6 +14,9 @@ export function RunProgress(
   const [state, setState] = useState<string>("…");
   const [stage, setStage] = useState<string | null>(null);
   const [pct, setPct] = useState<number | null>(null);
+  const [done, setDone] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [eta, setEta] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pauseRequested, setPauseRequested] = useState(false);
   const [cancelRequested, setCancelRequested] = useState(false);
@@ -37,6 +41,7 @@ export function RunProgress(
         const [s, f] = await Promise.all([getStatus(tenantId, runId), getFindings(tenantId, runId)]);
         if (controller.signal.aborted) return;
         applyState(s.state); setStage(s.stage); setPct(s.pct);
+        setDone(s.done); setTotal(s.total); setEta(s.eta_seconds);
         setPauseRequested(s.pause_requested); setCancelRequested(s.cancel_requested);
         onFindingsRef.current(f);
       } catch (e) {
@@ -88,28 +93,44 @@ export function RunProgress(
 
   return (
     <div className="card">
-      <h2>Run {runId}</h2>
-      <p>
-        State: <strong>{state}</strong>
-        {/* Slice Y: done vs partial are both terminal but not the same outcome —
-            a distinct chip per terminal state (not just the plain word) keeps a
-            partially-completed crawl from reading as a clean success at a glance. */}
-        {TERMINAL_STATES.has(state) && (
-          <span className={`chip chip-${state}`}>{state.toUpperCase()}</span>
-        )}
-        {stage ? ` · ${stage}` : ""}{pct != null ? ` · ${pct}%` : ""}
-      </p>
+      <div className="rp-head">
+        <h2 className="rp-title">Run <span className="rp-id" title={runId}>{runId.slice(0, 8)}</span></h2>
+        <div className="rp-head-right">
+          {/* Slice Y: done vs partial are both terminal but not the same outcome —
+              a distinct chip per terminal state keeps a partially-completed crawl
+              from reading as a clean success. Active/queued/paused show the live
+              state word (kept verbatim; capitalised for display only). */}
+          {TERMINAL_STATES.has(state)
+            ? <span className={`chip chip-${state}`}>{state.toUpperCase()}</span>
+            : state !== "…" && <span className="rp-state">{state}</span>}
+          {state !== "…" && (
+            <RunControls
+              runId={runId}
+              state={state}
+              pauseRequested={pauseRequested}
+              cancelRequested={cancelRequested}
+              onControlResult={handleControlResult}
+            />
+          )}
+        </div>
+      </div>
+
       {state !== "…" && (
-        <RunControls
-          runId={runId}
-          state={state}
-          pauseRequested={pauseRequested}
-          cancelRequested={cancelRequested}
-          onControlResult={handleControlResult}
-        />
+        <RunPipeline state={state} stage={stage} pct={pct} done={done} total={total} etaSeconds={eta} />
       )}
+
       {error && <p className="sev-high">{error}</p>}
-      <ul>{events.map((e, i) => <li key={i} className="muted">{e.event}: {e.data}</li>)}</ul>
+
+      {events.length > 0 && (
+        <details className="rp-log">
+          <summary className="rp-log-summary">
+            Activity log <span className="rp-log-count">{events.length} events</span>
+          </summary>
+          <ul className="rp-log-list">
+            {events.map((e, i) => <li key={i} className="muted">{e.event}: {e.data}</li>)}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }

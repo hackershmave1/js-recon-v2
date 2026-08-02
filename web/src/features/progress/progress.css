@@ -1,0 +1,86 @@
+/* Run progress — pipeline stepper + determinate bar + collapsed activity log.
+   Replaces the raw run-event dump: the ordered STAGE_ORDER pipeline (domain.py)
+   rendered as reached/active/pending, so "where is my run" is answerable at a
+   glance. Terminal + queued + paused states drive node colour; the full event
+   stream is preserved but tucked into a <details> drawer, off by default. */
+
+.rp-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.rp-title { margin:0; font-size:15px; }
+.rp-id { font-family:var(--font-mono); color:var(--text-2); font-weight:500; }
+.rp-head-right { display:flex; align-items:center; gap:10px; }
+
+/* raw non-terminal state, kept as text (capitalised for display only) */
+.rp-state {
+  display:inline-flex; align-items:center; gap:7px;
+  font-size:11px; font-weight:500; text-transform:capitalize;
+  color:var(--accent); background:var(--accent-soft);
+  border:1px solid var(--accent-line); padding:3px 10px; border-radius:var(--r-pill);
+}
+.rp-state::before {
+  content:""; width:7px; height:7px; border-radius:var(--r-pill);
+  background:var(--accent); animation:rp-blink 1.4s ease-in-out infinite;
+}
+
+/* stepper */
+.rp-pipeline { margin-top:16px; }
+.rp-steps { display:flex; align-items:flex-start; list-style:none; margin:0 0 4px; padding:0; }
+.rp-step { flex:1; position:relative; display:flex; flex-direction:column; align-items:center; gap:7px; min-width:0; }
+.rp-step::before {
+  content:""; position:absolute; top:14px; left:calc(-50% + 15px); width:calc(100% - 30px);
+  height:2px; background:var(--border); border-radius:2px; z-index:0;
+}
+.rp-step:first-child::before { display:none; }
+.rp-step.is-complete::before, .rp-step.is-active::before,
+.rp-step.is-paused::before, .rp-step.is-stopped::before { background:var(--accent); }
+.rp-step.is-stopped.is-fail::before { background:var(--danger); }
+.rp-step.is-stopped.is-warn::before { background:var(--warn); }
+
+.rp-step-dot {
+  position:relative; z-index:1; width:30px; height:30px; border-radius:var(--r-pill);
+  display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600;
+  background:var(--raised); border:1px solid var(--border-strong); color:var(--faint);
+}
+.rp-step.is-complete .rp-step-dot { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+.rp-step.is-active .rp-step-dot { background:var(--accent-soft); border:2px solid var(--accent); color:var(--accent); animation:rp-pulse 1.7s ease-out infinite; }
+.rp-step.is-paused .rp-step-dot { background:rgba(255,199,61,0.13); border:2px solid var(--warn); color:var(--warn); }
+.rp-step.is-stopped.is-fail .rp-step-dot { background:rgba(255,77,94,0.13); border:2px solid var(--danger); color:var(--danger); }
+.rp-step.is-stopped.is-warn .rp-step-dot { background:rgba(255,199,61,0.13); border:2px solid var(--warn); color:var(--warn); }
+.rp-dot-inner { width:9px; height:9px; border-radius:var(--r-pill); background:currentColor; }
+
+.rp-step-label { font-size:11px; color:var(--dim); text-align:center; }
+.rp-step.is-complete .rp-step-label { color:var(--text-2); }
+.rp-step.is-active .rp-step-label { color:var(--text); font-weight:500; }
+.rp-step.is-paused .rp-step-label { color:var(--warn); }
+
+/* determinate bar (active runs only) */
+.rp-bar-wrap { margin-top:14px; }
+.rp-bar { height:6px; background:var(--raised); border-radius:var(--r-pill); overflow:hidden; }
+.rp-bar-fill { height:100%; background:var(--accent); border-radius:var(--r-pill); transition:width .35s ease; }
+.rp-bar-fill.is-indeterminate { width:40%; animation:rp-slide 1.4s ease-in-out infinite; }
+.rp-bar-meta { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:7px; font-size:11.5px; color:var(--muted); }
+.rp-bar-nums { display:flex; align-items:center; gap:10px; }
+.rp-bar-nums .rp-mono, .rp-mono { font-family:var(--font-mono); }
+
+/* terminal summary line (done / partial / failed / cancelled) */
+.rp-outcome { margin-top:12px; font-size:11.5px; color:var(--muted); }
+.rp-outcome b { color:var(--text-2); font-weight:500; }
+
+/* activity log drawer */
+.rp-log { margin-top:14px; border-top:1px solid var(--border); padding-top:10px; }
+.rp-log-summary { cursor:pointer; list-style:none; display:flex; align-items:center; gap:8px; font-size:12px; color:var(--dim); user-select:none; }
+.rp-log-summary::-webkit-details-marker { display:none; }
+.rp-log-summary::before { content:""; width:6px; height:6px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(-45deg); transition:transform .15s ease; margin-left:2px; }
+.rp-log[open] .rp-log-summary::before { transform:rotate(45deg); }
+.rp-log-summary:hover { color:var(--muted); }
+.rp-log-count { font-family:var(--font-mono); font-size:11px; color:var(--faint); }
+.rp-log-list { margin:10px 0 0; padding:0 0 0 2px; list-style:none; max-height:220px; overflow:auto; }
+.rp-log-list li { font-family:var(--font-mono); font-size:11px; line-height:1.7; color:var(--muted); word-break:break-word; }
+
+@keyframes rp-pulse { 0%{box-shadow:0 0 0 0 var(--accent-soft);} 70%{box-shadow:0 0 0 7px transparent;} 100%{box-shadow:0 0 0 0 transparent;} }
+@keyframes rp-blink { 0%,100%{opacity:1;} 50%{opacity:.35;} }
+@keyframes rp-slide { 0%{transform:translateX(-110%);} 100%{transform:translateX(320%);} }
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-state::before, .rp-step.is-active .rp-step-dot, .rp-bar-fill.is-indeterminate { animation:none; }
+  .rp-bar-fill.is-indeterminate { width:100%; opacity:.5; }
+}
