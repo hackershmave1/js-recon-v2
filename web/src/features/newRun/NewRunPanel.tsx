@@ -75,7 +75,7 @@ export function NewRunPanel() {
     : "Optional for uploads.";
 
   return (
-    <form className="card" onSubmit={submit}>
+    <form className="card nr-form" onSubmit={submit}>
       <h2>New recon run</h2>
       <p className="muted">Declaring who authorized this is the authorization acknowledgment.</p>
       <div role="radiogroup" aria-label="Run mode">

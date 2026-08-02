@@ -1,5 +1,7 @@
 /* New Recon form — optional, multi-host scope chips + add row (S4). Reuses the
    global .chip pill; overrides its inline-block/margin for a flex chip + × row. */
+/* Keep the form a readable width inside the wide shell content column. */
+.nr-form { max-width: 560px; }
 .nr-chips { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; padding: 0; }
 .nr-chip { display: inline-flex; align-items: center; gap: 6px; margin-left: 0; }
 .nr-chip-label { font-family: var(--font-mono); }

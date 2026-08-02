@@ -52,4 +52,13 @@ export function RunWorkspace() {
   );
 }
 
-export function Home() { return <NewRunPanel />; }
+// New Recon is framed by the same shell as the rest of the app (sessions mode: no
+// active run) so it carries the sidebar (Sessions nav + engagement switcher) and
+// top bar — a consistent look and a way back out, not a dead-end standalone page.
+export function Home() {
+  return (
+    <Shell mode="sessions">
+      <NewRunPanel />
+    </Shell>
+  );
+}
