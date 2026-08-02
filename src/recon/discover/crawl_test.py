@@ -40,7 +40,7 @@ def _patches(katana_urls, validated, engagement, existing=None):
         # Mock the DB seam so these stay pure units (record_event is patched too).
         patch("recon.discover.crawl.tenant_session"),
         patch("recon.discover.crawl.queries.latest_assets_event", return_value=existing),
-        patch("recon.discover.crawl._load_target", return_value=("acme.io", "sess-1")),
+        patch("recon.discover.crawl._load_target", return_value=("acme.io", "sess-1", None)),
         patch("recon.discover.crawl.sessions_service.get_session", return_value=engagement),
         patch("recon.discover.crawl.harness.run_crawl",
               return_value=CrawlResult(stdout=b"", timed_out=False)),
@@ -82,17 +82,32 @@ def test_discover_run_is_idempotent_when_event_exists():
 def test_discover_run_rejects_unauthorized_session():
     engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=False)
     with patch("recon.discover.crawl.queries.latest_assets_event", return_value=None), \
-         patch("recon.discover.crawl._load_target", return_value=("acme.io", "sess-1")), \
+         patch("recon.discover.crawl._load_target", return_value=("acme.io", "sess-1", None)), \
          patch("recon.discover.crawl.sessions_service.get_session", return_value=engagement):
         with pytest.raises(retry.FatalError):
             crawl.discover_run(MagicMock(), tenant_id="t", run_id="r", job_id="j")
+
+
+def test_discover_run_skips_upload_run_with_a_base_url_target():
+    # An upload run carries a `target` only as a base-URL hint (REQ-C2); it must
+    # NOT be crawled. input_ref present => upload => no crawl, no seed egress/DNS.
+    with patch("recon.discover.crawl.queries.latest_assets_event", return_value=None), \
+         patch("recon.discover.crawl._load_target",
+               return_value=("acme.io", "sess-1", "t/r/input/deadbeef")), \
+         patch("recon.discover.crawl.sessions_service.get_session") as get_session, \
+         patch("recon.discover.crawl.egress.validate_target") as validate_target, \
+         patch("recon.discover.crawl.harness.run_crawl") as run_crawl:
+        crawl.discover_run(MagicMock(), tenant_id="t", run_id="r", job_id="j")
+    run_crawl.assert_not_called()  # no crawl for an upload
+    validate_target.assert_not_called()  # no seed egress/DNS for an upload
+    get_session.assert_not_called()  # returned before the authorization check
 
 
 def test_discover_run_skips_target_with_path():
     # A single-asset URL target is NOT a crawl — no event, no rows (backward compat).
     with patch("recon.discover.crawl.queries.latest_assets_event", return_value=None), \
          patch("recon.discover.crawl._load_target",
-               return_value=("https://acme.io/app.js", "sess-1")), \
+               return_value=("https://acme.io/app.js", "sess-1", None)), \
          patch("recon.discover.crawl.sessions_service.get_session"), \
          patch("recon.discover.crawl.harness.run_crawl") as run_crawl:
         crawl.discover_run(MagicMock(), tenant_id="t", run_id="r", job_id="j")
@@ -125,7 +140,7 @@ def test_discover_run_rejects_seed_that_fails_egress_guard():
     # is fatal and katana NEVER launches — the seed can't become an SSRF pivot.
     engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
     with patch("recon.discover.crawl.queries.latest_assets_event", return_value=None), \
-         patch("recon.discover.crawl._load_target", return_value=("acme.io", "sess-1")), \
+         patch("recon.discover.crawl._load_target", return_value=("acme.io", "sess-1", None)), \
          patch("recon.discover.crawl.sessions_service.get_session", return_value=engagement), \
          patch("recon.discover.crawl.harness.run_crawl") as run_crawl, \
          patch("recon.discover.crawl.egress.validate_target",
@@ -145,7 +160,7 @@ def test_discover_run_builds_a_schemed_seed_url_for_the_guard(monkeypatch):
     engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
     with patch("recon.discover.crawl.tenant_session"), \
          patch("recon.discover.crawl.queries.latest_assets_event", return_value=None), \
-         patch("recon.discover.crawl._load_target", return_value=("acme.io", "sess-1")), \
+         patch("recon.discover.crawl._load_target", return_value=("acme.io", "sess-1", None)), \
          patch("recon.discover.crawl.sessions_service.get_session", return_value=engagement), \
          patch("recon.discover.crawl.harness.run_crawl",
                return_value=CrawlResult(stdout=b"", timed_out=False)) as run_crawl, \
