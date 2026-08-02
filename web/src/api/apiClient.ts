@@ -35,7 +35,9 @@ function json(method: string, body: unknown): RequestInit {
 
 export function createSession(
   tenantId: string,
-  body: { scope_hosts: string[]; authorized_by: string; name?: string; engagement_id?: string },
+  // `target` (a crawl domain) lets the backend seed scope when scope_hosts is
+  // blank (S3), so the New Recon form need not make the user retype the domain.
+  body: { scope_hosts: string[]; authorized_by: string; name?: string; engagement_id?: string; target?: string },
 ): Promise<SessionView> {
   return request("/sessions", json("POST", body), tenantId);
 }

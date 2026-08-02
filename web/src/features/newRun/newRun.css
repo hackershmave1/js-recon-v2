@@ -1,0 +1,14 @@
+/* New Recon form — optional, multi-host scope chips + add row (S4). Reuses the
+   global .chip pill; overrides its inline-block/margin for a flex chip + × row. */
+.nr-chips { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; padding: 0; }
+.nr-chip { display: inline-flex; align-items: center; gap: 6px; margin-left: 0; }
+.nr-chip-label { font-family: var(--font-mono); }
+.nr-chip-x {
+  border: none; background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 0; width: 14px; height: 14px;
+}
+.nr-chip-x:hover { color: var(--danger); }
+.nr-scope-add { display: flex; gap: 8px; align-items: stretch; }
+.nr-scope-add input { flex: 1; }
+.nr-add { flex: 0 0 auto; }
+.nr-hint { font-size: 12px; margin: 6px 0 0; }
