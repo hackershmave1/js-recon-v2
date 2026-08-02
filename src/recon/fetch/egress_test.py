@@ -45,13 +45,47 @@ def test_is_public_ip_rejects_garbage():
     assert egress.is_public_ip("not-an-ip") is False
 
 
-def test_host_in_scope_exact_only():
+def test_host_in_scope_matches_host_and_subdomains():
     assert egress.host_in_scope("acme.io", _SCOPE) is True
     assert egress.host_in_scope("CDN.Acme.IO", _SCOPE) is True  # case-insensitive
     assert egress.host_in_scope("acme.io.", _SCOPE) is True  # trailing dot
-    assert egress.host_in_scope("evil-acme.io", _SCOPE) is False  # not a suffix match
-    assert egress.host_in_scope("sub.acme.io", _SCOPE) is False  # subdomain not implied
+    assert egress.host_in_scope("sub.acme.io", _SCOPE) is True  # subdomain now in scope
+    assert egress.host_in_scope("a.b.acme.io", _SCOPE) is True  # deep subdomain
     assert egress.host_in_scope("", _SCOPE) is False
+
+
+def test_host_in_scope_rejects_suffix_tricks():
+    # dot-boundary suffix only — no substring / sibling-domain matches.
+    assert egress.host_in_scope("evil-acme.io", _SCOPE) is False
+    assert egress.host_in_scope("notacme.io", _SCOPE) is False
+    assert egress.host_in_scope("acme.io.evil.com", _SCOPE) is False  # suffix is .evil.com
+    assert egress.host_in_scope("acme.io.attacker.net", _SCOPE) is False
+
+
+def test_host_in_scope_drops_overbroad_entries():
+    # A subdomain rule under a bare TLD / public suffix / IP would authorize the
+    # internet, so such entries are dropped and authorize nothing (fail closed).
+    assert egress.host_in_scope("evil.com", ["com"]) is False
+    assert egress.host_in_scope("anything.io", ["io"]) is False
+    assert egress.host_in_scope("x.localhost", ["localhost"]) is False
+    assert egress.host_in_scope("victim.github.io", ["github.io"]) is False
+    assert egress.host_in_scope("x.co.uk", ["co.uk"]) is False
+    assert egress.host_in_scope("10.0.0.1", ["10.0.0.1"]) is False
+    assert egress.host_in_scope("acme.io", ["  ", ""]) is False
+    # a valid entry still authorizes even when mixed with rejected ones.
+    assert egress.host_in_scope("x.acme.io", ["com", "acme.io"]) is True
+
+
+def test_is_valid_scope_entry():
+    for good in ["acme.io", "cdn.acme.io", "ACME.IO", "acme.io.", "a.b.c.example.com"]:
+        assert egress.is_valid_scope_entry(good) is True, good
+    for bad in [
+        "", "   ", "com", "io", "localhost", "internal",  # empty / single-label
+        "co.uk", "github.io", "s3.amazonaws.com",  # public suffixes
+        "10.0.0.1", "127.0.0.1",  # IP literals
+        "acme.io:8443", "https://acme.io", "acme.io/app", "a@b.com", "*.acme.io", "ac me.io",
+    ]:
+        assert egress.is_valid_scope_entry(bad) is False, bad
 
 
 def test_validate_target_allows_in_scope_public(monkeypatch):

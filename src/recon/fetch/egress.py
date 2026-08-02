@@ -23,6 +23,19 @@ from urllib.parse import urlsplit
 
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 
+# Multi-label public suffixes where subdomain-scoping would authorize hosts the
+# engagement never declared (e.g. every ``*.github.io`` site). NOT a full public-
+# suffix list — just common shared-hosting suffixes; a bare single-label TLD
+# (``com``) is already rejected structurally (no dot) by is_valid_scope_entry.
+_PUBLIC_SUFFIX_DENYLIST = frozenset({
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "co.jp", "com.au", "com.br", "co.in", "co.za",
+    "github.io", "gitlab.io", "herokuapp.com", "web.app", "firebaseapp.com",
+    "pages.dev", "workers.dev", "netlify.app", "vercel.app", "now.sh",
+    "cloudfront.net", "amazonaws.com", "s3.amazonaws.com", "azurewebsites.net",
+    "blob.core.windows.net", "appspot.com", "run.app", "blogspot.com",
+    "wordpress.com", "glitch.me", "repl.co", "surge.sh",
+})
+
 
 class EgressBlocked(Exception):
     """A fetch target failed the scope or SSRF policy."""
@@ -39,16 +52,52 @@ class ValidatedTarget:
     ips: tuple[str, ...]
 
 
-def host_in_scope(host: str | None, scope_hosts: list[str]) -> bool:
-    """Exact, case-insensitive host match against the declared scope (REQ-P2).
+def _normalize_host(value: str | None) -> str:
+    """Lowercase + strip surrounding whitespace and the FQDN-root trailing dot."""
+    return (value or "").strip().rstrip(".").lower()
 
-    A trailing dot (the FQDN root) is normalized away. Match is exact, not
-    suffix — ``acme.io`` in scope does NOT authorize ``evil-acme.io`` or an
-    arbitrary subdomain, which keeps the egress surface exactly what was declared.
+
+def is_valid_scope_entry(entry: str) -> bool:
+    """Whether a declared scope entry is specific enough to authorize a host + its
+    subdomains without authorizing half the internet. Invalid entries are dropped
+    from the allow-set so egress fails closed no matter how ``scope_hosts`` was
+    populated (create, rerun, default-from-target, a direct DB write).
+
+    Rejects: empty/whitespace; anything carrying a scheme, port, path, userinfo,
+    wildcard, or whitespace (``/ : @ ? # *`` or space — i.e. not a bare host); a
+    single-label name (a bare TLD like ``com`` or an internal name like
+    ``localhost``); an IP literal (IPs are judged by :func:`is_public_ip`, not
+    scope); and a known multi-label public suffix (``github.io``, ``co.uk`` …),
+    under which a subdomain rule would authorize every tenant of that shared host.
     """
-    normalized = (host or "").strip().rstrip(".").lower()
-    allowed = {entry.strip().rstrip(".").lower() for entry in scope_hosts if entry}
-    return bool(normalized) and normalized in allowed
+    host = _normalize_host(entry)
+    if not host:
+        return False
+    if any(ch in host for ch in "/:@?#* \t"):
+        return False
+    if "." not in host:  # single label -> bare TLD or internal name
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return False  # an IP literal is not a host-scope entry
+    except ValueError:
+        pass
+    return host not in _PUBLIC_SUFFIX_DENYLIST
+
+
+def host_in_scope(host: str | None, scope_hosts: list[str]) -> bool:
+    """True if ``host`` equals, or is a subdomain of, a VALID declared scope entry
+    (REQ-P2). Subdomain = an exact dot-boundary suffix: ``acme.io`` authorizes
+    ``acme.io`` and ``*.acme.io`` but never ``evil-acme.io`` (no dot boundary) or
+    ``acme.io.evil.com`` (its suffix is ``.evil.com``). Over-broad / malformed
+    entries are dropped (see :func:`is_valid_scope_entry`), so the egress decision
+    fails closed regardless of how ``scope_hosts`` was set.
+    """
+    normalized = _normalize_host(host)
+    if not normalized:
+        return False
+    allowed = {_normalize_host(e) for e in scope_hosts if is_valid_scope_entry(e)}
+    return any(normalized == entry or normalized.endswith("." + entry) for entry in allowed)
 
 
 def is_public_ip(ip_str: str) -> bool:
