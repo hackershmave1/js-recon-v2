@@ -1,7 +1,24 @@
-/* New Recon form — optional, multi-host scope chips + add row (S4). Reuses the
-   global .chip pill; overrides its inline-block/margin for a flex chip + × row. */
-/* Keep the form a readable width inside the wide shell content column. */
-.nr-form { max-width: 560px; }
+/* New Recon form — styled to the app's design language (Recon Workspace): a
+   display-font title, a segmented mode toggle, an even field rhythm, and a lime
+   primary submit, so it reads as a designed panel and not a bare form. */
+.nr-form { max-width: 560px; padding: 22px 24px; }
+.nr-title { font-family: var(--font-display); font-size: 20px; font-weight: 700; margin: 0; }
+.nr-sub { font-size: 12.5px; margin: 4px 0 18px; }
+
+/* Segmented Upload / Crawl toggle: native radios kept for a11y, visually hidden. */
+.nr-modes { display: flex; gap: 4px; background: var(--field); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px; margin: 0 0 18px; }
+.nr-modes label { flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--muted); user-select: none; transition: background .12s ease, color .12s ease; }
+.nr-modes label:hover:not(.is-active) { color: var(--text-2); }
+.nr-modes label.is-active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.nr-modes label:focus-within { box-shadow: 0 0 0 3px var(--accent-soft); }
+.nr-modes input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+/* Even field rhythm; inputs span the form width. */
+.nr-field { margin: 0 0 16px; }
+.nr-field > input { width: 100%; box-sizing: border-box; }
+
+/* Scope host chips + add row. Reuses the global .chip pill; overrides its
+   inline-block/margin for a flex chip + × row. */
 .nr-chips { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; padding: 0; }
 .nr-chip { display: inline-flex; align-items: center; gap: 6px; margin-left: 0; }
 .nr-chip-label { font-family: var(--font-mono); }
@@ -14,3 +31,6 @@
 .nr-scope-add input { flex: 1; }
 .nr-add { flex: 0 0 auto; }
 .nr-hint { font-size: 12px; margin: 6px 0 0; }
+
+.nr-error { margin: 0 0 12px; font-size: 12.5px; }
+.nr-submit { width: 100%; margin-top: 4px; padding: 9px; font-size: 13.5px; }

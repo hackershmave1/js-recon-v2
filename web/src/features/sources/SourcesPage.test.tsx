@@ -93,6 +93,25 @@ describe("SourcesPage", () => {
     expect(screen.getByText("endpoint")).toBeInTheDocument();  // marks still shown
   });
 
+  it("folds a directory and shows an aggregated finding badge on the folder", async () => {
+    const asset: SourceFile = { path: "https://acme.io/scripts/app.js", kind: "asset", fetch_status: "ok" };
+    const data: FindingsResponse = {
+      run_id: "r", count: 1, coverage: null, spec: null,
+      findings: [f({ finding_hash: "e1", occurrences: [occ({ asset_url: asset.path, line: 1 })] })],
+    };
+    vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: 1, sources: [asset] });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: asset.path, content: "x", truncated: false });
+    render(<SourcesPage data={data} tenantId="t" runId="r" />);
+
+    const scriptsDir = await screen.findByRole("button", { name: /scripts/i });
+    expect(scriptsDir).toHaveTextContent("1");            // aggregated finding badge on the folder
+    expect(screen.getByText("app.js")).toBeInTheDocument();
+    await userEvent.click(scriptsDir);                     // collapse -> child hidden
+    expect(screen.queryByText("app.js")).not.toBeInTheDocument();
+    await userEvent.click(scriptsDir);                     // expand -> child back
+    expect(screen.getByText("app.js")).toBeInTheDocument();
+  });
+
   it("flags a truncated file", async () => {
     vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: 1, sources: [UPLOAD] });
     vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "input.js", content: "x", truncated: true });

@@ -76,15 +76,30 @@ export function NewRunPanel() {
 
   return (
     <form className="card nr-form" onSubmit={submit}>
-      <h2>New recon run</h2>
-      <p className="muted">Declaring who authorized this is the authorization acknowledgment.</p>
-      <div role="radiogroup" aria-label="Run mode">
-        <label><input type="radio" name="mode" value="upload" checked={mode === "upload"}
-          onChange={() => setMode("upload")} /> Upload a file</label>
-        <label><input type="radio" name="mode" value="crawl" checked={mode === "crawl"}
-          onChange={() => setMode("crawl")} /> Crawl a domain</label>
+      <h2 className="nr-title">New recon run</h2>
+      <p className="muted nr-sub">Declaring who authorized this is the authorization acknowledgment.</p>
+
+      <div className="nr-modes" role="radiogroup" aria-label="Run mode">
+        <label className={mode === "upload" ? "is-active" : ""}>
+          <input type="radio" name="mode" value="upload" checked={mode === "upload"}
+            onChange={() => setMode("upload")} /> Upload a file
+        </label>
+        <label className={mode === "crawl" ? "is-active" : ""}>
+          <input type="radio" name="mode" value="crawl" checked={mode === "crawl"}
+            onChange={() => setMode("crawl")} /> Crawl a domain
+        </label>
       </div>
-      <div>
+
+      {mode === "upload" ? (
+        <div className="nr-field"><label htmlFor="file">JavaScript file</label>
+          <input id="file" type="file" accept=".js,.mjs,text/javascript"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></div>
+      ) : (
+        <div className="nr-field"><label htmlFor="domain">Domain</label>
+          <input id="domain" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="acme.io" /></div>
+      )}
+
+      <div className="nr-field">
         <label htmlFor="scope">Scope hosts</label>
         {scopeHosts.length > 0 && (
           <ul className="nr-chips" aria-label="Scope hosts">
@@ -98,26 +113,21 @@ export function NewRunPanel() {
           </ul>
         )}
         <div className="nr-scope-add">
-          <input id="scope" value={scopeInput} placeholder="example.com"
+          <input id="scope" value={scopeInput} placeholder="example.com  (or *.example.com)"
             onChange={(e) => setScopeInput(e.target.value)} onKeyDown={onScopeKeyDown} />
           <button type="button" className="nr-add" onClick={addHost}
             disabled={scopeInput.trim() === ""}>Add</button>
         </div>
         <p className="muted nr-hint">{scopeHint}</p>
       </div>
-      <div><label htmlFor="auth">Authorized by</label>
-        <input id="auth" value={authorizedBy} onChange={(e) => setAuthorizedBy(e.target.value)} /></div>
-      {mode === "upload" ? (
-        <div><label htmlFor="file">JavaScript file</label>
-          <input id="file" type="file" accept=".js,.mjs,text/javascript"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></div>
-      ) : (
-        <div><label htmlFor="domain">Domain</label>
-          <input id="domain" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="acme.io" /></div>
-      )}
-      {error && <p className="sev-high">{error}</p>}
-      <button type="submit" disabled={!ready || busy}>
-        {busy ? "Starting…" : mode === "crawl" ? "Crawl" : "Analyze"}
+
+      <div className="nr-field"><label htmlFor="auth">Authorized by</label>
+        <input id="auth" value={authorizedBy} placeholder="your name / ticket"
+          onChange={(e) => setAuthorizedBy(e.target.value)} /></div>
+
+      {error && <p className="sev-high nr-error">{error}</p>}
+      <button type="submit" className="btn-primary nr-submit" disabled={!ready || busy}>
+        {busy ? "Starting…" : mode === "crawl" ? "Crawl domain" : "Analyze file"}
       </button>
     </form>
   );
