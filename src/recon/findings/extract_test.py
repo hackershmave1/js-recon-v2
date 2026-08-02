@@ -348,6 +348,19 @@ def test_wrapper_request_config_is_recognized():
     assert (eps[0].method, eps[0].url, eps[0].wrapper) == ("POST", "/x", "api")
 
 
+def test_dotted_receiver_wrapper_is_recognized():
+    # A dotted receiver (`this.httpClient`) — the common minified class-based client
+    # shape — resolves through the same object-text match, no extract.py change: the
+    # dispatch already compares the full `this.httpClient` (spec §4 fast-follow).
+    eps = _wrapped(
+        "this.httpClient.request({url:'/api/v2/users/${e}', method:'get'});",
+        ["this.httpClient"],
+    )
+    assert (eps[0].method, eps[0].url, eps[0].wrapper) == (
+        "GET", "/api/v2/users/${e}", "this.httpClient",
+    )
+
+
 def test_wrapper_post_body_params_are_mined():
     eps = _wrapped("api.post('/login', {user:1});", ["api"])
     assert ("user", "body") in {(p.name, p.location) for p in eps[0].params}
