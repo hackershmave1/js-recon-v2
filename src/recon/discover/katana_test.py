@@ -27,6 +27,28 @@ def test_build_argv_headless_is_opt_in():
     assert argv[argv.index("-headless-options") + 1] == "--disable-dev-shm-usage"
     assert "-em" not in argv
     assert "-system-chrome" not in argv
+    assert "-system-chrome-path" not in argv  # omitted when no path is supplied
+
+
+def test_build_argv_headless_uses_system_chrome_path_when_supplied():
+    # Points katana at the image's baked-in chromium so go-rod does not download
+    # its own browser at runtime (verified against katana v1.6.1 + chromium 150).
+    argv = katana.build_argv(
+        katana_bin="katana", domain="acme.io", scope_hosts=["acme.io"],
+        depth=3, crawl_duration_seconds=120.0, headless=True,
+        system_chrome_path="/usr/bin/chromium",
+    )
+    assert "-headless" in argv
+    assert argv[argv.index("-system-chrome-path") + 1] == "/usr/bin/chromium"
+
+
+def test_build_argv_system_chrome_path_ignored_without_headless():
+    # No headless -> standard crawl, so the chrome path is irrelevant and dropped.
+    argv = katana.build_argv(
+        katana_bin="katana", domain="acme.io", scope_hosts=["acme.io"],
+        depth=3, crawl_duration_seconds=120.0, system_chrome_path="/usr/bin/chromium",
+    )
+    assert "-headless" not in argv
     assert "-system-chrome-path" not in argv
 
 

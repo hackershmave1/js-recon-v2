@@ -27,6 +27,7 @@ def build_argv(
     depth: int,
     crawl_duration_seconds: float,
     headless: bool = False,
+    system_chrome_path: str | None = None,
 ) -> list[str]:
     target = domain if "://" in domain else f"https://{domain}"
     argv = [
@@ -39,12 +40,17 @@ def build_argv(
     for host in scope_hosts:
         argv += ["-crawl-scope", host]
     if headless:
-        # -system-chrome/-system-chrome-path are intentionally omitted: katana's go-rod
-        # launcher rejects the vendored Debian chromium ("system chrome binary does not
-        # exist") and manages its own browser. --disable-dev-shm-usage is required or
-        # headless Chrome hangs on Docker's 64MB /dev/shm. Headless is opt-in
-        # (crawl_headless) and not yet fully verified in-container (see debt ledger).
+        # --disable-dev-shm-usage is required or headless Chrome hangs on Docker's
+        # 64MB /dev/shm; -no-sandbox because the worker runs unprivileged.
         argv += ["-headless", "-no-sandbox", "-headless-options", "--disable-dev-shm-usage"]
+        # Point katana at the system chromium baked into the image
+        # (config.system_chrome_path = /usr/bin/chromium) instead of letting go-rod
+        # download its own ~150MB Chromium from a Google CDN on every fresh container.
+        # Verified 2026-08-02 (katana v1.6.1 + chromium 150): `-system-chrome-path`
+        # launches instantly. The prior "go-rod rejects the system path" note predated
+        # chromium being installed at this path and no longer holds.
+        if system_chrome_path:
+            argv += ["-system-chrome-path", system_chrome_path]
     return argv
 
 

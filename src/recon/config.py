@@ -65,8 +65,9 @@ class Settings(BaseSettings):
     # heartbeat_stall_threshold_seconds so the poll loop renews the job lease during
     # a long crawl and no peer worker reclaims the RUNNING job (double-crawl).
     katana_bin: str = "katana"
-    # Reserved: katana's go-rod launcher currently rejects a system chrome path
-    # (uses its own browser); kept for when that is resolved.
+    # Passed to katana as `-system-chrome-path` on the headless crawl path so its
+    # go-rod launcher drives this baked-in chromium (installed in the image) instead
+    # of downloading its own from a CDN per container. Non-headless crawls ignore it.
     system_chrome_path: str = "/usr/bin/chromium"
     crawl_headless: bool = False
     crawl_depth: int = 3
