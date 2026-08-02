@@ -118,12 +118,14 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
           <div className="sx-sub">Recon targets and their latest runs</div>
         </div>
         <div className="sx-head-actions">
+          {/* No "New Recon" CTA here: the global top-bar button is the single
+              primary create action (ui-ux-pro-max: primary-action /
+              navigation-consistency). The empty-state below keeps its own CTA. */}
           <label className="sx-arch">
             <input type="checkbox" checked={showArchived}
               onChange={(e) => setShowArchived(e.target.checked)} />
             Show archived
           </label>
-          <a className="sx-new" href="/"><Icon name="plus" size={14} />New Recon</a>
         </div>
       </div>
 
