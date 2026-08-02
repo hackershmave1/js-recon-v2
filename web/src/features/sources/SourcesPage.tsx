@@ -90,18 +90,43 @@ function TreeLevel({ nodes, depth, selectedPath, onSelect, badges }: {
   );
 }
 
-function CodeViewer({ content, marks }: { content: SourceContent; marks: Map<number, string> }) {
-  const lines = content.content.split("\n");
+// A source is "minified" if any line is absurdly long — a webpack/rollup bundle is
+// one giant line. Such files are auto-pretty-printed; a source recovered from a
+// source map is already real code and won't trip this.
+function isMinified(text: string): boolean {
+  return text.split("\n", 200).some((line) => line.length > 500);
+}
+
+// Lazily load the beautifier the first time a source is pretty-printed, so it never
+// enters the initial bundle. Falls back to the raw code if the import/format fails.
+async function formatJs(code: string): Promise<string> {
+  try {
+    const mod = await import("js-beautify");
+    // Vite's CJS interop may put the named export directly or under `default`.
+    const beautify = mod.js_beautify ?? (mod as unknown as { default?: typeof mod }).default?.js_beautify;
+    return beautify ? beautify(code, { indent_size: 2, end_with_newline: false }) : code;
+  } catch {
+    return code;
+  }
+}
+
+// Presentational: renders `text` line-by-line. `marks` (line -> finding type) is
+// null when the view is pretty-printed, since the original line numbers no longer
+// map after reformatting.
+function CodeViewer({ text, truncated, marks }: {
+  text: string; truncated: boolean; marks: Map<number, string> | null;
+}) {
+  const lines = text.split("\n");
   return (
     <div className="sv-code">
-      {content.truncated && <div className="sv-note sv-warn">File truncated — showing a capped preview.</div>}
-      {lines.map((text, i) => {
+      {truncated && <div className="sv-note sv-warn">File truncated — showing a capped preview.</div>}
+      {lines.map((line, i) => {
         const n = i + 1;
-        const mark = marks.get(n);
+        const mark = marks?.get(n);
         return (
           <div key={n} className={"sv-line" + (mark ? " marked" : "")}>
             <span className="sv-ln">{n}</span>
-            <span className="sv-code-txt">{text}</span>
+            <span className="sv-code-txt">{line}</span>
             {mark && <span className="sv-mark">{mark}</span>}
           </div>
         );
@@ -176,6 +201,21 @@ export function SourcesPage({ data, tenantId, runId }: {
     return m;
   }, [selected, data]);
 
+  // Pretty-print: auto-on for minified content, off for already-readable source.
+  // Resets per file; the beautified text is computed lazily (js-beautify) once.
+  const [pretty, setPretty] = useState(false);
+  const [prettyText, setPrettyText] = useState<string | null>(null);
+  useEffect(() => {
+    setPrettyText(null);
+    setPretty(content != null && isMinified(content.content));
+  }, [content]);
+  useEffect(() => {
+    if (!pretty || content == null || prettyText != null) return;
+    let live = true;
+    void formatJs(content.content).then((out) => { if (live) setPrettyText(out); });
+    return () => { live = false; };
+  }, [pretty, content, prettyText]);
+
   if (listError) return <div className="sv-empty"><div className="sv-empty-title">Couldn't load sources</div><div>{listError}</div></div>;
   if (!files) return null;
   if (files.length === 0) {
@@ -204,6 +244,13 @@ export function SourcesPage({ data, tenantId, runId }: {
             <span className="sv-file-path">{selected.path}</span>
             <span className="sv-spacer" />
             {findingCount > 0 && <span className="sv-file-count">{findingCount} finding{findingCount === 1 ? "" : "s"} in this file</span>}
+            {content && (
+              <button type="button" className={"sv-pretty" + (pretty ? " on" : "")}
+                aria-pressed={pretty} onClick={() => setPretty((p) => !p)}
+                title={pretty ? "Show the raw, unformatted source" : "Format (pretty-print) the source"}>
+                <span className="sv-pretty-glyph" aria-hidden="true">{"{ }"}</span> Pretty print
+              </button>
+            )}
             {content && <button type="button" onClick={() => downloadText(baseName, content.content)}>{content.truncated ? "Download (partial)" : "Download"}</button>}
           </div>
         )}
@@ -214,7 +261,15 @@ export function SourcesPage({ data, tenantId, runId }: {
         ) : contentState === "error" ? (
           <div className="sv-note sv-warn">Couldn't load this file's source.</div>
         ) : content ? (
-          <CodeViewer content={content} marks={marks} />
+          pretty && prettyText == null ? (
+            <div className="sv-note">Formatting…</div>
+          ) : (
+            <CodeViewer
+              text={pretty ? prettyText! : content.content}
+              truncated={content.truncated}
+              marks={pretty ? null : marks}
+            />
+          )
         ) : null}
       </div>
     </div>
