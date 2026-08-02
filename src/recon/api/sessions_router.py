@@ -29,6 +29,9 @@ class CreateSessionBody(BaseModel):
     scope_hosts: list[str] = Field(default_factory=list)
     authorized_by: str
     engagement_id: str | None = None
+    # Optional crawl target: when scope_hosts is blank its host seeds the scope, so
+    # the New Recon form doesn't make the user retype the domain (S3).
+    target: str | None = None
 
 
 class PatchSessionBody(BaseModel):
@@ -47,6 +50,7 @@ def create_session(
             scope_hosts=body.scope_hosts,
             authorized_by=body.authorized_by,
             engagement_id=body.engagement_id,
+            target=body.target,
         )
     except (service.AuthorizationRequired, service.SessionInvalid) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

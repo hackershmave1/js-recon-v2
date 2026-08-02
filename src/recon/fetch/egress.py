@@ -85,6 +85,31 @@ def is_valid_scope_entry(entry: str) -> bool:
     return host not in _PUBLIC_SUFFIX_DENYLIST
 
 
+def normalize_scope_entry(entry: str) -> str | None:
+    """The normalized host for a VALID scope entry, or ``None`` if the entry is not
+    a usable host-scope declaration (see :func:`is_valid_scope_entry`).
+
+    Lets a caller persist a clean, deduped allow-list and reject a bad entry at the
+    edge (a create-time 400) instead of silently dropping it at egress time. The
+    egress decision still fails closed on its own, so this is a UX/hygiene layer,
+    not the security boundary."""
+    if not is_valid_scope_entry(entry):
+        return None
+    return _normalize_host(entry)
+
+
+def host_of(target: str | None) -> str:
+    """The lowercased host of a user-supplied target — a bare domain (``acme.io``)
+    or a full URL (``https://acme.io:8443/x``) — or ``""`` if none. The single
+    host-extraction used for scope decisions that start from a target (defaulting
+    a blank scope, the API's fail-fast crawl-scope check); the fetch-time seed
+    guard keeps its own URL form for the DNS/public-IP check."""
+    if not target or not target.strip():
+        return ""
+    t = target if "://" in target else f"https://{target.strip()}"
+    return (urlsplit(t).hostname or "").lower()
+
+
 def host_in_scope(host: str | None, scope_hosts: list[str]) -> bool:
     """True if ``host`` equals, or is a subdomain of, a VALID declared scope entry
     (REQ-P2). Subdomain = an exact dot-boundary suffix: ``acme.io`` authorizes

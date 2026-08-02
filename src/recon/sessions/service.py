@@ -1,8 +1,12 @@
 """Engagement/session service — the scope lock + authorization ack (REQ-P3, REQ-C1).
 
-A run may only start under a session that declares its in-scope hosts and carries
-a lightweight authorization acknowledgment. Egress scope is taken from here and
-never derived from crawled content (REQ-P2).
+A run may only start under a session that carries a lightweight authorization
+acknowledgment (``authorized_by``). A CRAWL additionally needs in-scope hosts —
+its egress scope is taken from here, never derived from crawled content (REQ-P2)
+— while an UPLOAD needs no scope (S3): a blank scope is allowed, and when a crawl
+target is supplied at create time its host seeds the scope so the user need not
+retype the domain. Declared entries are validated up front (a bad host is a 400,
+not a silently-dropped allow-list entry).
 
 R6 widens this into the Sessions surface: listing a tenant's sessions as cards
 (each with its LATEST run's real stats), plus rename / archive / delete. Per-card
@@ -21,6 +25,7 @@ from sqlalchemy.orm import Session
 from recon.db.base import admin_session, tenant_session
 from recon.db.models import Engagement, EngagementSession, Finding, Run, RunAsset, Tenant
 from recon.domain import FindingType
+from recon.fetch import egress
 from recon.findings.queries import _latest_coverage
 
 
@@ -83,6 +88,32 @@ def create_tenant(name: str) -> str:
         return str(tenant.id)
 
 
+def _resolve_scope_hosts(scope_hosts: list[str], target: str | None) -> list[str]:
+    """Normalize + validate the declared scope, defaulting a blank scope to the
+    crawl target's host (S3, REQ-P2/P3).
+
+    Every explicit entry must be a valid host-scope declaration; an invalid one is
+    rejected here (a clean create-time 400) rather than silently dropped by the
+    egress guard at run time. A blank scope is allowed — an upload session needs
+    none — and when a ``target`` is supplied its host seeds the scope so a crawl
+    authorizes exactly the domain (and its subdomains) the user typed. A target
+    whose host is not itself a valid scope entry (an IP literal, ``localhost``)
+    does NOT seed scope; that crawl is refused later by the fail-fast/seed guard.
+    """
+    cleaned: list[str] = []
+    for entry in scope_hosts:
+        normalized = egress.normalize_scope_entry(entry)
+        if normalized is None:
+            raise SessionInvalid(f"invalid scope host: {entry!r}")
+        if normalized not in cleaned:
+            cleaned.append(normalized)
+    if not cleaned and target:
+        default_host = egress.normalize_scope_entry(egress.host_of(target))
+        if default_host is not None:
+            cleaned.append(default_host)
+    return cleaned
+
+
 def create_session(
     tenant_id: str,
     *,
@@ -90,11 +121,15 @@ def create_session(
     scope_hosts: list[str],
     authorized_by: str,
     engagement_id: str | None = None,
+    target: str | None = None,
 ) -> SessionView:
-    if not scope_hosts:
-        raise AuthorizationRequired("at least one in-scope host must be declared")
+    """Create an engagement session. ``authorized_by`` is always required (the
+    authorization ack). ``scope_hosts`` may be empty (an upload needs no scope);
+    when it is and a ``target`` is given, the target's host seeds the scope (S3).
+    Invalid scope entries raise :class:`SessionInvalid` (mapped to a 400)."""
     if not authorized_by:
         raise AuthorizationRequired("an authorization acknowledgment is required")
+    resolved_scope = _resolve_scope_hosts(scope_hosts, target)
     with tenant_session(tenant_id) as session:
         if engagement_id is not None and session.get(Engagement, engagement_id) is None:
             # RLS confines this lookup to the tenant's own engagements, so a miss means
@@ -105,7 +140,7 @@ def create_session(
         row = EngagementSession(
             tenant_id=tenant_id,
             name=name,
-            scope_hosts=scope_hosts,
+            scope_hosts=resolved_scope,
             authorization_ack=True,
             authorized_by=authorized_by,
             authorized_at=dt.datetime.now(dt.timezone.utc),

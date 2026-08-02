@@ -88,6 +88,24 @@ def test_is_valid_scope_entry():
         assert egress.is_valid_scope_entry(bad) is False, bad
 
 
+def test_normalize_scope_entry():
+    assert egress.normalize_scope_entry("ACME.IO") == "acme.io"
+    assert egress.normalize_scope_entry("  cdn.acme.io.  ") == "cdn.acme.io"  # trim + FQDN dot
+    for bad in ["", "com", "localhost", "github.io", "10.0.0.1", "https://acme.io", "*.acme.io"]:
+        assert egress.normalize_scope_entry(bad) is None, bad
+
+
+def test_host_of_extracts_host_from_domain_or_url():
+    assert egress.host_of("acme.io") == "acme.io"
+    assert egress.host_of("ACME.IO") == "acme.io"
+    assert egress.host_of("https://acme.io:8443/app.js?x=1") == "acme.io"
+    assert egress.host_of("http://user@acme.io/x") == "acme.io"  # userinfo excluded from host
+    assert egress.host_of("[2606:4700::1111]") == "2606:4700::1111"  # IPv6 brackets stripped
+    assert egress.host_of("") == ""
+    assert egress.host_of(None) == ""
+    assert egress.host_of("   ") == ""
+
+
 def test_validate_target_allows_in_scope_public(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("93.184.216.34"))
     target = egress.validate_target("https://acme.io/app.js", _SCOPE)
