@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getSources, getSourceContent, ApiError } from "../../api/apiClient";
 import type { FindingsResponse, Occurrence, SourceContent, SourceFile } from "../../api/types";
 import "./sources.css";
@@ -46,9 +46,18 @@ const FileIcon = () => (
   </svg>
 );
 
-function TreeLevel({ nodes, depth, selectedPath, onSelect, badges }: {
-  nodes: Map<string, TreeNode>; depth: number; selectedPath: string | null;
+// Total findings under a node — its own file's count plus every descendant's — so a
+// directory can show that it (transitively) contains findings, even when collapsed.
+function countFindingsUnder(node: TreeNode, badges: Map<string, number>): number {
+  let total = node.file ? (badges.get(node.file.path) ?? 0) : 0;
+  for (const child of node.children.values()) total += countFindingsUnder(child, badges);
+  return total;
+}
+
+function TreeLevel({ nodes, depth, parentKey, selectedPath, onSelect, badges, collapsed, onToggle }: {
+  nodes: Map<string, TreeNode>; depth: number; parentKey: string; selectedPath: string | null;
   onSelect: (path: string) => void; badges: Map<string, number>;
+  collapsed: Set<string>; onToggle: (key: string) => void;
 }) {
   const entries = [...nodes.values()].sort((a, b) =>
     (a.file ? 1 : 0) - (b.file ? 1 : 0) || a.name.localeCompare(b.name),
@@ -57,6 +66,12 @@ function TreeLevel({ nodes, depth, selectedPath, onSelect, badges }: {
     <>
       {entries.map((node) => {
         const pad = { paddingLeft: 8 + depth * 14 };
+        const key = parentKey + "/" + node.name;
+        const childLevel = (
+          <TreeLevel nodes={node.children} depth={depth + 1} parentKey={key}
+            selectedPath={selectedPath} onSelect={onSelect} badges={badges}
+            collapsed={collapsed} onToggle={onToggle} />
+        );
         if (node.file) {
           const file = node.file;
           const badge = badges.get(file.path);
@@ -65,24 +80,31 @@ function TreeLevel({ nodes, depth, selectedPath, onSelect, badges }: {
               <button type="button" style={pad}
                 className={"sv-node" + (selectedPath === file.path ? " sel" : "")}
                 onClick={() => onSelect(file.path)}>
+                <span className="sv-caret" aria-hidden="true" />
                 <span className="sv-ico"><FileIcon /></span>
                 <span className="sv-node-name">{node.name}</span>
                 {badge ? <span className="sv-node-badge">{badge}</span> : null}
                 {file.fetch_status !== "ok" && <span className="sv-node-status">{file.fetch_status}</span>}
               </button>
-              {node.children.size > 0 && (
-                <TreeLevel nodes={node.children} depth={depth + 1} selectedPath={selectedPath} onSelect={onSelect} badges={badges} />
-              )}
+              {node.children.size > 0 && childLevel}
             </div>
           );
         }
+        const isCollapsed = collapsed.has(key);
+        const dirFindings = countFindingsUnder(node, badges);
         return (
           <div key={node.name}>
-            <div className="sv-node sv-dir" style={pad}>
+            <button type="button" className="sv-node sv-dir" style={pad}
+              aria-expanded={!isCollapsed} onClick={() => onToggle(key)}>
+              <span className={"sv-caret" + (isCollapsed ? "" : " open")} aria-hidden="true">▸</span>
               <span className="sv-ico"><FolderIcon /></span>
               <span className="sv-node-name">{node.name}</span>
-            </div>
-            <TreeLevel nodes={node.children} depth={depth + 1} selectedPath={selectedPath} onSelect={onSelect} badges={badges} />
+              {dirFindings > 0 && (
+                <span className="sv-node-badge"
+                  title={`${dirFindings} finding${dirFindings === 1 ? "" : "s"} in this folder`}>{dirFindings}</span>
+              )}
+            </button>
+            {!isCollapsed && childLevel}
           </div>
         );
       })}
@@ -151,6 +173,14 @@ export function SourcesPage({ data, tenantId, runId }: {
   const [selPath, setSelPath] = useState<string | null>(null);
   const [content, setContent] = useState<SourceContent | null>(null);
   const [contentState, setContentState] = useState<"idle" | "loading" | "error">("idle");
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleDir = useCallback((key: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     // Clear the previous run's tree/selection so a run switch never shows stale
@@ -158,6 +188,7 @@ export function SourcesPage({ data, tenantId, runId }: {
     setFiles(null);
     setSelPath(null);
     setListError(null);
+    setCollapsed(new Set());
     let live = true;
     getSources(tenantId, runId)
       .then((r) => { if (live) setFiles(r.sources); })
@@ -234,7 +265,8 @@ export function SourcesPage({ data, tenantId, runId }: {
           <div className="sv-rail-sub">{files.length} file{files.length === 1 ? "" : "s"} · fetched from the target</div>
         </div>
         <div className="sv-tree">
-          <TreeLevel nodes={tree.children} depth={0} selectedPath={selected?.path ?? null} onSelect={setSelPath} badges={badges} />
+          <TreeLevel nodes={tree.children} depth={0} parentKey="" selectedPath={selected?.path ?? null}
+            onSelect={setSelPath} badges={badges} collapsed={collapsed} onToggle={toggleDir} />
         </div>
       </aside>
 
