@@ -10,7 +10,6 @@ export class BatchUploader {
     this.uploadTimer = null;
     this.apiEndpoint = this.normalizeEndpoint('http://localhost:3000/api/save-files');
     this.performAnalysisOnUpload = false;
-    this.analysisOptions = {};
     // Session scope (root domains + include-subdomains) chosen when a new session is
     // started; carried into save-files metadata so the backend seeds the session's scope.
     this.scope = null;
@@ -96,11 +95,6 @@ export class BatchUploader {
       this.uploadTimer = setTimeout(() => this.processBatch(), this.batchInterval);
     }
     return this.pendingQueue.length;
-  }
-
-  async queue(fileObject) {
-    // Backward-compatible alias.
-    return this.enqueue(fileObject);
   }
 
   async processBatch() {
@@ -217,8 +211,6 @@ export class BatchUploader {
         // alone does NOT suppress) so bulk capture stays a fast store on the single-worker
         // backend. Analysis is then run on demand (POST /api/sessions/{id}/analyze/start).
         disableAnalysis: !this.performAnalysisOnUpload,
-        // Scan-type extractor toggles → save_files → extract_all. Empty = backend defaults.
-        analysisOptions: this.analysisOptions || {},
         // Explicit session scope (only honoured by save_files on session create).
         ...this.scopeMetadata()
       },
@@ -269,10 +261,6 @@ export class BatchUploader {
 
   setPerformAnalysisOnUpload(enabled) {
     this.performAnalysisOnUpload = enabled === true;
-  }
-
-  setAnalysisOptions(options) {
-    this.analysisOptions = (options && typeof options === 'object') ? options : {};
   }
 
   setScope(scope) {

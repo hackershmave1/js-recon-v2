@@ -4,7 +4,6 @@
 import { useState } from 'preact/hooks';
 import { C, F, CLASS_COLOR, CLASS_LABEL } from '../theme.js';
 import { Switch, Dot } from './ui.jsx';
-import { ScanType } from './ScanType.jsx';
 import {
   SearchIcon, GearIcon, PauseIcon, PlayIcon, DownloadIcon, ArrowRightIcon
 } from '../icons.jsx';
@@ -242,19 +241,8 @@ export function HomeView({ vm }) {
         </div>
       </div>
 
-      {/* scan type */}
-      <div style={{ padding: '13px 17px', borderTop: `1px solid ${C.line}`, marginTop: '13px' }}>
-        <div style={{ marginBottom: '9px' }}><SectionLabel>SCAN TYPE</SectionLabel></div>
-        <ScanType scan={vm.scan} onChange={vm.onScanChange} />
-        {!vm.analyzeOn && (
-          <div style={{ fontSize: '10px', color: C.faint, marginTop: '8px' }}>
-            Applies when <span style={{ color: C.muted }}>Analyze on upload</span> is on.
-          </div>
-        )}
-      </div>
-
       {/* quick toggles */}
-      <div style={{ padding: '13px 17px', borderTop: `1px solid ${C.line}` }}>
+      <div style={{ padding: '13px 17px', borderTop: `1px solid ${C.line}`, marginTop: '13px' }}>
         {vm.toggles.map((t) => (
           <button key={t.key} onClick={() => vm.toggleSetting(t.key)} style={{
             width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0',

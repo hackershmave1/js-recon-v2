@@ -5,7 +5,6 @@ import { C } from './theme.js';
 import { Toast } from './components/ui.jsx';
 import { HomeView } from './components/HomeView.jsx';
 import { SettingsView } from './components/SettingsView.jsx';
-import { SCAN_PROFILES, DEFAULT_PROFILE, matchProfile } from './scanProfiles.js';
 import * as api from './api.js';
 
 const NOISE = new Set(['lib', 'cms', 'tracker']);
@@ -15,7 +14,7 @@ const NOISE = new Set(['lib', 'cms', 'tracker']);
 const FALLBACK_SETTINGS = {
   includeSubdomains: true, muteNoise: true, outOfScopeMode: 'tag', maxAssetMb: 8,
   denyDefaultProfile: true, performAnalysisOnUpload: false, captureAuthContext: true,
-  workspaceUrl: '', apiKey: '', domainScopes: [], useDomainScope: false,
+  workspaceUrl: '', domainScopes: [], useDomainScope: false,
   denyRules: [
     { tag: 'CMS', pattern: '/wp-content/plugins/*' },
     { tag: 'CMS', pattern: '/wp-includes/*' },
@@ -60,7 +59,6 @@ export function App() {
   const [toast, setToast] = useState(null);
   const [connState, setConnState] = useState('ok');
   const [latency, setLatency] = useState('');
-  const [showKey, setShowKey] = useState(false);
   const [newRule, setNewRule] = useState('');
   // Decoupled analysis: status of the on-demand backend job + its per-file progress,
   // which drives the captures feed's ingested→analyzing→analyzed lifecycle.
@@ -185,9 +183,7 @@ export function App() {
   }
 
   function openWorkspace() {
-    const url = settings?.workspaceUrl
-      || (settings?.apiEndpoint ? safeOrigin(settings.apiEndpoint) : '')
-      || 'http://localhost:3000';
+    const url = settings?.workspaceUrl || 'http://localhost:3000';
     api.openTab(url);
   }
 
@@ -255,17 +251,8 @@ export function App() {
   const mutedCount = allCaptures.filter(isHidden).length;
   const captures = allCaptures.filter((c) => !isHidden(c)).slice().reverse();
 
-  // Scan type: seed the picker from saved options (empty → default preset for display;
-  // backend defaults already match Standard). Editing persists scanProfile + analysisOptions.
-  const scanOptions = (settings.analysisOptions && Object.keys(settings.analysisOptions).length)
-    ? settings.analysisOptions
-    : { ...SCAN_PROFILES[DEFAULT_PROFILE].options };
-  const scanVm = { profile: settings.scanProfile || matchProfile(scanOptions), options: scanOptions };
-  const onScanChange = (next) => patchSettings({ scanProfile: next.profile, analysisOptions: next.options });
-
   const homeVm = {
     capturing: status.isCapturing,
-    scan: scanVm, onScanChange, analyzeOn: settings.performAnalysisOnUpload === true,
     connectionLabel: connState === 'fail' ? 'workspace unreachable' : 'connected to workspace',
     host: status.host || activeHost || '—',
     session: (status.sessionId || '').slice(0, 8) || '—',
@@ -290,15 +277,11 @@ export function App() {
     openWorkspace
   };
 
-  const apiKey = settings.apiKey || '';
   const settingsVm = {
     closeSettings: () => setView('home'),
     connState, latency,
-    wsUrl: settings.workspaceUrl || settings.apiEndpoint || '',
+    wsUrl: settings.workspaceUrl || '',
     setWsUrl: (v) => patchSettings({ workspaceUrl: v }),
-    apiKey,
-    showKey, toggleKey: () => setShowKey((v) => !v),
-    setApiKey: (v) => patchSettings({ apiKey: v }),
     testConnection,
     defScope: (settings.domainScopes || []).join(', '),
     setDefScope,
@@ -324,8 +307,4 @@ export function App() {
       <Toast message={toast} />
     </div>
   );
-}
-
-function safeOrigin(url) {
-  try { return new URL(url).origin; } catch (e) { return ''; }
 }

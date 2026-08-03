@@ -23,7 +23,6 @@ export function toExportFile(file, includeContent = false) {
     sourceMapFetchStatus: file.sourceMapFetchStatus,
     sourceMapFetchError: file.sourceMapFetchError,
     dependencies: file.dependencies,
-    repPlusSummary: file.repPlusSummary,
     initiator: file.initiator,
     documentUrl: file.documentUrl,
     needsServerProcessing: file.needsServerProcessing

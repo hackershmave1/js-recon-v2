@@ -6,7 +6,8 @@ import { Decompressor } from './modules/decompressor.js';
 import { BatchUploader } from './modules/batch-uploader.js';
 import { SessionStore } from './modules/session-store.js';
 import { IdbStore } from './modules/idb-store.js';
-import { RepPlusBridge } from './modules/rep-plus-bridge.js';
+import { AuthContextTracker } from './modules/auth-context.js';
+import { WorkspaceClient } from './modules/workspace-client.js';
 import { buildExportData } from './modules/export-builder.js';
 import { classifyAsset, isThirdParty, matchesDenylist, countSecrets } from './modules/asset-classifier.js';
 
@@ -40,17 +41,6 @@ function normalizeRootDomains(values) {
 // listener must NOT hold the response channel open for these (see setupListeners).
 const FIRE_AND_FORGET_ACTIONS = new Set(['dynamicScriptDetected']);
 
-const AUTH_HEADER_ALLOWLIST = new Set([
-  'authorization',
-  'cookie',
-  'x-api-key',
-  'x-auth-token',
-  'x-csrf-token',
-  'x-xsrf-token',
-  'x-access-token',
-  'x-session-token'
-]);
-
 class JSExtractor {
   constructor() {
     this.capturedFiles = new Map(); // url -> fileObject (for export/display)
@@ -70,9 +60,6 @@ class JSExtractor {
       lastFailureUrl: null,
       lastFailureMessage: null
     };
-    this.requestAuthContexts = new Map();
-    this.authContextTtlMs = 5 * 60 * 1000;
-    this.maxAuthContextEntries = 4000;
 
     this.limits = {
       // NOTE: must not exceed the backend's per-file cap (SecurityValidator.
@@ -91,7 +78,19 @@ class JSExtractor {
     this.sourceMapDetector = new SourceMapDetector();
     this.decompressor = new Decompressor();
     this.batchUploader = new BatchUploader();
-    this.repPlusBridge = new RepPlusBridge();
+    // Request auth-context capture (Authorization/Cookie/CSRF headers), extracted into
+    // its own module; the tracker is fed the live settings + scope/extension predicates.
+    this.authTracker = new AuthContextTracker({
+      getSettings: () => this.settings,
+      isInScope: (url) => this.isInScope(url),
+      isExtensionRequest: (details) => this.isExtensionRequest(details)
+    });
+    // Workspace backend client (health / analyze / progress + API-base resolution).
+    this.workspaceClient = new WorkspaceClient({
+      getSettings: () => this.settings,
+      getSessionId: () => this.sessionId,
+      batchUploader: this.batchUploader
+    });
     // Durable stores (IndexedDB) that outlive the service worker: the upload outbox
     // (unsent files) and the dedup set (hash -> {url, capturedAt}). Separate DBs to
     // avoid multi-store upgrade coordination.
@@ -124,15 +123,8 @@ class JSExtractor {
     // Restore the persisted session id (or mint one on first run) so a service-worker
     // respawn resumes the SAME backend session instead of fragmenting into a new one.
     this.sessionId = await this.sessionStore.loadOrCreate();
-    if (this.settings.useLocalApi !== true) {
-      this.settings.useLocalApi = true;
-      await chrome.storage.local.set({ useLocalApi: true });
-    }
-    if (this.settings.apiEndpoint) {
-      this.batchUploader.setEndpoint(this.settings.apiEndpoint);
-    }
+    this.batchUploader.setEndpoint(this.workspaceClient.resolveApiBase());
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
-    this.batchUploader.setAnalysisOptions(this.settings.analysisOptions || {});
     // Re-apply a persisted scope so uploads keep tagging the session even if the
     // service worker recycled after a new session was started.
     if (this.settings.useDomainScope && Array.isArray(this.settings.domainScopes) && this.settings.domainScopes.length) {
@@ -141,15 +133,7 @@ class JSExtractor {
         includeSubdomains: this.settings.includeSubdomains !== false
       });
     }
-    this.repPlusBridge.setExtensionId(this.settings.repPlusExtensionId || '');
     this.isCapturing = this.settings.isCapturing || false;
-    if (this.settings.autoStart) {
-      this.isCapturing = true;
-      await this.persistCaptureState(true);
-    }
-    
-    // Initialize rep+ bridge for optional integration
-    await this.repPlusBridge.initialize();
 
     // --- durability wiring (S2): back the uploader with the persistent outbox and
     // let it clear the flush alarm once fully drained.
@@ -170,7 +154,6 @@ class JSExtractor {
 
     console.log('JSExtractor initialized', {
       sessionId: this.sessionId,
-      repPlusAvailable: this.repPlusBridge.isRepPlusAvailable,
       pendingUploads
     });
   }
@@ -181,7 +164,8 @@ class JSExtractor {
   // are plain data, so they stay valid inside the deferred continuation.
   setupListeners() {
     chrome.webRequest.onBeforeSendHeaders.addListener(
-      (details) => { this.ready.then(() => this.captureRequestAuthContext(details)); },
+      // Gate on capture being active (the record() method no longer owns that check).
+      (details) => { this.ready.then(() => { if (this.isCapturing) this.authTracker.record(details); }); },
       {
         urls: ["<all_urls>"],
         types: ["script"]
@@ -201,7 +185,7 @@ class JSExtractor {
     chrome.webRequest.onErrorOccurred.addListener(
       // Gate on ready so discard can't run before the (also-deferred) record for the same
       // requestId in the cold pre-init window, which would orphan an auth-context entry.
-      (details) => { this.ready.then(() => this.discardRequestAuthContext(details.requestId)); },
+      (details) => { this.ready.then(() => this.authTracker.discard(details.requestId)); },
       {
         urls: ["<all_urls>"],
         types: ["script"]
@@ -278,7 +262,7 @@ class JSExtractor {
     if (this.isExtensionRequest(details)) return;
     if (this.shouldSkipUrl(details.url, details.documentUrl)) return;
 
-    const authContext = this.consumeRequestAuthContext(details.requestId, details.url);
+    const authContext = this.authTracker.consume(details.requestId, details.url);
     const fileMetadata = this.extractMetadata(details, authContext);
     
     this.processingQueue.push({
@@ -363,9 +347,7 @@ class JSExtractor {
     let sourceMapFetchStatus = this.settings.captureSourceMaps ? 'not_detected' : 'disabled';
     let sourceMapFetchError = null;
     if (this.settings.captureSourceMaps) {
-      detectedSourceMapUrl = this.sourceMapDetector.detect(content, url, {
-        allowFallback: this.settings.allowSourceMapFallback
-      });
+      detectedSourceMapUrl = this.sourceMapDetector.detect(content, url);
 
       if (!detectedSourceMapUrl) {
         sourceMapFetchStatus = 'not_detected';
@@ -406,21 +388,9 @@ class JSExtractor {
       }
     }
 
-    let dependencies = this.settings.resolveDependencies
+    const dependencies = this.settings.resolveDependencies
       ? this.dependencyExtractor.extract(content, url)
       : [];
-
-    let repPlusSummary = this.repPlusBridge.summarize(null);
-    repPlusSummary.importedHintCount = 0;
-    if (this.settings.importRepPlusSignals && this.repPlusBridge.isRepPlusAvailable) {
-      const repPlusResults = await this.repPlusBridge.getRepPlusResults(tabId);
-      repPlusSummary = this.repPlusBridge.summarize(repPlusResults);
-      if (this.settings.resolveDependencies) {
-        const repPlusHints = this.repPlusBridge.extractScriptImportHints(repPlusResults, url);
-        dependencies = this.mergeDependencies(dependencies, repPlusHints);
-        repPlusSummary.importedHintCount = repPlusHints.length;
-      }
-    }
 
     const contentByteLength = this.getContentByteLength(content);
 
@@ -491,7 +461,6 @@ class JSExtractor {
       sourceMapFetchStatus: sourceMapFetchStatus,
       sourceMapFetchError: sourceMapFetchError,
       dependencies: dependencies,
-      repPlusSummary: repPlusSummary,
       initiator: metadata.initiator,
       documentUrl: metadata.documentUrl,
       needsServerProcessing: sourceMapData !== null || dependencies.length > 0
@@ -581,171 +550,6 @@ class JSExtractor {
       initiator: details.initiator,
       documentUrl: details.documentUrl
     };
-  }
-
-  captureRequestAuthContext(details) {
-    if (!this.isCapturing) return;
-    if (!details || !details.requestId || !details.url) return;
-    if (this.isExtensionRequest(details)) return;
-    if (!this.isInScope(details.url)) return;
-    if (this.settings?.captureAuthContext === false) return;
-    if (!this.shouldCaptureAuthContextForUrl(details.url)) return;
-
-    const capturedHeaders = {};
-    for (const header of details.requestHeaders || []) {
-      const rawName = typeof header?.name === 'string' ? header.name : '';
-      const rawValue = typeof header?.value === 'string' ? header.value : '';
-      const name = rawName.trim().toLowerCase();
-      const value = this.sanitizeAuthHeaderValue(rawValue);
-      if (!name || !AUTH_HEADER_ALLOWLIST.has(name) || !value) {
-        continue;
-      }
-      capturedHeaders[name] = value;
-    }
-
-    if (Object.keys(capturedHeaders).length === 0) {
-      return;
-    }
-
-    const domain = this.getHostname(details.url);
-    const cookieNames = this.extractCookieNames(capturedHeaders.cookie || '');
-    const authContext = {
-      schemaVersion: '1.0',
-      source: 'extension.webRequest',
-      capturedAt: new Date().toISOString(),
-      domain: domain,
-      requestUrl: details.url,
-      headers: capturedHeaders,
-      cookie: {
-        present: cookieNames.length > 0,
-        names: cookieNames,
-        count: cookieNames.length
-      }
-    };
-
-    this.requestAuthContexts.set(details.requestId, {
-      capturedAt: Date.now(),
-      context: authContext
-    });
-    this.pruneRequestAuthContexts();
-  }
-
-  consumeRequestAuthContext(requestId, requestUrl) {
-    if (!requestId) {
-      return null;
-    }
-    const entry = this.requestAuthContexts.get(requestId);
-    if (!entry) {
-      return null;
-    }
-    this.requestAuthContexts.delete(requestId);
-    if ((Date.now() - entry.capturedAt) > this.authContextTtlMs) {
-      return null;
-    }
-    if (!this.isAuthContextValidForUrl(entry.context, requestUrl)) {
-      return null;
-    }
-    return entry.context;
-  }
-
-  discardRequestAuthContext(requestId) {
-    if (!requestId) return;
-    this.requestAuthContexts.delete(requestId);
-  }
-
-  shouldCaptureAuthContextForUrl(url) {
-    const configuredDomains = Array.isArray(this.settings?.authContextDomains)
-      ? this.settings.authContextDomains
-      : [];
-    if (configuredDomains.length === 0) {
-      return true;
-    }
-    const hostname = this.getHostname(url);
-    if (!hostname) {
-      return false;
-    }
-    return configuredDomains.some((scope) => this.hostnameMatchesScope(hostname, scope));
-  }
-
-  isAuthContextValidForUrl(authContext, url) {
-    if (!authContext || typeof authContext !== 'object') {
-      return false;
-    }
-    const contextDomain = this.getHostname(authContext.domain || authContext.requestUrl || '');
-    const urlDomain = this.getHostname(url);
-    if (!contextDomain || !urlDomain) {
-      return false;
-    }
-    return this.hostnameMatchesScope(urlDomain, contextDomain);
-  }
-
-  pruneRequestAuthContexts() {
-    const now = Date.now();
-    for (const [requestId, entry] of this.requestAuthContexts.entries()) {
-      if ((now - entry.capturedAt) > this.authContextTtlMs) {
-        this.requestAuthContexts.delete(requestId);
-      }
-    }
-    if (this.requestAuthContexts.size <= this.maxAuthContextEntries) {
-      return;
-    }
-    const excess = this.requestAuthContexts.size - this.maxAuthContextEntries;
-    const keys = Array.from(this.requestAuthContexts.keys()).slice(0, excess);
-    for (const requestId of keys) {
-      this.requestAuthContexts.delete(requestId);
-    }
-  }
-
-  sanitizeAuthHeaderValue(value) {
-    if (typeof value !== 'string') return '';
-    const cleaned = value.replace(/\r/g, ' ').replace(/\n/g, ' ').trim();
-    if (!cleaned) return '';
-    const maxLength = 8192;
-    return cleaned.length > maxLength ? cleaned.slice(0, maxLength) : cleaned;
-  }
-
-  extractCookieNames(cookieHeader) {
-    if (typeof cookieHeader !== 'string' || !cookieHeader.trim()) {
-      return [];
-    }
-    const names = [];
-    const seen = new Set();
-    for (const segment of cookieHeader.split(';')) {
-      const name = segment.split('=')[0].trim();
-      if (!name) continue;
-      const key = name.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      names.push(name);
-      if (names.length >= 64) break;
-    }
-    return names;
-  }
-
-  getHostname(value) {
-    if (!value || typeof value !== 'string') {
-      return null;
-    }
-    try {
-      const url = value.startsWith('http://') || value.startsWith('https://')
-        ? new URL(value)
-        : new URL(`https://${value}`);
-      return (url.hostname || '').toLowerCase();
-    } catch (e) {
-      return null;
-    }
-  }
-
-  hostnameMatchesScope(hostname, scope) {
-    const target = (hostname || '').trim().toLowerCase();
-    const normalizedScope = (scope || '').trim().toLowerCase().replace(/^\./, '');
-    if (!target || !normalizedScope) {
-      return false;
-    }
-    if (target === normalizedScope) {
-      return true;
-    }
-    return target.endsWith(`.${normalizedScope}`);
   }
 
   needsDecompression(url, encoding, isBinary) {
@@ -847,26 +651,6 @@ class JSExtractor {
     }
   }
 
-  mergeDependencies(existing, additional) {
-    const merged = [];
-    const seen = new Set();
-    const all = [...(existing || []), ...(additional || [])];
-
-    for (const dep of all) {
-      if (!dep) continue;
-      const resolved = dep.resolvedUrl || dep.url;
-      const key = `${dep.type || 'unknown'}|${resolved || ''}`;
-      if (!resolved || seen.has(key)) continue;
-      seen.add(key);
-      merged.push({
-        ...dep,
-        resolvedUrl: resolved
-      });
-    }
-
-    return merged;
-  }
-
   isLikelyScriptResource(url) {
     if (!url || typeof url !== 'string') return false;
     try {
@@ -935,64 +719,40 @@ class JSExtractor {
     const result = await chrome.storage.local.get([
       'domainScopes',
       'useDomainScope',
-      'apiEndpoint',
-      'useLocalApi',
-      'autoStart',
       'performAnalysisOnUpload',
       'captureSourceMaps',
       'resolveDependencies',
-      'importRepPlusSignals',
-      'repPlusExtensionId',
-      'allowSourceMapFallback',
       'isCapturing',
-      'exportIncludeContent',
       'captureAuthContext',
-      'authContextDomains',
       'includeSubdomains',
       'workspaceUrl',
-      'apiKey',
       'muteNoise',
       'outOfScopeMode',
       'maxAssetMb',
       'denyDefaultProfile',
-      'denyRules',
-      'scanProfile',
-      'analysisOptions'
+      'denyRules'
     ]);
 
     return {
       domainScopes: result.domainScopes || [],
       useDomainScope: result.useDomainScope || false,
-      apiEndpoint: result.apiEndpoint || 'http://localhost:3000/api/save-files',
-      useLocalApi: result.useLocalApi !== false,
-      autoStart: result.autoStart || false,
       performAnalysisOnUpload: result.performAnalysisOnUpload === true,
       captureSourceMaps: result.captureSourceMaps !== false,
       resolveDependencies: result.resolveDependencies !== false,
-      importRepPlusSignals: result.importRepPlusSignals === true,
-      repPlusExtensionId: result.repPlusExtensionId || '',
-      allowSourceMapFallback: result.allowSourceMapFallback || false,
       isCapturing: result.isCapturing || false,
-      exportIncludeContent: result.exportIncludeContent === true,
       captureAuthContext: result.captureAuthContext !== false,
-      authContextDomains: Array.isArray(result.authContextDomains) ? result.authContextDomains : [],
       // --- redesigned popup settings ---
       // includeSubdomains MUST default true to preserve today's always-match
       // subdomain capture behaviour (isInScope) for existing users.
       includeSubdomains: result.includeSubdomains !== false,
       workspaceUrl: result.workspaceUrl || '',
-      apiKey: result.apiKey || '',
       muteNoise: result.muteNoise !== false,
       outOfScopeMode: result.outOfScopeMode || 'tag',
       // Clamp to the 10 MB backend ceiling so a legacy stored value (from the old
       // 25 MB slider) can't wave through files the server will 422.
       maxAssetMb: Math.min(10, typeof result.maxAssetMb === 'number' ? result.maxAssetMb : 8),
       denyDefaultProfile: result.denyDefaultProfile !== false,
-      denyRules: Array.isArray(result.denyRules) ? result.denyRules : DEFAULT_DENY_RULES,
-      // Scan type: preset name + extractor toggles forwarded as analysisOptions on
-      // upload. Empty options → backend defaults; profile drives the popup selection.
-      scanProfile: result.scanProfile || 'standard',
-      analysisOptions: (result.analysisOptions && typeof result.analysisOptions === 'object') ? result.analysisOptions : {}
+      denyRules: Array.isArray(result.denyRules) ? result.denyRules : DEFAULT_DENY_RULES
     };
   }
 
@@ -1038,10 +798,9 @@ class JSExtractor {
       getStatus: () => this.getStatus(sendResponse),
       updateSettings: (req) => this.updateSettings(req, sendResponse),
       getExportData: () => this.getExportData(sendResponse),
-      exportFiles: () => this.exportFiles(sendResponse),
-      testConnection: () => this.testConnection(sendResponse),
-      analyzeSession: () => this.analyzeSession(sendResponse),
-      getAnalysisProgress: () => this.getAnalysisProgress(sendResponse),
+      testConnection: () => this.workspaceClient.testConnection().then(sendResponse),
+      analyzeSession: () => this.workspaceClient.analyzeSession().then(sendResponse),
+      getAnalysisProgress: () => this.workspaceClient.getAnalysisProgress().then(sendResponse),
       dynamicScriptDetected: (req) => this.handleDynamicScript(req, sender)
     };
 
@@ -1098,7 +857,7 @@ class JSExtractor {
     // Reset the persistent dedup set for the new session. The outbox is intentionally
     // NOT cleared — any still-unsent files carry their own (old) per-file session id.
     this.dedupStore.clear().catch(() => {});
-    this.requestAuthContexts.clear();
+    this.authTracker.clear();
     this.totalCapturedBytes = 0;
     this.processingStats = {
       processedFiles: 0,
@@ -1145,7 +904,6 @@ class JSExtractor {
       size: f.contentLength,
       hasSourceMap: f.hasSourceMap,
       dependencyCount: f.dependencies.length,
-      repPlusImportedHints: f.repPlusSummary?.importedHintCount || 0,
       capturedAt: f.capturedAt,
       isMinified: f.isMinified,
       classification: f.classification || 'app',
@@ -1168,7 +926,7 @@ class JSExtractor {
     this.capturedHashes.clear();
     this.dedupStore.clear().catch(() => {});
     this.processingQueue = [];
-    this.requestAuthContexts.clear();
+    this.authTracker.clear();
     this.totalCapturedBytes = 0;
     this.processingStats = {
       processedFiles: 0,
@@ -1200,163 +958,37 @@ class JSExtractor {
     });
   }
 
-  async testConnection(sendResponse) {
-    const target = this.resolveApiBase() + '/api/health';
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-    const startedAt = Date.now();
-    try {
-      const headers = {};
-      if (this.settings?.apiKey) headers['x-api-key'] = this.settings.apiKey;
-      const resp = await fetch(target, { method: 'GET', headers, signal: controller.signal });
-      clearTimeout(timer);
-      sendResponse({ ok: resp.ok, status: resp.status, latencyMs: Date.now() - startedAt });
-    } catch (error) {
-      clearTimeout(timer);
-      sendResponse({ ok: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') });
-    }
-  }
-
-  deriveOrigin(url) {
-    try { return new URL(url).origin; } catch (e) { return ''; }
-  }
-
-  // Workspace API origin (no trailing slash) for non-ingestion calls (health, analyze).
-  resolveApiBase() {
-    const s = this.settings || {};
-    let base = (s.workspaceUrl || '').trim()
-      || this.deriveOrigin(s.apiEndpoint)
-      || 'http://localhost:3000';
-    // A scheme-less workspace URL (e.g. "localhost:3000") would resolve relative to the
-    // extension origin and fail — prepend http:// so it's an absolute URL.
-    if (base && !/^[a-z][a-z0-9+.-]*:\/\//i.test(base)) base = 'http://' + base;
-    return base.replace(/\/+$/, '');
-  }
-
-  // Trigger on-demand analysis of the current session (the decoupled path): flush any
-  // unsent captures first, then kick the backend's async threaded job so the single
-  // worker isn't blocked inline during capture.
-  async analyzeSession(sendResponse) {
-    // Best-effort flush so the server has as many captures as possible before analyzing,
-    // but BOUNDED — a slow/unreachable workspace must not stall the analyze trigger (the
-    // outbox timer/alarm keeps draining in the background regardless).
-    try {
-      await Promise.race([
-        this.batchUploader.flushAll(),
-        new Promise((resolve) => setTimeout(resolve, 8000))
-      ]);
-    } catch (e) {
-      // A flush failure shouldn't block analyzing what did upload.
-      console.warn('Flush before analyze failed:', e);
-    }
-    const target = `${this.resolveApiBase()}/api/sessions/${encodeURIComponent(this.sessionId)}/analyze/start`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
-    try {
-      const headers = { 'Content-Type': 'application/json' };
-      if (this.settings?.apiKey) headers['x-api-key'] = this.settings.apiKey;
-      const resp = await fetch(target, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ options: this.settings.analysisOptions || {} }),
-        signal: controller.signal
-      });
-      clearTimeout(timer);
-      if (!resp.ok) {
-        sendResponse({ success: false, status: resp.status, error: `HTTP ${resp.status}` });
-        return;
-      }
-      const data = await resp.json();
-      sendResponse({ success: true, started: data.started !== false, message: data.message, job: data.job });
-    } catch (error) {
-      clearTimeout(timer);
-      sendResponse({ success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') });
-    }
-  }
-
-  // Poll analysis progress for the current session (drives the popup's per-file feed).
-  async getAnalysisProgress(sendResponse) {
-    const target = `${this.resolveApiBase()}/api/sessions/${encodeURIComponent(this.sessionId)}/analyze/progress`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    try {
-      const headers = {};
-      if (this.settings?.apiKey) headers['x-api-key'] = this.settings.apiKey;
-      const resp = await fetch(target, { method: 'GET', headers, signal: controller.signal });
-      clearTimeout(timer);
-      if (!resp.ok) {
-        sendResponse({ success: false, status: resp.status });
-        return;
-      }
-      const data = await resp.json();
-      sendResponse({ success: true, job: data.job || null });
-    } catch (error) {
-      clearTimeout(timer);
-      sendResponse({ success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') });
-    }
-  }
-
   async updateSettings(request, sendResponse) {
     this.settings = { ...this.settings, ...request.settings };
-    this.settings.useLocalApi = true;
-    if (!Array.isArray(this.settings.authContextDomains)) {
-      this.settings.authContextDomains = [];
-    }
     if (typeof this.settings.captureAuthContext !== 'boolean') {
       this.settings.captureAuthContext = true;
     }
     await chrome.storage.local.set(this.settings);
-    if (this.settings.apiEndpoint) {
-      this.batchUploader.setEndpoint(this.settings.apiEndpoint);
-    }
+    this.batchUploader.setEndpoint(this.workspaceClient.resolveApiBase());
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
-    this.batchUploader.setAnalysisOptions(this.settings.analysisOptions || {});
-    if (Object.prototype.hasOwnProperty.call(request.settings || {}, 'repPlusExtensionId')) {
-      this.repPlusBridge.setExtensionId(this.settings.repPlusExtensionId || '');
-      await this.repPlusBridge.initialize();
-    }
     sendResponse({ success: true });
   }
 
   getExportData(sendResponse) {
     const files = Array.from(this.capturedFiles.values());
-    const includeContent = this.settings?.exportIncludeContent === true;
 
     try {
       const exportData = buildExportData({
         sessionId: this.sessionId,
         files,
-        includeContent,
+        includeContent: false,
         version: '3.0.0'
       });
-      const estimatedBytes = JSON.stringify(exportData).length;
-      const maxMessageBytes = 24 * 1024 * 1024;
-
-      if (includeContent && estimatedBytes > maxMessageBytes) {
-        const estimatedMb = (estimatedBytes / (1024 * 1024)).toFixed(2);
-        sendResponse({
-          success: false,
-          error: `Export payload is too large (${estimatedMb} MB) for extension transfer. Disable "Include file contents in export" for metadata-only export.`
-        });
-        return;
-      }
 
       sendResponse({
         success: true,
         filename: `js-extraction-${this.sessionId}.json`,
-        includeContent,
-        estimatedBytes,
         exportData
       });
     } catch (error) {
       console.error('Export payload build failed:', error);
       sendResponse({ success: false, error: error.message });
     }
-  }
-
-  exportFiles(sendResponse) {
-    // Backward-compatible action alias.
-    this.getExportData(sendResponse);
   }
 }
 

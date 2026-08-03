@@ -4,7 +4,7 @@
 import { C, F, TAG_COLOR } from '../theme.js';
 import { Switch } from './ui.jsx';
 import {
-  BackIcon, SearchIcon, LinkIcon, GlobeIcon, EyeOffIcon, EyeIcon, EyeOffSmall,
+  BackIcon, SearchIcon, LinkIcon, GlobeIcon, EyeOffIcon,
   PulseIcon, SpinnerIcon, CloseIcon
 } from '../icons.jsx';
 
@@ -72,18 +72,7 @@ export function SettingsView({ vm }) {
           </div>
           <Label>Workspace URL</Label>
           <input value={vm.wsUrl} onInput={(e) => vm.setWsUrl(e.target.value)} placeholder="http://localhost:3000"
-                 style={{ ...inputStyle, marginBottom: '11px' }} />
-          <Label>API Key</Label>
-          <div style={{ display: 'flex', gap: '7px', marginBottom: '12px' }}>
-            <input value={vm.apiKey} onInput={(e) => vm.setApiKey(e.target.value)}
-                   type={vm.showKey ? 'text' : 'password'}
-                   placeholder="rk_live_…" style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
-            <button onClick={vm.toggleKey} aria-label="Toggle key visibility" style={{
-              flex: '0 0 auto', width: '38px', borderRadius: '8px', border: `1px solid ${C.lineStrong}`,
-              background: C.control, color: C.muted, cursor: 'pointer', display: 'flex',
-              alignItems: 'center', justifyContent: 'center'
-            }}><span style={{ width: '15px', height: '15px', display: 'inline-flex' }}>{vm.showKey ? <EyeOffSmall /> : <EyeIcon />}</span></button>
-          </div>
+                 style={{ ...inputStyle, marginBottom: '12px' }} />
           <button onClick={vm.testConnection} style={{
             width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
             padding: '9px', borderRadius: '9px',

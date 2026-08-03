@@ -25,4 +25,8 @@ assert.match(bg, /onCompleted\.addListener\([\s\S]*?this\.ready\.then\(\(\)\s*=>
 assert.match(bg, /onMessage\.addListener\([\s\S]*?this\.ready\.then\(\(\)\s*=>\s*this\.handleMessage/, 'onMessage handler gates on ready');
 assert.match(bg, /onAlarm\.addListener\([\s\S]*?this\.ready\.then\(/, 'onAlarm handler gates on ready');
 
+// Auth-context capture must only run while capturing (the gate moved to the call site
+// when captureRequestAuthContext was extracted into AuthContextTracker).
+assert.match(bg, /onBeforeSendHeaders\.addListener\([\s\S]*?if \(this\.isCapturing\) this\.authTracker\.record/, 'onBeforeSendHeaders records auth context only while capturing');
+
 console.log('test_mv3_listeners: ok');

@@ -84,31 +84,12 @@ export const EyeOffIcon = ({ size = 13, color = '#5C6680' }) => (
   </svg>
 );
 
-export const EyeIcon = () => stroke(15, (
-  <><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></>
-));
-
-export const EyeOffSmall = () => stroke(15, (
-  <>
-    <path d="M9.9 4.2A9.1 9.1 0 0 1 12 4c7 0 10 8 10 8a13.2 13.2 0 0 1-1.7 2.7" />
-    <path d="M6.6 6.6A13.5 13.5 0 0 0 2 12s3 8 10 8a9 9 0 0 0 5.4-1.6" />
-    <path d="m2 2 20 20" />
-  </>
-));
-
 export const PulseIcon = ({ size = 14 }) => stroke(size, <path d="M22 12h-4l-3 9L9 3l-3 9H2" />);
 
 export const SpinnerIcon = ({ size = 14 }) => (
   <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor"
        stroke-width="2" style={{ animation: 'spin 1s linear infinite' }}>
     <path d="M21 12a9 9 0 1 1-6.2-8.5" stroke-linecap="round" />
-  </svg>
-);
-
-export const CheckIcon = ({ size = 13 }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-       stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M20 6 9 17l-5-5" />
   </svg>
 );
 

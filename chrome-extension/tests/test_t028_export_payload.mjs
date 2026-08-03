@@ -38,7 +38,8 @@ const metadataOnly = buildExportData({
 assert.equal(metadataOnly.metadata.includeContent, false);
 assert.equal(metadataOnly.metadata.totalFiles, 1);
 assert.equal(metadataOnly.files[0].url, files[0].url);
-assert.equal(metadataOnly.files[0].repPlusSummary.importedHintCount, 2);
+// repPlusSummary was removed from the export payload; ensure it is not re-emitted.
+assert.equal(Object.prototype.hasOwnProperty.call(metadataOnly.files[0], 'repPlusSummary'), false);
 assert.equal(Object.prototype.hasOwnProperty.call(metadataOnly.files[0], 'content'), false);
 
 const fullExport = buildExportData({

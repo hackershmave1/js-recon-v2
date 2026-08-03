@@ -1,12 +1,8 @@
 export class SourceMapDetector {
-  detect(content, fileUrl, options = {}) {
-    const allowFallback = options.allowFallback || false;
+  detect(content, fileUrl) {
     const urlComment = this.extractFromComment(content);
     if (urlComment) {
       return this.resolveSourceMapUrl(urlComment, fileUrl);
-    }
-    if (allowFallback) {
-      return `${fileUrl}.map`;
     }
     return null;
   }

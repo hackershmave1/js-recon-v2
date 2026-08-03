@@ -65,10 +65,23 @@ node build.mjs                 # rebuild the popup after src/popup/** edits
 All 9 suites pass; the service-worker module graph compiles under esbuild. Load unpacked in Chrome
 to exercise the live capture → analyze flow against the workspace.
 
+## Minimalist cleanup pass (follow-up)
+Removed ~1,000+ lines of dead weight and cut settings the backend doesn't back:
+- Deleted `enhanced-analyzer.js` (dead) and the entire rep+ integration (`rep-plus-bridge.js` + wiring + test).
+- Removed the **API Key** field (backend enforces no auth), the **SCAN TYPE** panel (3 of 6 toggles
+  were silently dropped by the analyze endpoint's normalizer — including jsluice; analysis depth is
+  configured in the workspace), and inert settings (`autoStart`, `useLocalApi`, `exportIncludeContent`,
+  `allowSourceMapFallback`, `authContextDomains`).
+- Fixed: **Workspace URL is now the single source of truth** — uploads + health/analyze all derive
+  from it (before, uploads always went to `localhost:3000` regardless).
+- Modularized `background.js` **1372 → 1003 lines**: extracted `modules/auth-context.js`
+  (`AuthContextTracker`) and `modules/workspace-client.js` (`WorkspaceClient`).
+- Popup 46.9 → 42.6 kb; settings now show only Connection / Capture Rules / Noise Denylist.
+
 ## Deliberately deferred (debt)
-- `background.js` (~1350 lines) is not split to the 300-line guideline — a pre-existing monolith;
-  splitting it belongs in its own change with a review pass, not at the end of this one.
+- `background.js` is still 1003 lines — the message router + `processFile` could extract further.
 - Optional: a workspace-SPA "Analyze" button (the popup already triggers analysis).
 - Sourcemap reconstruction still runs synchronously at upload for sourcemap-bearing files (the
   uploaded sourcemap content is ephemeral, so deferring it risks losing it). Turn off "capture
   source maps" for maximum bulk-capture speed.
+- Legacy removed-setting keys linger unread in `chrome.storage.local` (no migration — harmless).
