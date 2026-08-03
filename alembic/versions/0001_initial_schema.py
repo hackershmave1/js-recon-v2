@@ -151,7 +151,9 @@ def upgrade() -> None:
         sa.Column('error', sa.Text(), nullable=True),
         sa.Column('state_json', sa.JSON(), nullable=False, server_default='{}'),
     )
-    op.create_index('ix_jobs_session_id', 'jobs', ['session_id'])
+    # NOTE: session_id above already declares index=True, which create_table emits as
+    # ix_jobs_session_id. A second explicit create_index here is a duplicate that errors
+    # ("relation already exists") on a from-scratch upgrade against a truly empty DB.
 
 
 def downgrade() -> None:

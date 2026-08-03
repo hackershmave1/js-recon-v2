@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from ...db import get_db
 from ...models import Session as DbSession
 from ...models import Job as DbJob
+from ...session_scope import derive_root_domains
 from ...services.binary_locator import resolve_binary_path
 from ...services.recon_job_runner import ReconJobRunner, ReconRunnerOptions
 from ...services.security_utils import SecurityValidator
@@ -48,6 +49,9 @@ class ReconJobStartRequest(BaseModel):
     discoveryEngine: str = Field(default="headless")
     includeSourceMaps: bool = True
     performAnalysis: bool = True
+    # Scan-type extractor toggles forwarded to ComprehensiveExtractor.extract_all
+    # (e.g. use_rep_endpoints, use_jsluice, include_sourcemap). Empty → backend defaults.
+    analysisOptions: dict[str, Any] = Field(default_factory=dict)
     waitAfterLoadMs: int = Field(default=2500, ge=0, le=30000)
     timeoutSeconds: int = Field(default=20, ge=3, le=120)
     maxResponseBytes: int = Field(default=12 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
@@ -162,6 +166,7 @@ def build_job_state(job_id: str, request: ReconJobStartRequest, targets: list[st
             "discoveryEngine": request.discoveryEngine,
             "includeSourceMaps": request.includeSourceMaps,
             "performAnalysis": request.performAnalysis,
+            "analysisOptions": request.analysisOptions or {},
             "waitAfterLoadMs": request.waitAfterLoadMs,
             "timeoutSeconds": request.timeoutSeconds,
             "maxResponseBytes": request.maxResponseBytes,
@@ -177,8 +182,14 @@ def build_job_state(job_id: str, request: ReconJobStartRequest, targets: list[st
     }
 
 
-def get_public_job_snapshot(job_id: str, db_session) -> dict[str, Any] | None:
-    """Read job from DB and return the public snapshot dict."""
+def get_public_job_snapshot(job_id: str, db_session, include_assets: bool = True) -> dict[str, Any] | None:
+    """Read job from DB and return the public snapshot dict.
+
+    include_assets=False omits the (potentially large) per-asset list while still
+    reporting assetCount. The job list is polled frequently by the workspace UI,
+    which only needs status/coverage/targets — sending every asset on each poll
+    bloats the payload (hundreds of KB) and starves the single API worker.
+    """
     try:
         job_uuid = uuid.UUID(job_id) if isinstance(job_id, str) else job_id
     except (ValueError, AttributeError):
@@ -187,9 +198,12 @@ def get_public_job_snapshot(job_id: str, db_session) -> dict[str, Any] | None:
     if not row:
         return None
     payload = dict(row.state_json or {})
-    assets = sorted(payload.get("assets", {}).values(), key=lambda r: r.get("discoveredAt") or "")
-    payload["assets"] = assets
-    payload["assetCount"] = len(assets)
+    assets_map = payload.get("assets", {})
+    payload["assetCount"] = len(assets_map)
+    if include_assets:
+        payload["assets"] = sorted(assets_map.values(), key=lambda r: r.get("discoveredAt") or "")
+    else:
+        payload.pop("assets", None)
     payload["coverage"] = build_coverage_snapshot(payload.get("coverage") or {})
     return payload
 
@@ -393,6 +407,9 @@ def start_recon_job(request: ReconJobStartRequest, db: Session = Depends(get_db)
             name=session_name,
             source=f"recon_{discovery_engine}",
             version="3.0.0",
+            # Seed the session scope from the crawl's targets + same-origin setting.
+            root_domains=derive_root_domains(validated_targets),
+            include_subdomains=not request.sameOriginOnly,
         )
         db.add(db_session_obj)
     elif session_name:
@@ -411,6 +428,7 @@ def start_recon_job(request: ReconJobStartRequest, db: Session = Depends(get_db)
         vespasian_binary=vespasian_binary or "vespasian",
         include_sourcemaps=request.includeSourceMaps,
         perform_analysis=request.performAnalysis,
+        analysis_options=dict(request.analysisOptions or {}),
         wait_after_load_ms=request.waitAfterLoadMs,
         timeout_seconds=request.timeoutSeconds,
         max_response_bytes=request.maxResponseBytes,
@@ -453,9 +471,11 @@ def start_recon_job(request: ReconJobStartRequest, db: Session = Depends(get_db)
 
 
 @router.get("/api/recon/jobs")
-def list_recon_jobs(db: Session = Depends(get_db)):
+def list_recon_jobs(db: Session = Depends(get_db), include_assets: bool = True):
+    """List recon jobs. include_assets=false returns slim snapshots (no per-asset
+    list, assetCount retained) for frequent polling; defaults true for compatibility."""
     rows = db.query(DbJob).filter(DbJob.job_type == "recon").order_by(DbJob.created_at.desc()).all()
-    jobs = [get_public_job_snapshot(str(row.id), db) for row in rows]
+    jobs = [get_public_job_snapshot(str(row.id), db, include_assets=include_assets) for row in rows]
     jobs = [j for j in jobs if j]
     return {
         "success": True,

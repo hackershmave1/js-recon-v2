@@ -25,6 +25,7 @@ from ...services.comprehensive_extractor import ComprehensiveExtractor
 from ...services.secret_rollup import SecretRollupService
 from ...services.sourcemap_validation import derive_validation_state, summarize_validation
 from .recon import get_latest_session_capture_coverage
+from ...session_scope import normalize_root_domains, scope_payload
 
 
 router = APIRouter()
@@ -38,8 +39,11 @@ class SessionAnalyzeRequest(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
-class SessionRenameRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=120)
+class SessionUpdateRequest(BaseModel):
+    # All fields optional → partial update. name-only keeps the original rename contract.
+    name: str | None = Field(default=None, max_length=120)
+    rootDomains: list[str] | None = None
+    includeSubdomains: bool | None = None
 
 
 class SessionBulkDeleteRequest(BaseModel):
@@ -408,6 +412,7 @@ def list_sessions(db: Session = Depends(get_db)):
             "createdAt": session.created_at.isoformat(),
             "source": session.source,
             "version": session.version,
+            **scope_payload(session),
             "fileCount": int(file_count or 0),
             "analysisSummary": {
                 "completed": int(analysis_completed or 0),
@@ -654,19 +659,26 @@ def bulk_delete_sessions(request: SessionBulkDeleteRequest, db: Session = Depend
 
 
 @router.patch("/api/sessions/{session_id}")
-def rename_session(session_id: str, request: SessionRenameRequest, db: Session = Depends(get_db)):
+def update_session(session_id: str, request: SessionUpdateRequest, db: Session = Depends(get_db)):
+    """Partial update of a session: rename and/or edit its scope (root domains +
+    include-subdomains). Only the fields present in the body are changed."""
     session_uuid = safe_uuid(session_id)
     session = db.query(DbSession).filter(DbSession.id == session_uuid).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    name = request.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Session name cannot be empty")
-    if len(name) > 120:
-        raise HTTPException(status_code=400, detail="Session name is too long")
+    if request.name is not None:
+        name = request.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Session name cannot be empty")
+        if len(name) > 120:
+            raise HTTPException(status_code=400, detail="Session name is too long")
+        session.name = name
+    if request.rootDomains is not None:
+        session.root_domains = normalize_root_domains(request.rootDomains)
+    if request.includeSubdomains is not None:
+        session.include_subdomains = bool(request.includeSubdomains)
 
-    session.name = name
     db.commit()
     db.refresh(session)
 
@@ -677,6 +689,7 @@ def rename_session(session_id: str, request: SessionRenameRequest, db: Session =
         "createdAt": session.created_at.isoformat(),
         "source": session.source,
         "version": session.version,
+        **scope_payload(session),
     }
 
 

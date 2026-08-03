@@ -7,7 +7,7 @@ import logging
 import re
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -65,6 +65,8 @@ class ReconRunnerOptions:
     katana_binary: str = "katana"
     include_sourcemaps: bool = True
     perform_analysis: bool = True
+    # Scan-type extractor toggles forwarded to save_files → extract_all per batch.
+    analysis_options: dict = field(default_factory=dict)
     wait_after_load_ms: int = 2500
     timeout_seconds: int = 20
     max_response_bytes: int = 12 * 1024 * 1024
@@ -392,16 +394,21 @@ class ReconJobRunner:
             "sessionId": self.options.session_id,
             "performAnalysis": perform_analysis,
             "disableAnalysis": not perform_analysis,
+            "analysisOptions": dict(self.options.analysis_options or {}),
             "source": f"recon_{source_engine}",
         }
         ingest_payload = IngestionPayload(metadata=metadata, files=batch)
         try:
             partial = save_files(payload=ingest_payload, db=self.db)
         except Exception as exc:
-            # Keep capture reliable even when analyzer output overflows DB jsonb limits.
-            if bool(self.options.perform_analysis) and self._should_retry_without_analysis(exc):
+            # Keep the crawl alive across two classes of batch failure: analyzer output
+            # overflowing DB jsonb limits, AND a DB connection dropped mid-write (large
+            # analysis payloads over Docker's network invalidate the connection, surfacing
+            # as PendingRollbackError/8s2b). Both are recoverable: roll back and re-ingest the
+            # batch capture-only so the files are still persisted and remaining batches run.
+            if bool(self.options.perform_analysis) and self._is_recoverable_ingest_error(exc):
                 logger.warning(
-                    "Recon batch analysis overflow for session %s; retrying ingest without analysis: %s",
+                    "Recon batch ingest error for session %s; retrying capture-only without analysis: %s",
                     self.options.session_id,
                     exc,
                 )
@@ -415,7 +422,18 @@ class ReconJobRunner:
                     },
                     files=batch,
                 )
-                partial = save_files(payload=retry_payload, db=self.db)
+                try:
+                    partial = save_files(payload=retry_payload, db=self.db)
+                except Exception as retry_exc:
+                    # Even capture-only failed — skip this batch rather than abort the job
+                    # so the rest of the crawl (and already-saved files) survive.
+                    logger.error(
+                        "Recon batch capture-only retry failed for session %s; skipping batch: %s",
+                        self.options.session_id,
+                        retry_exc,
+                    )
+                    self._safe_rollback()
+                    return
             else:
                 self._safe_rollback()
                 raise
@@ -429,6 +447,31 @@ class ReconJobRunner:
             "programlimitexceeded",
             "jsonb array elements exceeds the maximum",
             "total size of jsonb array elements exceeds the maximum",
+        )
+        return any(marker in message for marker in markers)
+
+    def _is_recoverable_ingest_error(self, exc: Exception) -> bool:
+        """A batch failure we can recover from by re-ingesting capture-only: either an
+        analyzer jsonb overflow or a dropped/invalidated DB connection mid-write."""
+        return self._should_retry_without_analysis(exc) or self._is_connection_error(exc)
+
+    @staticmethod
+    def _is_connection_error(exc: Exception) -> bool:
+        from sqlalchemy.exc import DBAPIError, PendingRollbackError
+
+        if isinstance(exc, PendingRollbackError):
+            return True
+        if isinstance(exc, DBAPIError) and getattr(exc, "connection_invalidated", False):
+            return True
+        message = str(exc or "").lower()
+        markers = (
+            "rolled back",
+            "8s2b",
+            "server closed the connection",
+            "connection already closed",
+            "ssl connection has been closed",
+            "terminating connection",
+            "consuming input failed",
         )
         return any(marker in message for marker in markers)
 

@@ -15,6 +15,7 @@ from .api.routes.enhanced_analysis import router as enhanced_analysis_router
 from .api.routes.dashboard import router as dashboard_router
 from .api.routes.recon import router as recon_router
 from .api.routes.asset_graph import router as asset_graph_router
+from .api.routes.triage import router as triage_router
 from .services.job_recovery import recover_orphaned_jobs
 
 app = FastAPI(
@@ -104,7 +105,10 @@ async def api_root():
     }
 
 @app.get("/health")
+@app.get("/api/health")
 async def health():
+    # /api/health is the path the Chrome extension's "Test connection" check uses
+    # (it derives the API origin and appends /api/health); keep it as an alias of /health.
     return {"status": "healthy"}
 
 
@@ -116,3 +120,4 @@ app.include_router(files_router)
 app.include_router(enhanced_analysis_router)
 app.include_router(recon_router)
 app.include_router(asset_graph_router)
+app.include_router(triage_router)

@@ -17,6 +17,7 @@ from ...models import Dependency as DbDependency
 from ...models import SourceMap as DbSourceMap
 from ...models import FileAnalysis as DbFileAnalysis
 from ...config import settings
+from ...session_scope import derive_root_domains, normalize_root_domains
 from ...services.comprehensive_extractor import ComprehensiveExtractor
 from ...services.storage import StorageService
 from ...services.native_sourcemap_processor import NativeSourceMapProcessor
@@ -62,6 +63,29 @@ SOURCEMAP_MAX_RECONSTRUCTED_FILES = max(1, int(settings.sourcemap_max_reconstruc
 SOURCEMAP_MAX_FETCH_RETRIES = 3
 SOURCEMAP_RETRY_BASE_SECONDS = 0.5
 
+# Cap per-finding string fields before persisting analysis. The parameter/secret extractors
+# embed a raw code slice in each finding's ``context``; on large minified bundles this balloons
+# the analysis jsonb to multiple MB, which both bloats the DB and (over Docker's network) can
+# drop the connection mid-write. A few hundred chars is plenty of context for triage, and the
+# finding fingerprint is keyed on kind|value|file|line — never context — so capping is safe.
+ANALYSIS_MAX_FIELD_CHARS = 500
+
+
+def cap_analysis_payload(analysis: Any) -> Any:
+    """Truncate oversized string fields in each finding so the stored analysis stays small."""
+    if not isinstance(analysis, dict):
+        return analysis
+    for value in analysis.values():
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            for field_name, field_value in list(item.items()):
+                if isinstance(field_value, str) and len(field_value) > ANALYSIS_MAX_FIELD_CHARS:
+                    item[field_name] = field_value[:ANALYSIS_MAX_FIELD_CHARS] + "…[truncated]"
+    return analysis
+
 
 class DependencyIn(BaseModel):
     url: str
@@ -104,7 +128,18 @@ def save_files(payload: IngestionPayload, db: Session = Depends(get_db)):
     session_uuid = safe_uuid(session_id)
     db_session = db.query(DbSession).filter(DbSession.id == session_uuid).first()
     if not db_session:
-        db_session = DbSession(id=session_uuid)
+        # Seed scope on create. Prefer an explicit rootDomains list from the
+        # extension (the user-chosen scope for a new session); otherwise derive it
+        # from the captured files' hosts. Honour an explicit includeSubdomains hint
+        # (defaults to True). Only on create — later appends never clobber an edited scope.
+        meta = payload.metadata or {}
+        include_subdomains = meta.get("includeSubdomains")
+        explicit_roots = normalize_root_domains(meta.get("rootDomains") or [])
+        db_session = DbSession(
+            id=session_uuid,
+            root_domains=explicit_roots or derive_root_domains([f.url for f in payload.files]),
+            include_subdomains=True if include_subdomains is None else bool(include_subdomains),
+        )
         db.add(db_session)
         db.commit()
         db.refresh(db_session)
@@ -469,7 +504,7 @@ def run_ingestion_analysis(
             results = extractor.extract_all(file_in.content, analysis_metadata, options=analysis_options)
 
             analysis_row.status = "completed"
-            analysis_row.analysis = results.get("analysis", {})
+            analysis_row.analysis = cap_analysis_payload(results.get("analysis", {}))
             analysis_row.stats = results.get("stats", {})
             analysis_row.extractors_used = results.get("extractors_used", [])
             analysis_row.error = None
