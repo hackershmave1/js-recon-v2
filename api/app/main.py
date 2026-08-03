@@ -16,6 +16,7 @@ from .api.routes.dashboard import router as dashboard_router
 from .api.routes.recon import router as recon_router
 from .api.routes.asset_graph import router as asset_graph_router
 from .api.routes.triage import router as triage_router
+from .api.routes.projects import router as projects_router
 from .services.job_recovery import recover_orphaned_jobs
 
 app = FastAPI(
@@ -121,3 +122,4 @@ app.include_router(enhanced_analysis_router)
 app.include_router(recon_router)
 app.include_router(asset_graph_router)
 app.include_router(triage_router)
+app.include_router(projects_router)
