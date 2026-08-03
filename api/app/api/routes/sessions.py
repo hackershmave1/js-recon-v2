@@ -26,6 +26,7 @@ from ...services.secret_rollup import SecretRollupService
 from ...services.sourcemap_validation import derive_validation_state, summarize_validation
 from .recon import get_latest_session_capture_coverage
 from ...session_scope import normalize_root_domains, scope_payload
+from ...project_config import validate_config
 
 
 router = APIRouter()
@@ -44,6 +45,8 @@ class SessionUpdateRequest(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     rootDomains: list[str] | None = None
     includeSubdomains: bool | None = None
+    captureConfig: dict | None = None
+    overrideKeys: list[str] | None = None
 
 
 class SessionBulkDeleteRequest(BaseModel):
@@ -681,6 +684,14 @@ def update_session(session_id: str, request: SessionUpdateRequest, db: Session =
         session.root_domains = normalize_root_domains(request.rootDomains)
     if request.includeSubdomains is not None:
         session.include_subdomains = bool(request.includeSubdomains)
+    if request.captureConfig is not None:
+        try:
+            validate_config(request.captureConfig, partial=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid captureConfig: {exc}")
+        session.capture_config = request.captureConfig
+    if request.overrideKeys is not None:
+        session.override_keys = list(request.overrideKeys)
 
     db.commit()
     db.refresh(session)
@@ -693,6 +704,9 @@ def update_session(session_id: str, request: SessionUpdateRequest, db: Session =
         "source": session.source,
         "version": session.version,
         **scope_payload(session),
+        "projectId": str(session.project_id) if session.project_id else None,
+        "overrideKeys": list(session.override_keys or []),
+        "captureConfig": session.capture_config,
     }
 
 
