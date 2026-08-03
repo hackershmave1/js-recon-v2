@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ...db import get_db
 from ...models import Session as DbSession
+from ...models import Project as DbProject
 from ...models import File as DbFile
 from ...models import Dependency as DbDependency
 from ...models import SourceMap as DbSourceMap
@@ -136,6 +137,13 @@ def save_files(payload: IngestionPayload, db: Session = Depends(get_db)):
         include_subdomains = meta.get("includeSubdomains")
         explicit_roots = normalize_root_domains(meta.get("rootDomains") or [])
         project_id = safe_project_uuid(meta.get("projectId"))
+        # A stale popup cache can reference a since-deleted project. Binding a
+        # non-existent project_id would hit the FK and 500, dropping the whole
+        # capture batch (and a 4xx would too — the extension drops 4xx as
+        # non-retriable). Coerce an unknown project to standalone instead.
+        if project_id is not None and not db.query(DbProject.id).filter(DbProject.id == project_id).first():
+            logger.warning("save-files: unknown projectId %s; saving session %s as standalone", project_id, session_uuid)
+            project_id = None
         capture_config = meta.get("captureConfig")
         if capture_config is not None:
             try:

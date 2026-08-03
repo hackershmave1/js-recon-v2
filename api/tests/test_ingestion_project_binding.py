@@ -85,3 +85,15 @@ def test_delete_project_leaves_session_loose():
     _save(sid, "dl-1", project_id=pid)
     assert client.delete(f"/api/projects/{pid}").status_code == 200
     assert _get_session(sid)["projectId"] is None
+
+
+def test_save_files_unknown_project_coerced_to_standalone():
+    sid = str(uuid.uuid4())
+    ghost = str(uuid.uuid4())  # never created
+    resp = _save(sid, "ghost-1", project_id=ghost,
+                 capture_config={"analysis": {"analyzeOnUpload": True, "captureSourceMaps": False}},
+                 override_keys=["analysis.analyzeOnUpload"])
+    assert resp["success"] is True          # capture saved, not dropped
+    s = _get_session(sid)
+    assert s["projectId"] is None           # unknown project -> standalone
+    assert s["captureConfig"]["analysis"]["analyzeOnUpload"] is True  # resolved config preserved
