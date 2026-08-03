@@ -18,6 +18,7 @@ from ...models import SourceMap as DbSourceMap
 from ...models import FileAnalysis as DbFileAnalysis
 from ...config import settings
 from ...session_scope import derive_root_domains, normalize_root_domains
+from ...project_config import validate_config
 from ...services.comprehensive_extractor import ComprehensiveExtractor
 from ...services.storage import StorageService
 from ...services.native_sourcemap_processor import NativeSourceMapProcessor
@@ -128,17 +129,29 @@ def save_files(payload: IngestionPayload, db: Session = Depends(get_db)):
     session_uuid = safe_uuid(session_id)
     db_session = db.query(DbSession).filter(DbSession.id == session_uuid).first()
     if not db_session:
-        # Seed scope on create. Prefer an explicit rootDomains list from the
-        # extension (the user-chosen scope for a new session); otherwise derive it
-        # from the captured files' hosts. Honour an explicit includeSubdomains hint
-        # (defaults to True). Only on create — later appends never clobber an edited scope.
+        # Seed scope + project membership + config snapshot on create only (later
+        # appends never re-bind). The client sends the already-resolved effective
+        # config; the backend stores it as-is (snapshot-on-create; single-user).
         meta = payload.metadata or {}
         include_subdomains = meta.get("includeSubdomains")
         explicit_roots = normalize_root_domains(meta.get("rootDomains") or [])
+        project_id = safe_project_uuid(meta.get("projectId"))
+        capture_config = meta.get("captureConfig")
+        if capture_config is not None:
+            try:
+                validate_config(capture_config, partial=True)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"invalid captureConfig: {exc}")
+        override_keys = meta.get("overrideKeys")
+        if not isinstance(override_keys, list):
+            override_keys = []
         db_session = DbSession(
             id=session_uuid,
             root_domains=explicit_roots or derive_root_domains([f.url for f in payload.files]),
             include_subdomains=True if include_subdomains is None else bool(include_subdomains),
+            project_id=project_id,
+            capture_config=capture_config,
+            override_keys=override_keys,
         )
         db.add(db_session)
         db.commit()
@@ -571,6 +584,16 @@ def safe_uuid(value: str | None) -> uuid.UUID:
     except Exception:
         # Deterministically map legacy/non-UUID session ids.
         return uuid.uuid5(uuid.NAMESPACE_URL, value)
+
+
+def safe_project_uuid(value):
+    """Parse an optional projectId. None/'' -> None; invalid -> HTTP 400."""
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid projectId")
 
 
 def detect_sourcemap_url(js_content: str, js_url: str, headers: dict[str, str] | None = None) -> tuple[str | None, str]:

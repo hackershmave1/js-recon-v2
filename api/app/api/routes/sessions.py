@@ -413,6 +413,9 @@ def list_sessions(db: Session = Depends(get_db)):
             "source": session.source,
             "version": session.version,
             **scope_payload(session),
+            "projectId": str(session.project_id) if session.project_id else None,
+            "overrideKeys": list(session.override_keys or []),
+            "captureConfig": session.capture_config,
             "fileCount": int(file_count or 0),
             "analysisSummary": {
                 "completed": int(analysis_completed or 0),
