@@ -1,0 +1,29 @@
+/* styles.css — global reset, keyframes and scrollbar for the RECON Capture popup.
+   Per-element styling is inline (mirrors the prototype 1:1); this file only holds
+   what inline styles can't express. */
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  width: 384px;
+  background: #0a0c12;
+  color: #ECEFF6;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+}
+
+#app { width: 384px; }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes capflow { 0% { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+::-webkit-scrollbar { width: 7px; }
+::-webkit-scrollbar-thumb { background: #232b3b; border-radius: 6px; }
+
+input { font-family: inherit; }
+button { font-family: inherit; }
+
+/* hover affordances the prototype declared via style-hover */
+.pp-iconbtn:hover { color: #ECEFF6 !important; border-color: #2a3243 !important; }
+.pp-rule-remove:hover { color: #FF6B8A !important; background: rgba(255,107,138,0.1) !important; }

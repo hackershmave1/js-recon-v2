@@ -16,6 +16,7 @@ const sandbox = {
   URL,
   setTimeout,
   clearTimeout,
+  AbortController,
   chrome: {
     notifications: {
       create: () => {}
@@ -50,9 +51,12 @@ const testFiles = [
 uploader.setPerformAnalysisOnUpload(false);
 await uploader.upload(testFiles);
 assert.equal(capturedPayloads[0].metadata.performAnalysis, false);
+// Decouple (S3): analyze-on-upload OFF => disableAnalysis TRUE (true fast store).
+assert.equal(capturedPayloads[0].metadata.disableAnalysis, true);
 
 uploader.setPerformAnalysisOnUpload(true);
 await uploader.upload(testFiles);
 assert.equal(capturedPayloads[1].metadata.performAnalysis, true);
+assert.equal(capturedPayloads[1].metadata.disableAnalysis, false);
 
 console.log('test_t007_batch_uploader_payload: ok');

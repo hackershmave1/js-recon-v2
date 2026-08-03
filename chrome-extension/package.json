@@ -1,0 +1,20 @@
+{
+  "name": "js-security-extractor-extension",
+  "version": "3.0.0",
+  "private": true,
+  "description": "Chrome MV3 popup (RECON Capture) for the JS Security Extractor.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch"
+  },
+  "dependencies": {
+    "preact": "^10.24.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  },
+  "allowScripts": {
+    "esbuild@0.24.2": true
+  }
+}

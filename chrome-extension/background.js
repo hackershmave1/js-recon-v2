@@ -4,8 +4,41 @@ import { DependencyExtractor } from './modules/dependency-extractor.js';
 import { SourceMapDetector } from './modules/sourcemap-detector.js';
 import { Decompressor } from './modules/decompressor.js';
 import { BatchUploader } from './modules/batch-uploader.js';
+import { SessionStore } from './modules/session-store.js';
+import { IdbStore } from './modules/idb-store.js';
 import { RepPlusBridge } from './modules/rep-plus-bridge.js';
 import { buildExportData } from './modules/export-builder.js';
+import { classifyAsset, isThirdParty, matchesDenylist, countSecrets } from './modules/asset-classifier.js';
+
+// Seed denylist shown in the redesigned popup Settings on first run.
+const DEFAULT_DENY_RULES = [
+  { tag: 'CMS', pattern: '/wp-content/plugins/*' },
+  { tag: 'CMS', pattern: '/wp-includes/*' },
+  { tag: 'TRACK', pattern: '*.google-analytics.com' },
+  { tag: 'TRACK', pattern: '*.doubleclick.net' },
+  { tag: 'LIB', pattern: '*/jquery*.min.js' }
+];
+
+// Reduce user-supplied scope entries (full URL, host:port, user@host, www.host) to bare
+// hostnames so they gate capture (domainScopes) and match the backend's normalize_root_domains.
+function normalizeRootDomains(values) {
+  const list = Array.isArray(values) ? values : [];
+  const out = [];
+  for (const value of list) {
+    let host = String(value || '').trim().toLowerCase();
+    if (!host) continue;
+    host = host.replace(/^[a-z][a-z0-9+.-]*:\/\//, ''); // scheme
+    host = host.replace(/^[^@/]*@/, '');                // userinfo
+    host = host.split('/')[0].split('?')[0].split('#')[0].split(':')[0]; // path/query/frag/port
+    if (host.startsWith('www.')) host = host.slice(4);
+    if (host && !out.includes(host)) out.push(host);
+  }
+  return out;
+}
+
+// Messages the popup/content-script send without waiting for a response. The onMessage
+// listener must NOT hold the response channel open for these (see setupListeners).
+const FIRE_AND_FORGET_ACTIONS = new Set(['dynamicScriptDetected']);
 
 const AUTH_HEADER_ALLOWLIST = new Set([
   'authorization',
@@ -25,7 +58,10 @@ class JSExtractor {
     this.processingQueue = [];
     this.isCapturing = false;
     this.settings = null;
-    this.sessionId = this.generateSessionId();
+    this.sessionStore = new SessionStore();
+    // Placeholder id for the brief window before initialize() restores the persisted
+    // one; overwritten in initialize() before any capture/message listener attaches.
+    this.sessionId = this.sessionStore.generate();
     this.totalCapturedBytes = 0;
     this.processingStats = {
       processedFiles: 0,
@@ -39,7 +75,13 @@ class JSExtractor {
     this.maxAuthContextEntries = 4000;
 
     this.limits = {
-      maxFileBytes: 50 * 1024 * 1024,
+      // NOTE: must not exceed the backend's per-file cap (SecurityValidator.
+      // MAX_JS_CONTENT_SIZE = 10 MB in api/app/security_utils.py). A larger file
+      // is 422-rejected by /api/save-files, and a rejected file used to poison the
+      // upload batch into an infinite retry. Byte cap ≤ 10 MB guarantees the server
+      // (which caps by char count) accepts it. Oversized assets are soft-skipped
+      // per-file via the popup "Max asset size" slider (maxAssetMb), not here.
+      maxFileBytes: 10 * 1024 * 1024,
       maxTotalBytes: 200 * 1024 * 1024,
       maxFiles: 2000
     };
@@ -50,6 +92,18 @@ class JSExtractor {
     this.decompressor = new Decompressor();
     this.batchUploader = new BatchUploader();
     this.repPlusBridge = new RepPlusBridge();
+    // Durable stores (IndexedDB) that outlive the service worker: the upload outbox
+    // (unsent files) and the dedup set (hash -> {url, capturedAt}). Separate DBs to
+    // avoid multi-store upgrade coordination.
+    this.outboxStore = new IdbStore('recon-outbox');
+    this.dedupStore = new IdbStore('recon-dedup');
+    // Tracks whether the durable-flush alarm is armed, so per-file reconcile calls
+    // don't re-create it on every capture.
+    this.flushAlarmArmed = false;
+    // Resolves when initialize() completes; the bootstrap replaces this with the real
+    // init promise. Listener handlers await it so a cold-woken worker finishes loading
+    // settings/session/stores before handling the event that woke it.
+    this.ready = Promise.resolve();
   }
 
   buildProcessingError(code, message) {
@@ -67,6 +121,9 @@ class JSExtractor {
 
   async initialize() {
     this.settings = await this.loadSettings();
+    // Restore the persisted session id (or mint one on first run) so a service-worker
+    // respawn resumes the SAME backend session instead of fragmenting into a new one.
+    this.sessionId = await this.sessionStore.loadOrCreate();
     if (this.settings.useLocalApi !== true) {
       this.settings.useLocalApi = true;
       await chrome.storage.local.set({ useLocalApi: true });
@@ -75,6 +132,15 @@ class JSExtractor {
       this.batchUploader.setEndpoint(this.settings.apiEndpoint);
     }
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
+    this.batchUploader.setAnalysisOptions(this.settings.analysisOptions || {});
+    // Re-apply a persisted scope so uploads keep tagging the session even if the
+    // service worker recycled after a new session was started.
+    if (this.settings.useDomainScope && Array.isArray(this.settings.domainScopes) && this.settings.domainScopes.length) {
+      this.batchUploader.setScope({
+        rootDomains: normalizeRootDomains(this.settings.domainScopes),
+        includeSubdomains: this.settings.includeSubdomains !== false
+      });
+    }
     this.repPlusBridge.setExtensionId(this.settings.repPlusExtensionId || '');
     this.isCapturing = this.settings.isCapturing || false;
     if (this.settings.autoStart) {
@@ -84,14 +150,38 @@ class JSExtractor {
     
     // Initialize rep+ bridge for optional integration
     await this.repPlusBridge.initialize();
-    
-    this.setupListeners();
-    console.log('JSExtractor initialized', { sessionId: this.sessionId, repPlusAvailable: this.repPlusBridge.isRepPlusAvailable });
+
+    // --- durability wiring (S2): back the uploader with the persistent outbox and
+    // let it clear the flush alarm once fully drained.
+    this.batchUploader.setStore(this.outboxStore);
+    this.batchUploader.setOnDrained(() => this.reconcileFlushAlarm(false));
+
+    // NOTE: listeners are registered SYNCHRONOUSLY at module load (see bootstrap at the
+    // bottom), not here — MV3 tears the worker down and routes the waking event only to
+    // listeners present in the first turn. Their handlers gate on `this.ready`.
+
+    // Restore the dedup set (so we don't re-fetch/re-upload files already captured in
+    // this session) and resume any uploads a previous worker instance left unsent.
+    await this.rehydrateDedup();
+    // rehydrate() returns pending count, or -1 if the outbox READ failed. Treat both
+    // "has files" and "unknown" as reasons to keep the flush alarm armed (fail safe).
+    const pendingUploads = await this.batchUploader.rehydrate();
+    this.reconcileFlushAlarm(pendingUploads !== 0);
+
+    console.log('JSExtractor initialized', {
+      sessionId: this.sessionId,
+      repPlusAvailable: this.repPlusBridge.isRepPlusAvailable,
+      pendingUploads
+    });
   }
 
+  // Registered synchronously at module load (bootstrap below). Because a cold-woken
+  // worker may not have finished initialize() yet, each handler defers its state-using
+  // work behind `this.ready` (the initialize() promise). The webRequest detail objects
+  // are plain data, so they stay valid inside the deferred continuation.
   setupListeners() {
     chrome.webRequest.onBeforeSendHeaders.addListener(
-      (details) => this.captureRequestAuthContext(details),
+      (details) => { this.ready.then(() => this.captureRequestAuthContext(details)); },
       {
         urls: ["<all_urls>"],
         types: ["script"]
@@ -100,8 +190,8 @@ class JSExtractor {
     );
 
     chrome.webRequest.onCompleted.addListener(
-      (details) => this.handleRequest(details),
-      { 
+      (details) => { this.ready.then(() => this.handleRequest(details)); },
+      {
         urls: ["<all_urls>"],
         types: ["script"]
       },
@@ -109,7 +199,9 @@ class JSExtractor {
     );
 
     chrome.webRequest.onErrorOccurred.addListener(
-      (details) => this.discardRequestAuthContext(details.requestId),
+      // Gate on ready so discard can't run before the (also-deferred) record for the same
+      // requestId in the cold pre-init window, which would orphan an auth-context entry.
+      (details) => { this.ready.then(() => this.discardRequestAuthContext(details.requestId)); },
       {
         urls: ["<all_urls>"],
         types: ["script"]
@@ -118,16 +210,73 @@ class JSExtractor {
 
     chrome.runtime.onMessage.addListener(
       (request, sender, sendResponse) => {
-        this.handleMessage(request, sender, sendResponse);
-        return true;
+        // Defer handling until init has populated settings/session/stores. Hold the
+        // sendResponse channel open ONLY for actions that actually respond — a fire-and-
+        // forget message (e.g. dynamicScriptDetected) returning true would leak the port
+        // until GC and log "message port closed before a response was received".
+        this.ready.then(() => this.handleMessage(request, sender, sendResponse));
+        return !FIRE_AND_FORGET_ACTIONS.has(request && request.action);
       }
     );
+
+    chrome.alarms.onAlarm.addListener((alarm) => {
+      // Cold-respawn safety net: if the worker was torn down with unsent uploads, this
+      // wakes it (min period ~30s per chrome.alarms) to drain the outbox. During active
+      // capture the stream of webRequest events + the 5s timer already handle draining.
+      if (alarm && alarm.name === 'flushOutbox') {
+        this.ready.then(() => this.batchUploader.processBatch());
+      }
+    });
+  }
+
+  // Keep the durable-flush alarm alive only while unsent uploads exist, so an idle
+  // extension isn't waking the worker every 30-60s for nothing.
+  reconcileFlushAlarm(hasPending) {
+    try {
+      if (hasPending) {
+        if (this.flushAlarmArmed) return; // already armed — avoid per-file churn
+        this.flushAlarmArmed = true;
+        chrome.alarms.create('flushOutbox', { periodInMinutes: 1 });
+      } else {
+        // Always clear (idempotent) so a stale alarm from a prior worker can't linger.
+        this.flushAlarmArmed = false;
+        chrome.alarms.clear('flushOutbox');
+      }
+    } catch (e) {
+      // alarms API unavailable (e.g. permission missing) — non-fatal.
+    }
+  }
+
+  // Rebuild the in-memory dedup set from the persistent store after a respawn.
+  async rehydrateDedup() {
+    try {
+      const entries = (await this.dedupStore.getAll()) || [];
+      for (const entry of entries) {
+        if (entry && entry.contentHash) {
+          this.capturedHashes.set(entry.contentHash, { url: entry.url, capturedAt: entry.capturedAt });
+        }
+      }
+    } catch (e) {
+      console.warn('Dedup rehydrate failed:', e);
+    }
+  }
+
+  // Noise denylist + out-of-scope "exclude" mode → drop before capture.
+  shouldSkipUrl(url, documentUrl) {
+    if (matchesDenylist(url, this.settings.denyRules || [], this.settings.denyDefaultProfile !== false)) {
+      return true;
+    }
+    if (this.settings.outOfScopeMode === 'exclude' && documentUrl && isThirdParty(url, documentUrl)) {
+      return true;
+    }
+    return false;
   }
 
   async handleRequest(details) {
     if (!this.isCapturing) return;
     if (!this.isInScope(details.url)) return;
     if (this.isExtensionRequest(details)) return;
+    if (this.shouldSkipUrl(details.url, details.documentUrl)) return;
 
     const authContext = this.consumeRequestAuthContext(details.requestId, details.url);
     const fileMetadata = this.extractMetadata(details, authContext);
@@ -274,9 +423,29 @@ class JSExtractor {
     }
 
     const contentByteLength = this.getContentByteLength(content);
+
+    // Per-asset size cap (popup "Max asset size" slider). Skips the single file
+    // without stopping capture — unlike the hard limits in enforceLimits().
+    const maxAssetBytes = (this.settings.maxAssetMb || 8) * 1024 * 1024;
+    if (contentByteLength > maxAssetBytes) {
+      this.recordProcessingFailure(
+        'asset_too_large',
+        url,
+        `Asset ${(contentByteLength / 1048576).toFixed(1)} MB exceeds ${this.settings.maxAssetMb} MB limit`
+      );
+      return;
+    }
+
     if (!this.enforceLimits(contentByteLength)) {
       return;
     }
+
+    // Cheap, count-only enrichment for the redesigned popup. Runs only AFTER the
+    // size gates above; we persist counts only — never the matched secret values.
+    const classification = classifyAsset(url);
+    const thirdParty = isThirdParty(url, metadata.documentUrl || metadata.initiator);
+    const secretCount = countSecrets(content);
+
     const contentHash = await this.calculateHash(content);
 
     // Version-aware deduplication - check if we already have this exact content
@@ -290,8 +459,10 @@ class JSExtractor {
     const existingFile = this.capturedFiles.get(url);
     if (existingFile && existingFile.contentHash !== contentHash) {
       console.log(`Re-capturing URL with changed content - old hash: ${existingFile.contentHash.substring(0, 8)}..., new hash: ${contentHash.substring(0, 8)}...`);
-      // Remove old content hash tracking
+      // Remove old content hash tracking (memory + persistent store, so a superseded
+      // version isn't resurrected on respawn and dedupStore can't grow unbounded).
       this.capturedHashes.delete(existingFile.contentHash);
+      this.dedupStore.delete(existingFile.contentHash).catch(() => {});
     }
 
     const fileObject = {
@@ -311,6 +482,9 @@ class JSExtractor {
       contentLength: contentByteLength,
       content: content,
       isMinified: this.isMinified(content),
+      classification: classification,
+      isThirdParty: thirdParty,
+      secretCount: secretCount,
       hasSourceMap: sourceMapData !== null,
       sourceMapUrl: sourceMapUrl,
       sourceMapContent: sourceMapData,
@@ -323,10 +497,13 @@ class JSExtractor {
       needsServerProcessing: sourceMapData !== null || dependencies.length > 0
     };
 
-    // Track both URL and content hash for version-aware deduplication  
+    // Track both URL and content hash for version-aware deduplication
     this.capturedFiles.set(url, fileObject);
     this.capturedHashes.set(contentHash, {url: url, capturedAt: fileObject.capturedAt});
-    
+    // Persist the dedup entry so a respawn won't re-fetch/re-hash/re-upload this file.
+    try { await this.dedupStore.put(contentHash, { contentHash, url, capturedAt: fileObject.capturedAt }); }
+    catch (e) { /* dedup is an optimization; a miss just re-uploads (server dedupes) */ }
+
     this.totalCapturedBytes += contentByteLength;
     this.processingStats.processedFiles += 1;
 
@@ -336,6 +513,12 @@ class JSExtractor {
       }
       const depUrl = dep.resolvedUrl || this.resolveUrl(dep.url || dep, url);
       if (!this.isLikelyScriptResource(depUrl)) {
+        continue;
+      }
+      // Dependency children must honour the same denylist / out-of-scope-exclude
+      // rules as top-level requests (isInScope is intentionally NOT applied here —
+      // dependency resolution may legitimately pull cross-scope libraries).
+      if (this.shouldSkipUrl(depUrl, url)) {
         continue;
       }
       if (!this.capturedFiles.has(depUrl)) {
@@ -352,6 +535,8 @@ class JSExtractor {
     }
 
     await this.batchUploader.enqueue(fileObject);
+    // There is now durable pending work — ensure the cold-respawn flush alarm exists.
+    this.reconcileFlushAlarm(true);
 
     this.notifyUI({
       action: 'fileProcessed',
@@ -616,12 +801,12 @@ class JSExtractor {
   handleLimitExceeded(message) {
     this.isCapturing = false;
     this.persistCaptureState(false);
-    chrome.notifications.create({
+    Promise.resolve(chrome.notifications.create({
       type: 'basic',
       iconUrl: 'icons/icon48.png',
       title: 'Capture Stopped',
       message: message
-    });
+    })).catch(() => {});
   }
 
   decodeDataUrl(dataUrl) {
@@ -720,10 +905,10 @@ class JSExtractor {
         
         // Exact domain match
         if (hostname === trimmed) return true;
-        
-        // Subdomain match (must end with the scope domain)
-        if (hostname.endsWith('.' + trimmed)) return true;
-        
+
+        // Subdomain match (gated by includeSubdomains; defaults true).
+        if (this.settings.includeSubdomains !== false && hostname.endsWith('.' + trimmed)) return true;
+
         return false;
       });
     } catch (e) {
@@ -746,13 +931,6 @@ class JSExtractor {
     }, 500);
   }
 
-  generateSessionId() {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-      return crypto.randomUUID();
-    }
-    return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-  }
-
   async loadSettings() {
     const result = await chrome.storage.local.get([
       'domainScopes',
@@ -769,9 +947,19 @@ class JSExtractor {
       'isCapturing',
       'exportIncludeContent',
       'captureAuthContext',
-      'authContextDomains'
+      'authContextDomains',
+      'includeSubdomains',
+      'workspaceUrl',
+      'apiKey',
+      'muteNoise',
+      'outOfScopeMode',
+      'maxAssetMb',
+      'denyDefaultProfile',
+      'denyRules',
+      'scanProfile',
+      'analysisOptions'
     ]);
-    
+
     return {
       domainScopes: result.domainScopes || [],
       useDomainScope: result.useDomainScope || false,
@@ -787,7 +975,24 @@ class JSExtractor {
       isCapturing: result.isCapturing || false,
       exportIncludeContent: result.exportIncludeContent === true,
       captureAuthContext: result.captureAuthContext !== false,
-      authContextDomains: Array.isArray(result.authContextDomains) ? result.authContextDomains : []
+      authContextDomains: Array.isArray(result.authContextDomains) ? result.authContextDomains : [],
+      // --- redesigned popup settings ---
+      // includeSubdomains MUST default true to preserve today's always-match
+      // subdomain capture behaviour (isInScope) for existing users.
+      includeSubdomains: result.includeSubdomains !== false,
+      workspaceUrl: result.workspaceUrl || '',
+      apiKey: result.apiKey || '',
+      muteNoise: result.muteNoise !== false,
+      outOfScopeMode: result.outOfScopeMode || 'tag',
+      // Clamp to the 10 MB backend ceiling so a legacy stored value (from the old
+      // 25 MB slider) can't wave through files the server will 422.
+      maxAssetMb: Math.min(10, typeof result.maxAssetMb === 'number' ? result.maxAssetMb : 8),
+      denyDefaultProfile: result.denyDefaultProfile !== false,
+      denyRules: Array.isArray(result.denyRules) ? result.denyRules : DEFAULT_DENY_RULES,
+      // Scan type: preset name + extractor toggles forwarded as analysisOptions on
+      // upload. Empty options → backend defaults; profile drives the popup selection.
+      scanProfile: result.scanProfile || 'standard',
+      analysisOptions: (result.analysisOptions && typeof result.analysisOptions === 'object') ? result.analysisOptions : {}
     };
   }
 
@@ -826,6 +1031,7 @@ class JSExtractor {
   handleMessage(request, sender, sendResponse) {
     const handlers = {
       startCapture: () => this.startCapture(sendResponse),
+      newSession: (req) => this.newSession(req, sendResponse),
       stopCapture: () => this.stopCapture(sendResponse),
       getFiles: () => this.getFiles(sendResponse),
       clearFiles: () => this.clearFiles(sendResponse),
@@ -833,6 +1039,9 @@ class JSExtractor {
       updateSettings: (req) => this.updateSettings(req, sendResponse),
       getExportData: () => this.getExportData(sendResponse),
       exportFiles: () => this.exportFiles(sendResponse),
+      testConnection: () => this.testConnection(sendResponse),
+      analyzeSession: () => this.analyzeSession(sendResponse),
+      getAnalysisProgress: () => this.getAnalysisProgress(sendResponse),
       dynamicScriptDetected: (req) => this.handleDynamicScript(req, sender)
     };
 
@@ -846,6 +1055,7 @@ class JSExtractor {
     if (!this.isCapturing) return;
     if (!request || !request.url) return;
     if (!this.isInScope(request.url)) return;
+    if (this.shouldSkipUrl(request.url, sender?.tab?.url || request.documentUrl)) return;
 
     const senderTabId = sender?.tab?.id;
     const senderFrameId = sender?.frameId;
@@ -872,6 +1082,52 @@ class JSExtractor {
     sendResponse({ success: true, sessionId: this.sessionId });
   }
 
+  async newSession(request, sendResponse) {
+    // Drop not-yet-processed capture requests BEFORE rotating the id, so a straggler
+    // can't be stamped with the new session id (fileObject.sessionId is set at process
+    // time). Already-built batches in the uploader keep their own old per-file id, so
+    // flush them under the previous session first.
+    this.processingQueue = [];
+    await this.batchUploader.flushAll();
+
+    // Rotate to a fresh, PERSISTED session id and drop the previous session's captured
+    // state (mirrors clearFiles) so the new session starts clean and survives respawns.
+    this.sessionId = await this.sessionStore.rotate();
+    this.capturedFiles.clear();
+    this.capturedHashes.clear();
+    // Reset the persistent dedup set for the new session. The outbox is intentionally
+    // NOT cleared — any still-unsent files carry their own (old) per-file session id.
+    this.dedupStore.clear().catch(() => {});
+    this.requestAuthContexts.clear();
+    this.totalCapturedBytes = 0;
+    this.processingStats = {
+      processedFiles: 0,
+      failedFiles: 0,
+      lastFailureReason: null,
+      lastFailureUrl: null,
+      lastFailureMessage: null
+    };
+
+    // Apply the chosen scope: root domains both gate capture (reusing domainScopes)
+    // and seed the app-side session scope via the save-files metadata.
+    const scope = (request && request.scope) || {};
+    const rootDomains = normalizeRootDomains(scope.rootDomains);
+    const includeSubdomains = scope.includeSubdomains !== false;
+    // A blank scope must RESET capture gating (no else → the new session would silently
+    // inherit the previous session's domainScopes and capture out of its intended scope).
+    this.settings.domainScopes = rootDomains;
+    this.settings.useDomainScope = rootDomains.length > 0;
+    this.settings.includeSubdomains = includeSubdomains;
+    await chrome.storage.local.set({
+      domainScopes: this.settings.domainScopes,
+      useDomainScope: this.settings.useDomainScope,
+      includeSubdomains
+    });
+    this.batchUploader.setScope({ rootDomains, includeSubdomains });
+
+    sendResponse({ success: true, sessionId: this.sessionId, scope: { rootDomains, includeSubdomains } });
+  }
+
   async stopCapture(sendResponse) {
     this.isCapturing = false;
     this.persistCaptureState(false);
@@ -892,6 +1148,9 @@ class JSExtractor {
       repPlusImportedHints: f.repPlusSummary?.importedHintCount || 0,
       capturedAt: f.capturedAt,
       isMinified: f.isMinified,
+      classification: f.classification || 'app',
+      isThirdParty: f.isThirdParty === true,
+      secretCount: f.secretCount || 0,
       sourceMapFetchStatus: f.sourceMapFetchStatus,
       sourceMapFetchError: f.sourceMapFetchError
     }));
@@ -907,6 +1166,7 @@ class JSExtractor {
   clearFiles(sendResponse) {
     this.capturedFiles.clear();
     this.capturedHashes.clear();
+    this.dedupStore.clear().catch(() => {});
     this.processingQueue = [];
     this.requestAuthContexts.clear();
     this.totalCapturedBytes = 0;
@@ -921,15 +1181,119 @@ class JSExtractor {
   }
 
   getStatus(sendResponse) {
+    let mapsCount = 0;
+    let secretCount = 0;
+    for (const f of this.capturedFiles.values()) {
+      if (f.hasSourceMap) mapsCount += 1;
+      secretCount += f.secretCount || 0;
+    }
     sendResponse({
       isCapturing: this.isCapturing,
       sessionId: this.sessionId,
       fileCount: this.capturedFiles.size,
+      mapsCount,
+      secretCount,
       queueLength: this.processingQueue.length,
       processingStats: this.processingStats,
       uploader: this.batchUploader.getStats(),
       settings: this.settings
     });
+  }
+
+  async testConnection(sendResponse) {
+    const target = this.resolveApiBase() + '/api/health';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const startedAt = Date.now();
+    try {
+      const headers = {};
+      if (this.settings?.apiKey) headers['x-api-key'] = this.settings.apiKey;
+      const resp = await fetch(target, { method: 'GET', headers, signal: controller.signal });
+      clearTimeout(timer);
+      sendResponse({ ok: resp.ok, status: resp.status, latencyMs: Date.now() - startedAt });
+    } catch (error) {
+      clearTimeout(timer);
+      sendResponse({ ok: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') });
+    }
+  }
+
+  deriveOrigin(url) {
+    try { return new URL(url).origin; } catch (e) { return ''; }
+  }
+
+  // Workspace API origin (no trailing slash) for non-ingestion calls (health, analyze).
+  resolveApiBase() {
+    const s = this.settings || {};
+    let base = (s.workspaceUrl || '').trim()
+      || this.deriveOrigin(s.apiEndpoint)
+      || 'http://localhost:3000';
+    // A scheme-less workspace URL (e.g. "localhost:3000") would resolve relative to the
+    // extension origin and fail — prepend http:// so it's an absolute URL.
+    if (base && !/^[a-z][a-z0-9+.-]*:\/\//i.test(base)) base = 'http://' + base;
+    return base.replace(/\/+$/, '');
+  }
+
+  // Trigger on-demand analysis of the current session (the decoupled path): flush any
+  // unsent captures first, then kick the backend's async threaded job so the single
+  // worker isn't blocked inline during capture.
+  async analyzeSession(sendResponse) {
+    // Best-effort flush so the server has as many captures as possible before analyzing,
+    // but BOUNDED — a slow/unreachable workspace must not stall the analyze trigger (the
+    // outbox timer/alarm keeps draining in the background regardless).
+    try {
+      await Promise.race([
+        this.batchUploader.flushAll(),
+        new Promise((resolve) => setTimeout(resolve, 8000))
+      ]);
+    } catch (e) {
+      // A flush failure shouldn't block analyzing what did upload.
+      console.warn('Flush before analyze failed:', e);
+    }
+    const target = `${this.resolveApiBase()}/api/sessions/${encodeURIComponent(this.sessionId)}/analyze/start`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (this.settings?.apiKey) headers['x-api-key'] = this.settings.apiKey;
+      const resp = await fetch(target, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ options: this.settings.analysisOptions || {} }),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        sendResponse({ success: false, status: resp.status, error: `HTTP ${resp.status}` });
+        return;
+      }
+      const data = await resp.json();
+      sendResponse({ success: true, started: data.started !== false, message: data.message, job: data.job });
+    } catch (error) {
+      clearTimeout(timer);
+      sendResponse({ success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') });
+    }
+  }
+
+  // Poll analysis progress for the current session (drives the popup's per-file feed).
+  async getAnalysisProgress(sendResponse) {
+    const target = `${this.resolveApiBase()}/api/sessions/${encodeURIComponent(this.sessionId)}/analyze/progress`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const headers = {};
+      if (this.settings?.apiKey) headers['x-api-key'] = this.settings.apiKey;
+      const resp = await fetch(target, { method: 'GET', headers, signal: controller.signal });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        sendResponse({ success: false, status: resp.status });
+        return;
+      }
+      const data = await resp.json();
+      sendResponse({ success: true, job: data.job || null });
+    } catch (error) {
+      clearTimeout(timer);
+      sendResponse({ success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') });
+    }
   }
 
   async updateSettings(request, sendResponse) {
@@ -946,6 +1310,7 @@ class JSExtractor {
       this.batchUploader.setEndpoint(this.settings.apiEndpoint);
     }
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
+    this.batchUploader.setAnalysisOptions(this.settings.analysisOptions || {});
     if (Object.prototype.hasOwnProperty.call(request.settings || {}, 'repPlusExtensionId')) {
       this.repPlusBridge.setExtensionId(this.settings.repPlusExtensionId || '');
       await this.repPlusBridge.initialize();
@@ -996,4 +1361,11 @@ class JSExtractor {
 }
 
 const extractor = new JSExtractor();
-extractor.initialize();
+// Kick off async init and expose the promise so the listeners (registered synchronously
+// below) can gate their handlers on it. .catch keeps `ready` resolvable even if init
+// fails, so handlers proceed with best-effort state instead of hanging forever.
+extractor.ready = extractor.initialize().catch((e) => console.error('JSExtractor init failed:', e));
+// Register listeners SYNCHRONOUSLY in the worker's first turn (MV3 requirement) so the
+// event that woke the worker — a page's first script request or the flushOutbox alarm —
+// is actually routed to us instead of being dropped.
+extractor.setupListeners();
