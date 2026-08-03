@@ -100,7 +100,7 @@ def resolve_effective_config(defaults: dict, overrides: dict | None) -> tuple[di
         if not isinstance(section_override, dict):
             continue
         for key in keys:
-            if key in section_override:
+            if section_override.get(key) is not None:
                 effective.setdefault(section, {})[key] = copy.deepcopy(section_override[key])
                 override_keys.append(f"{section}.{key}")
     return effective, sorted(override_keys)

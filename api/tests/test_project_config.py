@@ -79,6 +79,28 @@ def test_validate_partial_only_checks_present_sections():
     validate_config({"analysis": {"analyzeOnUpload": True, "captureSourceMaps": False}}, partial=True)
 
 
+def test_resolve_null_override_means_inherit():
+    d = system_defaults()
+    d["capture"]["outOfScopeMode"] = "exclude"
+    eff, keys = resolve_effective_config(d, {"capture": {"outOfScopeMode": None}})
+    assert eff["capture"]["outOfScopeMode"] == "exclude"   # None override -> inherit
+    assert "capture.outOfScopeMode" not in keys
+
+
+def test_validate_accepts_system_defaults():
+    validate_config(system_defaults())  # full valid document must not raise
+
+
+def test_validate_max_asset_mb_boundaries():
+    validate_config(deep_merge(system_defaults(), {"capture": {"maxAssetMb": 10}}))  # 10 is valid
+    for bad in (0, -1):
+        try:
+            validate_config(deep_merge(system_defaults(), {"capture": {"maxAssetMb": bad}}))
+            assert False, f"expected ValueError for maxAssetMb={bad}"
+        except ValueError:
+            pass
+
+
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):
