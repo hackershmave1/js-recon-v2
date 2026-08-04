@@ -1,0 +1,16 @@
+# Removed dependencies (2026-04-19):
+#   python-jose[cryptography] — JWT library, no active auth routes; CVE-2024-33664
+#   passlib[bcrypt]           — Password hashing, no active auth routes
+#   celery                    — Legacy task queue removed; API uses in-process background work
+#   redis                     — No active runtime dependency after Celery removal
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+pydantic==2.5.0
+pydantic-settings==2.1.0
+python-multipart==0.0.6
+aiofiles==23.2.1
+httpx==0.25.2
+alembic==1.13.0
+pytest==7.4.3

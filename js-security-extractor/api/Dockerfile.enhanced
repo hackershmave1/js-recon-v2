@@ -1,0 +1,78 @@
+# Enhanced Dockerfile with jsluice and sourcemapper binaries
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    git \
+    build-essential \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Go for building sourcemapper and jsluice
+ENV GO_VERSION=1.21.5
+RUN wget https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz && \
+    rm go${GO_VERSION}.linux-amd64.tar.gz
+
+ENV PATH=$PATH:/usr/local/go/bin:/root/go/bin
+
+# Create app directory
+WORKDIR /app
+
+# Build and install sourcemapper
+RUN git clone https://github.com/denandz/sourcemapper.git /tmp/sourcemapper && \
+    cd /tmp/sourcemapper && \
+    go build -o /usr/local/bin/sourcemapper main.go && \
+    chmod +x /usr/local/bin/sourcemapper && \
+    rm -rf /tmp/sourcemapper
+
+# Build and install jsluice
+RUN git clone https://github.com/BishopFox/jsluice.git /tmp/jsluice && \
+    cd /tmp/jsluice && \
+    go mod download && \
+    go build -o /usr/local/bin/jsluice ./cmd/jsluice && \
+    chmod +x /usr/local/bin/jsluice && \
+    rm -rf /tmp/jsluice
+
+# Build and install katana
+RUN go install github.com/projectdiscovery/katana/cmd/katana@latest && \
+    mv /root/go/bin/katana /usr/local/bin/katana && \
+    chmod +x /usr/local/bin/katana
+
+# Verify binaries are working
+RUN /usr/local/bin/sourcemapper -h || echo "sourcemapper installed"
+RUN /usr/local/bin/jsluice -h || echo "jsluice installed"
+RUN /usr/local/bin/katana -version || /usr/local/bin/katana -h || echo "katana installed"
+
+# Install uv for Python package management
+RUN pip install uv
+
+# Copy Python dependencies
+COPY api/pyproject.toml api/uv.lock* ./
+
+# Install Python dependencies
+RUN uv sync --frozen
+
+# Copy application code and migrations
+COPY api/app ./app
+COPY alembic.ini ./alembic.ini
+COPY alembic ./alembic
+
+# Create storage directory
+RUN mkdir -p /var/lib/js-extractor/storage
+
+# Set environment variables
+ENV STORAGE_PATH=/var/lib/js-extractor/storage
+ENV PYTHONPATH=/app
+
+# Expose port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+# Run the application
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3000", "--workers", "2"]

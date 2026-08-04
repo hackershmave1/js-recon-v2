@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: jsextractor
+      POSTGRES_PASSWORD: changeme123
+      POSTGRES_DB: js_extractor
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - js-extractor-network
+
+  api:
+    build:
+      context: ..
+      dockerfile: api/Dockerfile.enhanced
+    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 3000 --reload
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./app:/app/app
+      - ./storage:/var/lib/js-extractor/storage
+    environment:
+      - DATABASE_URL=postgresql://jsextractor:changeme123@postgres:5432/js_extractor
+      - STORAGE_PATH=/var/lib/js-extractor/storage
+    depends_on:
+      - postgres
+    networks:
+      - js-extractor-network
+
+networks:
+  js-extractor-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
