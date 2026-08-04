@@ -5,7 +5,7 @@ import { C, F } from '../theme.js';
 import { FileIcon, ChevronRight, ChevronDown, ChevronLeft } from '../icons.jsx';
 
 export function SourcesTree({
-  railWidth, subtitle, bundles, loading, expanded, recon, sel, findings, findingsForDoc,
+  railWidth, subtitle, bundles, loading, hasSession, expanded, recon, sel, findings, findingsForDoc,
   onCollapse, onToggle, onPickRaw, onPickRecon
 }) {
   return (
@@ -20,9 +20,11 @@ export function SourcesTree({
         </button>
       </div>
       {bundles.length === 0 && (
-        <div style={{ padding: '24px 18px', color: C.faint, fontSize: '12.5px', lineHeight: 1.6 }}>
-          {loading ? 'Loading sources…' : 'No JavaScript sources for this session yet.'}
-        </div>
+        !hasSession
+          ? <div style={{ padding: '24px 18px', color: C.faint, fontSize: '12.5px', lineHeight: 1.6 }}>No session selected. Capture JS with the extension or start a New Recon, then pick it from the target selector below.</div>
+          : loading
+            ? <LoadingRow pad="24px 18px" />
+            : <div style={{ padding: '24px 18px', color: C.faint, fontSize: '12.5px', lineHeight: 1.6 }}>No JavaScript sources in this session yet.</div>
       )}
       {bundles.map((b) => {
         const count = findingsForDoc(findings, b.fileId, null).length;
@@ -40,7 +42,7 @@ export function SourcesTree({
             </button>
             {b.hasRecon && isOpen && (
               <div>
-                {(!entry || entry.loading) && <Hint text="Loading sources…" />}
+                {(!entry || entry.loading) && <LoadingRow pad="6px 18px 6px 36px" />}
                 {entry && entry.error && <Hint text="Sources unavailable" />}
                 {entry && entry.rows && entry.rows.map((r) => {
                   const fc = findingsForDoc(findings, b.fileId, r.path).length;
@@ -76,4 +78,14 @@ function Badge({ n }) {
 }
 function Hint({ text }) {
   return <div style={{ padding: '6px 18px 6px 36px', fontSize: '11.5px', color: C.faint, fontFamily: F.body }}>{text}</div>;
+}
+// Animated loader so an in-flight fetch reads as alive, not stuck. Indeterminate (a
+// pulsing dot) because the file-list/reconstruct fetches don't report byte progress.
+function LoadingRow({ text = 'Loading sources…', pad = '6px 18px' }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '9px', padding: pad, fontSize: '12px', color: C.faint, fontFamily: F.body }}>
+      <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: C.lime, animation: 'pulse 1.1s infinite', flex: '0 0 7px' }} />
+      <span>{text}</span>
+    </div>
+  );
 }

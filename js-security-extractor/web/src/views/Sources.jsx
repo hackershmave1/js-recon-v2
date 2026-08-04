@@ -97,11 +97,13 @@ export function Sources({ sessionId, findings, openTarget, onClearTarget, onPick
   }, [files, extra]);
 
   const reconTotal = bundles.reduce((n, b) => n + (b.hasRecon ? b.reconCount : 0), 0);
-  const subtitle = filesLoading && bundles.length === 0
-    ? 'Loading…'
-    : reconTotal > 0
-      ? `${reconTotal} files · reconstructed from source maps`
-      : `${bundles.length} JS bundle${bundles.length === 1 ? '' : 's'} captured`;
+  const subtitle = !sessionId
+    ? 'No session selected'
+    : filesLoading && bundles.length === 0
+      ? 'Loading…'
+      : reconTotal > 0
+        ? `${reconTotal} files · reconstructed from source maps`
+        : `${bundles.length} JS bundle${bundles.length === 1 ? '' : 's'} captured`;
 
   async function openBundle(b, opts = {}) {
     const { targetPath = null, line = 0, select = false } = opts;
@@ -218,6 +220,7 @@ export function Sources({ sessionId, findings, openTarget, onClearTarget, onPick
       {!collapsed && (
         <SourcesTree
           railWidth={railWidth} subtitle={subtitle} bundles={bundles} loading={filesLoading}
+          hasSession={!!sessionId}
           expanded={expanded} recon={recon} sel={sel} findings={findings}
           findingsForDoc={findingsForDoc} onCollapse={() => setCollapsed(true)}
           onToggle={toggle} onPickRaw={pickRaw} onPickRecon={pickRecon}
@@ -235,7 +238,7 @@ export function Sources({ sessionId, findings, openTarget, onClearTarget, onPick
         {!sel ? (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.inset, color: C.faint, fontSize: '13px' }}>
             {collapsed && <RestoreRailButton onClick={() => setCollapsed(false)} />}
-            Select a file to view its source.
+            {sessionId ? 'Select a file to view its source.' : 'No session selected — capture with the extension or start a New Recon.'}
           </div>
         ) : (
           <>
