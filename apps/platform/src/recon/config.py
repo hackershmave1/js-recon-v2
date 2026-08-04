@@ -84,6 +84,15 @@ class Settings(BaseSettings):
     s3_bucket: str = "recon-artifacts"
     s3_region: str = "us-east-1"
 
+    # SPIKE (throwaway): when true, mount POST /api/save-files so the Chrome
+    # extension can push captured JS straight into the run/analyze path, backed by
+    # local disk (storage_local) instead of S3 — a seam to MEASURE how tightly the
+    # analyze stage couples to Redis/S3/RLS. Off in production. See api/app.py +
+    # api/capture_router.py.
+    enable_capture_ingest: bool = False
+    capture_storage_dir: str = "./data/capture-blobs"
+    capture_tenant_name: str = "capture-spike"
+
     # Realtime / durability (REQ-R2, REQ-R3).
     heartbeat_interval_seconds: float = 5.0
     heartbeat_stall_threshold_seconds: float = 30.0

@@ -1,0 +1,5 @@
+services:
+  api:
+    environment:
+      RECON_ENABLE_CAPTURE_INGEST: "true"
+      RECON_CAPTURE_STORAGE_DIR: "/tmp/capture-blobs"
