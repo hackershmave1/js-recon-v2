@@ -18,31 +18,34 @@ class MockJSExtractor {
     this.capturedHashes = new Map();
     this.settings = {
       useDomainScope: true,
-      domainScopes: ['example.com', 'test.org']
+      domainScopes: ['example.com', 'test.org'],
+      includeSubdomains: true,
+      captureEverything: false
     };
   }
 
-  // Copy the exact isInScope implementation
+  // Copy of the exact isInScope implementation (fail-closed + capture-everything opt-in).
   isInScope(url) {
-    if (!this.settings.useDomainScope || 
+    if (!this.settings.useDomainScope ||
         this.settings.domainScopes.length === 0) {
-      return true;
+      // Fail closed: no scope => capture nothing unless explicitly opted into wide-open.
+      return this.settings.captureEverything === true;
     }
-    
+
     try {
       const urlObj = new URL(url);
       const hostname = urlObj.hostname.toLowerCase();
-      
+
       return this.settings.domainScopes.some(scope => {
         const trimmed = scope.trim().toLowerCase();
         if (!trimmed) return false;
-        
+
         // Exact domain match
         if (hostname === trimmed) return true;
-        
-        // Subdomain match (must end with the scope domain)
-        if (hostname.endsWith('.' + trimmed)) return true;
-        
+
+        // Subdomain match (gated by includeSubdomains; defaults true)
+        if (this.settings.includeSubdomains !== false && hostname.endsWith('.' + trimmed)) return true;
+
         return false;
       });
     } catch (e) {
@@ -121,10 +124,14 @@ function testDomainScopeMatching() {
   assert(!extractor.isInScope('https://examplenotcom.net/app.js'), 'Should NOT match domain prefix');
   assert(!extractor.isInScope('https://different.com/app.js'), 'Should NOT match unrelated domain');
   
-  // Test with domain scope disabled
+  // Fail-closed: with no scope AND capture-everything off, capture NOTHING (was: capture all).
   extractor.settings.useDomainScope = false;
-  assert(extractor.isInScope('https://anywhere.com/app.js'), 'Should match any domain when scope disabled');
-  
+  assert(!extractor.isInScope('https://anywhere.com/app.js'), 'No scope + capture-all off should capture nothing (fail closed)');
+  // The explicit wide-open opt-in captures everything.
+  extractor.settings.captureEverything = true;
+  assert(extractor.isInScope('https://anywhere.com/app.js'), 'captureEverything should capture any domain');
+  extractor.settings.captureEverything = false;
+
   console.log('✅ Domain scope matching tests passed');
   return true;
 }

@@ -19,11 +19,15 @@ export const getStatus = () => send('getStatus');
 export const getFiles = () => send('getFiles');
 export const startCapture = () => send('startCapture');
 export const stopCapture = () => send('stopCapture');
-// Start a fresh session with an explicit scope: { rootDomains: string[], includeSubdomains: boolean }.
-export const newSession = (scope) => send('newSession', { scope });
+// Start a fresh session. Payload is the popup-resolved snapshot the background applies:
+// { projectId, scope: { rootDomains, includeSubdomains }, captureConfig, overrideKeys }.
+export const newSession = (payload) => send('newSession', payload);
 export const getExportData = () => send('getExportData');
 export const testConnection = () => send('testConnection');
 export const updateSettings = (settings) => send('updateSettings', { settings });
+// Project-scoped capture: list engagements (cached in the worker) and quick-create one.
+export const listProjects = () => send('listProjects');
+export const createProject = (project) => send('createProject', { project });
 // Decoupled analysis: trigger the backend's async job for the current session, and poll
 // its per-file progress for the captures feed.
 export const analyzeSession = () => send('analyzeSession');

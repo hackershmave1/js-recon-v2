@@ -29,12 +29,13 @@ export class DependencyExtractor {
       }
     }
 
-    const chunkPattern = /(?:__webpack_require__|e)\s*\(\s*(\d+)\s*\)/g;
-    while ((match = chunkPattern.exec(content)) !== null) {
-      const id = match[1];
-      dependencies.add(`/static/js/${id}.chunk.js`);
-      dependencies.add(`/chunks/${id}.js`);
-    }
+    // NOTE: numeric-chunk-URL guessing was removed here. It matched a bare `e(123)`
+    // call — ubiquitous in minified code — and invented `/static/js/123.chunk.js` plus
+    // `/chunks/123.js`, which 404 en masse on any bundler that content-hashes chunk
+    // names (webpack 5, Module Federation) and computes the public path at runtime.
+    // The guesses never resolved to real files; they only flooded the queue and the
+    // Errors panel with 404s. Real chunks are discovered from actual script loads
+    // (webRequest) and the explicit dep arrays parsed above.
   }
 
   extractESModuleImports(content, dependencies) {

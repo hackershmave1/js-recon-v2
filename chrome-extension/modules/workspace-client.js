@@ -98,4 +98,46 @@ export class WorkspaceClient {
       return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
     }
   }
+
+  // List engagements (projects) from the workspace. Mirrors the inline fetch+timeout template.
+  async listProjects() {
+    const target = this.resolveApiBase() + '/api/projects';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const resp = await fetch(target, { method: 'GET', signal: controller.signal });
+      clearTimeout(timer);
+      if (!resp.ok) return { success: false, status: resp.status, error: `HTTP ${resp.status}` };
+      const projects = await resp.json();
+      return { success: true, projects: Array.isArray(projects) ? projects : [] };
+    } catch (error) {
+      clearTimeout(timer);
+      return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    }
+  }
+
+  // Create a project (quick-create from the popup: name + scope; backend fills the rest).
+  async createProject(project) {
+    const target = this.resolveApiBase() + '/api/projects';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const resp = await fetch(target, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(project || {}),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        let detail = `HTTP ${resp.status}`;
+        try { const body = await resp.json(); if (body && body.detail) detail = body.detail; } catch (e) { /* keep default */ }
+        return { success: false, status: resp.status, error: detail };
+      }
+      return { success: true, project: await resp.json() };
+    } catch (error) {
+      clearTimeout(timer);
+      return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    }
+  }
 }

@@ -137,6 +137,8 @@ Popup New-Session journey (replaces the free-text "root domains" box; see the re
    - rotates `reconSessionId`;
    - stamps every upload's `metadata` with `projectId`, resolved `rootDomains`/`includeSubdomains`, `captureConfig`, `overrideKeys`.
 
+> **Implementation note (Plan B):** the **popup** performs the resolve (it already resolves for the inherited/override preview) and sends the resolved snapshot `{ projectId, scope, captureConfig, overrideKeys }`; the background service worker is the thin applicator (maps the snapshot onto the flat capture-gate keys + the uploader). This realizes §7's "the client resolves; the backend stores as-is" — read "background resolves" above as "the extension client resolves, then background applies."
+
 Standalone: `startNewSession({ projectId: null, scope })` → today's behavior (type scope ad-hoc, global defaults), still snapshotting the resolved `captureConfig` for a uniform record.
 
 Client modules touched: `modules/workspace-client.js` (add `listProjects`, `createProject`), `background.js` (`newSession` becomes project-aware; a `resolveEffectiveConfig` mirror of the server schema), `modules/batch-uploader.js` (`scopeMetadata` → `configMetadata`: adds `projectId`/`captureConfig`/`overrideKeys`), popup `src/popup/{app.jsx, api.js, components/HomeView.jsx}` (project picker + inherited display + override editor), `src/popup/components/SettingsView.jsx` (the global "default scope for new sessions" becomes a fallback used only by Standalone).

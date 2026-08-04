@@ -90,7 +90,7 @@ export function SettingsView({ vm }) {
         {/* CAPTURE RULES */}
         <SectionHeader icon={<GlobeIcon />}>CAPTURE RULES</SectionHeader>
         <Card>
-          <Label>Default scope for new sessions</Label>
+          <Label>Standalone default scope <span style={{ color: C.faint }}>(used when no project is selected)</span></Label>
           <input value={vm.defScope} onInput={(e) => vm.setDefScope(e.target.value)} placeholder="auto (active tab domain)"
                  style={{ ...inputStyle, color: C.lime, marginBottom: '13px' }} />
           <button onClick={vm.toggleSubdomains} style={{

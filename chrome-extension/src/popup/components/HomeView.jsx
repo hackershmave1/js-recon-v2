@@ -4,6 +4,7 @@
 import { useState } from 'preact/hooks';
 import { C, F, CLASS_COLOR, CLASS_LABEL } from '../theme.js';
 import { Switch, Dot } from './ui.jsx';
+import { resolveEffectiveConfig } from '../../../modules/project-config.js';
 import {
   SearchIcon, GearIcon, PauseIcon, PlayIcon, DownloadIcon, ArrowRightIcon
 } from '../icons.jsx';
@@ -54,52 +55,134 @@ function CaptureRow({ c }) {
   );
 }
 
-// Inline "New session" control: rotates the capture session and seeds its scope
-// (root domains + the subdomains toggle) so the app-side session reflects it.
+// Inline "New session" control: pick an engagement (or Standalone), review the inherited
+// config, optionally override per-session, then rotate the capture session under the resolved
+// snapshot (the popup resolves; background applies + stamps uploads — spec §7/§8).
 function NewSession({ vm }) {
   const [open, setOpen] = useState(false);
-  const [scope, setScope] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newScope, setNewScope] = useState('');
+  // Raw scope text (Standalone box + the project scope override), kept raw so spaces/commas
+  // type freely; parsed to a list on change (project) or at start (Standalone).
+  const [scopeText, setScopeText] = useState('');
+
   const input = {
     flex: 1, minWidth: 0, background: C.inset, border: `1px solid ${C.lineStrong}`,
     borderRadius: '8px', color: C.text, fontFamily: F.mono, fontSize: '11.5px', padding: '7px 9px', outline: 'none'
   };
-  const start = () => { vm.startNewSession(scope); setOpen(false); };
+  const selectStyle = { ...input, width: '100%', fontFamily: F.body, cursor: 'pointer' };
+
+  const project = vm.projectId ? (vm.projects || []).find((p) => p.id === vm.projectId) : null;
+  const preview = project ? resolveEffectiveConfig(project.defaults || {}, vm.overrides) : null;
+  const previewScope = (preview && preview.effective && preview.effective.scope) || {};   // guard a partial defaults doc
+  const overridden = new Set(preview ? preview.overrideKeys : []);
+  const inheritedScope = (p) => (((p && p.defaults && p.defaults.scope && p.defaults.scope.rootDomains) || [])).join(' ');
+
+  // Discard any stale pending override when (re)opening the editor so the displayed scope
+  // always equals what Start applies (fixes cancel / settings-roundtrip leaving a hidden override).
+  const openEditor = () => {
+    vm.selectProject(vm.projectId || null);
+    setScopeText(project ? inheritedScope(project) : (vm.startScopeDefault || ''));
+    setOpen(true);
+  };
+  const pick = (v) => {
+    if (v === '__new__') { setCreating(true); return; }
+    setCreating(false);
+    vm.selectProject(v || null);
+    const p = v ? (vm.projects || []).find((x) => x.id === v) : null;
+    setScopeText(p ? inheritedScope(p) : '');   // prefill from the picked project's scope
+  };
+  const onScopeInput = (value) => {
+    setScopeText(value);
+    if (!project) return;                        // Standalone parses at start
+    const list = value.split(/[\s,]+/).filter(Boolean);
+    const inherited = (project.defaults && project.defaults.scope && project.defaults.scope.rootDomains) || [];
+    if (JSON.stringify(list) === JSON.stringify(inherited)) vm.clearOverride('scope', 'rootDomains');
+    else vm.setOverride('scope', 'rootDomains', list);
+  };
+  const toggleSubs = () => {
+    const next = !(previewScope.includeSubdomains !== false);
+    const inherited = !(project.defaults && project.defaults.scope && project.defaults.scope.includeSubdomains === false);
+    if (next === inherited) vm.clearOverride('scope', 'includeSubdomains');
+    else vm.setOverride('scope', 'includeSubdomains', next);
+  };
+  const start = () => { vm.startNewSession(scopeText); setOpen(false); };
+
   if (!open) {
     return (
-      <button onClick={() => { setScope(vm.startScopeDefault || ''); setOpen(true); }} style={{
+      <button onClick={openEditor} style={{
         marginTop: '8px', width: '100%', padding: '8px', borderRadius: '9px',
         border: `1px solid ${C.lineHover}`, background: C.control, color: C.textSoft,
         cursor: 'pointer', fontSize: '12px', fontWeight: 600
       }}>+ New session</button>
     );
   }
+
   return (
     <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-      <input value={scope} placeholder="root domains (e.g. app.target.com)" autofocus
-        onInput={(e) => setScope(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') start(); if (e.key === 'Escape') setOpen(false); }}
-        style={input} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <button onClick={vm.toggleSubdomains} style={{ display: 'flex', alignItems: 'center', gap: '6px', border: 'none', background: 'none', cursor: 'pointer' }}>
-          <span style={{ fontSize: '10.5px', color: C.muted }}>+ subdomains</span>
-          <Switch on={vm.includeSubdomains} variant="sm" />
-        </button>
-        <span style={{ flex: 1 }} />
-        <button onClick={() => setOpen(false)} style={{
-          padding: '7px 12px', borderRadius: '8px', border: `1px solid ${C.lineHover}`,
-          background: C.control, color: C.muted, cursor: 'pointer', fontSize: '11.5px', fontWeight: 600
-        }}>Cancel</button>
-        <button onClick={start} style={{
-          padding: '7px 14px', borderRadius: '8px', border: 'none',
-          background: C.lime, color: C.onLime, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700
-        }}>Start</button>
-      </div>
+      <select style={selectStyle} value={creating ? '__new__' : (vm.projectId || '')} onChange={(e) => pick(e.target.value)}>
+        <option value="">Standalone (no project)</option>
+        {(vm.projects || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        <option value="__new__">＋ New project…</option>
+      </select>
+
+      {creating && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <input value={newName} placeholder="project name" onInput={(e) => setNewName(e.target.value)} style={input} />
+          <input value={newScope} placeholder="root domains (e.g. *.target.com)" onInput={(e) => setNewScope(e.target.value)} style={input} />
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button onClick={async () => {
+              const r = await vm.createProject(newName, newScope);
+              if (r && r.success) { setCreating(false); setNewName(''); setNewScope(''); setScopeText(inheritedScope(r.project)); }
+            }} style={{ padding: '7px 14px', borderRadius: '8px', border: 'none', background: C.lime, color: C.onLime, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700 }}>Create</button>
+            <button onClick={() => setCreating(false)} style={{ padding: '7px 12px', borderRadius: '8px', border: `1px solid ${C.lineHover}`, background: C.control, color: C.muted, cursor: 'pointer', fontSize: '11.5px', fontWeight: 600 }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {!creating && project && preview && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <span style={{ fontSize: '10px', color: C.faint }}>
+            SCOPE · <span style={{ color: overridden.has('scope.rootDomains') ? C.amber : C.dim }}>{overridden.has('scope.rootDomains') ? 'overridden' : 'inherited'}</span>
+          </span>
+          <input value={scopeText} placeholder="root domains" onInput={(e) => onScopeInput(e.target.value)} style={input} />
+          <button onClick={toggleSubs} style={{ display: 'flex', alignItems: 'center', gap: '6px', border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}>
+            <span style={{ fontSize: '10.5px', color: C.muted }}>+ subdomains{overridden.has('scope.includeSubdomains') ? ' · overridden' : ''}</span>
+            <Switch on={previewScope.includeSubdomains !== false} variant="sm" />
+          </button>
+        </div>
+      )}
+
+      {!creating && !project && (
+        <>
+          <input value={scopeText} placeholder="root domains (e.g. app.target.com)" autofocus
+            onInput={(e) => setScopeText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') start(); if (e.key === 'Escape') setOpen(false); }}
+            style={input} />
+          <button onClick={vm.toggleSubdomains} style={{ display: 'flex', alignItems: 'center', gap: '6px', border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}>
+            <span style={{ fontSize: '10.5px', color: C.muted }}>+ subdomains</span>
+            <Switch on={vm.includeSubdomains} variant="sm" />
+          </button>
+        </>
+      )}
+
+      {!creating && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ flex: 1 }} />
+          <button onClick={() => setOpen(false)} style={{ padding: '7px 12px', borderRadius: '8px', border: `1px solid ${C.lineHover}`, background: C.control, color: C.muted, cursor: 'pointer', fontSize: '11.5px', fontWeight: 600 }}>Cancel</button>
+          <button onClick={start} style={{ padding: '7px 14px', borderRadius: '8px', border: 'none', background: C.lime, color: C.onLime, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700 }}>Start</button>
+        </div>
+      )}
     </div>
   );
 }
 
 export function HomeView({ vm }) {
   const cap = vm.capturing;
+  // Scope-badge colour tracks the real capture-gate state: red = wide open (all tabs),
+  // amber = no scope (capturing nothing), lime = scoped.
+  const scopeColor = vm.scopeMode === 'open' ? C.orange : vm.scopeMode === 'none' ? C.amber : C.lime;
   const statBox = (value, label, color) => (
     <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: '11px', padding: '12px' }}>
       <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: '22px', lineHeight: 1, color: color || C.text }}>{value}</div>
@@ -182,7 +265,7 @@ export function HomeView({ vm }) {
         }}>
           <span style={{ fontSize: '10px', color: C.faint, fontWeight: 700, letterSpacing: '0.6px' }}>SCOPE</span>
           <span style={{
-            fontFamily: F.mono, fontSize: '12px', color: C.lime, flex: 1, minWidth: 0,
+            fontFamily: F.mono, fontSize: '12px', color: scopeColor, flex: 1, minWidth: 0,
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
           }}>{vm.scope}</span>
           <button onClick={vm.toggleSubdomains} style={{

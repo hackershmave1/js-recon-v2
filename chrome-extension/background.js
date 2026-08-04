@@ -10,6 +10,8 @@ import { AuthContextTracker } from './modules/auth-context.js';
 import { WorkspaceClient } from './modules/workspace-client.js';
 import { buildExportData } from './modules/export-builder.js';
 import { classifyAsset, isThirdParty, matchesDenylist, countSecrets } from './modules/asset-classifier.js';
+import { listProjectsWithCache } from './modules/projects-cache.js';
+import { settingsFromConfig } from './modules/project-config.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -133,6 +135,12 @@ class JSExtractor {
         includeSubdomains: this.settings.includeSubdomains !== false
       });
     }
+    // Re-apply the persisted project/config snapshot so a respawn before the first upload still
+    // binds the session to its project (scope is re-applied above via its own flat keys).
+    const pendingSessionConfig = (await chrome.storage.local.get('pendingSessionConfig')).pendingSessionConfig;
+    if (pendingSessionConfig && typeof pendingSessionConfig === 'object') {
+      this.batchUploader.setConfig(pendingSessionConfig);
+    }
     this.isCapturing = this.settings.isCapturing || false;
 
     // --- durability wiring (S2): back the uploader with the persistent outbox and
@@ -247,6 +255,11 @@ class JSExtractor {
 
   // Noise denylist + out-of-scope "exclude" mode → drop before capture.
   shouldSkipUrl(url, documentUrl) {
+    // Never capture the recon workspace's own assets — the tool must not recon itself. Safety
+    // net even when scope is wide-open (e.g. after "Open Workspace" loads localhost:3000).
+    if (this.isWorkspaceUrl(url)) {
+      return true;
+    }
     if (matchesDenylist(url, this.settings.denyRules || [], this.settings.denyDefaultProfile !== false)) {
       return true;
     }
@@ -254,6 +267,16 @@ class JSExtractor {
       return true;
     }
     return false;
+  }
+
+  // True if the URL is served by the configured RECON Workspace origin (workspaceUrl / API base),
+  // so the extension never captures its own workspace/API JS. Fails open (false) on a bad URL.
+  isWorkspaceUrl(url) {
+    try {
+      return new URL(url).origin === new URL(this.workspaceClient.resolveApiBase()).origin;
+    } catch (e) {
+      return false;
+    }
   }
 
   async handleRequest(details) {
@@ -674,11 +697,17 @@ class JSExtractor {
   }
 
   isInScope(url) {
-    if (!this.settings.useDomainScope || 
+    // No explicit scope defined for this session?
+    if (!this.settings.useDomainScope ||
         this.settings.domainScopes.length === 0) {
-      return true;
+      // Fail CLOSED: capture NOTHING unless the operator has explicitly opted into
+      // wide-open capture. The old behaviour returned true here, which made capture
+      // silently follow whatever tab you were on — grabbing out-of-scope engagement
+      // data (e.g. docs.google.com) and even the workspace's own JS. "Capture every
+      // tab" is now an explicit, loudly-badged choice, not a silent default.
+      return this.settings.captureEverything === true;
     }
-    
+
     try {
       const urlObj = new URL(url);
       const hostname = urlObj.hostname.toLowerCase();
@@ -719,6 +748,7 @@ class JSExtractor {
     const result = await chrome.storage.local.get([
       'domainScopes',
       'useDomainScope',
+      'captureEverything',
       'performAnalysisOnUpload',
       'captureSourceMaps',
       'resolveDependencies',
@@ -736,6 +766,8 @@ class JSExtractor {
     return {
       domainScopes: result.domainScopes || [],
       useDomainScope: result.useDomainScope || false,
+      // Fail-closed default: with no scope AND this off, isInScope captures nothing.
+      captureEverything: result.captureEverything === true,
       performAnalysisOnUpload: result.performAnalysisOnUpload === true,
       captureSourceMaps: result.captureSourceMaps !== false,
       resolveDependencies: result.resolveDependencies !== false,
@@ -801,6 +833,8 @@ class JSExtractor {
       testConnection: () => this.workspaceClient.testConnection().then(sendResponse),
       analyzeSession: () => this.workspaceClient.analyzeSession().then(sendResponse),
       getAnalysisProgress: () => this.workspaceClient.getAnalysisProgress().then(sendResponse),
+      listProjects: () => this.listProjects(sendResponse),
+      createProject: (req) => this.workspaceClient.createProject(req.project).then(sendResponse),
       dynamicScriptDetected: (req) => this.handleDynamicScript(req, sender)
     };
 
@@ -867,24 +901,41 @@ class JSExtractor {
       lastFailureMessage: null
     };
 
-    // Apply the chosen scope: root domains both gate capture (reusing domainScopes)
-    // and seed the app-side session scope via the save-files metadata.
-    const scope = (request && request.scope) || {};
-    const rootDomains = normalizeRootDomains(scope.rootDomains);
-    const includeSubdomains = scope.includeSubdomains !== false;
-    // A blank scope must RESET capture gating (no else → the new session would silently
-    // inherit the previous session's domainScopes and capture out of its intended scope).
-    this.settings.domainScopes = rootDomains;
-    this.settings.useDomainScope = rootDomains.length > 0;
-    this.settings.includeSubdomains = includeSubdomains;
-    await chrome.storage.local.set({
-      domainScopes: this.settings.domainScopes,
-      useDomainScope: this.settings.useDomainScope,
-      includeSubdomains
-    });
-    this.batchUploader.setScope({ rootDomains, includeSubdomains });
+    // Apply the client-resolved effective config. The popup resolved (project.defaults +
+    // per-session overrides) and sent the snapshot; here we map it onto the flat capture-gate
+    // keys and the uploader. A blank/absent captureConfig leaves the non-scope gate as-is
+    // (back-compat with pre-project popups); a blank scope RESETS gating (settingsFromConfig
+    // emits domainScopes=[] / useDomainScope=false) so a new session can't silently inherit the
+    // previous session's domainScopes.
+    const req = request || {};
+    const reqScope = req.scope || {};
+    const rootDomains = normalizeRootDomains(reqScope.rootDomains);
+    const includeSubdomains = reqScope.includeSubdomains !== false;
+    const captureConfig = (req.captureConfig && typeof req.captureConfig === 'object') ? req.captureConfig : {};
+    const overrideKeys = Array.isArray(req.overrideKeys) ? req.overrideKeys : [];
+    const projectId = req.projectId || null;
 
-    sendResponse({ success: true, sessionId: this.sessionId, scope: { rootDomains, includeSubdomains } });
+    // Reconstruct the resolved effective config (scope + non-scope groups) and map to storage.
+    const effective = { scope: { rootDomains, includeSubdomains }, ...captureConfig };
+    const patch = settingsFromConfig(effective);
+    Object.assign(this.settings, patch);
+    // Persist the flat gate keys AND the project snapshot together. The snapshot lets a worker
+    // respawn before the first upload still bind the session to its project — scope persists
+    // via the flat keys, but projectId/captureConfig/overrideKeys need their own key.
+    await chrome.storage.local.set({ ...patch, pendingSessionConfig: { projectId, captureConfig, overrideKeys } });
+
+    // Uploader: scope + project/config snapshot + analyze flag (mirrors updateSettings's sync).
+    this.batchUploader.setScope({ rootDomains, includeSubdomains });
+    this.batchUploader.setConfig({ projectId, captureConfig, overrideKeys });
+    this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
+
+    sendResponse({
+      success: true,
+      sessionId: this.sessionId,
+      scope: { rootDomains, includeSubdomains },
+      projectId,
+      overrideKeys
+    });
   }
 
   async stopCapture(sendResponse) {
@@ -967,6 +1018,16 @@ class JSExtractor {
     this.batchUploader.setEndpoint(this.workspaceClient.resolveApiBase());
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
     sendResponse({ success: true });
+  }
+
+  async listProjects(sendResponse) {
+    // Live list refreshes the cache; a workspace blip falls back to the cached list so the
+    // popup's engagement picker still renders. Never throws.
+    const { projects, source } = await listProjectsWithCache(
+      () => this.workspaceClient.listProjects(),
+      chrome.storage.local
+    );
+    sendResponse({ success: true, projects, source });
   }
 
   getExportData(sendResponse) {

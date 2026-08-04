@@ -6,6 +6,7 @@ import { Toast } from './components/ui.jsx';
 import { HomeView } from './components/HomeView.jsx';
 import { SettingsView } from './components/SettingsView.jsx';
 import * as api from './api.js';
+import { resolveEffectiveConfig, splitEffective, configFromSettings } from '../../modules/project-config.js';
 
 const NOISE = new Set(['lib', 'cms', 'tracker']);
 
@@ -14,7 +15,7 @@ const NOISE = new Set(['lib', 'cms', 'tracker']);
 const FALLBACK_SETTINGS = {
   includeSubdomains: true, muteNoise: true, outOfScopeMode: 'tag', maxAssetMb: 8,
   denyDefaultProfile: true, performAnalysisOnUpload: false, captureAuthContext: true,
-  workspaceUrl: '', domainScopes: [], useDomainScope: false,
+  workspaceUrl: '', domainScopes: [], useDomainScope: false, captureEverything: false,
   denyRules: [
     { tag: 'CMS', pattern: '/wp-content/plugins/*' },
     { tag: 'CMS', pattern: '/wp-includes/*' },
@@ -63,6 +64,11 @@ export function App() {
   // Decoupled analysis: status of the on-demand backend job + its per-file progress,
   // which drives the captures feed's ingested→analyzing→analyzed lifecycle.
   const [analysis, setAnalysis] = useState({ status: 'idle', counts: null, files: [] });
+  // Project-scoped capture: cached engagement list, the chosen project (null => Standalone),
+  // and the sparse per-session override doc the New-Session editor builds.
+  const [projects, setProjects] = useState([]);
+  const [projectId, setProjectId] = useState(null);
+  const [overrides, setOverrides] = useState({});
   const toastTimer = useRef(null);
 
   // Local settings is the edit source of truth once loaded; polling refreshes only
@@ -87,6 +93,8 @@ export function App() {
       if (inFlight > 0) setAnalysis({ status: 'running', counts: c, files: res.job.files || [] });
       else if ((c.completed || 0) > 0 || (c.failed || 0) > 0) setAnalysis({ status: 'done', counts: c, files: res.job.files || [] });
     });
+    // Load engagements for the New-Session picker (cached in the worker; refreshed on open).
+    api.listProjects().then((res) => { if (res && Array.isArray(res.projects)) setProjects(res.projects); });
     const id = setInterval(refresh, 2000);
     // If the worker never answers with settings, fall back so the UI still renders.
     const fb = setTimeout(() => adoptSettings(FALLBACK_SETTINGS), 1000);
@@ -139,18 +147,35 @@ export function App() {
   // clears prior captures, and tags subsequent uploads so the app-side session shows this
   // scope. We mirror the resolved scope locally so the popup's scope display stays in sync.
   async function startNewSession(rawScope) {
-    const rootDomains = String(rawScope || '').split(/[\s,]+/).filter(Boolean);
-    const includeSubdomains = settings.includeSubdomains !== false;
-    const res = await api.newSession({ rootDomains, includeSubdomains });
+    // The popup is the resolving client: resolve the effective config from the project
+    // defaults (or the current global settings, for Standalone) + the sparse overrides, and
+    // send that snapshot. The background applies it to the capture gate and stamps it onto
+    // uploads (spec §7/§8.5); it does not re-resolve.
+    const selected = projectId ? projects.find((p) => p.id === projectId) : null;
+    let defaults = selected ? selected.defaults : configFromSettings(settings || {});
+    let ovr = overrides;
+    if (!selected) {
+      // Standalone: bake the ad-hoc scope into the resolved DEFAULTS (not as an override) so
+      // override_keys stays [] (spec §4) while capture still runs under the typed scope.
+      const rootDomains = String(rawScope || '').split(/[\s,]+/).filter(Boolean);
+      defaults = { ...defaults, scope: { ...(defaults.scope || {}), rootDomains, includeSubdomains: settings?.includeSubdomains !== false } };
+      ovr = {};
+    }
+
+    const { effective, overrideKeys } = resolveEffectiveConfig(defaults, ovr);
+    const { scope, captureConfig } = splitEffective(effective);
+
+    const res = await api.newSession({ projectId: projectId || null, scope, captureConfig, overrideKeys });
     if (res?.success) {
-      const resolved = res.scope?.rootDomains || rootDomains;
+      // Mirror the applied scope locally so the read-only SCOPE bar updates.
       setSettings((prev) => ({
         ...(prev || {}),
-        domainScopes: resolved,
-        useDomainScope: resolved.length > 0,
-        includeSubdomains: res.scope?.includeSubdomains !== false
+        domainScopes: scope.rootDomains,
+        useDomainScope: scope.rootDomains.length > 0,
+        includeSubdomains: scope.includeSubdomains
       }));
-      showToast('New session started');
+      setOverrides({});
+      showToast(selected ? `New session · ${selected.name}` : 'New standalone session');
     } else {
       showToast('Could not start session');
     }
@@ -183,7 +208,15 @@ export function App() {
   }
 
   function openWorkspace() {
-    const url = settings?.workspaceUrl || 'http://localhost:3000';
+    const base = settings?.workspaceUrl || 'http://localhost:3000';
+    // Deep-link the current capture session so the workspace opens INTO it instead of
+    // defaulting to whatever session is newest (a recon crawl, a second engagement, or
+    // the workspace's own self-capture). The session id is the backend session's primary
+    // key, so ?session=<id> always resolves. Bare URL when no session id is known yet.
+    const sid = status?.sessionId;
+    const url = sid
+      ? `${base}${base.includes('?') ? '&' : '?'}session=${encodeURIComponent(sid)}`
+      : base;
     api.openTab(url);
   }
 
@@ -222,9 +255,17 @@ export function App() {
   }
 
   // ---- view-models ----
-  const scopeText = settings.useDomainScope && (settings.domainScopes || []).length
-    ? settings.domainScopes.join(', ')
-    : (activeHost || 'auto (active tab)');
+  // Honest, tri-state scope label. It reflects what the CAPTURE GATE (isInScope) will
+  // actually do — never the active tab, which is what made the scope look like it
+  // "followed" whatever tab you were on.
+  const wideOpen = settings.captureEverything === true;
+  const hasScope = settings.useDomainScope && (settings.domainScopes || []).length > 0;
+  const scopeMode = wideOpen ? 'open' : hasScope ? 'scoped' : 'none';
+  const scopeText = wideOpen
+    ? 'WIDE OPEN · all tabs'
+    : hasScope
+      ? settings.domainScopes.join(', ')
+      : 'no scope · capturing nothing';
 
   // Per-file analysis status (by URL) → the captures feed's lifecycle token.
   const analysisByUrl = new Map((analysis.files || []).map((f) => [f.url, f.status]));
@@ -257,13 +298,46 @@ export function App() {
     host: status.host || activeHost || '—',
     session: (status.sessionId || '').slice(0, 8) || '—',
     scope: scopeText,
+    scopeMode,
     includeSubdomains: settings.includeSubdomains !== false,
     startNewSession,
     startScopeDefault: (settings.domainScopes || []).join(', ') || activeHost || '',
+    // Project-scoped capture: engagement picker + override editor state.
+    projects,
+    projectId,
+    selectProject: (id) => { setProjectId(id || null); setOverrides({}); },
+    overrides,
+    setOverride: (section, key, value) =>
+      setOverrides((prev) => ({ ...prev, [section]: { ...(prev[section] || {}), [key]: value } })),
+    clearOverride: (section, key) =>
+      setOverrides((prev) => {
+        const next = { ...prev, [section]: { ...(prev[section] || {}) } };
+        delete next[section][key];
+        if (Object.keys(next[section]).length === 0) delete next[section];
+        return next;
+      }),
+    createProject: async (name, rootDomains) => {
+      const cleanName = String(name || '').trim();
+      if (!cleanName) { showToast('Project name required'); return { success: false }; }
+      const res = await api.createProject({
+        name: cleanName,
+        defaults: { scope: { rootDomains: String(rootDomains || '').split(/[\s,]+/).filter(Boolean) } }
+      });
+      if (res?.success && res.project) {
+        setProjects((prev) => [res.project, ...prev]);
+        setProjectId(res.project.id);
+        setOverrides({});
+        showToast(`Project created · ${res.project.name}`);
+      } else {
+        showToast(res?.error ? `Create failed: ${res.error}` : 'Could not create project');
+      }
+      return res;
+    },
     stats: { js: status.fileCount || 0, maps: status.mapsCount || 0, secrets: status.secretCount || 0 },
     captures, mutedCount,
     analysis, analyzeNow, canAnalyze: (status.fileCount || 0) > 0,
     toggles: [
+      { key: 'captureEverything', label: 'Capture every tab (ignore scope)', on: settings.captureEverything === true },
       { key: 'performAnalysisOnUpload', label: 'Analyze on upload', on: settings.performAnalysisOnUpload === true },
       { key: 'muteNoise', label: 'Mute plugins & trackers', on: muteNoise },
       { key: 'captureAuthContext', label: 'Capture auth context', on: settings.captureAuthContext !== false }

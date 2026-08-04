@@ -13,6 +13,10 @@ export class BatchUploader {
     // Session scope (root domains + include-subdomains) chosen when a new session is
     // started; carried into save-files metadata so the backend seeds the session's scope.
     this.scope = null;
+    // Resolved project binding + non-scope config snapshot chosen when a new session starts;
+    // stamped onto save-files metadata so the backend binds it on session create (mirrors
+    // this.scope / scopeMetadata). null keeps today's payload (no project keys).
+    this.config = null;
     this.isUploading = false;
     this.isFlushing = false;
     // Durable outbox (IndexedDB) so queued uploads survive a service-worker respawn.
@@ -212,7 +216,9 @@ export class BatchUploader {
         // backend. Analysis is then run on demand (POST /api/sessions/{id}/analyze/start).
         disableAnalysis: !this.performAnalysisOnUpload,
         // Explicit session scope (only honoured by save_files on session create).
-        ...this.scopeMetadata()
+        ...this.scopeMetadata(),
+        // Project binding + resolved non-scope config snapshot (also create-only on the backend).
+        ...this.configMetadata()
       },
       files: files
     };
@@ -276,6 +282,22 @@ export class BatchUploader {
     if (this.scope && typeof this.scope.includeSubdomains === 'boolean') {
       out.includeSubdomains = this.scope.includeSubdomains;
     }
+    return out;
+  }
+
+  setConfig(config) {
+    // config: { projectId, captureConfig, overrideKeys } | null
+    this.config = (config && typeof config === 'object') ? config : null;
+  }
+
+  configMetadata() {
+    const out = {};
+    if (!this.config) return out;
+    if (this.config.projectId) out.projectId = this.config.projectId;   // null/'' omitted -> standalone
+    if (this.config.captureConfig && typeof this.config.captureConfig === 'object') {
+      out.captureConfig = this.config.captureConfig;
+    }
+    if (Array.isArray(this.config.overrideKeys)) out.overrideKeys = this.config.overrideKeys;
     return out;
   }
 
