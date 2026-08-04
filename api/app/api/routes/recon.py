@@ -16,10 +16,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from ...db import get_db
 from ...models import Session as DbSession
 from ...models import Job as DbJob
+from ...models import Project as DbProject
 from ...session_scope import derive_root_domains
 from ...services.binary_locator import resolve_binary_path
 from ...services.recon_job_runner import ReconJobRunner, ReconRunnerOptions
 from ...services.security_utils import SecurityValidator
+from .ingestion import safe_project_uuid
 
 
 router = APIRouter()
@@ -46,6 +48,9 @@ class ReconJobStartRequest(BaseModel):
     urls: list[str] = Field(default_factory=list)
     sessionId: str | None = None
     sessionName: str | None = Field(default=None, min_length=1, max_length=120)
+    # Optional engagement binding: the workspace passes the active project's id so a
+    # recon launched inside an engagement lands in it (null/omitted → standalone).
+    projectId: str | None = None
     sameOriginOnly: bool = True
     maxAssets: int = Field(default=300, ge=1, le=5000)
     maxDepth: int = Field(default=2, ge=0, le=5)
@@ -413,6 +418,17 @@ def start_recon_job(request: ReconJobStartRequest, db: Session = Depends(get_db)
     session_id = str(session_uuid)
     session_name = (request.sessionName or "").strip() or None
 
+    # Resolve the optional engagement binding once, up front. The workspace only ever
+    # sends a real project id (or null), but a since-deleted project could still be
+    # referenced; binding a non-existent project_id would hit the FK and 500, aborting
+    # the crawl before it starts, so a valid-but-missing project is coerced to standalone
+    # (mirrors save-files ingestion). A malformed id is a 400 via safe_project_uuid —
+    # unreachable from the UI, but a clean client error rather than a silent bind.
+    bind_project_id = safe_project_uuid(request.projectId)
+    if bind_project_id is not None and not db.query(DbProject.id).filter(DbProject.id == bind_project_id).first():
+        logger.warning("recon start: unknown projectId %s; session %s will be standalone", bind_project_id, session_uuid)
+        bind_project_id = None
+
     db_session_obj = db.query(DbSession).filter(DbSession.id == session_uuid).first()
     created_session = False
     if not db_session_obj:
@@ -425,6 +441,9 @@ def start_recon_job(request: ReconJobStartRequest, db: Session = Depends(get_db)
             # Seed the session scope from the crawl's targets + same-origin setting.
             root_domains=derive_root_domains(validated_targets),
             include_subdomains=not request.sameOriginOnly,
+            # Bind to the active engagement on create only (a resumed/continued crawl
+            # keeps whatever project it already had — appends never re-bind).
+            project_id=bind_project_id,
         )
         db.add(db_session_obj)
     elif session_name:

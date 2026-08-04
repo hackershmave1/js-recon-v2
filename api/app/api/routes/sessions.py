@@ -21,11 +21,13 @@ from ...models import FileAnalysis as DbFileAnalysis
 from ...models import SourceMap as DbSourceMap
 from ...models import Dependency as DbDependency
 from ...models import Job as DbJob
+from ...models import Project as DbProject
 from ...services.comprehensive_extractor import ComprehensiveExtractor
 from ...services.file_analysis_persistence import get_or_create_analyzing_file_analysis
 from ...services.secret_rollup import SecretRollupService
 from ...services.sourcemap_validation import derive_validation_state, summarize_validation
 from .recon import get_latest_session_capture_coverage
+from .ingestion import safe_project_uuid
 from ...session_scope import normalize_root_domains, scope_payload
 from ...project_config import validate_config
 
@@ -48,6 +50,9 @@ class SessionUpdateRequest(BaseModel):
     includeSubdomains: bool | None = None
     captureConfig: dict | None = None
     overrideKeys: list[str] | None = None
+    # (Re)assign the session's engagement. Presence-detected in the handler: an
+    # explicit null unassigns (→ standalone); an absent field leaves it untouched.
+    projectId: str | None = None
 
 
 class SessionBulkDeleteRequest(BaseModel):
@@ -693,6 +698,15 @@ def update_session(session_id: str, request: SessionUpdateRequest, db: Session =
         session.capture_config = request.captureConfig
     if request.overrideKeys is not None:
         session.override_keys = list(request.overrideKeys)
+    # Engagement (re)assignment. Presence-detected so an explicit null unassigns
+    # (→ standalone) while an absent field leaves the binding untouched. An unknown
+    # project is a 404 — unlike the automated ingestion path, a manual move should
+    # fail loudly rather than silently drop the session to standalone.
+    if "projectId" in request.model_fields_set:
+        pid = safe_project_uuid(request.projectId)
+        if pid is not None and not db.query(DbProject.id).filter(DbProject.id == pid).first():
+            raise HTTPException(status_code=404, detail="Project not found")
+        session.project_id = pid
 
     db.commit()
     db.refresh(session)
