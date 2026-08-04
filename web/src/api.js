@@ -98,6 +98,10 @@ export async function deleteSession(sessionId) {
 export const renameSession = (sessionId, name) => patchSession(sessionId, { name });
 export const setSessionScope = (sessionId, rootDomains, includeSubdomains) =>
   patchSession(sessionId, { rootDomains, includeSubdomains });
+// Move a session into an engagement, or unassign it (projectId null → Standalone).
+// null on error (incl. 404 for an unknown project) so callers roll back optimistic UI.
+export const setSessionProject = (sessionId, projectId) =>
+  patchSession(sessionId, { projectId: projectId || null });
 
 // PATCH /api/sessions/{id} — partial update (name and/or scope). null on error.
 async function patchSession(sessionId, patch) {

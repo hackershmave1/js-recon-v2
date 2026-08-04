@@ -165,7 +165,9 @@ export function App() {
   // immediate list refresh so the job appears without waiting for the poll tick.
   const onStartRecon = async (payload) => {
     setReconBusy(true);
-    const res = await api.startReconJob(payload);
+    // File the run under the engagement the operator is working in (null = Standalone).
+    // Bind-on-create only: the backend ignores this for an existing/resumed session.
+    const res = await api.startReconJob({ ...payload, projectId: activeProjectId });
     setReconBusy(false);
     if (!res || !res.ok) { flash((res && res.error) || 'Could not start recon'); return; }
     setNewReconOpen(false);
@@ -220,6 +222,17 @@ export function App() {
     const res = await api.deleteSession(sessionId);
     if (!res) { setSessions(prev); setSelectedId(prevSelected); flash('Could not delete session — restored'); }
     else { setReloadNonce((n) => n + 1); flash('Session deleted'); }
+  };
+  // Move a session into an engagement (projectId) or Standalone (null). Optimistic:
+  // reflect the binding so the project filter re-derives immediately; roll back on failure
+  // (e.g. the project was deleted server-side → 404 → api returns null).
+  const onAssignSession = async (sessionId, projectId) => {
+    const prev = sessions;
+    setSessions((list) => list.map((s) => (s.id === sessionId ? { ...s, projectId: projectId || null } : s)));
+    const res = await api.setSessionProject(sessionId, projectId || null);
+    if (!res) { setSessions(prev); flash('Could not move session — reverted'); return; }
+    const name = projectId ? (projects.find((p) => p.id === projectId) || {}).name : null;
+    flash(name ? `Moved to ${name}` : 'Moved to Standalone');
   };
   // Scope edit: persist root domains + include-subdomains, then mirror the server's
   // normalized result back into the session list so cards/Overview update immediately.
@@ -284,6 +297,10 @@ export function App() {
   const activeProject = activeProjectId ? projects.find((p) => p.id === activeProjectId) : null;
   const visibleSessions = activeProjectId ? sessions.filter((s) => s.projectId === activeProjectId) : sessions;
   const sessionsVm = buildSessionsVm(visibleSessions, jobs, selectedId);
+  // Inside an engagement, loose (project-less) sessions surface in an "Unassigned"
+  // section so they can be adopted — an engagement is never a dead-end. Standalone
+  // (no active project) already shows everything, so there's nothing to surface.
+  const unassignedVm = activeProjectId ? buildSessionsVm(sessions.filter((s) => !s.projectId), jobs, selectedId) : [];
 
   // ---- overview view-model ----
   const job = selected ? latestJobForSession(jobs, selected.id) : null;
@@ -353,11 +370,14 @@ export function App() {
                 <button onClick={() => setView('projects')} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 11px', borderRadius: '8px', border: `1px solid ${C.lineStrong}`, background: C.control, color: C.muted, cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>‹ Projects</button>
                 <span style={{ fontSize: '12.5px', color: C.faint }}>{activeProject ? activeProject.name : 'Standalone · all sessions'}</span>
               </div>
-              <Sessions sessions={sessionsVm} onNewRecon={() => setNewReconOpen(true)}
+              <Sessions sessions={sessionsVm} unassigned={unassignedVm}
+                projects={projects} activeProject={activeProject}
+                onNewRecon={() => setNewReconOpen(true)}
                 onOpen={(s) => { setSelectedId(s.id); setView('overview'); }}
                 onStop={onStopSession} onResume={onResumeSession}
                 onRename={onRenameSession} onDelete={onDeleteSession}
-                onEditScope={(s) => setScopeTarget(s)} />
+                onEditScope={(s) => setScopeTarget(s)}
+                onAssign={onAssignSession} onViewAll={onStandalone} />
             </>
           )}
           {view === 'findings' && (
@@ -379,7 +399,7 @@ export function App() {
       </main>
       {activityOpen && <ActivityDrawer jobs={jobs} onClose={() => setActivityOpen(false)} onStop={onStopJob} />}
       {searchOpen && <SearchPalette findings={findings} onClose={() => setSearchOpen(false)} onPick={onSearchPick} />}
-      {newReconOpen && <NewReconModal onClose={() => setNewReconOpen(false)} onStart={onStartRecon} busy={reconBusy} />}
+      {newReconOpen && <NewReconModal onClose={() => setNewReconOpen(false)} onStart={onStartRecon} busy={reconBusy} engagement={activeProject ? activeProject.name : null} />}
       {exportOpen && <ExportModal findings={findings} target={targetHost} onClose={() => setExportOpen(false)} onDone={(msg) => { setExportOpen(false); flash(msg); }} />}
       {scopeTarget && <ScopeModal session={scopeTarget} busy={scopeBusy} onClose={() => setScopeTarget(null)} onSave={onSaveScope} />}
       {toast && (

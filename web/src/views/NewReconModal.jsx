@@ -27,7 +27,7 @@ function Toggle({ on, label, onClick }) {
 const DEPTHS = [0, 1, 2, 3, 4, 5];
 const ASSET_CAPS = [100, 300, 600, 1000];
 
-export function NewReconModal({ onClose, onStart, busy }) {
+export function NewReconModal({ onClose, onStart, busy, engagement }) {
   const [url, setUrl] = useState('');
   const [includeSubdomains, setIncludeSubdomains] = useState(false);
   const [maxDepth, setMaxDepth] = useState(2);
@@ -65,6 +65,9 @@ export function NewReconModal({ onClose, onStart, busy }) {
         <div style={{ padding: '20px 24px', borderBottom: `1px solid ${C.line}` }}>
           <h2 style={{ fontFamily: F.display, fontWeight: 700, fontSize: '19px', margin: 0 }}>New Recon Run</h2>
           <div style={{ fontSize: '12.5px', color: C.faint, marginTop: '3px' }}>Passive discovery → fetch → analyze. You can keep working while it runs.</div>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '11px', padding: '5px 11px', borderRadius: '20px', border: `1px solid ${engagement ? 'rgba(205,235,69,0.3)' : C.lineStrong}`, background: engagement ? 'rgba(205,235,69,0.08)' : C.inset, fontSize: '11.5px', fontWeight: 600, color: engagement ? C.lime : C.faint }}>
+            {engagement ? `Filed under ${engagement}` : 'Standalone · not filed under an engagement'}
+          </div>
         </div>
 
         <div style={{ padding: '22px 24px' }}>

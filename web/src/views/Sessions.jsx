@@ -1,7 +1,9 @@
 // Sessions.jsx — grid of recon targets and their latest runs. Each card shows the
 // session scope (root domains + subdomain rule) and carries inline actions: Resume
-// (continue crawl), Stop (in-flight job), Scope (edit), Rename (inline edit), and
-// Delete (two-step confirm). Mirrors prototype SESSIONS.
+// (continue crawl), Stop (in-flight job), Move (reassign to an engagement / Standalone),
+// Scope (edit), Rename (inline edit), and Delete (two-step confirm). When a project is
+// open, a second "Unassigned sessions" section lets loose sessions be adopted into it,
+// so an engagement is never a dead-end even before anything is bound. Mirrors SESSIONS.
 import { useState } from 'preact/hooks';
 import { C, F } from '../theme.js';
 import { PlusIcon, PlayIcon, StopIcon, EditIcon, TrashIcon, CheckIcon, CloseIcon, FocusIcon } from '../icons.jsx';
@@ -14,7 +16,20 @@ function ActionButton({ onClick, color, title, children }) {
   );
 }
 
-function SessionCard({ s, onOpen, onStop, onResume, onRename, onDelete, onEditScope }) {
+// Reassign control on every card. Its value reflects the current binding, so it also
+// reads as a "which engagement is this in?" indicator. Empty value = Standalone.
+function MoveSelect({ current, projects, onChange }) {
+  return (
+    <select value={current || ''} onChange={(e) => onChange(e.target.value || null)}
+      title="Move to an engagement"
+      style={{ maxWidth: '160px', padding: '5px 8px', borderRadius: '7px', border: `1px solid ${C.lineStrong}`, background: C.control, color: current ? C.lime : C.muted, cursor: 'pointer', fontSize: '11px', fontWeight: 600, fontFamily: F.body }}>
+      <option value="">Standalone</option>
+      {(projects || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+    </select>
+  );
+}
+
+function SessionCard({ s, projects, quickAssignTo, onOpen, onStop, onResume, onRename, onDelete, onEditScope, onAssign }) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(s.name || '');
   const [confirming, setConfirming] = useState(false);
@@ -54,7 +69,7 @@ function SessionCard({ s, onOpen, onStop, onResume, onRename, onDelete, onEditSc
         <div style={{ fontSize: '10.5px', color: C.faint, marginTop: '7px', fontFamily: F.mono }}>{s.cov}% analyzed</div>
       </button>
 
-      <div onClick={stop} style={{ display: 'flex', alignItems: 'center', gap: '7px', marginTop: '14px', paddingTop: '13px', borderTop: `1px solid ${C.line}` }}>
+      <div onClick={stop} style={{ display: 'flex', alignItems: 'center', gap: '7px', marginTop: '14px', paddingTop: '13px', borderTop: `1px solid ${C.line}`, flexWrap: 'wrap' }}>
         {confirming ? (
           <>
             <span style={{ flex: 1, fontSize: '11.5px', color: C.textSoft }}>Delete this session and all its files?</span>
@@ -71,7 +86,9 @@ function SessionCard({ s, onOpen, onStop, onResume, onRename, onDelete, onEditSc
           <>
             {s.running && <ActionButton onClick={() => onStop(s.jobId)} color={C.amber} title="Stop the running crawl"><StopIcon size={11} />Stop</ActionButton>}
             {s.canResume && <ActionButton onClick={() => onResume(s.resumePayload)} color={C.lime} title="Continue crawling this target"><PlayIcon size={11} />Continue</ActionButton>}
+            {quickAssignTo && <ActionButton onClick={() => onAssign(s.id, quickAssignTo.id)} color={C.lime} title={`Add to ${quickAssignTo.name}`}><PlusIcon size={11} />Add to {quickAssignTo.name}</ActionButton>}
             <span style={{ flex: 1 }} />
+            {(projects || []).length > 0 && <MoveSelect current={s.projectId} projects={projects} onChange={(pid) => onAssign(s.id, pid)} />}
             <ActionButton onClick={() => onEditScope(s)} title="Edit scope (root domains + subdomains)"><FocusIcon size={11} />Scope</ActionButton>
             <ActionButton onClick={() => { setName(s.name || ''); setRenaming(true); }} title="Rename session"><EditIcon size={11} />Rename</ActionButton>
             <ActionButton onClick={() => setConfirming(true)} title="Delete session"><TrashIcon size={11} /></ActionButton>
@@ -82,7 +99,12 @@ function SessionCard({ s, onOpen, onStop, onResume, onRename, onDelete, onEditSc
   );
 }
 
-export function Sessions({ sessions, onNewRecon, onOpen, onStop, onResume, onRename, onDelete, onEditScope }) {
+const gridStyle = { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '14px' };
+
+export function Sessions({ sessions, unassigned = [], projects = [], activeProject, onNewRecon, onOpen, onStop, onResume, onRename, onDelete, onEditScope, onAssign, onViewAll }) {
+  const boundEmpty = sessions.length === 0;
+  const cardProps = { projects, onOpen, onStop, onResume, onRename, onDelete, onEditScope, onAssign };
+
   return (
     <div style={{ padding: '26px 30px 60px', maxWidth: '1180px', animation: 'dropin .25s ease' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
@@ -95,18 +117,37 @@ export function Sessions({ sessions, onNewRecon, onOpen, onStop, onResume, onRen
         </button>
       </div>
 
-      {sessions.length === 0 && (
+      {boundEmpty && (activeProject ? (
+        <div style={{ padding: '44px 20px', textAlign: 'center', color: C.faint, border: `1px dashed ${C.lineStrong}`, borderRadius: '14px' }}>
+          <div style={{ fontFamily: F.display, fontSize: '16px', color: C.muted, marginBottom: '6px' }}>No sessions in {activeProject.name} yet</div>
+          <div style={{ fontSize: '13px', marginBottom: '14px' }}>Start a New Recon (it's filed here automatically){unassigned.length ? ', adopt an unassigned session below,' : ''} or work across every session.</div>
+          <button onClick={onViewAll} style={{ padding: '9px 16px', borderRadius: '9px', border: `1px solid ${C.lineHover}`, background: C.control, color: C.textSoft, cursor: 'pointer', fontSize: '12.5px', fontWeight: 600 }}>View all sessions</button>
+        </div>
+      ) : (
         <div style={{ padding: '70px 20px', textAlign: 'center', color: C.faint }}>
           <div style={{ fontFamily: F.display, fontSize: '16px', color: C.muted, marginBottom: '6px' }}>No sessions yet</div>
           <div style={{ fontSize: '13px' }}>Capture JS with the extension or start a New Recon to populate this.</div>
         </div>
+      ))}
+
+      {!boundEmpty && (
+        <div style={gridStyle}>
+          {sessions.map((s) => <SessionCard key={s.id} s={s} {...cardProps} />)}
+        </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '14px' }}>
-        {sessions.map((s) => (
-          <SessionCard key={s.id} s={s} onOpen={onOpen} onStop={onStop} onResume={onResume} onRename={onRename} onDelete={onDelete} onEditScope={onEditScope} />
-        ))}
-      </div>
+      {activeProject && unassigned.length > 0 && (
+        <div style={{ marginTop: boundEmpty ? '22px' : '30px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '9px', marginBottom: '4px' }}>
+            <h2 style={{ fontFamily: F.display, fontWeight: 700, fontSize: '16px', margin: 0, color: C.textSoft }}>Unassigned sessions</h2>
+            <span style={{ fontFamily: F.mono, fontSize: '11px', color: C.muted, background: C.control2, padding: '2px 8px', borderRadius: '20px' }}>{unassigned.length}</span>
+          </div>
+          <div style={{ fontSize: '12.5px', color: C.faint, marginBottom: '14px' }}>Not in {activeProject.name}. Add one to group it under this engagement.</div>
+          <div style={gridStyle}>
+            {unassigned.map((s) => <SessionCard key={s.id} s={s} quickAssignTo={activeProject} {...cardProps} />)}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

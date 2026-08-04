@@ -27,7 +27,7 @@ function ActionButton({ onClick, color, title, children }) {
   );
 }
 
-function ProjectCard({ p, sessionCount, onOpen, onRename, onRescope, onDelete }) {
+function ProjectCard({ p, sessionCount, fileCount, onOpen, onRename, onRescope, onDelete }) {
   const [mode, setMode] = useState(null);   // null | 'rename' | 'scope' | 'confirm'
   const [name, setName] = useState(p.name || '');
   const doms = scopeOf(p);
@@ -59,6 +59,7 @@ function ProjectCard({ p, sessionCount, onOpen, onRename, onRescope, onDelete })
 
         <div style={{ display: 'flex', gap: '22px' }}>
           <div><div style={{ fontFamily: F.display, fontWeight: 700, fontSize: '20px', color: C.text }}>{sessionCount}</div><div style={{ fontSize: '10.5px', color: C.faint }}>sessions</div></div>
+          <div><div style={{ fontFamily: F.display, fontWeight: 700, fontSize: '20px', color: C.text }}>{fileCount}</div><div style={{ fontSize: '10.5px', color: C.faint }}>files</div></div>
           <div style={{ marginLeft: 'auto', textAlign: 'right' }}><div style={{ fontSize: '11px', color: C.muted, fontFamily: F.mono }}>{relTime(p.createdAt)}</div><div style={{ fontSize: '10.5px', color: C.faint }}>created</div></div>
         </div>
       </button>
@@ -107,6 +108,9 @@ export function Projects({ projects, sessions, onOpenProject, onStandalone, onCr
   const [newName, setNewName] = useState('');
   const [newScope, setNewScope] = useState('');
   const countFor = (id) => (sessions || []).filter((s) => s.projectId === id).length;
+  // Rollup summed from the already-loaded session list (no extra API scan): total files
+  // captured across the engagement's sessions.
+  const filesFor = (id) => (sessions || []).filter((s) => s.projectId === id).reduce((n, s) => n + (s.fileCount || 0), 0);
   const looseCount = (sessions || []).filter((s) => !s.projectId).length;
 
   const submit = () => {
@@ -159,7 +163,7 @@ export function Projects({ projects, sessions, onOpenProject, onStandalone, onCr
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '14px' }}>
         {projects.map((p) => (
-          <ProjectCard key={p.id} p={p} sessionCount={countFor(p.id)} onOpen={onOpenProject} onRename={onRename} onRescope={onRescope} onDelete={onDelete} />
+          <ProjectCard key={p.id} p={p} sessionCount={countFor(p.id)} fileCount={filesFor(p.id)} onOpen={onOpenProject} onRename={onRename} onRescope={onRescope} onDelete={onDelete} />
         ))}
       </div>
     </div>

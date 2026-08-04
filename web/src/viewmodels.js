@@ -46,6 +46,7 @@ export function buildSessionsVm(sessions, jobs, selectedId) {
     const includeSubdomains = s.includeSubdomains !== false;
     return {
       id: s.id, host: hostOf(s), name: s.name || '',
+      projectId: s.projectId || null,
       rootDomains, includeSubdomains, scopeLabel: scopeLabelOf(rootDomains, includeSubdomains),
       files: fileCount,
       endpoints: summary.endpoints ?? summary.endpointCount ?? 0,
