@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlparse
 
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
+from sqlalchemy.exc import IntegrityError
 
 from ..models.asset_graph import AssetNode, AssetEdge, DiscoveryMethod, AssetType
 from ..models.session import Session as SessionModel
@@ -93,7 +94,11 @@ class AssetGraphService:
             logger.debug(f"Asset {target_url} already exists as node {existing_node.id}")
             target_node = existing_node
         else:
-            # Create new node
+            # Create new node. Wrap the INSERT in a SAVEPOINT so that a concurrent
+            # discoverer racing us on (session_id, url, asset_type) — both SELECT-miss
+            # above, both INSERT — adopts the winner's node instead of silently
+            # creating a duplicate (guarded by uq_asset_nodes_session_url_type). Inert
+            # for the single-writer path; the surrounding transaction survives.
             target_node = AssetNode(
                 session_id=session_id,
                 file_id=file_id,
@@ -105,10 +110,24 @@ class AssetGraphService:
                 processed="pending",
                 asset_metadata=context or {}
             )
-            
-            self.db.add(target_node)
-            self.db.flush()  # Get the ID
-            logger.info(f"Created new asset node {target_node.id} for {target_url}")
+
+            try:
+                with self.db.begin_nested():
+                    self.db.add(target_node)
+                    self.db.flush()  # Get the ID
+                logger.info(f"Created new asset node {target_node.id} for {target_url}")
+            except IntegrityError:
+                # Lost the insert race: adopt the node the concurrent writer committed.
+                target_node = self.db.query(AssetNode).filter(
+                    and_(
+                        AssetNode.session_id == session_id,
+                        AssetNode.url == target_url,
+                        AssetNode.asset_type == asset_type.value
+                    )
+                ).first()
+                if target_node is None:
+                    raise
+                logger.debug(f"Adopted concurrently-created asset node {target_node.id} for {target_url}")
         
         # Create discovery edge (even if node existed, this might be a new discovery path)
         edge = AssetEdge(

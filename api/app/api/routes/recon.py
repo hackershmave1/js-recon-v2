@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+import logging
 import shutil
 import threading
 from typing import Any
@@ -9,6 +10,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from ...db import get_db
@@ -21,6 +23,7 @@ from ...services.security_utils import SecurityValidator
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Stop events are in-process signals — not persisted, not shared across workers.
 RECON_JOB_STOP_EVENTS: dict[str, threading.Event] = {}
@@ -345,10 +348,22 @@ def run_recon_job_worker(
         final_status = "cancelled" if stop_event.is_set() else "completed"
         finalize_job(job_id, final_status, result=result, error=None, db_session=db)
     except Exception as exc:
+        # A failed worker must still record WHY on the job row. Roll back FIRST so a
+        # poisoned/aborted transaction (e.g. an IntegrityError left the session in a
+        # PendingRollback state) is cleared and finalize_job's own commit can succeed;
+        # otherwise the observed symptom is an empty job.error on a "failed" job.
         try:
-            finalize_job(job_id, "failed", result=None, error=str(exc), db_session=db)
+            db.rollback()
         except Exception:
-            pass
+            logger.exception("Recon worker %s: rollback before finalize failed", job_id)
+        error_message = (f"{type(exc).__name__}: {exc}".strip() or repr(exc))[:2000]
+        logger.exception("Recon worker %s failed: %s", job_id, error_message)
+        try:
+            finalize_job(job_id, "failed", result=None, error=error_message, db_session=db)
+        except Exception:
+            # Never silently swallow a finalize failure — that is how a job ends up
+            # stuck "running" with no error recorded.
+            logger.exception("Recon worker %s: finalize_job failed to persist failure", job_id)
     finally:
         db.close()
 
@@ -414,7 +429,20 @@ def start_recon_job(request: ReconJobStartRequest, db: Session = Depends(get_db)
         db.add(db_session_obj)
     elif session_name:
         db_session_obj.name = session_name
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent creator won the race on this session id (both SELECT-missed,
+        # both INSERT). Adopt the committed row rather than 500 on sessions_pkey;
+        # apply the name if one was requested. Mirrors triage.py's commit-catch.
+        db.rollback()
+        created_session = False
+        db_session_obj = db.query(DbSession).filter(DbSession.id == session_uuid).first()
+        if db_session_obj is None:
+            raise
+        if session_name:
+            db_session_obj.name = session_name
+            db.commit()
 
     job_id = str(uuid.uuid4())
     options = ReconRunnerOptions(

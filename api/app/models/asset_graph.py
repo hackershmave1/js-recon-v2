@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text, Integer, Index
+from sqlalchemy import Column, DateTime, ForeignKey, String, Text, Integer, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -88,12 +88,14 @@ class AssetNode(Base):
         cascade="all, delete-orphan"
     )
 
-    # Indexes for performance
+    # Indexes for performance + a uniqueness guard so concurrent discovery can't
+    # create duplicate nodes for the same asset (see asset_graph_service).
     __table_args__ = (
         Index('idx_asset_nodes_session_id', 'session_id'),
         Index('idx_asset_nodes_file_id', 'file_id'),
         Index('idx_asset_nodes_url', 'url'),
         Index('idx_asset_nodes_discovery_depth', 'discovery_depth'),
+        UniqueConstraint('session_id', 'url', 'asset_type', name='uq_asset_nodes_session_url_type'),
     )
 
     def __repr__(self):

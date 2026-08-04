@@ -22,6 +22,7 @@ from ...models import SourceMap as DbSourceMap
 from ...models import Dependency as DbDependency
 from ...models import Job as DbJob
 from ...services.comprehensive_extractor import ComprehensiveExtractor
+from ...services.file_analysis_persistence import get_or_create_analyzing_file_analysis
 from ...services.secret_rollup import SecretRollupService
 from ...services.sourcemap_validation import derive_validation_state, summarize_validation
 from .recon import get_latest_session_capture_coverage
@@ -955,22 +956,10 @@ def execute_session_analysis(
         if progress_callback:
             progress_callback(file, "analyzing", None)
 
-        row = db.query(DbFileAnalysis).filter(DbFileAnalysis.file_id == file.id).first()
-        if not row:
-            row = DbFileAnalysis(
-                file_id=file.id,
-                session_id=file.session_id,
-                status="analyzing",
-                analysis={},
-                stats={},
-                extractors_used=[],
-                error=None,
-            )
-            db.add(row)
-        else:
-            row.status = "analyzing"
-            row.error = None
-            row.updated_at = datetime.utcnow()
+        # Race-safe get-or-create in "analyzing" state (file_analyses.file_id is
+        # UNIQUE): concurrent analysis of one file can't raise an unhandled
+        # UniqueViolation that would abort this whole session-analysis run.
+        row = get_or_create_analyzing_file_analysis(db, file.id, file.session_id)
         db.commit()
 
         content_path = Path(file.stored_path)

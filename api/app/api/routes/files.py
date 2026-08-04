@@ -14,6 +14,7 @@ from ...models import Dependency as DbDependency
 from ...models import FileAnalysis as DbFileAnalysis
 from ...models import SourceMap as DbSourceMap
 from ...services.comprehensive_extractor import ComprehensiveExtractor
+from ...services.file_analysis_persistence import get_or_create_analyzing_file_analysis
 from ...services.native_sourcemap_processor import NativeSourceMapProcessor
 from ...services.async_utils import run_coroutine_sync
 from ...services.auth_context import redact_file_metadata_for_output
@@ -185,22 +186,9 @@ def analyze_file(file_id: str, request: FileAnalyzeRequest, db: Session = Depend
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
 
-    row = db.query(DbFileAnalysis).filter(DbFileAnalysis.file_id == file.id).first()
-    if not row:
-        row = DbFileAnalysis(
-            file_id=file.id,
-            session_id=file.session_id,
-            status="analyzing",
-            analysis={},
-            stats={},
-            extractors_used=[],
-            error=None,
-        )
-        db.add(row)
-    else:
-        row.status = "analyzing"
-        row.error = None
-        row.updated_at = datetime.utcnow()
+    # Race-safe get-or-create in "analyzing" state (file_analyses.file_id is UNIQUE):
+    # two concurrent analyses of one file can't raise an unhandled UniqueViolation.
+    row = get_or_create_analyzing_file_analysis(db, file.id, file.session_id)
     db.commit()
 
     content_path = Path(file.stored_path)

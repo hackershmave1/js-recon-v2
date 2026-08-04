@@ -8,6 +8,7 @@ import httpx
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...db import get_db
@@ -21,6 +22,7 @@ from ...config import settings
 from ...session_scope import derive_root_domains, normalize_root_domains
 from ...project_config import validate_config
 from ...services.comprehensive_extractor import ComprehensiveExtractor
+from ...services.file_analysis_persistence import get_or_create_analyzing_file_analysis
 from ...services.storage import StorageService
 from ...services.native_sourcemap_processor import NativeSourceMapProcessor
 from ...services.async_utils import run_coroutine_sync
@@ -162,8 +164,18 @@ def save_files(payload: IngestionPayload, db: Session = Depends(get_db)):
             override_keys=override_keys,
         )
         db.add(db_session)
-        db.commit()
-        db.refresh(db_session)
+        try:
+            db.commit()
+        except IntegrityError:
+            # A concurrent first-time writer created this session id first (both
+            # SELECT-missed above, both INSERT). Adopt the row they committed
+            # rather than 500 on ``sessions_pkey``. Mirrors triage.py's commit-catch.
+            db.rollback()
+            db_session = db.query(DbSession).filter(DbSession.id == session_uuid).first()
+            if db_session is None:
+                raise
+        else:
+            db.refresh(db_session)
 
     storage = StorageService()
     file_ids = []
@@ -258,7 +270,12 @@ def save_files(payload: IngestionPayload, db: Session = Depends(get_db)):
             db_file = existing_file
             logger.info(f"File already exists for session {session_uuid} + hash {file_in.contentHash[:8]}... - using existing record {db_file.id}")
         else:
-            # Create new file record
+            # Create new file record. Wrap the INSERT in a SAVEPOINT so that a
+            # concurrent writer racing us on the same (session_id, content_hash) —
+            # both SELECT-miss above, both INSERT — degrades to idempotent reuse
+            # instead of an unhandled IntegrityError that poisons this whole batch
+            # transaction (which aborts the recon crawl). Mirrors triage.py's
+            # commit-catch, but nested so the surrounding per-batch work survives.
             db_file = DbFile(
                 session_id=session_uuid,
                 url=file_in.url,
@@ -271,8 +288,32 @@ def save_files(payload: IngestionPayload, db: Session = Depends(get_db)):
                 stored_path=stored_path,
                 map_path=map_path
             )
-            db.add(db_file)
-            db.flush()
+            try:
+                with db.begin_nested():
+                    db.add(db_file)
+                    db.flush()
+            except IntegrityError:
+                # Lost the insert race. Adopt the row the winner committed and treat
+                # this file as pre-existing so the dependency (:278), sourcemap (:289)
+                # and analysis ("existing") gates below stay idempotent — no duplicate
+                # child rows. Do NOT use ON CONFLICT DO NOTHING: downstream needs
+                # db_file.id, which DO NOTHING would not return.
+                db_file = db.query(DbFile).filter(
+                    DbFile.session_id == session_uuid,
+                    DbFile.content_hash == file_in.contentHash,
+                ).first()
+                if db_file is None:
+                    # No winner visible (row vanished between the failed INSERT and
+                    # this re-SELECT — no delete path exists today). Don't proceed
+                    # with a dead object.
+                    raise
+                existing_file = db_file
+                logger.info(
+                    "Concurrent insert race for session %s + hash %s...; adopting winning file %s",
+                    session_uuid,
+                    file_in.contentHash[:8],
+                    db_file.id,
+                )
 
         # Handle dependencies - only add if this is a new file
         if not existing_file and file_in.dependencies:
@@ -504,23 +545,10 @@ def run_ingestion_analysis(
 
     try:
         with db.begin_nested():
-            analysis_row = db.query(DbFileAnalysis).filter(DbFileAnalysis.file_id == db_file.id).first()
-            if not analysis_row:
-                analysis_row = DbFileAnalysis(
-                    file_id=db_file.id,
-                    session_id=db_file.session_id,
-                    status="analyzing",
-                    analysis={},
-                    stats={},
-                    extractors_used=[],
-                    error=None,
-                )
-                db.add(analysis_row)
-            else:
-                analysis_row.status = "analyzing"
-                analysis_row.error = None
-                analysis_row.updated_at = datetime.utcnow()
-            db.flush()
+            # Race-safe get-or-create in "analyzing" state (file_analyses.file_id is
+            # UNIQUE); the helper's own SAVEPOINT nests inside this one and adopts a
+            # concurrent writer's row on collision.
+            analysis_row = get_or_create_analyzing_file_analysis(db, db_file.id, db_file.session_id)
 
             results = extractor.extract_all(file_in.content, analysis_metadata, options=analysis_options)
 

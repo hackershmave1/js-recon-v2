@@ -5,7 +5,7 @@ Tests asset discovery tracking, graph construction, and provenance queries.
 """
 
 import pytest
-from unittest.mock import Mock
+from unittest.mock import Mock, MagicMock
 from datetime import datetime
 import uuid
 
@@ -18,7 +18,9 @@ class TestAssetGraphService:
 
     def setup_method(self):
         """Set up test fixtures."""
-        self.mock_db = Mock()
+        # MagicMock (not Mock) so ``with db.begin_nested():`` — the SAVEPOINT the
+        # service now wraps its INSERT in — works as a context manager.
+        self.mock_db = MagicMock()
         self.service = AssetGraphService(self.mock_db)
         self.session_id = str(uuid.uuid4())
 

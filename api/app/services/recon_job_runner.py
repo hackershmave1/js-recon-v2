@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urljoin, urlparse
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..api.routes.ingestion import FileIn, IngestionPayload, save_files
@@ -435,8 +436,33 @@ class ReconJobRunner:
                     self._safe_rollback()
                     return
             else:
+                # A non-recoverable batch error must NOT abort the whole crawl. The
+                # main case is an IntegrityError from a concurrent writer that raced us
+                # on (session_id, content_hash); save_files self-heals that per file
+                # now, but any collision surfacing here (or any other hard error) is
+                # degraded to "these files not stored this run" instead of an aborted
+                # job. Roll back the poisoned transaction, record the miss on the
+                # batch's assets, and skip to the next batch.
                 self._safe_rollback()
-                raise
+                is_conflict = isinstance(exc, IntegrityError)
+                logger.warning(
+                    "Recon batch ingest failed non-recoverably for session %s (%s%s); skipping %d file(s): %s",
+                    self.options.session_id,
+                    type(exc).__name__,
+                    ", concurrent conflict" if is_conflict else "",
+                    len(batch),
+                    exc,
+                )
+                skip_error = f"{type(exc).__name__}: {exc}"[:500]
+                for skipped in batch:
+                    self._update_asset(
+                        getattr(skipped, "url", None),
+                        ingested=False,
+                        ingestSkipped=True,
+                        ingestConflict=is_conflict,
+                        ingestError=skip_error,
+                    )
+                return
 
         self._accumulate_ingestion_result(partial)
         self._apply_ingestion_results(partial)
