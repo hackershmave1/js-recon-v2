@@ -1,9 +1,19 @@
 // ActivityDrawer.jsx — right-side panel listing recon jobs with a Discover→Fetch→
 // Analyze→Done stepper, live progress, and a Stop action for active jobs. Renders
 // thin view-models from transforms.jobActivityVm; receives the polled jobs from app.jsx.
+import { useState } from 'preact/hooks';
 import { C, F } from '../theme.js';
 import { CloseIcon, CheckIcon, ClockIcon, StopIcon } from '../icons.jsx';
 import { jobActivityVm } from '../transforms.overlays.js';
+
+const DISMISS_KEY = 'recon.activity.dismissed';
+function loadDismissed() {
+  try { return new Set(JSON.parse(localStorage.getItem(DISMISS_KEY) || '[]')); }
+  catch (e) { return new Set(); }
+}
+function saveDismissed(set) {
+  try { localStorage.setItem(DISMISS_KEY, JSON.stringify([...set])); } catch (e) { /* private mode */ }
+}
 
 function Stepper({ stages }) {
   return (
@@ -30,7 +40,7 @@ function Stepper({ stages }) {
   );
 }
 
-function JobCard({ j, onStop }) {
+function JobCard({ j, onStop, onClear }) {
   const border = j.active ? 'rgba(205,235,69,0.25)' : C.line;
   return (
     <div style={{ background: C.panel, border: `1px solid ${border}`, borderRadius: '12px', padding: '15px 16px', marginBottom: '12px' }}>
@@ -67,21 +77,46 @@ function JobCard({ j, onStop }) {
         </>
       )}
       {j.doneState && (
-        <div style={{ fontSize: '11.5px', color: C.muted, fontFamily: F.mono }}>{j.summary}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ flex: 1, fontSize: '11.5px', color: C.muted, fontFamily: F.mono, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.summary}</span>
+          {onClear && (
+            <button onClick={onClear} title="Clear this job from the activity list" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 10px', borderRadius: '8px', border: `1px solid ${C.lineStrong}`, background: C.control, color: C.muted, cursor: 'pointer', fontSize: '11px', fontWeight: 600, flex: '0 0 auto' }}>
+              <CloseIcon size={11} />Clear
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
 export function ActivityDrawer({ jobs, onClose, onStop }) {
-  const vms = (jobs || []).map(jobActivityVm);
+  const [dismissed, setDismissed] = useState(loadDismissed);
+  // Client-side "clear from the panel": hide finished jobs by id (persisted to
+  // localStorage) so the list stays tidy across reloads. Non-destructive — the job
+  // rows remain in the DB, and a running job is never hidden (no Clear on it). The
+  // sidebar running-count in app.jsx reads the raw jobs list, so it's unaffected.
+  const vms = (jobs || []).map(jobActivityVm).filter((j) => !dismissed.has(j.jobId));
+  const clearableCount = vms.filter((j) => j.doneState).length;
+  const dismiss = (jobId) => setDismissed((prev) => { const next = new Set(prev); next.add(jobId); saveDismissed(next); return next; });
+  const clearAllDone = () => setDismissed((prev) => {
+    const next = new Set(prev);
+    vms.forEach((j) => { if (j.doneState) next.add(j.jobId); });
+    saveDismissed(next);
+    return next;
+  });
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(5,7,11,0.6)', zIndex: 40 }} />
       <aside style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: '420px', maxWidth: '94vw', background: C.panel2, borderLeft: `1px solid ${C.lineStrong}`, zIndex: 41, overflowY: 'auto', animation: 'slidein .22s cubic-bezier(.2,.8,.2,1)' }}>
         <div style={{ padding: '20px 22px', borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', gap: '10px' }}>
           <h2 style={{ fontFamily: F.display, fontWeight: 700, fontSize: '18px', margin: 0, flex: 1 }}>Activity</h2>
-          <button onClick={onClose} style={{ width: '30px', height: '30px', borderRadius: '8px', border: `1px solid ${C.lineStrong}`, background: C.control, color: C.muted, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {clearableCount > 0 && (
+            <button onClick={clearAllDone} title="Clear all finished jobs from this list" style={{ padding: '6px 11px', borderRadius: '8px', border: `1px solid ${C.lineStrong}`, background: C.control, color: C.muted, cursor: 'pointer', fontSize: '11.5px', fontWeight: 600, flex: '0 0 auto' }}>
+              Clear done ({clearableCount})
+            </button>
+          )}
+          <button onClick={onClose} style={{ width: '30px', height: '30px', borderRadius: '8px', border: `1px solid ${C.lineStrong}`, background: C.control, color: C.muted, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto' }}>
             <CloseIcon />
           </button>
         </div>
@@ -92,7 +127,7 @@ export function ActivityDrawer({ jobs, onClose, onStop }) {
               <div style={{ fontSize: '12.5px' }}>Start a New Recon to see live progress here.</div>
             </div>
           )}
-          {vms.map((j) => <JobCard key={j.jobId} j={j} onStop={onStop} />)}
+          {vms.map((j) => <JobCard key={j.jobId} j={j} onStop={onStop} onClear={j.doneState ? () => dismiss(j.jobId) : null} />)}
         </div>
       </aside>
     </>
