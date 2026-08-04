@@ -6,7 +6,10 @@ services:
       POSTGRES_PASSWORD: changeme123
       POSTGRES_DB: js_extractor
     ports:
-      - "5432:5432"
+      # Host 5433 (not 5432) so this dev stack never collides with the platform's
+      # postgres (apps/platform/docker-compose.yml publishes 5432). Container port
+      # stays 5432; only the host mapping changes.
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
