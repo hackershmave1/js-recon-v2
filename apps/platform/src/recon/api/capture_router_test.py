@@ -25,10 +25,13 @@ from recon.db.models import Job, Run, Tenant
 from recon.discover import queries as discover_queries
 from recon.domain import RunState
 from recon.fetch import egress, fetch
+from recon.findings import analyze as analyze_mod
 from recon.findings import queries as findings_queries
+from recon.queue import retry
 from recon.runs import assets as run_assets
 from recon.runs import queries as run_queries
 from recon.runs import state_machine as sm
+from recon.sessions import service as sessions_service
 from recon.worker import main as worker
 
 pytestmark = pytest.mark.integration
@@ -303,3 +306,142 @@ def test_end_to_end_upload_analyze_to_findings(make_capture_client, redis, monke
     # the shared endpoint dedupes across both assets to one finding, two occurrences
     shared = next(f for f in view.findings if f.value == "GET /api/v1/users")
     assert len(shared.occurrences) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2: analyze/progress adapter.
+# --------------------------------------------------------------------------- #
+
+
+def test_progress_unknown_session_is_404(make_capture_client):
+    r = make_capture_client().get(f"/api/sessions/{uuid.uuid4().hex}/analyze/progress")
+    assert r.status_code == 404
+
+
+def test_progress_before_analyze_is_idle(make_capture_client):
+    # Captured but not analyzed (QUEUED run, no Job): progress must read IDLE so the
+    # popup keeps the Analyze button live — never a stuck "running".
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    _save(client, sid, [_file("https://acme.io/a.js", "a();", sid)])
+    job = client.get(f"/api/sessions/{sid}/analyze/progress").json()["job"]
+    assert job["counts"] == {"queued": 0, "analyzing": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0}
+    assert job["files"] == []
+
+
+def test_progress_after_start_before_worker_is_running(make_capture_client):
+    # analyze/start enqueued the run (it now has a Job) but the worker hasn't run:
+    # pending assets read "queued" so the popup shows running (inFlight > 0).
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    _save(client, sid, [_file("https://acme.io/a.js", "a();", sid), _file("https://acme.io/b.js", "b();", sid)])
+    client.post(f"/api/sessions/{sid}/analyze/start")
+    job = client.get(f"/api/sessions/{sid}/analyze/progress").json()["job"]
+    assert job["counts"]["total"] == 2 and job["counts"]["queued"] == 2
+    assert {f["url"] for f in job["files"]} == {"https://acme.io/a.js", "https://acme.io/b.js"}
+    assert all(f["status"] == "queued" for f in job["files"])
+
+
+def test_progress_after_worker_is_completed(make_capture_client, redis):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    _save(client, sid, [_file("https://acme.io/a.js", "fetch('/api/v1/users');", sid)])
+    started = client.post(f"/api/sessions/{sid}/analyze/start").json()
+    tid = _tenant_id(client.capture_tenant_name)
+    for _ in range(80):
+        worker.run_once(redis, "capture-progress-worker", block_ms=50)
+        flags = run_queries.get_run_flags(tid, started["runId"])
+        if flags and sm.is_terminal(RunState(flags.state)):
+            break
+    job = client.get(f"/api/sessions/{sid}/analyze/progress").json()["job"]
+    assert job["counts"]["completed"] == 1 and job["counts"]["queued"] == 0
+    assert job["files"] == [{"url": "https://acme.io/a.js", "status": "completed"}]
+
+
+def test_progress_terminal_run_with_pending_asset_settles(make_capture_client, redis, monkeypatch):
+    # Abnormal termination: analyze fails fatally -> run FAILED with the asset still
+    # pending. Progress must SETTLE (pending -> failed) so the popup's inFlight hits
+    # 0 and the Analyze button unblocks, instead of polling "running" forever.
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    _save(client, sid, [_file("https://acme.io/a.js", "a();", sid)])
+    started = client.post(f"/api/sessions/{sid}/analyze/start").json()
+    tid = _tenant_id(client.capture_tenant_name)
+    monkeypatch.setattr(
+        analyze_mod, "analyze_run",
+        lambda *a, **k: (_ for _ in ()).throw(retry.FatalError("analyze exploded")),
+    )
+    flags = None
+    for _ in range(80):
+        worker.run_once(redis, "capture-fail-worker", block_ms=50)
+        flags = run_queries.get_run_flags(tid, started["runId"])
+        if flags and sm.is_terminal(RunState(flags.state)):
+            break
+    assert flags is not None and flags.state == RunState.FAILED.value
+    job = client.get(f"/api/sessions/{sid}/analyze/progress").json()["job"]
+    assert job["counts"]["queued"] == 0 and job["counts"]["analyzing"] == 0  # settled
+    assert job["counts"]["failed"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2: projects <-> engagements adapter.
+# --------------------------------------------------------------------------- #
+
+
+def test_projects_get_is_a_bare_array(make_capture_client):
+    r = make_capture_client().get("/api/projects")
+    assert r.status_code == 200 and isinstance(r.json(), list)  # NOT an object envelope
+
+
+def test_create_then_list_project(make_capture_client):
+    client = make_capture_client()
+    created = client.post(
+        "/api/projects",
+        json={"name": "Acme engagement", "defaults": {"scope": {"rootDomains": ["acme.io", "api.acme.io"]}}},
+    ).json()
+    assert created["id"] and created["name"] == "Acme engagement"
+    assert created["defaults"]["scope"]["rootDomains"] == ["acme.io", "api.acme.io"]
+    assert created["defaults"]["scope"]["includeSubdomains"] is True
+    listed = client.get("/api/projects").json()
+    assert isinstance(listed, list)
+    assert any(p["id"] == created["id"] and p["name"] == "Acme engagement" for p in listed)
+
+
+def test_create_project_blank_name_is_400(make_capture_client):
+    r = make_capture_client().post("/api/projects", json={"name": "   ", "defaults": {}})
+    assert r.status_code == 400
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2: defensive project binding on save-files.
+# --------------------------------------------------------------------------- #
+
+
+def test_save_files_binds_a_valid_project(make_capture_client):
+    client = make_capture_client()
+    pid = client.post(
+        "/api/projects", json={"name": "P", "defaults": {"scope": {"rootDomains": ["acme.io"]}}}
+    ).json()["id"]
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    body = client.post(
+        "/api/save-files",
+        json={"metadata": {"sessionId": sid, "projectId": pid}, "files": [_file("https://acme.io/a.js", "a();", sid)]},
+    ).json()
+    tid = _tenant_id(client.capture_tenant_name)  # tenant exists once a request created it
+    assert sessions_service.get_session(tid, body["sessionId"]).engagement_id == pid
+
+
+def test_save_files_ignores_garbage_or_foreign_project(make_capture_client):
+    # §4 defect-A regression guard: an invalid projectId must NOT raise (a 4xx would
+    # drop un-recapturable JS; a 5xx would retry-loop). The session is created UNBOUND
+    # and the batch still succeeds.
+    client = make_capture_client()
+    for bad in ("not-a-uuid", str(uuid.uuid4())):  # malformed, then valid-but-unknown
+        sid = f"sess-{uuid.uuid4().hex[:8]}"
+        r = client.post(
+            "/api/save-files",
+            json={"metadata": {"sessionId": sid, "projectId": bad}, "files": [_file("https://acme.io/a.js", "a();", sid)]},
+        )
+        assert r.status_code == 200
+        tid = _tenant_id(client.capture_tenant_name)  # tenant exists after the request
+        assert sessions_service.get_session(tid, r.json()["sessionId"]).engagement_id is None

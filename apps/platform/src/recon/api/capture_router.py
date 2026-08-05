@@ -30,6 +30,7 @@ session-create hot path:
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -43,7 +44,8 @@ from recon.api.deps import get_redis
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
 from recon.db.models import EngagementSession, Job, Run, RunAsset, Tenant
-from recon.domain import AssetStatus, RunStage, RunState
+from recon.domain import TERMINAL_STATES, AssetStatus, RunStage, RunState
+from recon.engagements import service as engagements_service
 from recon.events.log import publish, record_event
 from recon.observability import get_logger
 from recon.runs import assets, coordinator
@@ -91,20 +93,43 @@ def _find_session_by_name(tenant_id: str, ext_session_id: str) -> str | None:
         return str(row.id) if row is not None else None
 
 
-def _get_or_create_session(tenant_id: str, ext_session_id: str) -> str:
+def _safe_uuid(value: Any) -> str | None:
+    """Canonical UUID string, or None for a falsy/malformed value — so a bad
+    ``projectId`` can never reach a DB lookup that would raise (StatementError)."""
+    if not value:
+        return None
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _get_or_create_session(
+    tenant_id: str, ext_session_id: str, engagement_id: str | None = None
+) -> str:
     # Map the extension's sessionId -> a platform session idempotently, keyed by
     # name, so a retried batch reuses the session instead of piling up duplicates.
     existing = _find_session_by_name(tenant_id, ext_session_id)
     if existing is not None:
         return existing
-    # §4 defects A/B: NO engagement_id, EMPTY scope — invalid client metadata must
-    # never raise on the ingest hot path (see the module docstring).
-    view = sessions_service.create_session(
-        tenant_id,
-        name=ext_session_id,
-        scope_hosts=[],
-        authorized_by="chrome-extension-capture",
-    )
+    # EMPTY scope (§4 defect B: scope is inert here — captured assets never egress).
+    # Bind the engagement (projectId) if it resolves cleanly, but NEVER raise on the
+    # ingest hot path (§4 defect A): a foreign/deleted engagement makes create_session
+    # raise SessionInvalid *before* any row is added, so we retry unbound. A malformed
+    # id was already filtered to None by _safe_uuid upstream.
+    try:
+        view = sessions_service.create_session(
+            tenant_id, name=ext_session_id, scope_hosts=[],
+            authorized_by="chrome-extension-capture", engagement_id=engagement_id,
+        )
+    except sessions_service.SessionInvalid:
+        log.warning(
+            "capture.session.engagement_ignored", session=ext_session_id, engagement_id=engagement_id
+        )
+        view = sessions_service.create_session(
+            tenant_id, name=ext_session_id, scope_hosts=[],
+            authorized_by="chrome-extension-capture", engagement_id=None,
+        )
     return view.id
 
 
@@ -186,7 +211,8 @@ def save_files(payload: SaveFilesIn) -> dict:
             "success": True, "sessionId": None, "runId": None,
             "stored": 0, "failed": 0, "files": [],
         }
-    session_id = _get_or_create_session(tenant_id, ext_session_id)
+    engagement_id = _safe_uuid(meta.get("projectId"))  # bind the project if it resolves; else unbound
+    session_id = _get_or_create_session(tenant_id, ext_session_id, engagement_id)
     run_id = _accumulating_run_id(tenant_id, session_id, redis)
 
     file_results: list[dict] = []
@@ -315,3 +341,126 @@ def analyze_start(ext_session_id: str) -> dict:
     )
     log.info("capture.analyze_start", session=ext_session_id, run_id=run_id, count=len(rows), job=job_id)
     return {"started": True, "job": job_id, "runId": run_id}
+
+
+# --------------------------------------------------------------------------- #
+# analyze/progress: adapt the run's per-asset status into the extension popup's
+# `job` shape (counts + per-file url/status). See workspace-client.getAnalysisProgress.
+# --------------------------------------------------------------------------- #
+
+
+def _latest_analyzed_run(tenant_id: str, session_id: str) -> tuple[str, str] | None:
+    """The session's latest run that has been ENQUEUED for analysis (has a Job),
+    with its state. A never-analyzed accumulating run (QUEUED, no Job) is excluded
+    on purpose: the popup would read pending assets as "running" and disable the
+    Analyze button (§4). Excluding it makes progress report idle there instead, and
+    preferring the latest enqueued run keeps a finished round visible after the next
+    capture round opens a fresh accumulating run."""
+    with tenant_session(tenant_id) as session:
+        row = session.execute(
+            select(Run.id, Run.state)
+            .where(
+                Run.session_id == str(session_id),
+                exists(select(Job.id).where(Job.run_id == Run.id)),
+            )
+            .order_by(Run.created_at.desc())
+            .limit(1)
+        ).first()
+        return (str(row[0]), row[1]) if row is not None else None
+
+
+def _asset_progress_status(row: assets.AssetRow, *, run_analyzing: bool, run_terminal: bool) -> str:
+    """Map a capture asset to the popup's per-file vocabulary. Captured assets are
+    pre-fetch_ok, so the signal is analyze_status; a fetch failure still surfaces.
+    A still-``pending`` asset on a TERMINAL run (abnormal termination: analyze
+    retries exhausted -> FAILED, or CANCELLED) settles to ``failed`` so the popup's
+    ``inFlight = queued + analyzing`` reaches 0 instead of polling "running" forever."""
+    if row.analyze_status == AssetStatus.OK.value:
+        return "completed"
+    if row.analyze_status == AssetStatus.FAILED.value or row.fetch_status == AssetStatus.FAILED.value:
+        return "failed"
+    if run_terminal:
+        return "failed"
+    return "analyzing" if run_analyzing else "queued"
+
+
+def _idle_job() -> dict:
+    return {
+        "counts": {"queued": 0, "analyzing": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0},
+        "files": [],
+    }
+
+
+@router.get("/sessions/{ext_session_id}/analyze/progress")
+def analyze_progress(ext_session_id: str) -> dict:
+    settings = get_settings()
+    tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
+    session_id = _find_session_by_name(tenant_id, ext_session_id)
+    if session_id is None:
+        raise HTTPException(status_code=404, detail="unknown capture session")
+
+    latest = _latest_analyzed_run(tenant_id, session_id)
+    if latest is None:
+        return {"success": True, "sessionId": session_id, "job": _idle_job()}
+    run_id, state = latest
+    run_state = RunState(state)
+    run_analyzing = run_state == RunState.ANALYZING
+    run_terminal = run_state in TERMINAL_STATES
+    rows = assets.list_for_run(tenant_id, run_id)
+    counts = {"queued": 0, "analyzing": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": len(rows)}
+    files = []
+    for row in rows:
+        status = _asset_progress_status(row, run_analyzing=run_analyzing, run_terminal=run_terminal)
+        counts[status] += 1
+        files.append({"url": row.url, "status": status})
+    return {"success": True, "sessionId": session_id, "job": {"counts": counts, "files": files}}
+
+
+# --------------------------------------------------------------------------- #
+# projects <-> engagements: the extension's project = a v2 engagement. GET must be
+# a BARE ARRAY (the extension does Array.isArray(body)?body:[]); the project id is
+# `id` (not engagement_id); a `defaults` config doc is synthesized from the
+# engagement's scope + v1 system defaults (the extension only reads scope + creates
+# name+rootDomains, so nothing it uses is lost).
+# --------------------------------------------------------------------------- #
+
+
+def _engagement_to_project(view: engagements_service.EngagementView) -> dict:
+    return {
+        "id": view.id,
+        "name": view.name,
+        "createdAt": view.created_at,
+        "updatedAt": view.updated_at,
+        "defaults": {
+            "scope": {"rootDomains": list(view.in_scope_domains), "includeSubdomains": True},
+            "capture": {"outOfScopeMode": "tag", "maxAssetMb": 10},
+            "denylist": {"rules": [], "useDefaultProfile": True},
+            "analysis": {"analyzeOnUpload": False, "captureSourceMaps": True},
+        },
+    }
+
+
+@router.get("/projects")
+def list_projects() -> list[dict]:
+    settings = get_settings()
+    tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
+    return [_engagement_to_project(v) for v in engagements_service.list_engagements(tenant_id)]
+
+
+@router.post("/projects")
+def create_project(payload: dict[str, Any]) -> dict:
+    settings = get_settings()
+    tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        # create is user-initiated (not the JS-loss ingest path); a string detail
+        # matches the platform's engagements 400 and renders cleanly in the popup.
+        raise HTTPException(status_code=400, detail="a project name is required")
+    defaults = payload.get("defaults") if isinstance(payload.get("defaults"), dict) else {}
+    scope = defaults.get("scope") if isinstance(defaults.get("scope"), dict) else {}
+    raw_domains = scope.get("rootDomains")
+    root_domains = [str(d) for d in raw_domains] if isinstance(raw_domains, list) else []
+    view = engagements_service.create_engagement(
+        tenant_id, name=name, in_scope_domains=root_domains, out_of_scope_domains=[]
+    )
+    return _engagement_to_project(view)

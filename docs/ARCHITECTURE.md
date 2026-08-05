@@ -46,8 +46,16 @@ row per file pre-marked `fetch_ok` — and `POST /api/sessions/{id}/analyze/star
 `discover.assets` event and enqueues **one** worker walk. The pre-fetched assets make the
 DISCOVER/FETCH stages no-op (no katana, **no network egress** of captured URLs); only ANALYZE does
 real work. Idempotent by construction (content-addressed blobs + `(run_id,url)` conflict-skip), so
-the extension's whole-batch retries never duplicate a run. Phases 2–4 (endpoint parity → robustness
-→ cutover + delete v1) still pending.
+the extension's whole-batch retries never duplicate a run.
+
+**Phase 2 (endpoint parity) — DONE (flag-gated).** `GET /api/sessions/{id}/analyze/progress`
+adapts the run's per-asset status into the popup's counts+files `job` (reports *idle* for a
+never-analyzed run so the Analyze button stays live, and *settles* a terminal run so the spinner
+never sticks); `GET|POST /api/projects` adapts v2 engagements to the extension's project shape (a
+bare JSON array, `id`, and a synthesized `defaults.scope` doc). `save-files` now binds a valid
+`projectId` to its engagement — defensively: an unknown/malformed id is ignored, never dropping
+the batch. Phases 3–4 (robustness: async/chunked ingest + source-map wiring → cutover + delete v1)
+still pending.
 
 ## The extension <-> capture-backend contract
 
@@ -56,13 +64,14 @@ The extension is hard-coupled to `apps/capture/api` (default `workspaceUrl=http:
 route on the platform (flag-gated by `RECON_ENABLE_CAPTURE_INGEST`; see
 `apps/capture/chrome-extension/modules/workspace-client.js`):
 
-- `POST /api/save-files` — batched JSON push of captured files — **Phase 1, implemented**
-- `GET  /api/health` — **Phase 1, implemented**
-- `POST /api/sessions/{id}/analyze/start` — **Phase 1, implemented** (worker-driven)
-- `GET /api/sessions/{id}/analyze/progress` — **Phase 2, pending** (extension polls it; 404s until then)
-- `GET|POST /api/projects` — **Phase 2, pending** (project binding; a `projectId` in save-files
-  metadata is currently ignored — Phase 1 deliberately keeps client metadata off the
-  session-create path)
+- `POST /api/save-files` — batched JSON push of captured files — **implemented** (Phase 1;
+  binds `projectId`→engagement defensively as of Phase 2)
+- `GET  /api/health` — **implemented** (Phase 1)
+- `POST /api/sessions/{id}/analyze/start` — **implemented** (Phase 1, worker-driven)
+- `GET /api/sessions/{id}/analyze/progress` — **implemented** (Phase 2; adapts run + per-asset
+  status into the popup's `job` shape)
+- `GET|POST /api/projects` — **implemented** (Phase 2; adapts v2 engagements to the extension's
+  project shape — a bare array, `id`, and a synthesized `defaults.scope` doc)
 
 ## Running
 
