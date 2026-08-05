@@ -1,0 +1,17 @@
+{
+  "name": "recon-range",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build:vite": "vite build",
+    "build:webpack": "webpack --config webpack.config.js && node scripts/write-index.mjs dist/webpack",
+    "build": "npm run build:vite && npm run build:webpack",
+    "serve:vite": "node scripts/serve.mjs dist/vite 4173",
+    "serve:webpack": "node scripts/serve.mjs dist/webpack 4174",
+    "score": "node scripts/score-cli.mjs",
+    "test": "npm run build && node --test scripts/"
+  },
+  "dependencies": { "axios": "^1.7.0" },
+  "devDependencies": { "vite": "^5.4.0", "webpack": "^5.94.0", "webpack-cli": "^5.1.4" }
+}
