@@ -1,1 +1,3 @@
-export function init() { /* filled in Task 3 */ }
+export function openLive() {
+  return new WebSocket("wss://api.recon-range.test/ws/live");
+}

@@ -1,3 +1,17 @@
+import { loadProfile } from "./api/profile.js";
+import { updateCart } from "./api/cart.js";
+import { pingThirdParties } from "./api/thirdparty.js";
+import { loadSecure } from "./api/secure.js";
+import { blindSpots } from "./api/blindspots.js";
+import { KEYS } from "./secrets.js";
+
+window.__reconKeys = KEYS;
+loadProfile();
+updateCart();
+pingThirdParties();
+loadSecure("tok", "sig", "123");
+blindSpots();
+
 const lazy = [
   { name: "inventory", load: () => import("./api/inventory.js") },
   { name: "social", load: () => import("./api/social.js") },
