@@ -19,31 +19,50 @@ apps/
                            api/app/static/workspace/ and served by capture/api.
 ```
 
-## Why two apps (not merged)
+## Why two apps (converging onto v2)
 
-They share **zero code** today but overlap heavily — two backends, two Postgres DBs, two
-UIs, two analysis cores. The **Chrome extension is the one capability nothing else in the
-repo provides**: runtime, in-browser, post-authentication capture (the platform only does
-static crawl/upload). The two analysis cores are genuinely different and *complementary*
-(platform = tree-sitter AST; capture = regex + jsluice + Kingfisher), so the end-state is
-to **union** them, not delete one.
+`platform/` is **v2** — a complete, requirements-driven rewrite (`archive/Javascript recon
+app redesign/Developer Requirements.dc.html`, 40 REQ-* IDs). `capture/` is **v1** (the older
+JS Security Extractor). The **only** capability carried forward from v1 is the **Chrome
+extension** — runtime, in-browser, post-authentication capture (v2 otherwise only does static
+crawl/upload). v1's own backend + web UI are **not** kept: v2 already ships its own analysis
+(Vespasian/tree-sitter AST + Kingfisher secrets + Sourcemapper), its own Sources viewer, and
+its own findings/OpenAPI pipeline, all per v2's requirements. v1-only tooling (`jsluice`, the
+asset-provenance graph) is **not** in v2's spec and is being left behind — NOT unioned in.
+(Earlier drafts of this doc claimed the two analysis cores were "complementary" and should be
+"unioned"; that was a v1-porting assumption, unsupported by the requirements — jsluice appears
+in zero REQ-* items — and is retracted here.)
 
-The `apps/` split is deliberate. Per the staff-engineer / engineering-manager review, the
-right move now is a clean separation; converging onto one backend/DB/UI is a later,
-**product-triggered** step (route runtime captures into the platform's OpenAPI /
-shadow-API pipeline) — done incrementally behind a flag, never a big-bang rewrite.
+**Active program (2026-08): converge onto v2.** Wire the extension into v2's existing pipeline
+— harden the flag-gated `apps/platform/src/recon/api/capture_router.py` ingest into a real,
+`run_asset`-batched, worker-driven path — reach contract parity, then **delete** `capture/api`
++ `capture/web`. Done incrementally behind a flag; the extension is never broken and v1 is
+removed last — never a big-bang rewrite.
+
+**Phase 1 (ingest) — DONE (flag-gated, `RECON_ENABLE_CAPTURE_INGEST`).** The spike's throwaway
+ingest is productionized on the model **one Run per capture session**: every `POST /api/save-files`
+batch accumulates into the session's single open (QUEUED) run — blobs to real S3, one `run_asset`
+row per file pre-marked `fetch_ok` — and `POST /api/sessions/{id}/analyze/start` emits the
+`discover.assets` event and enqueues **one** worker walk. The pre-fetched assets make the
+DISCOVER/FETCH stages no-op (no katana, **no network egress** of captured URLs); only ANALYZE does
+real work. Idempotent by construction (content-addressed blobs + `(run_id,url)` conflict-skip), so
+the extension's whole-batch retries never duplicate a run. Phases 2–4 (endpoint parity → robustness
+→ cutover + delete v1) still pending.
 
 ## The extension <-> capture-backend contract
 
 The extension is hard-coupled to `apps/capture/api` (default `workspaceUrl=http://localhost:3000`).
-The platform implements **none** of these, so "re-point the extension at the platform" is a
-real feature, not a config change. Pin these when converging
-(see `apps/capture/chrome-extension/modules/workspace-client.js`):
+"Re-point the extension at the platform" is a real feature, not a config change. Status of each
+route on the platform (flag-gated by `RECON_ENABLE_CAPTURE_INGEST`; see
+`apps/capture/chrome-extension/modules/workspace-client.js`):
 
-- `POST /api/save-files` — batched JSON push of captured files
-- `GET  /api/health`
-- `POST /api/sessions/{id}/analyze/start` · `GET /api/sessions/{id}/analyze/progress`
-- `GET|POST /api/projects`
+- `POST /api/save-files` — batched JSON push of captured files — **Phase 1, implemented**
+- `GET  /api/health` — **Phase 1, implemented**
+- `POST /api/sessions/{id}/analyze/start` — **Phase 1, implemented** (worker-driven)
+- `GET /api/sessions/{id}/analyze/progress` — **Phase 2, pending** (extension polls it; 404s until then)
+- `GET|POST /api/projects` — **Phase 2, pending** (project binding; a `projectId` in save-files
+  metadata is currently ignored — Phase 1 deliberately keeps client metadata off the
+  session-create path)
 
 ## Running
 

@@ -1,5 +1,8 @@
+# Turn on the flag-gated extension->platform ingest (POST /api/save-files +
+# /api/sessions/{id}/analyze/start) for local dev. Blob storage is the normal
+# S3/MinIO path, so the base compose's worker + minio must be up. Remove this
+# file (or set RECON_ENABLE_CAPTURE_INGEST=false) to revert to platform-only.
 services:
   api:
     environment:
       RECON_ENABLE_CAPTURE_INGEST: "true"
-      RECON_CAPTURE_STORAGE_DIR: "/tmp/capture-blobs"

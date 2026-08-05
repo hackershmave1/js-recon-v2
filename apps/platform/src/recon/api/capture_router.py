@@ -1,70 +1,77 @@
-"""SPIKE: extension -> platform ingest bridge (throwaway, flag-gated).
+"""Extension -> platform ingest (Phase 1, flag-gated).
 
-Accepts the Chrome extension's batched ``POST /api/save-files`` payload and fans
-it into the platform's EXISTING run->analyze machinery — one platform ``Run`` per
-file — running analyze SYNCHRONOUSLY in-process (no Redis worker/queue). Its whole
-purpose is to MEASURE how deeply the platform's analysis couples to Redis /
-S3-MinIO / multi-tenant RLS. Mounted only when ``settings.enable_capture_ingest``
-is true (see ``api/app.py``, which also swaps blob storage to local disk).
+Accepts the Chrome extension's batched ``POST /api/save-files`` and accumulates a
+capture SESSION's files into ONE platform ``Run`` (run-per-capture-session): each
+batch stores its blobs to S3 and seeds pre-fetched ``run_asset`` rows; analysis is
+worker-driven, triggered once by ``POST /api/sessions/{id}/analyze/start`` which
+emits the ``discover.assets`` event and enqueues the DISCOVERING stage. The worker
+then walks DISCOVERING (no-op: the event short-circuits the crawl) -> FETCHING
+(no-op: every asset is already ``fetch_ok`` with its uploaded blob, so nothing is
+egressed) -> INGESTING/CORRELATING (no-op stubs) -> ANALYZING (real) -> finalize.
+Mounted only when ``settings.enable_capture_ingest`` is true (see ``api/app.py``).
 
-Deliberate spike shortcuts, documented so they aren't mistaken for real design:
-- One ``Run`` per file (``Run.input_ref`` is singular). A real bridge would batch
-  N files into one run via ``run_asset`` rows (the Slice-Y multi-asset path).
-- ``run.state`` stays ``"queued"``: we skip the worker's 5-stage walk.
-  ``list_findings`` ignores ``run.state`` so findings still read back — the state
-  is cosmetic here, not a bug.
-- No ``X-Tenant-Id`` header: a single ``capture-spike`` tenant is get-or-created.
-  No auth. This is a single-user local seam, not the multi-tenant contract.
-- Never returns 4xx for a per-file failure: the extension DROPS a whole batch on
-  any 4xx (non-429), so a bad file would silently lose un-recapturable post-auth
-  JS. Failures are recorded per file and the batch still returns 200.
+Idempotency (trap T6, settled "run-per-capture-session"): a retried batch re-stores
+the SAME content-addressed blob key, ``seed_pending`` skips the existing
+``(run_id, url)`` row, and an already-``fetch_ok`` asset is left untouched — so a
+retry never makes a duplicate run or asset. No client idempotency key, no schema
+change.
+
+Shaped by the §4 adversarial design review — two deliberate omissions on the
+session-create hot path:
+- NO ``engagement_id`` / ``scope_hosts`` from client metadata. An invalid
+  ``projectId`` or scope host raises in ``create_session``; on this path that
+  surfaces as a permanent 4xx (the extension DROPS un-recapturable JS) or a 5xx
+  retry loop. Project binding + scope seeding are Phase 2 (with ``/api/projects``).
+  Scope is inert here anyway: captured assets are pre-fetched, never egressed.
+- Files are validated PER FILE inside the handler, not by a body-level pydantic
+  model, so one malformed file can't 422 (and lose) the whole batch.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update
+from redis import Redis
+from sqlalchemy import exists, select
 
 from recon import storage
 from recon.api.deps import get_redis
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
-from recon.db.models import EngagementSession, Run, Tenant
-from recon.findings import analyze
+from recon.db.models import EngagementSession, Job, Run, RunAsset, Tenant
+from recon.domain import AssetStatus, RunStage, RunState
+from recon.events.log import publish, record_event
 from recon.observability import get_logger
+from recon.runs import assets, coordinator
 from recon.runs import service as runs_service
 from recon.sessions import service as sessions_service
 
 log = get_logger("recon.api.capture")
 
-router = APIRouter(prefix="/api", tags=["capture-spike"])
-
-
-class CaptureFileIn(BaseModel):
-    model_config = {"extra": "allow"}  # tolerate the extension's extra keys
-    url: str
-    contentHash: str
-    sessionId: str
-    content: str
-    contentLength: int | None = None
-    sourceMapUrl: str | None = None
-    sourceMapContent: dict | None = None
-    headers: dict[str, str] | None = None
-    dependencies: list[dict] = Field(default_factory=list)
+router = APIRouter(prefix="/api", tags=["capture"])
 
 
 class SaveFilesIn(BaseModel):
+    """Lenient by design: ``files`` is a list of raw dicts validated per-file in
+    the handler (see the module docstring), never a body-level pydantic model."""
+
     metadata: dict[str, Any] = Field(default_factory=dict)
-    files: list[CaptureFileIn]
+    files: list[dict[str, Any]] = Field(default_factory=list)
 
 
 @router.get("/health")
 def capture_health() -> dict:
     """Mirror the extension's workspace-client health probe."""
-    return {"status": "ok", "mode": "platform-spike"}
+    return {"status": "ok", "mode": "platform"}
+
+
+# --------------------------------------------------------------------------- #
+# Tenant + session resolution (single capture tenant; no X-Tenant-Id header).
+# --------------------------------------------------------------------------- #
 
 
 def _get_or_create_tenant(name: str) -> str:
@@ -76,22 +83,93 @@ def _get_or_create_tenant(name: str) -> str:
     return sessions_service.create_tenant(name)
 
 
+def _find_session_by_name(tenant_id: str, ext_session_id: str) -> str | None:
+    with tenant_session(tenant_id) as session:
+        row = session.scalar(
+            select(EngagementSession).where(EngagementSession.name == ext_session_id)
+        )
+        return str(row.id) if row is not None else None
+
+
 def _get_or_create_session(tenant_id: str, ext_session_id: str) -> str:
     # Map the extension's sessionId -> a platform session idempotently, keyed by
     # name, so a retried batch reuses the session instead of piling up duplicates.
-    with tenant_session(tenant_id) as session:
-        existing = session.scalar(
-            select(EngagementSession).where(EngagementSession.name == ext_session_id)
-        )
-        if existing is not None:
-            return str(existing.id)
+    existing = _find_session_by_name(tenant_id, ext_session_id)
+    if existing is not None:
+        return existing
+    # §4 defects A/B: NO engagement_id, EMPTY scope — invalid client metadata must
+    # never raise on the ingest hot path (see the module docstring).
     view = sessions_service.create_session(
         tenant_id,
         name=ext_session_id,
-        scope_hosts=[],  # an upload needs no egress scope (S3)
+        scope_hosts=[],
         authorized_by="chrome-extension-capture",
     )
     return view.id
+
+
+# --------------------------------------------------------------------------- #
+# Accumulating run: one open Run per capture session, appended to across batches.
+# --------------------------------------------------------------------------- #
+
+
+def _accumulating_run_id(tenant_id: str, session_id: str, redis: Redis) -> str:
+    """The session's open run to append this batch to: its latest QUEUED run that
+    has no Job yet. Once ``analyze/start`` enqueues a Job the run is "sealed", so
+    the next batch opens a fresh run (a new capture round). ``target`` stays None:
+    an upload run must never be crawled/fetched — the discover/fetch stages no-op
+    on a target-less, pre-fetched run (``crawl.py:45`` / ``fetch.py:171``)."""
+    with tenant_session(tenant_id) as session:
+        run_id = session.scalar(
+            select(Run.id)
+            .where(
+                Run.session_id == str(session_id),
+                Run.state == RunState.QUEUED.value,
+                ~exists(select(Job.id).where(Job.run_id == Run.id)),
+            )
+            .order_by(Run.created_at.desc())
+            .limit(1)
+        )
+        if run_id is not None:
+            return str(run_id)
+    view = runs_service.create_run(
+        redis, tenant_id=tenant_id, session_id=str(session_id), target=None
+    )
+    return view.id
+
+
+def _valid_file(f: dict, max_bytes: int) -> tuple[str, bytes] | None:
+    """``(url, content_bytes)`` for a well-formed, within-cap file, else ``None``
+    (a per-file failure — never a batch-wide 422). The cap bounds worker memory
+    (REQ-Q5): the analyze stage reads the whole blob in."""
+    url = f.get("url")
+    content = f.get("content")
+    if not isinstance(url, str) or not url or not isinstance(content, str):
+        return None
+    data = content.encode("utf-8")
+    if len(data) > max_bytes:
+        return None
+    return url, data
+
+
+def _seed_fetched_assets(tenant_id: str, run_id: str, keys_by_url: dict[str, str]) -> None:
+    """Seed this batch's urls as ``run_asset`` rows and mark each ``fetch_ok`` with
+    its uploaded blob key — in ONE transaction, so a row is never left committed as
+    PENDING-without-``input_ref`` (which the FETCHING stage would try to egress).
+    Idempotent: ``seed_pending`` skips an existing ``(run_id, url)``; a url already
+    ``fetch_ok`` is left as-is (first-wins — a retry or a later same-url batch never
+    clobbers the original blob)."""
+    with tenant_session(tenant_id) as session:
+        assets.seed_pending(session, tenant_id=tenant_id, run_id=run_id, urls=list(keys_by_url))
+        session.flush()  # make the seeded rows visible to the query below, same tx
+        by_url = {
+            row.url: row
+            for row in session.scalars(select(RunAsset).where(RunAsset.run_id == str(run_id)))
+        }
+        for url, key in keys_by_url.items():
+            row = by_url.get(url)
+            if row is not None and row.fetch_status == AssetStatus.PENDING.value and not row.input_ref:
+                assets.set_fetch_ok(session, str(row.id), key)
 
 
 @router.post("/save-files")
@@ -99,66 +177,141 @@ def save_files(payload: SaveFilesIn) -> dict:
     settings = get_settings()
     redis = get_redis()
     meta = payload.metadata or {}
-    should_analyze = bool(meta.get("performAnalysis")) and not meta.get("disableAnalysis")
-
     ext_session_id = meta.get("sessionId") or (
-        payload.files[0].sessionId if payload.files else None
+        payload.files[0].get("sessionId") if payload.files else None
     )
     tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
-    platform_session_id = (
-        _get_or_create_session(tenant_id, ext_session_id) if ext_session_id else None
-    )
-    if platform_session_id is None:
+    if not ext_session_id:
         return {
-            "success": True, "stored": 0, "files": [], "sessionId": None,
-            "analysis": {"requested": should_analyze, "completed": 0, "failed": 0},
+            "success": True, "sessionId": None, "runId": None,
+            "stored": 0, "failed": 0, "files": [],
         }
+    session_id = _get_or_create_session(tenant_id, ext_session_id)
+    run_id = _accumulating_run_id(tenant_id, session_id, redis)
 
     file_results: list[dict] = []
-    completed = failed = 0
+    keys_by_url: dict[str, str] = {}
+    stored = failed = 0
     for f in payload.files:
-        try:
-            view = runs_service.create_run(
-                redis, tenant_id=tenant_id, session_id=platform_session_id, target=f.url
-            )
-            key = storage.put_blob(tenant_id, view.id, "input", f.content.encode("utf-8"))
-            with tenant_session(tenant_id) as session:
-                session.execute(update(Run).where(Run.id == view.id).values(input_ref=key))
-            analysis: dict[str, Any] = {"requested": should_analyze, "status": "skipped"}
-            if should_analyze:
-                cov = analyze.analyze_run(
-                    redis, tenant_id=tenant_id, run_id=view.id, job_id=None
-                )
-                analysis = {
-                    "requested": True, "status": "completed",
-                    "attributed": cov.attributed, "unattributed": cov.unattributed,
-                    "secrets": cov.secrets, "secrets_engine": cov.secrets_engine,
-                    "findings_written": cov.findings_written,
-                }
-                completed += 1
-            file_results.append({
-                "fileId": view.id, "runId": view.id, "url": f.url,
-                "contentHash": f.contentHash, "analysis": analysis,
-            })
-        except Exception as exc:  # spike: surface, don't 4xx-drop the batch
+        content_hash = f.get("contentHash")
+        parsed = _valid_file(f, settings.max_upload_bytes)
+        if parsed is None:
             failed += 1
-            log.warning("capture.save_files.file_failed", url=f.url, error=str(exc))
             file_results.append({
-                "url": f.url, "contentHash": f.contentHash,
-                "analysis": {"requested": should_analyze, "status": "failed", "error": str(exc)},
+                "url": f.get("url"), "contentHash": content_hash,
+                "stored": False, "error": "invalid or oversized file",
             })
+            continue
+        url, data = parsed
+        if url in keys_by_url:
+            # A repeat url within one batch: keep the first (first-wins). Don't
+            # store an orphan blob or double-count — the asset already maps to the
+            # first file's content.
+            file_results.append({
+                "url": url, "contentHash": content_hash,
+                "stored": False, "error": "duplicate url in batch",
+            })
+            continue
+        try:
+            key = storage.put_blob(tenant_id, run_id, "input", data)
+        except Exception as exc:  # infra: 5xx so the extension RETRIES the whole (idempotent) batch
+            log.error("capture.save_files.blob_failed", url=url, error=str(exc))
+            raise HTTPException(status_code=503, detail="blob storage unavailable") from exc
+        keys_by_url[url] = key
+        stored += 1
+        file_results.append({
+            "url": url, "contentHash": content_hash, "runId": run_id, "stored": True,
+        })
 
-    log.info("capture.save_files", stored=len(file_results), analyzed=completed, failed=failed)
+    if keys_by_url:
+        _seed_fetched_assets(tenant_id, run_id, keys_by_url)
+
+    log.info("capture.save_files", session=ext_session_id, run_id=run_id, stored=stored, failed=failed)
     return {
         "success": True,
-        "sessionId": platform_session_id,
-        "stored": len(file_results),
-        "fileIds": [r["fileId"] for r in file_results if "fileId" in r],
+        "sessionId": session_id,
+        "runId": run_id,
+        "stored": stored,
+        "failed": failed,
         "files": file_results,
-        "analysis": {"requested": should_analyze, "completed": completed, "failed": failed},
-        "_spike": {
-            "tenant_id": tenant_id, "storage": "local-disk",
-            "run_state": "queued (worker skipped; analyze ran inline)",
-            "mapping": "one platform run per file",
-        },
     }
+
+
+# --------------------------------------------------------------------------- #
+# analyze/start: emit discover.assets + enqueue the worker once, on the session's
+# latest run (the one /save-files accumulated into).
+# --------------------------------------------------------------------------- #
+
+
+def _latest_run_id(tenant_id: str, session_id: str) -> str | None:
+    with tenant_session(tenant_id) as session:
+        run_id = session.scalar(
+            select(Run.id)
+            .where(Run.session_id == str(session_id))
+            .order_by(Run.created_at.desc())
+            .limit(1)
+        )
+        return str(run_id) if run_id is not None else None
+
+
+def _run_has_job(tenant_id: str, run_id: str) -> bool:
+    with tenant_session(tenant_id) as session:
+        return bool(
+            session.scalar(select(exists(select(Job.id).where(Job.run_id == str(run_id)))))
+        )
+
+
+def _manifest_domain(rows: list, fallback: str) -> str:
+    for row in rows:
+        host = urlsplit(row.url).hostname
+        if host:
+            return host
+    return fallback
+
+
+@router.post("/sessions/{ext_session_id}/analyze/start")
+def analyze_start(ext_session_id: str) -> dict:
+    redis = get_redis()
+    settings = get_settings()
+    tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
+    session_id = _find_session_by_name(tenant_id, ext_session_id)
+    if session_id is None:
+        raise HTTPException(status_code=404, detail="unknown capture session")
+
+    run_id = _latest_run_id(tenant_id, session_id)
+    if run_id is None:
+        return {"started": False, "message": "no run to analyze"}
+    rows = assets.list_for_run(tenant_id, run_id)
+    if not rows:
+        return {"started": False, "message": "no captured files to analyze"}
+    if _run_has_job(tenant_id, run_id):
+        # Already enqueued (idempotent: a retried analyze/start, or the run is a
+        # completed prior round). Do not enqueue a second walk.
+        return {"started": True, "message": "analysis already started", "runId": run_id}
+
+    # Store an assets manifest so GET /runs/{id}/assets reads back (trap T5), then
+    # emit the discover.assets event: the coordinator uses it to (a) short-circuit
+    # the crawl stage and (b) finalize DONE/PARTIAL from per-asset status. status
+    # MUST be the literal "ok" (coordinator._finalize_state).
+    manifest = {
+        "domain": _manifest_domain(rows, ext_session_id),
+        "status": "ok",
+        "assets": [{"url": r.url, "source": "extension"} for r in rows],
+    }
+    assets_ref = storage.put_blob(
+        tenant_id, run_id, "assets", json.dumps(manifest).encode("utf-8")
+    )
+    with tenant_session(tenant_id) as session:
+        event = record_event(
+            session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            event_type="discover.assets",
+            payload={"count": len(rows), "assets_ref": assets_ref, "status": "ok"},
+        )
+    publish(redis, event)  # after commit — a subscriber must never see an unpersisted event
+    job_id = coordinator.enqueue_stage(
+        redis, tenant_id=tenant_id, run_id=run_id, stage=RunStage.DISCOVERING
+    )
+    log.info("capture.analyze_start", session=ext_session_id, run_id=run_id, count=len(rows), job=job_id)
+    return {"started": True, "job": job_id, "runId": run_id}

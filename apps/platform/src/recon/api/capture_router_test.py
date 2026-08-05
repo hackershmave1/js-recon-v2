@@ -1,0 +1,305 @@
+"""Integration tests for the flag-gated extension -> platform ingest (Phase 1).
+
+Proves the "run-per-capture-session" model end to end: batches accumulate into one
+QUEUED run (idempotently, no worker), then analyze/start emits the discover.assets
+event + enqueues one walk that the REAL worker drives to findings — with the
+pre-ANALYZING stages no-op'ing over the pre-fetched assets (no katana, no network).
+
+Needs the live stack (Postgres/Redis/MinIO) like the other integration tests; the
+S3 endpoint is taken from the environment (RECON_S3_ENDPOINT_URL -> MinIO).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import uuid
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import func, select
+
+from recon.api.app import create_app
+from recon.config import get_settings
+from recon.db.base import admin_session, tenant_session
+from recon.db.models import Job, Run, Tenant
+from recon.discover import queries as discover_queries
+from recon.domain import RunState
+from recon.fetch import egress, fetch
+from recon.findings import queries as findings_queries
+from recon.runs import assets as run_assets
+from recon.runs import queries as run_queries
+from recon.runs import state_machine as sm
+from recon.worker import main as worker
+
+pytestmark = pytest.mark.integration
+
+
+@pytest.fixture()
+def make_capture_client(monkeypatch, redis):
+    """Build a TestClient with the capture-ingest flag ON and a UNIQUE capture
+    tenant per test (so tests don't collide on a shared tenant). Extra kwargs set
+    additional ``RECON_*`` env before the settings cache is rebuilt."""
+
+    def _make(**env) -> TestClient:
+        name = f"capture-test-{uuid.uuid4().hex[:8]}"
+        monkeypatch.setenv("RECON_ENABLE_CAPTURE_INGEST", "true")
+        monkeypatch.setenv("RECON_CAPTURE_TENANT_NAME", name)
+        for key, value in env.items():
+            monkeypatch.setenv(key, str(value))
+        get_settings.cache_clear()
+        client = TestClient(create_app())
+        client.capture_tenant_name = name  # type: ignore[attr-defined]
+        return client
+
+    yield _make
+    get_settings.cache_clear()
+
+
+def _tenant_id(name: str) -> str:
+    with admin_session() as session:
+        return str(session.scalar(select(Tenant.id).where(Tenant.name == name)))
+
+
+def _file(url: str, content: str, session_id: str) -> dict:
+    return {
+        "url": url,
+        "content": content,
+        "sessionId": session_id,
+        "contentHash": hashlib.sha256(content.encode()).hexdigest()[:16],
+        "contentLength": len(content),
+    }
+
+
+def _save(client: TestClient, sid: str, files: list[dict]) -> dict:
+    r = client.post(
+        "/api/save-files",
+        json={"metadata": {"sessionId": sid, "disableAnalysis": True}, "files": files},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+# --------------------------------------------------------------------------- #
+# save-files: accumulate, idempotency, per-file failure isolation.
+# --------------------------------------------------------------------------- #
+
+
+def test_health(make_capture_client):
+    r = make_capture_client().get("/api/health")
+    assert r.status_code == 200 and r.json()["status"] == "ok"
+
+
+def test_save_files_accumulates_one_queued_run(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    body = _save(client, sid, [
+        _file("https://acme.io/a.js", "fetch('/api/v1/users');", sid),
+        _file("https://acme.io/b.js", "fetch('/v2/orders',{method:'POST'});", sid),
+    ])
+    assert body["stored"] == 2 and body["failed"] == 0
+    run_id, tid = body["runId"], _tenant_id(client.capture_tenant_name)
+
+    with tenant_session(tid) as s:
+        run = s.get(Run, run_id)
+        assert run.state == RunState.QUEUED.value
+        # multi-asset: content lives on run_asset.input_ref, NEVER run.input_ref
+        # (setting it would put the run on the singular-upload path). target stays
+        # None so the discover/fetch stages no-op (never crawl/egress).
+        assert run.input_ref is None
+        assert run.target is None
+        n_jobs = s.scalar(select(func.count()).select_from(Job).where(Job.run_id == run_id))
+        assert n_jobs == 0  # not enqueued until analyze/start
+
+    rows = run_assets.list_for_run(tid, run_id)
+    assert len(rows) == 2
+    assert all(row.fetch_status == "ok" and row.input_ref for row in rows)
+    assert len(findings_queries.list_findings(tid, run_id).findings) == 0  # no analysis yet
+
+
+def test_save_files_retry_is_idempotent(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    files = [_file("https://acme.io/a.js", "a();", sid), _file("https://acme.io/b.js", "b();", sid)]
+    b1 = _save(client, sid, files)
+    b2 = _save(client, sid, files)  # exact retry (same bytes, same urls)
+    assert b1["runId"] == b2["runId"]  # reused the accumulating run
+    tid = _tenant_id(client.capture_tenant_name)
+    assert len(run_assets.list_for_run(tid, b1["runId"])) == 2  # no duplicate assets
+    with tenant_session(tid) as s:
+        n_runs = s.scalar(
+            select(func.count()).select_from(Run).where(Run.session_id == b1["sessionId"])
+        )
+        assert n_runs == 1  # no duplicate run
+
+
+def test_two_batches_accumulate_into_one_run(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    b1 = _save(client, sid, [_file("https://acme.io/a.js", "a();", sid)])
+    b2 = _save(client, sid, [_file("https://acme.io/b.js", "b();", sid)])
+    assert b1["runId"] == b2["runId"]
+    tid = _tenant_id(client.capture_tenant_name)
+    rows = run_assets.list_for_run(tid, b1["runId"])
+    assert {row.url for row in rows} == {"https://acme.io/a.js", "https://acme.io/b.js"}
+
+
+def test_duplicate_url_in_batch_first_wins(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    first, second = "first();", "second();"
+    body = _save(client, sid, [
+        _file("https://acme.io/x.js", first, sid),
+        _file("https://acme.io/x.js", second, sid),  # same url, different content
+    ])
+    tid = _tenant_id(client.capture_tenant_name)
+    rows = run_assets.list_for_run(tid, body["runId"])
+    assert len(rows) == 1  # coalesced to a single (run_id, url) asset
+    assert rows[0].input_ref.endswith(hashlib.sha256(first.encode()).hexdigest())  # first wins
+
+
+def test_oversize_file_is_a_per_file_failure_not_a_batch_drop(make_capture_client):
+    client = make_capture_client(RECON_MAX_UPLOAD_BYTES=16)
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    body = _save(client, sid, [
+        _file("https://acme.io/big.js", "x" * 100, sid),  # over the 16-byte cap
+        _file("https://acme.io/ok.js", "y();", sid),
+    ])
+    assert body["stored"] == 1 and body["failed"] == 1  # batch survived, sibling stored
+    tid = _tenant_id(client.capture_tenant_name)
+    rows = run_assets.list_for_run(tid, body["runId"])
+    assert {row.url for row in rows} == {"https://acme.io/ok.js"}
+
+
+def test_malformed_file_does_not_reject_the_whole_batch(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    body = _save(client, sid, [
+        {"url": "https://acme.io/bad.js"},  # missing content -> per-file failure, not a 422
+        _file("https://acme.io/good.js", "ok();", sid),
+    ])
+    assert body["stored"] == 1 and body["failed"] == 1
+    tid = _tenant_id(client.capture_tenant_name)
+    assert {r.url for r in run_assets.list_for_run(tid, body["runId"])} == {"https://acme.io/good.js"}
+
+
+def test_save_files_without_session_id_is_noop(make_capture_client):
+    r = make_capture_client().post("/api/save-files", json={"metadata": {}, "files": []})
+    assert r.status_code == 200 and r.json()["runId"] is None and r.json()["stored"] == 0
+
+
+def test_blob_store_failure_returns_503_so_the_extension_retries(make_capture_client, monkeypatch):
+    # An infra failure (object store down) must be a 5xx: the extension treats any
+    # non-429 4xx as a PERMANENT drop of un-recapturable JS, but retries 5xx.
+    client = make_capture_client()
+    monkeypatch.setattr("recon.storage.put_blob", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("minio down")))
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    r = client.post(
+        "/api/save-files",
+        json={"metadata": {"sessionId": sid}, "files": [_file("https://acme.io/a.js", "a();", sid)]},
+    )
+    assert r.status_code == 503
+
+
+# --------------------------------------------------------------------------- #
+# analyze/start: emit + enqueue once, idempotent, seals the run.
+# --------------------------------------------------------------------------- #
+
+
+def test_analyze_start_unknown_session_is_404(make_capture_client):
+    r = make_capture_client().post(f"/api/sessions/{uuid.uuid4().hex}/analyze/start")
+    assert r.status_code == 404
+
+
+def test_analyze_start_emits_event_and_enqueues_one_walk(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    _save(client, sid, [
+        _file("https://acme.io/a.js", "fetch('/api/v1/users');", sid),
+        _file("https://acme.io/b.js", "b();", sid),
+    ])
+    body = client.post(f"/api/sessions/{sid}/analyze/start").json()
+    assert body["started"] is True and body["job"]
+    run_id, tid = body["runId"], _tenant_id(client.capture_tenant_name)
+
+    event = discover_queries.latest_assets_event(tid, run_id)
+    assert event and event["status"] == "ok" and event["count"] == 2
+    with tenant_session(tid) as s:
+        n_jobs = s.scalar(
+            select(func.count()).select_from(Job).where(Job.run_id == run_id, Job.stage == "discovering")
+        )
+        assert n_jobs == 1
+
+
+def test_analyze_start_is_idempotent(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    _save(client, sid, [_file("https://acme.io/a.js", "a();", sid)])
+    b1 = client.post(f"/api/sessions/{sid}/analyze/start").json()
+    b2 = client.post(f"/api/sessions/{sid}/analyze/start").json()
+    assert b1["started"] and b2["started"]
+    tid = _tenant_id(client.capture_tenant_name)
+    with tenant_session(tid) as s:
+        n_jobs = s.scalar(select(func.count()).select_from(Job).where(Job.run_id == b1["runId"]))
+        assert n_jobs == 1  # the second call did not enqueue a second walk
+
+
+def test_analyze_start_seals_run_next_batch_opens_new_round(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    b1 = _save(client, sid, [_file("https://acme.io/a.js", "a();", sid)])
+    client.post(f"/api/sessions/{sid}/analyze/start")  # seals run 1
+    b2 = _save(client, sid, [_file("https://acme.io/b.js", "b();", sid)])
+    assert b2["runId"] != b1["runId"]  # a fresh capture round
+
+
+def test_analyze_start_with_no_captured_files_is_a_clean_noop(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    # one invalid file -> session + run exist but with zero assets.
+    _save(client, sid, [{"url": "https://acme.io/x.js"}])
+    r = client.post(f"/api/sessions/{sid}/analyze/start").json()
+    assert r["started"] is False
+
+
+# --------------------------------------------------------------------------- #
+# End-to-end: upload -> analyze/start -> REAL worker -> findings, run DONE.
+# --------------------------------------------------------------------------- #
+
+
+def test_end_to_end_upload_analyze_to_findings(make_capture_client, redis, monkeypatch):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    _save(client, sid, [
+        _file("https://acme.io/a.js", "fetch('/api/v1/users');", sid),
+        _file("https://acme.io/b.js", "fetch('/api/v1/users'); fetch('/v2/orders',{method:'POST'});", sid),
+    ])
+    started = client.post(f"/api/sessions/{sid}/analyze/start").json()
+    assert started["started"]
+    run_id, tid = started["runId"], _tenant_id(client.capture_tenant_name)
+
+    # Prove the walk does ZERO network egress: the pre-fetched assets make discover
+    # short-circuit and fetch skip, so neither fetch_url nor the egress guard is
+    # ever reached — captured post-auth URLs must never be re-requested.
+    calls = {"fetch_url": 0, "validate_target": 0}
+    real_fetch, real_validate = fetch.fetch_url, egress.validate_target
+    monkeypatch.setattr(fetch, "fetch_url", lambda *a, **k: (calls.__setitem__("fetch_url", calls["fetch_url"] + 1), real_fetch(*a, **k))[1])
+    monkeypatch.setattr(egress, "validate_target", lambda *a, **k: (calls.__setitem__("validate_target", calls["validate_target"] + 1), real_validate(*a, **k))[1])
+
+    # Drive the REAL worker. No katana/network: discover short-circuits on the
+    # event, fetch skips every pre-fetched asset, analyze does the real extraction.
+    flags = None
+    for _ in range(80):
+        worker.run_once(redis, "capture-test-worker", block_ms=50)
+        flags = run_queries.get_run_flags(tid, run_id)
+        if flags and sm.is_terminal(RunState(flags.state)):
+            break
+    assert flags is not None and flags.state == RunState.DONE.value
+    assert calls == {"fetch_url": 0, "validate_target": 0}  # no egress at all
+
+    view = findings_queries.list_findings(tid, run_id)
+    endpoints = {f.value for f in view.findings if f.type == "endpoint"}
+    assert "GET /api/v1/users" in endpoints
+    assert "POST /v2/orders" in endpoints
+    # the shared endpoint dedupes across both assets to one finding, two occurrences
+    shared = next(f for f in view.findings if f.value == "GET /api/v1/users")
+    assert len(shared.occurrences) == 2

@@ -48,20 +48,16 @@ def create_app() -> FastAPI:
     app.include_router(base_url_router.router)
     app.include_router(wrappers_router.router)
 
-    # SPIKE (flag-gated, throwaway): mount the extension's save-files ingest onto
-    # the platform and back blob storage with LOCAL DISK instead of S3 — a seam to
-    # measure how tightly analyze couples to Redis/S3/RLS. Reassigning the module
-    # attributes works because every caller does `from recon import storage;
-    # storage.put_blob(...)` (a call-time attribute lookup). Off by default → zero
-    # impact on the normal stack. See api/capture_router.py.
+    # Flag-gated (Phase 1, extension->platform convergence): mount the extension's
+    # save-files ingest + analyze/start onto the platform. Blob storage is the
+    # normal S3/MinIO path (REQ-D2) — the worker reads back what the API wrote, so
+    # a shared object store is required (the spike's local-disk swap is gone). Off
+    # by default → zero impact on the normal stack. See api/capture_router.py.
     if settings.enable_capture_ingest:
-        from recon import storage, storage_local
         from recon.api import capture_router
 
-        storage.put_blob = storage_local.put_blob  # type: ignore[assignment]
-        storage.get_blob = storage_local.get_blob  # type: ignore[assignment]
         app.include_router(capture_router.router)
-        log.info("api.capture_ingest_enabled", storage="local-disk")
+        log.info("api.capture_ingest_enabled")
 
     @app.get("/healthz", tags=["ops"])
     def healthz() -> dict:
