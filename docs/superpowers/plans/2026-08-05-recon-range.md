@@ -44,6 +44,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const DISTS = ["dist/vite/assets", "dist/webpack"];
 const root = new URL("../", import.meta.url);
@@ -51,7 +52,7 @@ const root = new URL("../", import.meta.url);
 async function jsFiles(rel) {
   const dir = new URL(rel + "/", root);
   const entries = await readdir(dir, { withFileTypes: true });
-  return entries.filter(e => e.isFile() && e.name.endsWith(".js")).map(e => join(dir.pathname, e.name));
+  return entries.filter(e => e.isFile() && e.name.endsWith(".js")).map(e => join(fileURLToPath(dir), e.name));
 }
 
 for (const dist of DISTS) {
@@ -141,7 +142,7 @@ export default {
     chunkFilename: "[name].chunk.js",
     clean: true,
   },
-  optimization: { runtimeChunk: "single" },
+  optimization: { runtimeChunk: false },
 };
 ```
 
