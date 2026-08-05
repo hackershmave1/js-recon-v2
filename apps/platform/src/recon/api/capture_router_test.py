@@ -12,12 +12,14 @@ S3 endpoint is taken from the environment (RECON_S3_ENDPOINT_URL -> MinIO).
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
+from recon import storage
 from recon.api.app import create_app
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
@@ -445,3 +447,67 @@ def test_save_files_ignores_garbage_or_foreign_project(make_capture_client):
         assert r.status_code == 200
         tid = _tenant_id(client.capture_tenant_name)  # tenant exists after the request
         assert sessions_service.get_session(tid, r.json()["sessionId"]).engagement_id is None
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3: per-asset source map ingest -> source_map blob + run_asset.source_map_ref.
+# --------------------------------------------------------------------------- #
+
+_MAP = {"version": 3, "sources": ["app/src/a.js"], "mappings": "AAAA"}
+
+
+def _asset(tid: str, run_id: str, url: str):
+    return next(r for r in run_assets.list_for_run(tid, run_id) if r.url == url)
+
+
+def test_save_files_stores_source_map_and_links_asset(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    f = {**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": _MAP}
+    body = _save(client, sid, [f])
+    tid = _tenant_id(client.capture_tenant_name)
+    row = _asset(tid, body["runId"], "https://acme.io/a.js")
+    assert row.source_map_ref and "/source_map/" in row.source_map_ref
+    assert json.loads(storage.get_blob(row.source_map_ref)) == _MAP  # the serialized map
+
+
+def test_save_files_without_map_leaves_ref_none(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    body = _save(client, sid, [_file("https://acme.io/a.js", "a();", sid)])
+    tid = _tenant_id(client.capture_tenant_name)
+    assert _asset(tid, body["runId"], "https://acme.io/a.js").source_map_ref is None
+
+
+def test_save_files_source_map_retry_is_first_wins(make_capture_client):
+    # A later same-url batch with a DIFFERENT map must not clobber the first (mirrors
+    # the input_ref first-wins rule) — the original recovery stays stable.
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    b1 = _save(client, sid, [{**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": _MAP}])
+    tid = _tenant_id(client.capture_tenant_name)
+    ref1 = _asset(tid, b1["runId"], "https://acme.io/a.js").source_map_ref
+    other = {"version": 3, "sources": ["other.js"], "mappings": "BBBB"}
+    _save(client, sid, [{**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": other}])
+    assert _asset(tid, b1["runId"], "https://acme.io/a.js").source_map_ref == ref1  # unchanged
+
+
+def test_save_files_oversized_map_skipped_file_still_stored(make_capture_client):
+    # A map over the byte cap is dropped; the JS is still stored + analyzable.
+    client = make_capture_client(RECON_MAX_UPLOAD_BYTES=64)
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    big_map = {"version": 3, "sources": ["x"], "mappings": "A" * 200}
+    body = _save(client, sid, [{**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": big_map}])
+    assert body["stored"] == 1 and body["failed"] == 0
+    tid = _tenant_id(client.capture_tenant_name)
+    row = _asset(tid, body["runId"], "https://acme.io/a.js")
+    assert row.input_ref and row.source_map_ref is None
+
+
+def test_save_files_non_object_map_skipped(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    body = _save(client, sid, [{**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": "not-an-object"}])
+    assert body["stored"] == 1
+    tid = _tenant_id(client.capture_tenant_name)
+    assert _asset(tid, body["runId"], "https://acme.io/a.js").source_map_ref is None

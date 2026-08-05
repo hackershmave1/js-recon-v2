@@ -67,8 +67,9 @@ class Coverage:
     # genuine engine error/timeout raises before a Coverage is ever returned.
     secrets_engine: str = "ok"
     # Source-map honesty: how many original files were recovered, and how the map
-    # was handled (none | uploaded | inline | unavailable | inline-error). REQ-D5
-    # must NOT treat map-scoped endpoint coverage as full-bundle coverage.
+    # was handled (none | uploaded | inline | capture | unavailable | inline-error |
+    # capture-error). REQ-D5 must NOT treat map-scoped endpoint coverage as
+    # full-bundle coverage.
     sources_recovered: int = 0
     source_map: str = "none"
     # Per-file breakdown of the attributed/unattributed totals (REQ-C2 is a
@@ -215,7 +216,13 @@ def _analyze_assets(
                     tenant_id=tenant_id,
                     run_id=run_id,
                     input_ref=asset.input_ref,
-                    source_map_ref=None,  # a crawled asset carries no source map this slice
+                    # A capture-ingested asset may carry its own source map (the
+                    # extension captures the bundle's map post-auth); a crawled
+                    # asset's is None. Origin "capture" makes a bad map fall back to
+                    # bundle analysis instead of failing the asset (best-effort,
+                    # unlike a legacy explicit upload whose failure surfaces).
+                    source_map_ref=asset.source_map_ref,
+                    source_map_origin="capture",
                     run_asset_id=asset.id,
                     asset_url=asset.url,
                     wrappers=wrappers,
@@ -267,6 +274,7 @@ def _extract_endpoints(
     run_id: str,
     source: str,
     source_map_ref: str | None,
+    source_map_origin: str = "uploaded",
     run_asset_id: str | None,
     asset_url: str | None,
     wrappers: Sequence[WrapperRule] = (),
@@ -281,7 +289,9 @@ def _extract_endpoints(
     Retains `_analysis_units(source_map_ref, source)` so a re-emitted native
     endpoint keeps its source-map-recovered path and thus its stable
     `finding_hash` (§12 Imp 4)."""
-    units, source_map_status, sources_recovered = _analysis_units(source_map_ref, source)
+    units, source_map_status, sources_recovered = _analysis_units(
+        source_map_ref, source, source_map_origin
+    )
     attributed = 0
     unattributed = 0
     written = 0
@@ -316,6 +326,7 @@ def _analyze_blob(
     run_id: str,
     input_ref: str,
     source_map_ref: str | None,
+    source_map_origin: str = "uploaded",
     run_asset_id: str | None,
     asset_url: str | None,
     wrappers: Sequence[WrapperRule] = (),
@@ -341,7 +352,8 @@ def _analyze_blob(
 
     endpoints = _extract_endpoints(
         session, tenant_id=tenant_id, run_id=run_id, source=source,
-        source_map_ref=source_map_ref, run_asset_id=run_asset_id, asset_url=asset_url,
+        source_map_ref=source_map_ref, source_map_origin=source_map_origin,
+        run_asset_id=run_asset_id, asset_url=asset_url,
         wrappers=wrappers,
     )
     written = endpoints.written
@@ -394,10 +406,10 @@ def _merge_coverage(a: Coverage, b: Coverage) -> Coverage:
     earlier asset going unscanned, which is exactly the silent-under-reporting
     REQ-C2 exists to prevent (see ``Coverage.secrets_engine``'s own docstring —
     a scanner that was absent must not be reported as "no secrets").
-    ``source_map`` is not a health signal the same way (every asset this slice
-    passes ``source_map_ref=None``, so it is "none" in practice unless an
-    asset's own JS carries an inline map) — the latest asset's value is kept as
-    a simple, low-stakes default. ``files`` (per-source-path detail) is already
+    ``source_map`` is not a health signal the same way (a crawl asset passes
+    ``source_map_ref=None`` so it is "none" unless its JS carries an inline map; a
+    capture asset may carry its own uploaded map → "capture"/"capture-error") — the
+    latest asset's value is kept as a simple, low-stakes default. ``files`` (per-source-path detail) is already
     durably recorded on each asset's own ``analyze.coverage`` event, which is
     what REQ-C2 reads back (the highest-id event wins — see
     ``findings/queries.py``'s ``_latest_coverage``); this run-level aggregate is
@@ -418,22 +430,26 @@ def _merge_coverage(a: Coverage, b: Coverage) -> Coverage:
     )
 
 
-def _analysis_units(source_map_ref: str | None, source: str) -> tuple[list[tuple[str, str]], str, int]:
+def _analysis_units(
+    source_map_ref: str | None, source: str, source_map_origin: str = "uploaded"
+) -> tuple[list[tuple[str, str]], str, int]:
     """Decide what to analyze: recovered original sources (real paths) if a source
     map recovers any, else the bundle under ``input.js``. Returns the (name, text)
     units, the source-map status, and the count of recovered files."""
-    map_bytes, origin = _resolve_source_map(source_map_ref, source)
+    map_bytes, origin = _resolve_source_map(source_map_ref, source, source_map_origin)
     if not map_bytes:
         return [(_SOURCE_NAME, source)], "none", 0
 
     try:
         recovered = sourcemapper.recover_sources(map_bytes, origin=origin)
     except engines.EngineError:
-        # An inline map is opportunistic and rides in the (untrusted) analyzed JS,
-        # so a malformed one must NOT fail the run — fall back to bundle analysis.
-        # An uploaded map is user-supplied and explicit, so a failure surfaces.
-        if origin == "inline":
-            return [(_SOURCE_NAME, source)], "inline-error", 0
+        # An inline map rides in the (untrusted) analyzed JS, and a "capture" map is
+        # the extension's best-effort post-auth grab — both are opportunistic, so a
+        # malformed one must NOT fail the run/asset: fall back to bundle analysis and
+        # record the honest "<origin>-error" status. A legacy "uploaded" map is a
+        # deliberate user upload, so its failure still surfaces (re-raise).
+        if origin in ("inline", "capture"):
+            return [(_SOURCE_NAME, source)], f"{origin}-error", 0
         raise
     if recovered.status != "ok":  # binary unavailable -> fall back to the bundle
         return [(_SOURCE_NAME, source)], recovered.status, 0
@@ -444,9 +460,14 @@ def _analysis_units(source_map_ref: str | None, source: str) -> tuple[list[tuple
     return units, origin, len(recovered.files)
 
 
-def _resolve_source_map(source_map_ref: str | None, source: str) -> tuple[bytes | None, str]:
+def _resolve_source_map(
+    source_map_ref: str | None, source: str, source_map_origin: str = "uploaded"
+) -> tuple[bytes | None, str]:
+    # A stored ref is the explicit map for this unit; its origin ("uploaded" legacy,
+    # "capture" from the extension) decides whether a parse failure surfaces or falls
+    # back (see _analysis_units). Absent a ref, an inline data: map is opportunistic.
     if source_map_ref:
-        return storage.get_blob(source_map_ref), "uploaded"
+        return storage.get_blob(source_map_ref), source_map_origin
     inline = sourcemapper.extract_inline_map(source)
     if inline:
         return inline, "inline"

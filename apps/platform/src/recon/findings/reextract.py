@@ -50,14 +50,21 @@ def reextract_run(tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]) 
     rows = run_assets.list_for_run(tenant_id, run_id)
     written = 0
     try:
-        if rows:  # multi-asset (crawl) run: one blob per fetched asset, no source map
+        if rows:  # multi-asset run: one blob per fetched asset (each may carry a capture map)
             for asset in rows:
                 if asset.fetch_status != AssetStatus.OK.value or not asset.input_ref:
                     continue
                 with tenant_session(tenant_id) as session:
+                    # Thread the asset's source map + "capture" origin exactly as the
+                    # analyze stage does (analyze.py `_analyze_assets`): a capture
+                    # asset's original findings are attributed to the map-recovered
+                    # path, so re-extract MUST recover the same paths or it would write
+                    # the wrapper endpoint under `input.js` — a divergent finding_hash,
+                    # i.e. a duplicate finding instead of an update (§12 Imp 4).
                     written += _reextract_blob(
                         session, tenant_id=tenant_id, run_id=run_id,
-                        input_ref=asset.input_ref, source_map_ref=None,
+                        input_ref=asset.input_ref, source_map_ref=asset.source_map_ref,
+                        source_map_origin="capture",
                         run_asset_id=asset.id, asset_url=asset.url, wrappers=wrappers,
                     )
         elif input_ref:  # legacy single-blob run (with its own source map, if any)
@@ -74,13 +81,15 @@ def reextract_run(tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]) 
 
 def _reextract_blob(
     session, *, tenant_id: str, run_id: str, input_ref: str,
-    source_map_ref: str | None, run_asset_id: str | None, asset_url: str | None,
+    source_map_ref: str | None, source_map_origin: str = "uploaded",
+    run_asset_id: str | None, asset_url: str | None,
     wrappers: Sequence[WrapperRule],
 ) -> int:
     raw = storage.get_blob(input_ref)
     source = raw.decode("utf-8", "replace")
     return _extract_endpoints(
         session, tenant_id=tenant_id, run_id=run_id, source=source,
-        source_map_ref=source_map_ref, run_asset_id=run_asset_id, asset_url=asset_url,
+        source_map_ref=source_map_ref, source_map_origin=source_map_origin,
+        run_asset_id=run_asset_id, asset_url=asset_url,
         wrappers=wrappers,
     ).written

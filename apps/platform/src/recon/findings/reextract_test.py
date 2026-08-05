@@ -128,6 +128,44 @@ def test_reextract_multi_asset_does_not_reemit_coverage(redis, authorized_sessio
     assert "GET /a" in _endpoint_findings(tenant, run_id)
 
 
+def test_reextract_multi_asset_preserves_capture_map_path(redis, authorized_session, monkeypatch):
+    # §4 MUST-FIX regression: a capture asset's ORIGINAL findings are attributed to the
+    # map-recovered path, so re-extract must recover the SAME path — else the wrapper
+    # endpoint lands under `input.js` with a divergent finding_hash (a duplicate, not
+    # an update; §12 Imp 4). Before the fix, reextract hardcoded source_map_ref=None
+    # for assets. recover_sources is faked (no Go binary); the recovered source carries
+    # the wrapper call.
+    from recon.findings import sourcemapper
+
+    tenant, session_id = authorized_session
+    recovered_src = b"const api = makeClient(); api.get('/w');"
+
+    def fake_recover(map_bytes, **_kwargs):
+        return sourcemapper.RecoveredSources(
+            files=[sourcemapper.RecoveredFile("app/src/api.js", recovered_src)],
+            status="ok", origin="capture",
+        )
+
+    monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
+
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
+    input_key = storage.put_blob(tenant, view.id, "input", recovered_src)
+    map_key = storage.put_blob(tenant, view.id, "source_map", b'{"version":3}')
+    with tenant_session(tenant) as session:
+        session.add(models.RunAsset(
+            tenant_id=tenant, run_id=view.id, url="https://acme.io/app.js",
+            input_ref=input_key, source_map_ref=map_key,
+            fetch_status=AssetStatus.OK.value, analyze_status=AssetStatus.OK.value,
+        ))
+
+    reextract.reextract_run(tenant, view.id, [WrapperRule("api")])
+
+    found = _endpoint_findings(tenant, view.id)
+    assert "GET /w" in found
+    assert found["GET /w"].path == "app/src/api.js"  # recovered path, NOT input.js
+    assert found["GET /w"].finding_hash == finding_hash("endpoint", "GET /w", "app/src/api.js")
+
+
 def test_reextract_unknown_run_is_none(redis, authorized_session):
     tenant, _session_id = authorized_session
     assert reextract.reextract_run(

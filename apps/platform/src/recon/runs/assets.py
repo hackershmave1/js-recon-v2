@@ -28,6 +28,10 @@ class AssetRow:
     input_ref: str | None
     fetch_status: str
     analyze_status: str
+    # Optional per-asset source map blob key (kind="source_map"); None for a
+    # crawled asset or one the extension captured without a map. Default keeps
+    # existing constructors (tests, older callers) working unchanged.
+    source_map_ref: str | None = None
 
 
 def seed_pending(session: Session, *, tenant_id: str, run_id: str, urls: list[str]) -> None:
@@ -53,6 +57,7 @@ def list_for_run(tenant_id: str, run_id: str) -> list[AssetRow]:
             AssetRow(
                 id=str(r.id), url=r.url, input_ref=r.input_ref,
                 fetch_status=r.fetch_status, analyze_status=r.analyze_status,
+                source_map_ref=r.source_map_ref,
             )
             for r in rows
         ]
@@ -69,6 +74,13 @@ def set_fetch_ok(session: Session, asset_id: str, input_ref: str) -> None:
         session, asset_id,
         {"input_ref": input_ref, "fetch_status": AssetStatus.OK.value, "fetch_error": None}
     )
+
+
+def set_source_map_ref(session: Session, asset_id: str, source_map_ref: str) -> None:
+    """Link a stored source map blob to an asset. Set once, in the same tx that
+    marks the asset fetch_ok (capture ingest) — first-wins, so a retry or a later
+    same-url batch never clobbers the original map."""
+    _set(session, asset_id, {"source_map_ref": source_map_ref})
 
 
 def set_fetch_failed(session: Session, asset_id: str, error: str) -> None:

@@ -54,8 +54,17 @@ never-analyzed run so the Analyze button stays live, and *settles* a terminal ru
 never sticks); `GET|POST /api/projects` adapts v2 engagements to the extension's project shape (a
 bare JSON array, `id`, and a synthesized `defaults.scope` doc). `save-files` now binds a valid
 `projectId` to its engagement — defensively: an unknown/malformed id is ignored, never dropping
-the batch. Phases 3–4 (robustness: async/chunked ingest + source-map wiring → cutover + delete v1)
-still pending.
+the batch.
+
+**Phase 3 (robustness) — DONE (flag-gated).** Per-file source maps sent by the extension are now
+stored per asset (new `run_asset.source_map_ref`, migration 0010) and wired into analysis, so recon
+recovers real per-source paths instead of analyzing everything under `input.js`. Capture maps are
+tolerant: a malformed map falls back to bundle analysis rather than failing the asset and dropping
+its findings (`source_map_origin="capture"`; legacy explicit uploads stay strict). Ingest stays
+synchronous — content-addressed idempotency already makes a timeout+retry safe, so async-202 was
+rejected as trading a correct retry for silent-loss risk — with a per-batch timing log as the
+tripwire. Phase 4 (cutover: repoint the extension default → platform, migrate data worth keeping,
+delete `apps/capture/{api,web}`, rewrite this doc) is the last step and still pending.
 
 ## The extension <-> capture-backend contract
 

@@ -370,6 +370,12 @@ class RunAsset(Base):
     )
     url: Mapped[str] = mapped_column(Text, nullable=False)
     input_ref: Mapped[str | None] = mapped_column(Text)
+    # Optional per-asset source map blob key (kind="source_map"). The Chrome
+    # extension captures a bundle's map post-auth and uploads it with the JS; the
+    # analyze stage recovers real per-source paths from it (tolerant "capture"
+    # origin — a bad map falls back to bundle analysis, never fails the asset).
+    # Mirrors the run-level ``Run.source_map_ref``. Added in migration 0010.
+    source_map_ref: Mapped[str | None] = mapped_column(Text)
     fetch_status: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=AssetStatus.PENDING.value
     )

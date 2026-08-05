@@ -230,3 +230,107 @@ def test_coverage_is_reported_per_file(redis, authorized_session, monkeypatch):
     assert coverage.unattributed == 1
     by_path = {f.path: (f.attributed, f.unattributed) for f in coverage.files}
     assert by_path == {"app/clean.js": (1, 0), "app/dynamic.js": (0, 1)}
+
+
+def _seed_capture_asset(redis, tenant, session_id, *, js: bytes, map_blob: bytes) -> str:
+    """A capture-ingested asset (run_asset row, fetch_ok) carrying its own source
+    map — the shape the extension->platform ingest produces (Phase 3)."""
+    from recon import storage
+    from recon.db.base import tenant_session
+    from recon.domain import AssetStatus
+    from recon.runs import service
+
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
+    input_key = storage.put_blob(tenant, view.id, "input", js)
+    map_key = storage.put_blob(tenant, view.id, "source_map", map_blob)
+    with tenant_session(tenant) as session:
+        session.add(models.RunAsset(
+            tenant_id=tenant, run_id=view.id, url="https://acme.io/app.js",
+            input_ref=input_key, source_map_ref=map_key,
+            fetch_status=AssetStatus.OK.value, analyze_status=AssetStatus.PENDING.value,
+        ))
+    return view.id
+
+
+def test_capture_asset_recovers_sources_from_its_map(redis, authorized_session, monkeypatch):
+    # A capture-ingested asset carries its OWN source map (run_asset.source_map_ref).
+    # Analyze recovers the real per-source path from it (origin "capture"), exactly
+    # like the legacy run-level map — recover_sources is faked (no Go binary).
+    from recon.findings import analyze, sourcemapper
+
+    tenant, session_id = authorized_session
+
+    def fake_recover(map_bytes, **_kwargs):
+        return sourcemapper.RecoveredSources(
+            files=[sourcemapper.RecoveredFile("app/src/api.js", b'fetch("/api/widgets/7");')],
+            status="ok", origin="capture",
+        )
+
+    monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
+    run_id = _seed_capture_asset(
+        redis, tenant, session_id, js=b'fetch("/bundle/only");', map_blob=b'{"version":3}'
+    )
+
+    coverage = analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id)
+
+    assert coverage.source_map == "capture"
+    endpoints = [f for f in _findings(tenant, run_id) if f.type == "endpoint"]
+    assert [e.path for e in endpoints] == ["app/src/api.js"]  # real path, not the bundle
+    assert endpoints[0].value == "GET /api/widgets/{id}"
+
+
+def test_capture_asset_bad_map_falls_back_and_asset_still_ok(redis, authorized_session, monkeypatch):
+    # THE safety guarantee: an unparseable capture map must NOT fail the asset (which
+    # would drop ALL its findings). It falls back to bundle analysis, the asset ends
+    # OK (not analyze_failed), and coverage honestly reports "capture-error".
+    from recon.db.base import tenant_session
+    from recon.domain import AssetStatus
+    from recon.findings import analyze, engines, sourcemapper
+    from recon.runs import assets as run_assets
+
+    tenant, session_id = authorized_session
+
+    def boom(map_bytes, **_kwargs):
+        raise engines.EngineError("unparseable capture map")
+
+    monkeypatch.setattr(sourcemapper, "recover_sources", boom)
+    run_id = _seed_capture_asset(
+        redis, tenant, session_id, js=b'fetch("/api/health");', map_blob=b'{"version":3}'
+    )
+
+    coverage = analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id)  # must NOT raise
+
+    assert coverage.source_map == "capture-error"
+    endpoint_values = {f.value for f in _findings(tenant, run_id) if f.type == "endpoint"}
+    assert "GET /api/health" in endpoint_values  # bundle analyzed as the fallback
+    with tenant_session(tenant):
+        row = next(r for r in run_assets.list_for_run(tenant, run_id) if r.url == "https://acme.io/app.js")
+    assert row.analyze_status == AssetStatus.OK.value  # asset kept, not failed
+
+
+def test_legacy_uploaded_bad_map_still_raises(redis, authorized_session, monkeypatch):
+    # Guards the refactor that added source_map_origin: a legacy explicit run-level
+    # upload stays STRICT — an unparseable map surfaces (raises), not a silent
+    # fallback. Only inline/capture maps are tolerant.
+    from sqlalchemy import update
+
+    from recon import storage
+    from recon.db.base import tenant_session
+    from recon.findings import analyze, engines, sourcemapper
+    from recon.runs import service
+
+    tenant, session_id = authorized_session
+    monkeypatch.setattr(
+        sourcemapper, "recover_sources",
+        lambda *a, **k: (_ for _ in ()).throw(engines.EngineError("bad map")),
+    )
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
+    input_key = storage.put_blob(tenant, view.id, "input", b'fetch("/x");')
+    map_key = storage.put_blob(tenant, view.id, "source_map", b'{"version":3}')
+    with tenant_session(tenant) as session:
+        session.execute(
+            update(models.Run).where(models.Run.id == view.id)
+            .values(input_ref=input_key, source_map_ref=map_key)
+        )
+    with pytest.raises(engines.EngineError):
+        analyze.analyze_run(redis, tenant_id=tenant, run_id=view.id)

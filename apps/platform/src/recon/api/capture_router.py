@@ -30,6 +30,7 @@ session-create hot path:
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from typing import Any
 from urllib.parse import urlsplit
@@ -177,13 +178,40 @@ def _valid_file(f: dict, max_bytes: int) -> tuple[str, bytes] | None:
     return url, data
 
 
-def _seed_fetched_assets(tenant_id: str, run_id: str, keys_by_url: dict[str, str]) -> None:
+def _valid_source_map(f: dict, max_bytes: int) -> bytes | None:
+    """Serialized source-map bytes for a file that carries one within the cap, else
+    ``None`` (no map / malformed / oversized). The extension sends
+    ``sourceMapContent`` as an already-parsed JSON OBJECT — it only sets it after a
+    successful client-side ``JSON.parse`` (``background.js``), so what arrives is
+    null or an object. A missing / non-object / oversized map is skipped WITHOUT
+    failing the file: the JS still analyzes, and a bad map is tolerated again at
+    analyze time (the "capture" source-map origin)."""
+    smc = f.get("sourceMapContent")
+    if not isinstance(smc, dict):
+        return None
+    try:
+        data = json.dumps(smc).encode("utf-8")
+    except (TypeError, ValueError):
+        return None
+    if len(data) > max_bytes:
+        return None
+    return data
+
+
+def _seed_fetched_assets(
+    tenant_id: str,
+    run_id: str,
+    keys_by_url: dict[str, str],
+    map_keys_by_url: dict[str, str] | None = None,
+) -> None:
     """Seed this batch's urls as ``run_asset`` rows and mark each ``fetch_ok`` with
     its uploaded blob key — in ONE transaction, so a row is never left committed as
     PENDING-without-``input_ref`` (which the FETCHING stage would try to egress).
     Idempotent: ``seed_pending`` skips an existing ``(run_id, url)``; a url already
     ``fetch_ok`` is left as-is (first-wins — a retry or a later same-url batch never
-    clobbers the original blob)."""
+    clobbers the original blob). A captured source map is linked in the SAME
+    first-wins branch, so it is likewise set once and never clobbered."""
+    map_keys_by_url = map_keys_by_url or {}
     with tenant_session(tenant_id) as session:
         assets.seed_pending(session, tenant_id=tenant_id, run_id=run_id, urls=list(keys_by_url))
         session.flush()  # make the seeded rows visible to the query below, same tx
@@ -195,6 +223,9 @@ def _seed_fetched_assets(tenant_id: str, run_id: str, keys_by_url: dict[str, str
             row = by_url.get(url)
             if row is not None and row.fetch_status == AssetStatus.PENDING.value and not row.input_ref:
                 assets.set_fetch_ok(session, str(row.id), key)
+                map_key = map_keys_by_url.get(url)
+                if map_key:
+                    assets.set_source_map_ref(session, str(row.id), map_key)
 
 
 @router.post("/save-files")
@@ -217,7 +248,15 @@ def save_files(payload: SaveFilesIn) -> dict:
 
     file_results: list[dict] = []
     keys_by_url: dict[str, str] = {}
+    map_keys_by_url: dict[str, str] = {}
     stored = failed = 0
+    total_bytes = 0
+    # Timing observability (§5): the batch is stored synchronously and the response
+    # ack (200) is durable-before-return — so this bounds how close a batch runs to
+    # the extension's 30s upload AbortController. A batch trending toward that ceiling
+    # is the tripwire to revisit parallelizing the puts (rejected now as YAGNI: batch
+    # <=5, and Phase-1 idempotency already makes a timeout+retry harmless).
+    store_started = time.monotonic()
     for f in payload.files:
         content_hash = f.get("contentHash")
         parsed = _valid_file(f, settings.max_upload_bytes)
@@ -240,19 +279,33 @@ def save_files(payload: SaveFilesIn) -> dict:
             continue
         try:
             key = storage.put_blob(tenant_id, run_id, "input", data)
+            # Store the captured source map alongside the JS. A storage infra failure
+            # here is STILL a 503 so the whole idempotent batch retries (a retry
+            # re-stores the same content-addressed blobs). A missing/malformed/oversized
+            # map is simply absent (None) — it never fails the file (a bad map is
+            # tolerated again at analyze time via the "capture" origin).
+            map_bytes = _valid_source_map(f, settings.max_upload_bytes)
+            if map_bytes is not None:
+                map_keys_by_url[url] = storage.put_blob(tenant_id, run_id, "source_map", map_bytes)
+                total_bytes += len(map_bytes)
         except Exception as exc:  # infra: 5xx so the extension RETRIES the whole (idempotent) batch
             log.error("capture.save_files.blob_failed", url=url, error=str(exc))
             raise HTTPException(status_code=503, detail="blob storage unavailable") from exc
         keys_by_url[url] = key
+        total_bytes += len(data)
         stored += 1
         file_results.append({
             "url": url, "contentHash": content_hash, "runId": run_id, "stored": True,
         })
 
     if keys_by_url:
-        _seed_fetched_assets(tenant_id, run_id, keys_by_url)
+        _seed_fetched_assets(tenant_id, run_id, keys_by_url, map_keys_by_url)
 
-    log.info("capture.save_files", session=ext_session_id, run_id=run_id, stored=stored, failed=failed)
+    log.info(
+        "capture.save_files", session=ext_session_id, run_id=run_id,
+        stored=stored, failed=failed, bytes=total_bytes,
+        duration_ms=round((time.monotonic() - store_started) * 1000),
+    )
     return {
         "success": True,
         "sessionId": session_id,
