@@ -123,7 +123,7 @@ All secrets are synthetic, non-live, local-only fixtures. `--no-validate` flags 
 
 ## 5. Scoring (`scripts/score.mjs`)
 
-Args: `--run <run_id>` `--tenant <tenant_uuid>` `--base http://localhost:8000` (+ `--key answer-key.json`). Steps:
+Args: `--run <run_id>` `--tenant <tenant_uuid>` `--base http://localhost:8000`. Steps:
 1. `GET {base}/runs/{run_id}/findings` with header `X-Tenant-Id: <tenant_uuid>`. **The header must be the tenant UUID, not the name** — `get_tenant_id` 400s a non-UUID (`deps.py:24-34`); the capture tenant is named `capture-spike` (`config.py:93`) with a random UUID (`capture_router.py:80-86`) that no endpoint returns, so it is resolved out-of-band (see §6) and passed in.
 2. Partition `findings[]` explicitly by `type` into `endpoint` / `param` / `secret` (all three exist — `domain.py:64-71`).
 3. **Endpoints**: for each `should_find`, match method + operation (value before `?`); for third-party rows match `occurrences[].host`. Report found / missed. Endpoint findings not in the key → `unexpected` (informational).
@@ -143,7 +143,7 @@ The in-app browser can't drive an MV3 extension, so the capture is user-side; th
 3. Load the target, scroll to the bottom to trigger every lazy `import()`; Stop capture.
 4. Trigger analysis (`POST /api/sessions/{ext_id}/analyze/start`, or the popup's Analyze); note the returned `run_id`; wait for progress → done.
 5. Resolve the capture tenant UUID once (documented one-liner):
-   `docker compose -f apps/platform/docker-compose.yml exec -T db psql -U recon -d recon -tAc "select id from tenant where name='capture-spike'"`
+   `docker compose -f apps/platform/docker-compose.yml exec -T postgres psql -U recon -d recon -tAc "select id from tenant where name='capture-spike'"`
 6. `npm run score -- --run <run_id> --tenant <tenant_uuid>` → read the verdict.
 7. Repeat 1–6 with `build:webpack` / `serve:webpack` (:4174).
 

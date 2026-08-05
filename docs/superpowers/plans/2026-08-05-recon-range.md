@@ -672,7 +672,7 @@ git commit -m "feat(recon-range): findings scoring lib + CLI"
 - [ ] **Step 1: Write `README.md`** — cover, in order: what recon-range is and that it gates the Phase 4 delete; `npm install`; per-bundler build + serve (`:4173` / `:4174`); the real-Chrome capture steps (workspace URL `http://localhost:8000`, add `localhost` to capture scope, Start → scroll to load all lazy chunks → Stop); trigger analysis + note the `run_id`; resolve the tenant UUID with the documented one-liner:
 
 ```bash
-docker compose -f apps/platform/docker-compose.yml exec -T db psql -U recon -d recon -tAc "select id from tenant where name='capture-spike'"
+docker compose -f apps/platform/docker-compose.yml exec -T postgres psql -U recon -d recon -tAc "select id from tenant where name='capture-spike'"
 ```
 
 then `npm run score -- --run <run_id> --tenant <tenant_uuid>`; interpret PASS/FAIL and the `blindViolations`/`unexpected` notes; repeat for the other bundler. Include the calibration caveats from spec §9 (blind spots are expected-missing; GitHub/Slack/HMAC informational; first run confirms fake-secret detection).

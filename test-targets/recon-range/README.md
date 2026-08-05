@@ -40,7 +40,7 @@ capture/score walkthrough below is done one origin at a time.)
 
 Each build emits an entry chunk plus 3 lazy chunks (`import()`-loaded), each with a
 `//# sourceMappingURL=` comment and a same-origin `.map` carrying non-empty `sourcesContent`. If
-a build is missing chunks or maps, `npm test`'s `build-invariants` check will catch it — see §5.
+a build is missing chunks or maps, `npm test`'s `build-invariants` check will catch it (run `npm test`).
 
 ## 3. Capture with the real extension (real Chrome only)
 
@@ -75,7 +75,7 @@ platform 400s a non-UUID value. The capture tenant is named `capture-spike` but 
 randomly generated at creation and no endpoint currently returns it, so resolve it once via `psql`:
 
 ```bash
-docker compose -f apps/platform/docker-compose.yml exec -T db psql -U recon -d recon -tAc "select id from tenant where name='capture-spike'"
+docker compose -f apps/platform/docker-compose.yml exec -T postgres psql -U recon -d recon -tAc "select id from tenant where name='capture-spike'"
 ```
 
 Copy the printed UUID; it's stable for the life of that tenant, so this is a once-per-environment
@@ -88,15 +88,14 @@ step, not a once-per-run step. (A fast-follow candidate — out of scope here �
 npm run score -- --run <run_id> --tenant <tenant_uuid>
 ```
 
-(Optional `--base http://localhost:8000` if the platform isn't on the default; `--key` to point at
-a different answer key.) This fetches `GET /runs/{run_id}/findings` and diffs it against
+(Optional `--base http://localhost:8000` if the platform isn't on the default.) This fetches `GET /runs/{run_id}/findings` and diffs it against
 `answer-key.json`, printing a JSON breakdown followed by `PASS` or `FAIL` (and a non-zero exit code
 on `FAIL`).
 
 **Reading the output:**
 - `missedEndpoints` / `missedParams` / `secretMisses` / `covFail` — any of these non-empty means
   `FAIL`. Each is a real pipeline defect against the calibrated answer key, not a known limitation.
-- `blindViolations` — lists any *known blind spot* (see §7) that unexpectedly resolved to a real
+- `blindViolations` — lists any *known blind spot* (see §8) that unexpectedly resolved to a real
   finding anyway. This is informational, not a failure: the answer key plants these constructs
   specifically to document what the pipeline *can't* see, so a violation just means the pipeline
   got smarter than documented. Worth noting, never worth failing the run over.
