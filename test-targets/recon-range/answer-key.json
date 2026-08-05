@@ -1,0 +1,30 @@
+{
+  "target": "recon-range",
+  "spec": "docs/superpowers/specs/2026-08-05-recon-range-design.md",
+  "should_find": [
+    { "id": "ep-profile", "src": "src/api/profile.js", "method": "GET", "operation": "/api/v1/profile", "value": "GET /api/v1/profile", "params": [] },
+    { "id": "ep-user", "src": "src/api/profile.js", "method": "GET", "operation": "/api/v1/users/${userId}", "value": "GET /api/v1/users/${userId}", "params": [] },
+    { "id": "ep-search", "src": "src/api/profile.js", "method": "GET", "operation": "/api/v1/search", "value": "GET /api/v1/search?limit&q", "params": [ { "location": "query", "name": "q" }, { "location": "query", "name": "limit" } ] },
+    { "id": "ep-order", "src": "src/api/profile.js", "method": "POST", "operation": "/api/v1/orders", "value": "POST /api/v1/orders", "params": [ { "location": "body", "name": "sku" }, { "location": "body", "name": "qty" } ] },
+    { "id": "ep-cart", "src": "src/api/cart.js", "method": "PUT", "operation": "/api/v1/cart/{id}", "value": "PUT /api/v1/cart/{id}", "params": [] },
+    { "id": "ep-secure", "src": "src/api/secure.js", "method": "GET", "operation": "/api/v1/secure", "value": "GET /api/v1/secure", "params": [] },
+    { "id": "ep-inv", "src": "src/api/inventory.js", "method": "GET", "operation": "/api/v2/inventory", "value": "GET /api/v2/inventory", "params": [] },
+    { "id": "ep-checkout", "src": "src/api/inventory.js", "method": "POST", "operation": "/api/v2/checkout", "value": "POST /api/v2/checkout", "params": [ { "location": "body", "name": "token" } ] },
+    { "id": "ep-session", "src": "src/api/inventory.js", "method": "DELETE", "operation": "/api/v1/session", "value": "DELETE /api/v1/session", "params": [] },
+    { "id": "ep-config", "src": "src/api/social.js", "method": "GET", "operation": "/api/v1/config", "value": "GET /api/v1/config", "params": [] },
+    { "id": "ep-feedback", "src": "src/api/social.js", "method": "POST", "operation": "/api/v1/feedback", "value": "POST /api/v1/feedback", "params": [ { "location": "body", "name": "msg" } ] },
+    { "id": "ep-ws", "src": "src/api/live.js", "method": "WSS", "operation": "/ws/live", "value": "WSS /ws/live", "params": [] },
+    { "id": "ep-ga", "src": "src/api/thirdparty.js", "method": "GET", "host": "www.google-analytics.com", "params": [] },
+    { "id": "ep-stripe", "src": "src/api/thirdparty.js", "method": "POST", "host": "api.stripe.com", "operation": "/v1/tokens", "params": [] },
+    { "id": "ep-sentry", "src": "src/api/thirdparty.js", "method": "POST", "host": "o0.ingest.sentry.io", "params": [] }
+  ],
+  "known_blind_spots": [
+    { "id": "bs-eventsource", "src": "src/api/blindspots.js", "expect": "no_finding", "probe": "/api/v1/stream" },
+    { "id": "bs-concat", "src": "src/api/blindspots.js", "expect": "unattributed" },
+    { "id": "bs-variable", "src": "src/api/blindspots.js", "expect": "unattributed" },
+    { "id": "bs-wrapper", "src": "src/api/blindspots.js", "expect": "no_trace", "probe": "/api/v1/hidden" },
+    { "id": "bs-headers", "src": "src/api/secure.js", "expect": "headers_invisible", "endpoint": "ep-secure" }
+  ],
+  "secrets": { "must": { "stripe": 2, "aws": 1 }, "info": [ "github", "slack", "hmac" ] },
+  "coverage_asserts": { "min_unattributed": 2, "source_map_ok": [ "capture", "inline" ], "require_sources_recovered": true }
+}
