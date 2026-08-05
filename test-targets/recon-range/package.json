@@ -10,7 +10,7 @@
     "serve:vite": "node scripts/serve.mjs dist/vite 4173",
     "serve:webpack": "node scripts/serve.mjs dist/webpack 4174",
     "score": "node scripts/score-cli.mjs",
-    "test": "npm run build && node --test scripts/"
+    "test": "npm run build && node --test scripts/*.test.mjs"
   },
   "dependencies": { "axios": "^1.7.0" },
   "devDependencies": { "vite": "^5.4.0", "webpack": "^5.94.0", "webpack-cli": "^5.1.4" }
