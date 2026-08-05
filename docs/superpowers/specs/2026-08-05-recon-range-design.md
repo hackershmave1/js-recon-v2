@@ -114,7 +114,7 @@ Matching rule: endpoints match on **method + operation** (value split on space, 
 |---|---|---|---|
 | sec-stripe | Stripe secret key `sk_live_…` | secrets.js const | **must-find** (verified class) |
 | sec-aws | AWS access key id `AKIA…` + secret | secrets.js const | **must-find** (verified class) |
-| sec-comment | 2nd Stripe key `sk_live_…` inside a `//` comment | secrets.js comment | **must-find** — proves whole-file scan |
+| sec-comment | 2nd Stripe key `sk_live_…` inside a `/*! … */` legal comment | secrets.js comment | **must-find** — proves whole-file scan (legal comment survives minification; secrets scan the minified bundle, not recovered sources) |
 | sec-github | GitHub token `ghp_…` | secrets.js const | informational (unverified class) |
 | sec-slack | Slack token `xoxb-…` | secrets.js const | informational (unverified class) |
 | sec-hmac | HMAC signing secret const | secrets.js const | informational (stretch) |
@@ -173,4 +173,7 @@ Run scoped, not the whole repo suite.
 - **Kingfisher class coverage** for GitHub/Slack/HMAC asserted from the ruleset, not verified in-repo — already informational.
 - **Tenant UUID is resolved out-of-band** (manual psql step) — acceptable for an on-demand gate; endpoint is a fast-follow.
 - **`localhost` in capture scope** could capture unrelated localhost scripts — mitigated because the extension skips its own workspace origin and the target runs on dedicated ports.
+- **Minification strips `//` comments and tree-shakes unused exports.** Secrets are scanned on the minified bundle (not recovered sources), so: the comment secret must be a preserved `/*! … */` legal comment; and the secret constants must be *referenced* (e.g. `secrets.js` exports a `KEYS` object that `main.js` pins via `window.__reconKeys = KEYS`) so their string values survive into the captured bundle.
+- **Canonical vendor example keys may be whitelisted** by Kingfisher rules (e.g. the AWS docs example key) — use plausible non-example fakes and confirm detection on the first live run.
+- **jQuery calls use a local `$` stub** so the target runs without loading real jQuery; the extractor is shape-based on the `$` receiver, but if a locally-declared `$` is not treated as jQuery, the fallback is a self-hosted real `$` global (a file **not** named `jquery*.min.js`, which the extension denylists).
 ```
