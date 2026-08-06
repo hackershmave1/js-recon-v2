@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from recon.findings import engines, kingfisher
+from recon.findings import engines, kingfisher, normalize
 
 # Modeled on real kingfisher-bin==1.106.0 output: a findings line (findings is a
 # LIST) plus a summary line (findings is an INT). Snippet is a scrubbed stand-in.
@@ -144,3 +144,33 @@ def test_scan_real_binary_detects_planted_secret(engines_required):
         pytest.skip("kingfisher binary not available")
     assert result.status == "ok"
     assert any("stripe" in secret.rule_id for secret in result.secrets)
+
+
+def test_akia_rule_file_ships_where_scan_expects():
+    # Guards a source-tree regression (rename/delete). Wheel packaging is enforced
+    # separately by pyproject's package-data; the integration lane (pytest inside
+    # the built image) is what catches a wheel that dropped the data file.
+    assert kingfisher._RULES_PATH.is_file(), kingfisher._RULES_PATH
+
+
+def test_scan_real_binary_detects_standalone_aws_access_key_id(engines_required):
+    # A lone AWS Access Key ID with NO paired secret. Kingfisher's built-in AWS rule
+    # treats the id as a pairing identity and, under --no-validate, never emits it —
+    # it only tallies it in the summary's findings_by_rule — so before the shipped
+    # standalone rule this was silently missed. Split literals so no key-shaped token
+    # is committed; kingfisher reassembles the contiguous token at runtime.
+    token = "AKIA" + "2E4XZ7K9QW3RT8YV"
+    source = f'const accessKeyId = "{token}";\n'.encode("utf-8")
+
+    result = kingfisher.scan(source)
+    if result.status == "unavailable":
+        if engines_required:
+            pytest.fail("kingfisher binary required (RECON_REQUIRE_ENGINES) but unavailable")
+        pytest.skip("kingfisher binary not available")
+    assert result.status == "ok"
+    ids = {secret.rule_id for secret in result.secrets}
+    assert "custom.aws.akia_standalone" in ids, ids
+    akia = next(s for s in result.secrets if s.rule_id == "custom.aws.akia_standalone")
+    assert akia.snippet == token
+    # The pinned provider override resolves the identity to aws, not "custom".
+    assert normalize.normalize_secret_value(akia.snippet, akia.rule_id).startswith("aws:")

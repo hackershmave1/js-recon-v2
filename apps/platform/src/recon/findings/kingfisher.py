@@ -19,6 +19,7 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from recon.config import get_settings
 from recon.findings import engines
@@ -28,6 +29,16 @@ log = get_logger("recon.findings.kingfisher")
 
 # 0 = clean, 200 = secrets found. Anything else is a genuine engine error.
 _OK_RETURNCODES = (0, 200)
+
+# A shipped custom rule so a STANDALONE AWS Access Key ID (AKIA…) emits as a
+# finding. Kingfisher's built-in AWS rule treats the access-key id as a pairing
+# "identity" and, under --no-validate, never emits a lone id — it only tallies it
+# in the summary's findings_by_rule (never the findings array we parse) — so a
+# leaked AKIA in a target's JS was silently missed. Resolved to a STABLE path
+# (packaged via pyproject [tool.setuptools.package-data]) so the compiled-rule
+# cache and the Dockerfile pre-warm stay effective; provider pinned to "aws" in
+# normalize._PROVIDER_BY_RULE.
+_RULES_PATH = Path(__file__).parent / "rules" / "aws_access_key_id.yml"
 
 
 @dataclass(frozen=True)
@@ -204,6 +215,15 @@ def scan(
             "--format", "json",
             "--no-validate", "--no-update-check", "--no-dedup",
         ]
+        # Load the shipped standalone-AKIA rule. A missing file is a PACKAGING
+        # regression (the wheel dropped the data file), not a per-run condition, so
+        # degrade LOUDLY to the built-in ruleset — we still scan, only losing
+        # standalone AWS-key-id detection — rather than passing a bad --rules-path
+        # that makes kingfisher exit 1 and hard-fails every scan.
+        if _RULES_PATH.is_file():
+            argv += ["--rules-path", str(_RULES_PATH)]
+        else:
+            log.error("kingfisher.rules_missing", path=str(_RULES_PATH))
         try:
             result = engines.run_engine(
                 argv,

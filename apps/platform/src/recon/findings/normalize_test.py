@@ -161,6 +161,13 @@ def test_secret_provider_for_kingfisher_rule_id_is_second_segment():
     assert nz.provider_for_rule("kingfisher") == "unknown"
 
 
+def test_secret_provider_pins_standalone_akia_rule_to_aws():
+    # The shipped standalone-AKIA rule id's first segment is "custom", so it would
+    # otherwise hash as "custom:…"; the pinned override keeps a lone AWS access key
+    # id's identity as aws:sha256(token), identical to a built-in AWS secret.
+    assert nz.provider_for_rule("custom.aws.akia_standalone") == "aws"
+
+
 def test_secret_does_not_strip_token_legal_chars():
     # `.` `-` `_` `=` `+` `/` are legal inside tokens and must survive.
     token = "abc.d0-Ef_G/h+i="

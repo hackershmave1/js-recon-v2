@@ -69,7 +69,17 @@ _SECRET_DELIMS = "\"'`()[]{}<>,;: \t\r\n"
 # KINGFISHER_RULES_VERSION is informational: it records which ruleset the
 # second-segment derivation was validated against (not wired into any hash).
 KINGFISHER_RULES_VERSION = "1.106"
-_PROVIDER_BY_RULE: dict[str, str] = {}
+_PROVIDER_BY_RULE: dict[str, str] = {
+    # The shipped standalone-AKIA rule (recon.findings.rules.aws_access_key_id)
+    # has id `custom.aws.akia_standalone`; its FIRST segment is "custom", so the
+    # generic derivation would return "custom". Pin it to "aws" so a lone AWS
+    # access key id hashes as aws:sha256(token) — a stable, honest provider slug,
+    # the same way a built-in AWS secret hashes. (This does NOT dedupe against the
+    # built-in AWS rule: that rule keys on the paired *secret* access key — a
+    # different token — so the values differ.) The hand-fixed-slug case this
+    # override map exists for (review M1).
+    "custom.aws.akia_standalone": "aws",
+}
 
 
 def shannon_entropy(text: str) -> float:

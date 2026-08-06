@@ -25,6 +25,6 @@
     { "id": "bs-wrapper", "src": "src/api/blindspots.js", "expect": "no_trace", "probe": "/api/v1/hidden" },
     { "id": "bs-headers", "src": "src/api/secure.js", "expect": "headers_invisible", "endpoint": "ep-secure" }
   ],
-  "secrets": { "must": { "stripe": 2 }, "info": [ "aws", "github", "slack", "hmac" ] },
+  "secrets": { "must": { "stripe": 2, "aws": 1 }, "info": [ "github", "slack", "hmac" ] },
   "coverage_asserts": { "min_unattributed": 2, "source_map_ok": [ "capture", "inline" ], "require_sources_recovered": true }
 }
