@@ -70,8 +70,12 @@ jobs:
         working-directory: apps/platform
     steps:
       - uses: actions/checkout@v6
-      - name: Build image + start stores + migrate
-        run: docker compose up -d --build postgres redis minio migrate
+      - name: Build image + start stores + fixture-site + migrate
+        # fixture-site (nginx, aliased recon.test on the compose network) serves the
+        # crawl-target fixtures the real-katana integration tests hit; without it those
+        # crawls resolve nothing and assert []. It shares the network the `docker compose
+        # run api` one-off joins, so the alias resolves. nginx is up in <1s vs a 30s crawl.
+        run: docker compose up -d --build postgres redis minio migrate fixture-site
       - name: Full suite incl. real-engine contract tests + integration
         run: >
           docker compose run --rm --user root -e RECON_REQUIRE_ENGINES=1

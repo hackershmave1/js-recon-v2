@@ -76,7 +76,8 @@ def test_invalid_callee_is_422(client, authorized_session):
         session.add(run)
         session.flush()
         run_id = str(run.id)
-    resp = client.post(f"/runs/{run_id}/wrappers", headers=_headers(tenant), json={"callee": "a.b"})
+    # `a.b` is a VALID dotted receiver now; `a-b` (hyphen) is a genuine non-identifier.
+    resp = client.post(f"/runs/{run_id}/wrappers", headers=_headers(tenant), json={"callee": "a-b"})
     assert resp.status_code == 422
 
 
