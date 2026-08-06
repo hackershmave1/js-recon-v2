@@ -62,7 +62,9 @@ def test_lists_the_legacy_bundle_as_input_js(client, authorized_session):
     assert resp.status_code == 200
     body = resp.json()
     assert body["count"] == 1
-    assert body["sources"] == [{"path": "input.js", "kind": "upload", "fetch_status": "ok"}]
+    assert body["sources"] == [
+        {"path": "input.js", "kind": "upload", "fetch_status": "ok", "asset_url": None}
+    ]
 
 
 def test_serves_the_legacy_bundle_content(client, authorized_session):
@@ -101,7 +103,7 @@ def test_crawl_lists_assets_with_status(client, authorized_session):
     resp = client.get(f"/runs/{run_id}/sources", headers=_headers(tenant))
     assert resp.status_code == 200
     by_path = {s["path"]: s for s in resp.json()["sources"]}
-    assert by_path[ok] == {"path": ok, "kind": "asset", "fetch_status": "ok"}
+    assert by_path[ok] == {"path": ok, "kind": "asset", "fetch_status": "ok", "asset_url": None}
     assert by_path[pending]["fetch_status"] == "pending"
 
 
