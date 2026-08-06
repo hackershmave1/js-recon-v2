@@ -4,9 +4,12 @@ Recovers a bundle's original source files from its source map so the analyze
 stage can attribute findings to real per-source paths (e.g. ``app/src/api.js``)
 instead of the single-file ``input.js`` placeholder — sharpening REQ-D3 identity.
 
-The map reaches us two ways this slice: an uploaded ``.map`` (preferred) or an
-inline ``data:`` map embedded in the bundle. An *external* ``sourceMappingURL``
-(a URL to fetch from the target) is out of scope until the fetch stage exists.
+The map reaches us three ways: an uploaded ``.map`` (preferred), an inline
+``data:`` map embedded in the bundle (``extract_inline_map``), or an *external*
+``//# sourceMappingURL=<url>`` reference. The external case is handled by the
+fetch stage: ``external_map_url`` locates the reference and the fetcher GETs the
+``.map`` through the egress guard, links it to the asset, and analyze recovers
+sources with the tolerant ``"capture"`` origin (REQ-CE2).
 
 Sourcemapper facts (github.com/denandz/sourcemapper): ``-url`` accepts a local
 map path; ``-output`` (required) recreates the source tree from the map's
@@ -83,6 +86,25 @@ def extract_inline_map(js: str) -> bytes | None:
     # A source map is a JSON object; reject obvious garbage here so it never
     # reaches the tool (a malformed inline map must not be able to fail the run).
     return payload if payload.lstrip().startswith(b"{") else None
+
+
+def external_map_url(js: str) -> str | None:
+    """Return the URL from an *external* ``//# sourceMappingURL=<url>`` comment, or
+    ``None`` if there is none or it is an inline ``data:`` payload.
+
+    Companion to :func:`extract_inline_map` for the fetch stage (REQ-CE2): that
+    function returns the bytes of an *inline* map and ``None`` for an external ref;
+    this one returns the external ref (and ``None`` for inline/absent) so the
+    fetcher can GET it. Same last-match-wins convention as the inline path. The
+    caller resolves the (possibly relative) ref against the asset URL and fetches
+    it through the egress guard."""
+    matches = _SOURCE_MAPPING_URL_RE.findall(js)
+    if not matches:
+        return None
+    url = matches[-1].strip()
+    if not url or url.startswith("data:"):
+        return None
+    return url
 
 
 def recover_sources(

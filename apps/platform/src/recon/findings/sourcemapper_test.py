@@ -40,9 +40,35 @@ def test_extract_inline_percent_encoded_map():
 
 
 def test_external_reference_is_none_deferred():
-    # An external .map URL needs the (deferred) fetch stage — not handled here.
+    # extract_inline_map handles ONLY inline data: maps; an external .map URL is
+    # returned by external_map_url instead (fetched by the fetch stage, REQ-CE2).
     assert sourcemapper.extract_inline_map(_inline_comment("app.js.map")) is None
     assert sourcemapper.extract_inline_map(_inline_comment("https://cdn.x/app.js.map")) is None
+
+
+def test_external_map_url_returns_external_ref():
+    # The fetch stage (REQ-CE2) needs the external .map URL that extract_inline_map
+    # deliberately returns None for.
+    assert sourcemapper.external_map_url(_inline_comment("app.js.map")) == "app.js.map"
+    assert (
+        sourcemapper.external_map_url(_inline_comment("https://cdn.x/app.js.map"))
+        == "https://cdn.x/app.js.map"
+    )
+
+
+def test_external_map_url_ignores_inline_and_absent():
+    b64 = base64.b64encode(json.dumps(_MAP).encode("utf-8")).decode("ascii")
+    # An inline data: map needs no fetch -> None (extract_inline_map handles it).
+    assert sourcemapper.external_map_url(_inline_comment(f"data:application/json;base64,{b64}")) is None
+    # No sourceMappingURL comment at all -> None.
+    assert sourcemapper.external_map_url("const x = 1;\n") is None
+
+
+def test_external_map_url_last_wins_and_legacy_at():
+    # Last sourceMappingURL wins (matches extract_inline_map); legacy //@ honored.
+    js = _inline_comment("first.js.map") + _inline_comment("second.js.map")
+    assert sourcemapper.external_map_url(js) == "second.js.map"
+    assert sourcemapper.external_map_url("//@ sourceMappingURL=legacy.js.map\n") == "legacy.js.map"
 
 
 def test_no_sourcemap_comment_is_none():

@@ -38,6 +38,7 @@ from recon.db.base import tenant_session
 from recon.db.models import Run
 from recon.domain import AssetStatus
 from recon.fetch import egress, politeness
+from recon.findings import sourcemapper
 from recon.observability import get_logger
 from recon.progress import heartbeat as progress
 from recon.queue import retry
@@ -107,6 +108,7 @@ def fetch_url(
     timeout_s: float,
     max_bytes: int,
     max_redirects: int = _MAX_REDIRECTS,
+    allow_local: bool = False,
     transport: httpx.BaseTransport | None = None,
 ) -> bytes:
     """Fetch ``url`` under the egress policy and return its bytes.
@@ -120,7 +122,9 @@ def fetch_url(
         follow_redirects=False, timeout=httpx.Timeout(timeout_s), transport=transport
     ) as client:
         for _hop in range(max_redirects + 1):
-            target = egress.validate_target(current, scope_hosts)  # scope + IP, every hop
+            target = egress.validate_target(  # scope + IP, every hop
+                current, scope_hosts, allow_local=allow_local
+            )
             # Pin/validate on the SAME host httpx will connect to — a parser split
             # between urlsplit (validator) and httpx.URL (client) must fail closed.
             if httpx.URL(current).host.lower() != target.host.lower():
@@ -211,6 +215,7 @@ def fetch_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None =
             engagement.scope_hosts,
             timeout_s=settings.fetch_timeout_seconds,
             max_bytes=settings.max_fetch_bytes,
+            allow_local=settings.allow_local_egress,
         )
     except egress.EgressBlocked as exc:
         # Scope/SSRF/scheme blocks are deterministic — fail fast, don't burn retries.
@@ -318,6 +323,7 @@ def _fetch_assets(
             content = fetch_url(
                 asset.url, engagement.scope_hosts,
                 timeout_s=settings.fetch_timeout_seconds, max_bytes=settings.max_fetch_bytes,
+                allow_local=settings.allow_local_egress,
             )
         except (egress.EgressBlocked, retry.FatalError, retry.RetryableError) as exc:
             with tenant_session(tenant_id) as s:
@@ -331,9 +337,79 @@ def _fetch_assets(
                 )
             continue
         key = storage.put_blob(tenant_id, run_id, "input", content)
+        # Best-effort external source-map recovery (REQ-CE2). JS-SUCCESS path only,
+        # inside _fetch_and_store_source_map's own non-re-raising try/except, so a
+        # bad/blocked .map can NEVER reach the outer handler and mark the asset
+        # fetch_failed (which would drop its JS finding). The .map GET runs with no
+        # DB session open (mirrors the input put_blob); the ref then commits together
+        # with fetch_ok in the one tx below.
+        map_key = (
+            _fetch_and_store_source_map(
+                redis, js=content, asset_url=asset.url, scope_hosts=engagement.scope_hosts,
+                tenant_id=tenant_id, run_id=run_id, job_id=job_id, done=i, total=total,
+                settings=settings,
+            )
+            if settings.crawl_fetch_source_maps
+            else None
+        )
         with tenant_session(tenant_id) as s:
             run_assets.set_fetch_ok(s, asset.id, key)  # per-asset commit
-        log.info("fetch.asset_done", run_id=run_id, url=asset.url, bytes=len(content))
+            if map_key:
+                run_assets.set_source_map_ref(s, asset.id, map_key)
+        log.info(
+            "fetch.asset_done", run_id=run_id, url=asset.url,
+            bytes=len(content), source_map=bool(map_key),
+        )
+
+
+def _fetch_and_store_source_map(
+    redis: Redis,
+    *,
+    js: bytes,
+    asset_url: str,
+    scope_hosts: list[str],
+    tenant_id: str,
+    run_id: str,
+    job_id: str | None,
+    done: int,
+    total: int,
+    settings: Settings,
+) -> str | None:
+    """Best-effort: if ``js`` references an external ``//# sourceMappingURL=``, fetch
+    that ``.map`` THROUGH THE EGRESS GUARD and store it, returning the blob key (or
+    ``None``). REQ-CE2.
+
+    NEVER raises: a missing/blocked/oversized/malformed map is a soft miss (analyze
+    falls back to the minified bundle) and must never propagate to the caller's outer
+    handler, which would mark the asset fetch_failed and DROP its JS finding. The
+    ``.map`` GET runs with NO DB session open (mirrors the input put_blob); the caller
+    links the returned key in the same tx that marks the asset fetch_ok."""
+    try:
+        ref = sourcemapper.external_map_url(js.decode("utf-8", "replace"))
+        if not ref:
+            return None
+        map_url = urljoin(asset_url, ref)
+        # A SECOND outbound request for this asset — preserve the per-asset heartbeat
+        # + politeness invariant (see _fetch_assets docstring): renew the job lease
+        # and take a host slot before the .map GET, exactly as the JS fetch does.
+        if job_id:
+            progress.beat(
+                redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, done=done, total=total
+            )
+        host = (urlsplit(map_url).hostname or "").lower()
+        if host:
+            _await_host_slot(
+                redis, host, tenant_id=tenant_id, run_id=run_id, job_id=job_id, settings=settings
+            )
+        map_bytes = fetch_url(
+            map_url, scope_hosts,
+            timeout_s=settings.fetch_timeout_seconds, max_bytes=settings.max_fetch_bytes,
+            allow_local=settings.allow_local_egress,
+        )
+        return storage.put_blob(tenant_id, run_id, "source_map", map_bytes)
+    except Exception as exc:  # noqa: BLE001 — soft miss; a bad map must never fail the asset
+        log.info("fetch.source_map_skipped", run_id=run_id, url=asset_url, error=str(exc))
+        return None
 
 
 def _authorized_engagement(tenant_id: str, run_id: str) -> sessions_service.SessionView:

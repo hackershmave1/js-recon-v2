@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     fetch_timeout_seconds: float = 20.0
     max_fetch_bytes: int = 10 * 1024 * 1024  # 10 MiB — matches the upload cap
 
+    # SSRF guard override — DEFAULT OFF (REQ-CE3). When true, the egress guard also
+    # permits loopback + private-range targets and single-label hosts (localhost) so
+    # the crawl->fetch->analyze pipeline can run against a LOCAL test target
+    # (test-targets/recon-range on http://localhost:4173). Link-local / cloud-metadata
+    # (169.254.169.254, fe80::/10 + their 6to4/IPv4-mapped forms) stays BLOCKED even
+    # when enabled, and there is NO per-request / URL / query-param override — this
+    # process-level env flag is the only switch. NEVER enable outside a developer box.
+    allow_local_egress: bool = False   # env: RECON_ALLOW_LOCAL_EGRESS
+
     # Fetch politeness (REQ-Q3): a single target is never hammered. A run may hit
     # the same host at most once per interval (a distributed, cross-run min-gap),
     # and total outbound fetch rate is capped by a global budget. A throttled fetch
@@ -70,6 +79,15 @@ class Settings(BaseSettings):
     # of downloading its own from a CDN per container. Non-headless crawls ignore it.
     system_chrome_path: str = "/usr/bin/chromium"
     crawl_headless: bool = False
+    # -jc: parse lazy/dynamic import() chunk URLs out of the JS during the crawl so
+    # a standard crawl discovers webpack/vite lazy chunks (REQ-CE1). Default on;
+    # config-gated kill-switch since katana flag semantics drift between releases.
+    crawl_js_crawl: bool = True   # env: RECON_CRAWL_JS_CRAWL
+    # REQ-CE2: on the crawl/fetch path, discover a fetched JS asset's external
+    # //# sourceMappingURL=, fetch the .map through the egress guard, and link it so
+    # analyze recovers original per-file sources. Best-effort — a bad/blocked map is
+    # a soft miss, never fails the asset. Default on; kill-switch symmetric with -jc.
+    crawl_fetch_source_maps: bool = True   # env: RECON_CRAWL_FETCH_SOURCE_MAPS
     crawl_depth: int = 3
     crawl_duration_seconds: float = 120.0
     crawl_max_assets: int = 500

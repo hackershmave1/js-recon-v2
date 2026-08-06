@@ -63,7 +63,7 @@ def _normalize_host(value: str | None) -> str:
     return (value or "").strip().rstrip(".").lower()
 
 
-def is_valid_scope_entry(entry: str) -> bool:
+def is_valid_scope_entry(entry: str, *, allow_local: bool = False) -> bool:
     """Whether a declared scope entry is specific enough to authorize a host + its
     subdomains without authorizing half the internet. Invalid entries are dropped
     from the allow-set so egress fails closed no matter how ``scope_hosts`` was
@@ -78,12 +78,16 @@ def is_valid_scope_entry(entry: str) -> bool:
     are judged by :func:`is_public_ip`, not scope); and a known multi-label public
     suffix (``github.io``, ``co.uk`` …), under which a subdomain rule would
     authorize every tenant of that shared host.
+
+    With ``allow_local`` (dev-only ``RECON_ALLOW_LOCAL_EGRESS``) a single-label host
+    such as ``localhost`` is additionally accepted; IP literals, non-LDH hosts, and
+    known public suffixes stay rejected.
     """
     host = _normalize_host(entry)
     if not host:
         return False
     labels = host.split(".")
-    if len(labels) < 2:  # single label -> bare TLD or internal name
+    if len(labels) < 2 and not allow_local:  # single label -> bare TLD or internal name
         return False
     if not all(_LABEL_RE.match(label) for label in labels):
         return False  # a non-LDH char, or an empty label
@@ -92,7 +96,7 @@ def is_valid_scope_entry(entry: str) -> bool:
     return host not in _PUBLIC_SUFFIX_DENYLIST
 
 
-def normalize_scope_entry(entry: str) -> str | None:
+def normalize_scope_entry(entry: str, *, allow_local: bool = False) -> str | None:
     """The normalized host for a VALID user-supplied scope entry, or ``None`` if it
     is not a usable host-scope declaration (see :func:`is_valid_scope_entry`).
 
@@ -106,7 +110,7 @@ def normalize_scope_entry(entry: str) -> str | None:
     host = _normalize_host(entry)
     if host.startswith("*."):
         host = host[2:]  # "*.acme.io" -> "acme.io"; the bare host covers subdomains
-    if not is_valid_scope_entry(host):
+    if not is_valid_scope_entry(host, allow_local=allow_local):
         return None
     return host
 
@@ -126,7 +130,7 @@ def host_of(target: str | None) -> str:
         return ""  # malformed (e.g. a bad IPv6 literal) -> no host -> out of scope
 
 
-def host_in_scope(host: str | None, scope_hosts: list[str]) -> bool:
+def host_in_scope(host: str | None, scope_hosts: list[str], *, allow_local: bool = False) -> bool:
     """True if ``host`` equals, or is a subdomain of, a VALID declared scope entry
     (REQ-P2). Subdomain = an exact dot-boundary suffix: ``acme.io`` authorizes
     ``acme.io`` and ``*.acme.io`` but never ``evil-acme.io`` (no dot boundary) or
@@ -137,11 +141,13 @@ def host_in_scope(host: str | None, scope_hosts: list[str]) -> bool:
     normalized = _normalize_host(host)
     if not normalized:
         return False
-    allowed = {_normalize_host(e) for e in scope_hosts if is_valid_scope_entry(e)}
+    allowed = {
+        _normalize_host(e) for e in scope_hosts if is_valid_scope_entry(e, allow_local=allow_local)
+    }
     return any(normalized == entry or normalized.endswith("." + entry) for entry in allowed)
 
 
-def is_public_ip(ip_str: str) -> bool:
+def is_public_ip(ip_str: str, *, allow_local: bool = False) -> bool:
     """True only for a globally-routable address. IPv4-mapped IPv6 is unwrapped
     so ``::ffff:127.0.0.1`` is judged as the loopback IPv4 it really is.
 
@@ -167,10 +173,24 @@ def is_public_ip(ip_str: str) -> bool:
             ip = ip.ipv4_mapped
         elif ip.sixtofour is not None:
             ip = ip.sixtofour
+    if allow_local:
+        # DEV-ONLY relaxation (RECON_ALLOW_LOCAL_EGRESS, default off): make loopback +
+        # private targets reachable (is_private is RFC1918 + other non-global private
+        # ranges, e.g. TEST-NET) so the pipeline can hit a LOCAL test target. Ordering
+        # is SSRF-critical and runs AFTER the v4-mapped/6to4 unwrap above: (1) reject
+        # link-local/multicast FIRST so cloud-metadata (169.254.169.254, fe80::/10,
+        # ff02::1, and their unwrapped 6to4/v4-mapped forms) stays blocked even here;
+        # (2) THEN accept loopback/private. No is_reserved gate — IPv6 ``::1`` is
+        # is_reserved, so gating on it would break localhost on a dual-stack resolver.
+        # Anything else (CGNAT, NAT64, public) falls through to the strict rule below.
+        if ip.is_link_local or ip.is_multicast:
+            return False
+        if ip.is_loopback or ip.is_private:
+            return True
     return ip.is_global and not ip.is_reserved and not ip.is_multicast
 
 
-def validate_target(url: str, scope_hosts: list[str]) -> ValidatedTarget:
+def validate_target(url: str, scope_hosts: list[str], *, allow_local: bool = False) -> ValidatedTarget:
     """Enforce the full policy on ``url`` or raise :class:`EgressBlocked`.
 
     Resolves the host and requires ALL resolved addresses to be public — a single
@@ -196,7 +216,7 @@ def validate_target(url: str, scope_hosts: list[str]) -> ValidatedTarget:
         raise EgressBlocked("userinfo is not allowed in a fetch URL")
     if not host:
         raise EgressBlocked("missing host in URL")
-    if not host_in_scope(host, scope_hosts):
+    if not host_in_scope(host, scope_hosts, allow_local=allow_local):
         raise EgressBlocked(f"host not in engagement scope: {host}")
 
     try:
@@ -207,6 +227,6 @@ def validate_target(url: str, scope_hosts: list[str]) -> ValidatedTarget:
     if not ips:
         raise EgressBlocked(f"no addresses resolved for {host}")
     for ip in ips:
-        if not is_public_ip(ip):
+        if not is_public_ip(ip, allow_local=allow_local):
             raise EgressBlocked(f"host {host} resolves to a non-public address: {ip}")
     return ValidatedTarget(url=url, host=host, port=port, ips=ips)

@@ -12,9 +12,19 @@ def test_build_argv_standard_by_default():
     assert "-jsonl" in argv
     assert argv[argv.index("-field-scope") + 1] == "rdn"
     assert "-crawl-scope" in argv
-    assert "-jc" not in argv   # discovery-only: Vespasian parses, not katana
+    assert "-jc" in argv       # REQ-CE1: -jc parses lazy import() chunks out of JS, default on
     assert "-em" not in argv   # -em js filtered everything; parse_assets filters .js
     assert "-headless" not in argv  # standard by default
+
+
+def test_build_argv_js_crawl_can_be_disabled():
+    # REQ-CE1 kill-switch: -jc is default-on but config-gated, so a katana release
+    # that regresses -jc on some target has an off-ramp.
+    argv = katana.build_argv(
+        katana_bin="katana", domain="acme.io", scope_hosts=["acme.io"],
+        depth=3, crawl_duration_seconds=120.0, js_crawl=False,
+    )
+    assert "-jc" not in argv
 
 
 def test_build_argv_headless_is_opt_in():

@@ -32,7 +32,7 @@ def _patches(katana_urls, validated, engagement, existing=None):
     """
     allowed = set(validated) | {_SEED_URL}
 
-    def validate(url, scope):
+    def validate(url, scope, **_kwargs):  # **_kwargs absorbs allow_local (REQ-CE3)
         if url not in allowed:
             raise egress.EgressBlocked(f"blocked: {url}")
         return SimpleNamespace(url=url)

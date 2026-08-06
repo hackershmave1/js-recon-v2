@@ -187,3 +187,68 @@ def test_host_of_returns_empty_on_malformed_target():
     # literal yields an empty host -> out of scope -> a clean 400, never a 500.
     assert egress.host_of("http://[") == ""
     assert egress.host_of("http://[::1") == ""
+
+
+# --- REQ-CE3: default-off local-egress relaxation (RECON_ALLOW_LOCAL_EGRESS) ---
+
+
+@pytest.mark.parametrize("ip", ["127.0.0.1", "::1", "10.0.0.5", "192.168.1.1", "172.16.0.1"])
+def test_is_public_ip_allow_local_permits_loopback_and_private(ip):
+    assert egress.is_public_ip(ip, allow_local=True) is True
+
+
+@pytest.mark.parametrize(
+    "ip",
+    [
+        "169.254.169.254",         # IPv4 cloud-metadata (link-local)
+        "::ffff:169.254.169.254",  # IPv4-mapped metadata — the unwrap must run first
+        "2002:a9fe:a9fe::",        # 6to4 of 169.254.169.254 — the unwrap must run first
+        "fe80::1",                 # IPv6 link-local
+        "224.0.0.1", "ff02::1",    # multicast
+    ],
+)
+def test_is_public_ip_allow_local_still_blocks_metadata_and_linklocal(ip):
+    # The whole point of the narrowing: link-local / cloud-metadata / multicast stay
+    # BLOCKED even with allow_local on, checked AFTER the v4-mapped/6to4 unwrap so a
+    # wrapped metadata address can't slip past the loopback/private accept.
+    assert egress.is_public_ip(ip, allow_local=True) is False
+
+
+def test_is_public_ip_allow_local_ipv6_loopback_and_public():
+    # ::1 is is_reserved, so the allow branch must NOT gate on is_reserved (that would
+    # break localhost on a dual-stack resolver). Plain public IPs stay allowed too.
+    assert egress.is_public_ip("::1", allow_local=True) is True
+    assert egress.is_public_ip("8.8.8.8", allow_local=True) is True
+
+
+def test_is_valid_scope_entry_allow_local_permits_localhost():
+    assert egress.is_valid_scope_entry("localhost", allow_local=True) is True
+    assert egress.is_valid_scope_entry("localhost") is False  # default off
+    # An IP literal / non-LDH host is still rejected even with the flag on.
+    assert egress.is_valid_scope_entry("127.0.0.1", allow_local=True) is False
+    assert egress.is_valid_scope_entry("ac me", allow_local=True) is False
+
+
+def test_normalize_scope_entry_allow_local_localhost():
+    assert egress.normalize_scope_entry("localhost", allow_local=True) == "localhost"
+    assert egress.normalize_scope_entry("localhost") is None  # default off
+
+
+def test_host_in_scope_allow_local_localhost():
+    assert egress.host_in_scope("localhost", ["localhost"], allow_local=True) is True
+    assert egress.host_in_scope("localhost", ["localhost"]) is False  # default off
+
+
+def test_validate_target_allow_local_reaches_localhost(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("127.0.0.1"))
+    target = egress.validate_target(
+        "http://localhost:4173/app.js", ["localhost"], allow_local=True
+    )
+    assert target.host == "localhost" and target.ips == ("127.0.0.1",)
+
+
+def test_validate_target_localhost_blocked_by_default(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("127.0.0.1"))
+    # Flag off: localhost isn't a valid scope entry -> out of scope -> blocked.
+    with pytest.raises(EgressBlocked):
+        egress.validate_target("http://localhost:4173/app.js", ["localhost"])
