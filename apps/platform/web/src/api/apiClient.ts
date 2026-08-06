@@ -107,9 +107,15 @@ export function getSources(tenantId: string, runId: string): Promise<SourcesResp
   return request(`/runs/${encodeURIComponent(runId)}/sources`, {}, tenantId);
 }
 
-export function getSourceContent(tenantId: string, runId: string, path: string): Promise<SourceContent> {
+// `assetUrl` disambiguates a source-map-recovered file (kind:"source") that shares
+// a path across two assets; omit it for asset/upload files (server treats it as
+// optional). See recon.probe.sources.
+export function getSourceContent(
+  tenantId: string, runId: string, path: string, assetUrl?: string | null,
+): Promise<SourceContent> {
+  const asset = assetUrl != null ? `&asset_url=${encodeURIComponent(assetUrl)}` : "";
   return request(
-    `/runs/${encodeURIComponent(runId)}/sources/content?path=${encodeURIComponent(path)}`,
+    `/runs/${encodeURIComponent(runId)}/sources/content?path=${encodeURIComponent(path)}${asset}`,
     {}, tenantId,
   );
 }

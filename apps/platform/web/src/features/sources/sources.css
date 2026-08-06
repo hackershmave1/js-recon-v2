@@ -41,10 +41,39 @@ button.sv-node.sel { background: var(--accent-soft); color: var(--accent); }
 .sv-code { flex: 1; overflow: auto; background: var(--field); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; }
 .sv-line { display: flex; border-left: 3px solid transparent; }
 .sv-line.marked { background: rgba(255,77,94,0.08); border-left-color: var(--danger); }
+/* The jump-to-source target line. A lime left-accent + faint wash so it stands out
+   from a red finding `.marked` line; declared after `.marked` so it wins if both. */
+.sv-line.focus { background: var(--accent-soft); border-left-color: var(--accent); }
 .sv-ln { flex: 0 0 52px; text-align: right; padding: 0 14px 0 0; color: var(--faint); user-select: none; }
 .sv-line.marked .sv-ln { color: var(--danger); }
+.sv-line.focus .sv-ln { color: var(--accent); }
 .sv-code-txt { color: var(--text-2); white-space: pre; padding-right: 20px; }
 .sv-mark { margin-left: auto; flex: 0 0 auto; padding: 0 14px; color: var(--danger); font-size: 10.5px; }
+
+/* Prism syntax highlighting — dark theme (we deliberately do NOT import prismjs'
+   default light theme). Colours reuse the app's semantic ramp so the viewer stays
+   on-palette; applied to spans inside .sv-code-txt. */
+.sv-code-txt .token.comment,
+.sv-code-txt .token.prolog,
+.sv-code-txt .token.doctype,
+.sv-code-txt .token.cdata { color: var(--dim); font-style: italic; }
+.sv-code-txt .token.punctuation { color: var(--faint); }
+.sv-code-txt .token.operator { color: var(--muted); }
+.sv-code-txt .token.keyword { color: var(--purple); }
+.sv-code-txt .token.string,
+.sv-code-txt .token.char,
+.sv-code-txt .token.template-string,
+.sv-code-txt .token.attr-value { color: var(--teal); }
+.sv-code-txt .token.function,
+.sv-code-txt .token.method,
+.sv-code-txt .token.class-name { color: var(--info); }
+.sv-code-txt .token.number,
+.sv-code-txt .token.boolean { color: var(--orange); }
+.sv-code-txt .token.property,
+.sv-code-txt .token.constant,
+.sv-code-txt .token.symbol,
+.sv-code-txt .token.tag { color: var(--pink); }
+.sv-code-txt .token.regex { color: var(--warn); }
 
 .sv-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--faint); padding: 40px; text-align: center; }
 .sv-empty-title { font-family: var(--font-display); font-size: 15px; color: var(--muted); }

@@ -28,7 +28,12 @@ async def get_run_sources(run_id: str, tenant_id: str = Depends(get_tenant_id)) 
         "run_id": run_id,
         "count": len(files),
         "sources": [
-            {"path": f.path, "kind": f.kind, "fetch_status": f.fetch_status}
+            {
+                "path": f.path,
+                "kind": f.kind,
+                "fetch_status": f.fetch_status,
+                "asset_url": f.asset_url,
+            }
             for f in files
         ],
     }
@@ -36,9 +41,14 @@ async def get_run_sources(run_id: str, tenant_id: str = Depends(get_tenant_id)) 
 
 @router.get("/runs/{run_id}/sources/content")
 async def get_run_source_content(
-    run_id: str, path: str, tenant_id: str = Depends(get_tenant_id)
+    run_id: str,
+    path: str,
+    tenant_id: str = Depends(get_tenant_id),
+    asset_url: str | None = None,
 ) -> dict:
-    content = await run_in_threadpool(sources.get_source_content, tenant_id, run_id, path)
+    content = await run_in_threadpool(
+        sources.get_source_content, tenant_id, run_id, path, asset_url
+    )
     if content is None:
         raise HTTPException(status_code=404, detail="source not found")
     return {"path": content.path, "content": content.content, "truncated": content.truncated}

@@ -41,6 +41,13 @@
 .fp-drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 18px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--panel); }
 .fp-drawer-title { font-family: var(--font-display); font-weight: 600; font-size: 15px; }
 
+/* Clickable finding occurrence (jumps to the line in Sources): reads as plain
+   text until hovered — no default button chrome. */
+.fd-occ { display: block; width: 100%; text-align: left; margin: 0; padding: 2px 5px;
+  border: none; border-radius: var(--r-sm); background: transparent; color: inherit;
+  font: inherit; cursor: pointer; }
+.fd-occ:hover { background: var(--surface); color: var(--text-2); }
+
 /* provisional home for the extraction-tuning knobs until the R6 Tuning surface */
 .fp-tuning { margin-top: 8px; border-top: 1px solid var(--border); }
 .fp-tuning > summary { cursor: pointer; padding: 12px 4px; font-size: 12px; color: var(--muted); font-weight: 600; list-style: revert; }

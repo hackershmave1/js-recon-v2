@@ -1,7 +1,12 @@
-import { useState, type ReactNode } from "react";
+import { createContext, useState, type ReactNode } from "react";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import "./shell.css";
+
+// Lets a deep child trigger the shell's section scroll. The jump-to-source flow
+// (a finding occurrence -> Sources) calls this from an effect to reveal the
+// Sources section; default is a no-op so a child outside a Shell is inert.
+export const ShellNavContext = createContext<(sectionId: string) => void>(() => {});
 
 // Frames a view with a fixed sidebar + top bar around one scrolling column. In "run"
 // mode (a run workspace) intra-page nav marks a nav item active and scrolls the matching
@@ -18,7 +23,11 @@ export function Shell({ runId, mode = "run", children }: {
 
   function navigate(sectionId: string) {
     setActive(sectionId);
-    document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Now also called from an effect (jump-to-source), not only a click, so guard
+    // it: jsdom stubs scrollIntoView as a throwing no-op.
+    try {
+      document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch { /* jsdom stubs scrollIntoView as a throwing no-op */ }
   }
 
   return (
@@ -27,7 +36,9 @@ export function Shell({ runId, mode = "run", children }: {
       <div className="shell-main">
         <TopBar mode={mode} onExport={() => navigate("api-spec")} />
         <div className="shell-view">
-          <div className="shell-view-inner">{children}</div>
+          <div className="shell-view-inner">
+            <ShellNavContext.Provider value={navigate}>{children}</ShellNavContext.Provider>
+          </div>
         </div>
       </div>
     </div>

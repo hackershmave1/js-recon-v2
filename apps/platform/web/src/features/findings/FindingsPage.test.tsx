@@ -28,7 +28,7 @@ const data: FindingsResponse = {
   ],
 };
 
-const view = () => render(<TenantProvider><FindingsPage data={data} runId="r" /></TenantProvider>);
+const view = () => render(<TenantProvider><FindingsPage data={data} runId="r" onJumpToSource={() => {}} /></TenantProvider>);
 const rail = () => document.querySelector(".fp-rail") as HTMLElement;
 
 describe("FindingsPage", () => {

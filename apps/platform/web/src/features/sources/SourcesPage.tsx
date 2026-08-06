@@ -1,15 +1,35 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { getSources, getSourceContent, ApiError } from "../../api/apiClient";
-import type { FindingsResponse, Occurrence, SourceContent, SourceFile } from "../../api/types";
+import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump } from "../../api/types";
+import { ShellNavContext } from "../../shell/Shell";
+import { highlightJsLines, type HighlightedSpan } from "./highlight";
 import "./sources.css";
 
 // A finding occurrence belongs to a file when: (crawl) its asset_url equals the
-// asset's URL; (legacy) its source_path is analyze's "input.js" and it has no
-// asset. See recon.probe.sources for why those are the join keys.
+// asset's URL; (source-map recovered) its source_path AND owning asset_url both
+// match — a path recovered by two assets must not cross-match (design fix M4);
+// (legacy) its source_path is analyze's "input.js" and it has no asset. See
+// recon.probe.sources for why those are the join keys.
 function matchFile(o: Occurrence, file: SourceFile): boolean {
-  return file.kind === "asset"
-    ? o.asset_url === file.path
-    : o.source_path === "input.js" && o.asset_url == null;
+  if (file.kind === "asset") return o.asset_url === file.path;
+  if (file.kind === "source") return o.source_path === file.path && (o.asset_url ?? null) === (file.asset_url ?? null);
+  return o.source_path === "input.js" && o.asset_url == null;
+}
+
+// Resolve a jump (from a finding occurrence) to a stored file's `path`:
+// a source-map file (matched by path + owning asset, else path only), else the
+// owning asset, else the legacy "input.js" bundle.
+function resolveJumpPath(j: SourceJump, files: SourceFile[]): string {
+  if (j.sourcePath && j.sourcePath !== "input.js") {
+    const match = files.find((f) => f.kind === "source" && f.path === j.sourcePath && (f.asset_url ?? null) === (j.assetUrl ?? null))
+      ?? files.find((f) => f.kind === "source" && f.path === j.sourcePath);
+    return match?.path ?? j.sourcePath;
+  }
+  if (j.assetUrl) {
+    const asset = files.find((f) => f.path === j.assetUrl);
+    if (asset) return asset.path;
+  }
+  return "input.js";
 }
 
 interface TreeNode { name: string; children: Map<string, TreeNode>; file: SourceFile | null; }
@@ -132,23 +152,55 @@ async function formatJs(code: string): Promise<string> {
   }
 }
 
+// Files past this size skip syntax highlighting: tokenizing multiple MiB
+// synchronously would freeze the tab (design fix S2).
+const HIGHLIGHT_MAX_CHARS = 200_000;
+
 // Presentational: renders `text` line-by-line. `marks` (line -> finding type) is
 // null when the view is pretty-printed, since the original line numbers no longer
-// map after reformatting.
-function CodeViewer({ text, truncated, marks }: {
-  text: string; truncated: boolean; marks: Map<number, string> | null;
+// map after reformatting. `focusLine` is the jumped-to line (highlighted + scrolled
+// into view); it still applies to pretty-printed text even though marks don't.
+function CodeViewer({ text, truncated, marks, focusLine }: {
+  text: string; truncated: boolean; marks: Map<number, string> | null; focusLine?: number | null;
 }) {
-  const lines = text.split("\n");
+  const lines = useMemo(() => text.split("\n"), [text]);
+
+  // Lazily syntax-highlight into per-line spans. Plain text until ready and on
+  // failure (S3); skipped entirely for very large files (S2).
+  const [highlighted, setHighlighted] = useState<HighlightedSpan[][] | null>(null);
+  useEffect(() => {
+    setHighlighted(null);
+    if (text.length > HIGHLIGHT_MAX_CHARS) return;
+    let live = true;
+    void highlightJsLines(text)
+      .then((out) => { if (live) setHighlighted(out); })
+      .catch(() => { /* fall back to plain text */ });
+    return () => { live = false; };
+  }, [text]);
+
+  // Scroll the jumped-to line into view after it renders. Re-run when highlighting
+  // resolves (it reflows the line). jsdom's scrollIntoView throws, so guard it.
+  const focusRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (focusLine == null) return;
+    try { focusRef.current?.scrollIntoView({ block: "center" }); } catch { /* jsdom no-op */ }
+  }, [focusLine, text, highlighted]);
+
   return (
     <div className="sv-code">
       {truncated && <div className="sv-note sv-warn">File truncated — showing a capped preview.</div>}
       {lines.map((line, i) => {
         const n = i + 1;
         const mark = marks?.get(n);
+        const focused = focusLine === n;
+        const spans = highlighted?.[i];
         return (
-          <div key={n} className={"sv-line" + (mark ? " marked" : "")}>
+          <div key={n} ref={focused ? focusRef : undefined}
+            className={"sv-line" + (mark ? " marked" : "") + (focused ? " focus" : "")}>
             <span className="sv-ln">{n}</span>
-            <span className="sv-code-txt">{line}</span>
+            <span className="sv-code-txt">
+              {spans ? spans.map((s, j) => <span key={j} className={s.className}>{s.text}</span>) : line}
+            </span>
             {mark && <span className="sv-mark">{mark}</span>}
           </div>
         );
@@ -165,8 +217,8 @@ function downloadText(name: string, text: string) {
   URL.revokeObjectURL(url);
 }
 
-export function SourcesPage({ data, tenantId, runId }: {
-  data: FindingsResponse | null; tenantId: string; runId: string;
+export function SourcesPage({ data, tenantId, runId, jump }: {
+  data: FindingsResponse | null; tenantId: string; runId: string; jump: SourceJump | null;
 }) {
   const [files, setFiles] = useState<SourceFile[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -174,6 +226,8 @@ export function SourcesPage({ data, tenantId, runId }: {
   const [content, setContent] = useState<SourceContent | null>(null);
   const [contentState, setContentState] = useState<"idle" | "loading" | "error">("idle");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [focusLine, setFocusLine] = useState<number | null>(null);
+  const shellNavigate = useContext(ShellNavContext);
   const toggleDir = useCallback((key: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -181,14 +235,34 @@ export function SourcesPage({ data, tenantId, runId }: {
       return next;
     });
   }, []);
+  // Manually picking a file cancels a jump's line highlight.
+  const selectFile = useCallback((path: string) => { setSelPath(path); setFocusLine(null); }, []);
+
+  // A jump can arrive before `files` load, so stash the latest one and apply it
+  // once files are present (the applying effect also keys on `files`).
+  const pendingJump = useRef<SourceJump | null>(null);
+  useEffect(() => { if (jump) pendingJump.current = jump; }, [jump]);
+  useEffect(() => {
+    const j = pendingJump.current;
+    if (!j || !files) return;
+    pendingJump.current = null;
+    setSelPath(resolveJumpPath(j, files));
+    shellNavigate("sources");
+    setFocusLine(j.line);
+  }, [jump, files, shellNavigate]);
 
   useEffect(() => {
     // Clear the previous run's tree/selection so a run switch never shows stale
-    // files until the refetch resolves.
+    // files until the refetch resolves. Also drop the old run's focus line — the
+    // route has no per-run key, so a leftover focusLine would spuriously highlight
+    // (and scroll to) that line number in the new run's first file. NOT the pending
+    // jump ref: it is cleared when applied, and clearing it here would clobber a jump
+    // passed at mount (this effect runs after the jump-stashing effect, before files load).
     setFiles(null);
     setSelPath(null);
     setListError(null);
     setCollapsed(new Set());
+    setFocusLine(null);
     let live = true;
     getSources(tenantId, runId)
       .then((r) => { if (live) setFiles(r.sources); })
@@ -206,11 +280,16 @@ export function SourcesPage({ data, tenantId, runId }: {
     if (!selected || selected.fetch_status !== "ok") { setContentState("idle"); return; }
     let live = true;
     setContentState("loading");
-    getSourceContent(tenantId, runId, selected.path)
+    // A source-map file needs its owning asset_url to disambiguate a shared path;
+    // asset/upload files omit the param entirely.
+    const load = selected.kind === "source"
+      ? getSourceContent(tenantId, runId, selected.path, selected.asset_url)
+      : getSourceContent(tenantId, runId, selected.path);
+    load
       .then((c) => { if (live) { setContent(c); setContentState("idle"); } })
       .catch(() => { if (live) setContentState("error"); });
     return () => { live = false; };
-  }, [tenantId, runId, selected?.path, selected?.fetch_status]);
+  }, [tenantId, runId, selected?.path, selected?.fetch_status, selected?.kind, selected?.asset_url]);
 
   const badges = useMemo(() => {
     const m = new Map<string, number>();
@@ -266,7 +345,7 @@ export function SourcesPage({ data, tenantId, runId }: {
         </div>
         <div className="sv-tree">
           <TreeLevel nodes={tree.children} depth={0} parentKey="" selectedPath={selected?.path ?? null}
-            onSelect={setSelPath} badges={badges} collapsed={collapsed} onToggle={toggleDir} />
+            onSelect={selectFile} badges={badges} collapsed={collapsed} onToggle={toggleDir} />
         </div>
       </aside>
 
@@ -300,6 +379,7 @@ export function SourcesPage({ data, tenantId, runId }: {
               text={pretty ? prettyText! : content.content}
               truncated={content.truncated}
               marks={pretty ? null : marks}
+              focusLine={focusLine}
             />
           )
         ) : null}

@@ -93,8 +93,15 @@ export interface RequestsResponse { run_id: string; count: number; requests: Rec
 // for a legacy single-bundle run, or the asset URL for a crawl asset; `kind`
 // distinguishes them. `fetch_status` === "ok" means the bytes are viewable — a
 // pending/failed crawl asset is listed but has no content to fetch.
-export interface SourceFile { path: string; kind: "asset" | "upload"; fetch_status: string; }
+// `kind:"source"` is a source-map-recovered original (e.g. webpack:/…/social.js);
+// `asset_url` names the owning crawl asset for those (null for asset/upload, or for
+// a legacy run-level map). See recon.probe.sources for the join keys.
+export interface SourceFile { path: string; kind: "asset" | "upload" | "source"; fetch_status: string; asset_url: string | null; }
 export interface SourcesResponse { run_id: string; count: number; sources: SourceFile[]; }
+// A finding occurrence's "jump to its source" request (Findings drawer -> Sources).
+// Any field may be null: an occurrence without a source_path/asset_url can still
+// carry a line, and a legacy occurrence resolves to the "input.js" bundle.
+export interface SourceJump { sourcePath: string | null; assetUrl: string | null; line: number | null; }
 // One source file's decoded text (GET /runs/{id}/sources/content?path=).
 // `truncated` is true when the raw blob exceeded the server's response cap.
 export interface SourceContent { path: string; content: string; truncated: boolean; }

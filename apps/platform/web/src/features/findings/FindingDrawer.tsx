@@ -1,4 +1,4 @@
-import type { Finding } from "../../api/types";
+import type { Finding, SourceJump } from "../../api/types";
 import { FindingDetail } from "./FindingDetail";
 
 // Right-side drawer holding one finding's full detail (design "Finding drawer").
@@ -6,10 +6,13 @@ import { FindingDetail } from "./FindingDetail";
 // unchanged. NOTE: manual-probe artifacts aren't folded in here yet — that needs
 // matching a finding to its reconstructed request; it stays in the Probe section
 // until a later pass.
-export function FindingDrawer({ finding, runId, onClose }: {
+// `onJumpToSource` is optional: the Findings page wires it (occurrences become
+// jump-to-source buttons) but the shared ApiSpec drawer leaves it unset (plain text).
+export function FindingDrawer({ finding, runId, onClose, onJumpToSource }: {
   finding: Finding | null;
   runId: string;
   onClose: () => void;
+  onJumpToSource?: (j: SourceJump) => void;
 }) {
   if (!finding) return null;
   return (
@@ -20,7 +23,7 @@ export function FindingDrawer({ finding, runId, onClose }: {
           <span className="fp-drawer-title">Finding detail</span>
           <button type="button" onClick={onClose}>Close</button>
         </div>
-        <FindingDetail finding={finding} runId={runId} />
+        <FindingDetail finding={finding} runId={runId} onJumpToSource={onJumpToSource} />
       </aside>
     </>
   );

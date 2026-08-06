@@ -7,25 +7,33 @@ text. Mirrors ``reveal.py``: resolve the object key under RLS (``tenant_session`
 / ``run_assets.list_for_run``, both run-scoped), then read the blob AFTER the
 session closes.
 
+Also serves source-map-recovered ORIGINAL files (kind ``"source"``, e.g.
+``webpack:/app/src/api.js``): the ones that carry >=1 finding are enumerated from
+the findings' persisted ``occurrence.source_path`` (NOT by re-running recovery at
+list time — that would spawn a Go subprocess per asset on every list), and their
+bytes are recovered ON DEMAND from ``run_asset.source_map_ref`` /
+``run.source_map_ref`` when one is opened. A bad/absent map yields "not found",
+never a 500 (see ``_recovered_content``).
+
 NOTE: this deliberately serves the raw source UNREDACTED — it is *not* a
 secret-reveal action (cf. ``reveal.py`` / REQ-S3's audited disclosure). That is
 consistent with ``/requests`` and ``/export``, which already expose
 reconstructed detail without a per-item audit: the source is the analyst's own
 captured artifact from an authorized target.
 
-Out of scope here (distinct future capabilities): source-map-recovered original
-files (``run.source_map_ref`` → ``sourcemapper.recover_sources``), and
-deobfuscation (no deobfuscator exists in the backend)."""
+Out of scope here: deobfuscation (no deobfuscator exists in the backend)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from botocore.exceptions import ClientError
+from sqlalchemy import select
 
 from recon import storage
 from recon.db import models
 from recon.db.base import tenant_session
+from recon.findings import engines, sourcemapper
 from recon.runs import assets as run_assets
 
 # Bound the served text so one request can't stream an arbitrarily large decoded
@@ -42,8 +50,13 @@ _UPLOAD_PATH = "input.js"
 @dataclass(frozen=True)
 class SourceFile:
     path: str
-    kind: str  # "asset" (one crawl asset) | "upload" (the legacy single bundle)
+    kind: str  # "asset" (one crawl asset) | "upload" (legacy bundle) | "source" (recovered original)
     fetch_status: str
+    # For kind="source" only: the asset whose source map recovered this original
+    # (crawl), or None for a legacy run-level map. It is part of the finding<->source
+    # join identity, so a path recovered by two different assets stays distinct
+    # instead of collapsing to one node with the wrong bytes. None for asset/upload.
+    asset_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -57,14 +70,17 @@ def list_sources(tenant_id: str, run_id: str) -> list[SourceFile] | None:
     """Every source file for a run, or ``None`` if the run is absent/invisible.
 
     Crawl runs (``run_asset`` rows exist) list one file per asset, named by its
-    URL; legacy runs list the single stored bundle as ``"input.js"``. Reads no
-    blob bytes (hence no size) to avoid an object-store GET per asset."""
+    URL; legacy runs list the single stored bundle as ``"input.js"``. Either way,
+    source-map-recovered originals that carry findings are appended (``kind
+    "source"``). Reads no bundle bytes (hence no size) to avoid an object-store
+    GET per asset, and runs NO recovery subprocess (that is on-demand only)."""
     asset_rows = run_assets.list_for_run(tenant_id, run_id)
     if asset_rows:
-        return [
+        files = [
             SourceFile(path=row.url, kind="asset", fetch_status=row.fetch_status)
             for row in asset_rows
         ]
+        return files + (_recovered_sources(tenant_id, run_id) or [])
     # No asset rows: a legacy run, or a run invisible to this tenant. The run row
     # distinguishes them (RLS hides another tenant's run -> None -> 404).
     with tenant_session(tenant_id) as session:
@@ -72,22 +88,78 @@ def list_sources(tenant_id: str, run_id: str) -> list[SourceFile] | None:
         if run is None:
             return None
         input_ref = run.input_ref
-    if input_ref is None:
-        return []  # legacy run that hasn't fetched/stored its bundle yet
-    return [SourceFile(path=_UPLOAD_PATH, kind="upload", fetch_status="ok")]
+    files = (
+        [] if input_ref is None else [SourceFile(path=_UPLOAD_PATH, kind="upload", fetch_status="ok")]
+    )
+    return files + (_recovered_sources(tenant_id, run_id) or [])
 
 
-def get_source_content(tenant_id: str, run_id: str, path: str) -> SourceContent | None:
+def _recovered_sources(tenant_id: str, run_id: str) -> list[SourceFile] | None:
+    """The source-map-recovered originals that carry >=1 finding, derived from the
+    persisted occurrence ``source_path`` values (design M1 — no recovery here).
+
+    Identity is ``(source_path, asset_url)`` so an original recovered by two assets
+    (a shared vendor chunk) stays distinct (M4). ``None`` if the run is invisible
+    to the tenant. RLS-scoped: the query runs inside ``tenant_session``."""
+    with tenant_session(tenant_id) as session:
+        run = session.get(models.Run, run_id)
+        if run is None:
+            return None
+        rows = session.execute(
+            select(
+                models.FindingOccurrence.source_path,
+                models.FindingOccurrence.run_asset_id,
+            )
+            .join(models.Finding, models.FindingOccurrence.finding)
+            .where(
+                models.Finding.run_id == str(run_id),
+                models.FindingOccurrence.source_path.is_not(None),
+                models.FindingOccurrence.source_path != _UPLOAD_PATH,
+            )
+            .distinct()
+        ).all()
+        asset_urls = {
+            str(a.id): a.url
+            for a in session.scalars(
+                select(models.RunAsset).where(models.RunAsset.run_id == str(run_id))
+            ).all()
+        }
+    seen: set[tuple[str, str | None]] = set()
+    files: list[SourceFile] = []
+    for source_path, run_asset_id in rows:
+        asset_url = asset_urls.get(str(run_asset_id)) if run_asset_id is not None else None
+        key = (source_path, asset_url)
+        if key in seen:
+            continue
+        seen.add(key)
+        files.append(
+            SourceFile(path=source_path, kind="source", fetch_status="ok", asset_url=asset_url)
+        )
+    files.sort(key=lambda f: (f.path, f.asset_url or ""))
+    return files
+
+
+def get_source_content(
+    tenant_id: str, run_id: str, path: str, asset_url: str | None = None
+) -> SourceContent | None:
     """One source file's bytes decoded to text, or ``None`` if the run/file is
     absent. ``path`` is only ever equality-matched against enumerated sources (an
-    asset URL, or the literal ``"input.js"``); it never builds an object key."""
+    asset URL, the literal ``"input.js"``, or a recovered original's path); it
+    never builds an object key. A recovered original (``asset_url`` names the
+    owning crawl asset, or ``None`` for a legacy run-level map) is recovered from
+    its source map on demand."""
     key = _resolve_key(tenant_id, run_id, path)
-    if key is None:
-        return None
-    try:
-        raw = storage.get_blob(key)
-    except ClientError:
-        return None  # key vanished from the object store — treat as not found
+    if key is not None:
+        try:
+            raw = storage.get_blob(key)
+        except ClientError:
+            return None  # key vanished from the object store — treat as not found
+        return _as_content(path, raw)
+    # Not a stored asset/upload blob: try a source-map-recovered original.
+    return _recovered_content(tenant_id, run_id, path, asset_url)
+
+
+def _as_content(path: str, raw: bytes) -> SourceContent:
     truncated = len(raw) > _MAX_CONTENT_BYTES
     # Slice the raw BYTES before decoding so the decoded string is bounded too.
     content = raw[:_MAX_CONTENT_BYTES].decode("utf-8", "replace")
@@ -113,3 +185,50 @@ def _resolve_key(tenant_id: str, run_id: str, path: str) -> str | None:
     if path == _UPLOAD_PATH and input_ref:
         return input_ref
     return None
+
+
+def _recovered_content(
+    tenant_id: str, run_id: str, path: str, asset_url: str | None
+) -> SourceContent | None:
+    """Recover ``path`` from its source map on demand. Returns ``None`` (→ 404) if
+    the map is missing, unparseable, times out, or the binary is absent — a bad map
+    must never 500 the whole Sources tab (design M3). ``EngineNotAvailable`` and
+    ``EngineTimeout`` subclass ``EngineError``, so one ``except`` covers all."""
+    map_ref = _resolve_source_map_ref(tenant_id, run_id, asset_url)
+    if map_ref is None:
+        return None
+    try:
+        map_bytes = storage.get_blob(map_ref)
+    except ClientError:
+        return None
+    try:
+        recovered = sourcemapper.recover_sources(map_bytes)
+    except engines.EngineError:
+        return None
+    if recovered.status != "ok":
+        return None
+    for recovered_file in recovered.files:
+        if recovered_file.path == path:
+            return _as_content(path, recovered_file.content)
+    return None
+
+
+def _resolve_source_map_ref(
+    tenant_id: str, run_id: str, asset_url: str | None
+) -> str | None:
+    """The source-map blob key for a recovered original, resolved under RLS. When
+    ``asset_url`` is given it is the owning crawl asset's map (``(run_id, url)`` is
+    unique, so ``.first()`` is exact); otherwise the legacy run-level map."""
+    with tenant_session(tenant_id) as session:
+        run = session.get(models.Run, run_id)
+        if run is None:
+            return None
+        if asset_url:
+            row = session.scalars(
+                select(models.RunAsset).where(
+                    models.RunAsset.run_id == str(run_id),
+                    models.RunAsset.url == asset_url,
+                )
+            ).first()
+            return row.source_map_ref if row else None
+        return run.source_map_ref

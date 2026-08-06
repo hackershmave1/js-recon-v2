@@ -10,13 +10,15 @@ import { OverviewPanel } from "./features/overview/OverviewPanel";
 import { DiscoveryEmpty } from "./features/discovery/DiscoveryEmpty";
 import { Shell } from "./shell/Shell";
 import { useTenant } from "./tenant/TenantContext";
-import { TERMINAL_STATES, type FindingsResponse } from "./api/types";
+import { TERMINAL_STATES, type FindingsResponse, type SourceJump } from "./api/types";
 
 export function RunWorkspace() {
   const { id } = useParams();
   const { tenantId } = useTenant();
   const [findings, setFindings] = useState<FindingsResponse | null>(null);
   const [state, setState] = useState<string | null>(null);
+  // A finding occurrence's "jump to its source" request, handed to SourcesPage.
+  const [jump, setJump] = useState<SourceJump | null>(null);
   if (!id) return null;
   const terminal = state != null && TERMINAL_STATES.has(state);
   // Each panel is wrapped in a <section id> matching a Sidebar nav item so the shell
@@ -30,7 +32,7 @@ export function RunWorkspace() {
       </section>
       {tenantId && (
         <section id="sources">
-          <SourcesPage data={findings} tenantId={tenantId} runId={id} />
+          <SourcesPage data={findings} tenantId={tenantId} runId={id} jump={jump} />
         </section>
       )}
       {terminal && (
@@ -40,7 +42,7 @@ export function RunWorkspace() {
       )}
       {findings && (
         <section id="findings">
-          <FindingsPage data={findings} runId={id} />
+          <FindingsPage data={findings} runId={id} onJumpToSource={setJump} />
         </section>
       )}
       {terminal && (

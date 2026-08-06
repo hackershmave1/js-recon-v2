@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { FindingsResponse, Finding } from "../../api/types";
+import type { FindingsResponse, Finding, SourceJump } from "../../api/types";
 import { FindingDrawer } from "./FindingDrawer";
 import { SpecUpload } from "./SpecUpload";
 import { BaseUrlPanel } from "./BaseUrlPanel";
@@ -34,7 +34,9 @@ function matchesQuery(f: Finding, q: string): boolean {
   return hay.includes(q.toLowerCase());
 }
 
-export function FindingsPage({ data, runId }: { data: FindingsResponse; runId: string }) {
+export function FindingsPage({ data, runId, onJumpToSource }: {
+  data: FindingsResponse; runId: string; onJumpToSource: (j: SourceJump) => void;
+}) {
   const [sel, setSel] = useState<Record<string, Set<string>>>({});
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Finding | null>(null);
@@ -124,7 +126,7 @@ export function FindingsPage({ data, runId }: { data: FindingsResponse; runId: s
         </div>
       </div>
 
-      <FindingDrawer finding={selected} runId={runId} onClose={() => setSelected(null)} />
+      <FindingDrawer finding={selected} runId={runId} onClose={() => setSelected(null)} onJumpToSource={onJumpToSource} />
 
       {/* Provisional home for the extraction-tuning knobs (spec attach, base-URL
           rules, wrapper teaching) until the R6 per-session Tuning surface. */}
