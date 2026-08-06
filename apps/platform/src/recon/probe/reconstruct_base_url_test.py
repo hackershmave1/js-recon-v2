@@ -1,7 +1,6 @@
-from dataclasses import replace
 
 from recon.findings.base_url import BaseUrlRule
-from recon.probe.reconstruct import ReconstructedRequest, build_requests
+from recon.probe.reconstruct import build_requests
 
 
 def _view(finding_hash, type_, value, attributes=None, occurrences=()):

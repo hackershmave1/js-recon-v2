@@ -1,5 +1,4 @@
 # src/recon/discover/crawl_test.py
-import json
 import socket
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -71,7 +70,6 @@ def test_discover_run_writes_only_in_scope_assets():
 
 
 def test_discover_run_is_idempotent_when_event_exists():
-    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
     with patch("recon.discover.crawl.harness.run_crawl") as run_crawl, \
          patch("recon.discover.crawl.queries.latest_assets_event",
                return_value={"count": 3, "assets_ref": "x", "status": "ok"}):

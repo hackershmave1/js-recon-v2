@@ -1,5 +1,5 @@
-from recon.config import get_settings
 from recon import storage
+from recon.config import get_settings
 
 
 def test_crawl_settings_have_defaults():

@@ -10,7 +10,8 @@ from recon import storage
 from recon.api.app import create_app
 from recon.db.base import tenant_session
 from recon.events.log import record_event
-from recon.runs import assets, service as runs_service
+from recon.runs import assets
+from recon.runs import service as runs_service
 
 client = TestClient(create_app())
 TENANT = "11111111-1111-1111-1111-111111111111"

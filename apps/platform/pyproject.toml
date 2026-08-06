@@ -45,6 +45,7 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "fakeredis>=2.21",
+    "ruff>=0.16,<0.17",
 ]
 
 [tool.setuptools.packages.find]
@@ -68,3 +69,11 @@ markers = [
 [tool.ruff]
 line-length = 100
 src = ["src"]
+
+[tool.ruff.lint]
+# Start conservative and GREEN: pyflakes (F — real errors: unused/undefined names,
+# redefinitions) + import sorting (I). Line-length (E501) is deliberately left to
+# `ruff format`, not the linter. A codebase-wide `ruff format` and the broader
+# UP/B/SIM modernization rules are tracked as follow-ups (see DEBT.md) rather than
+# a blame-churning big-bang folded into the CI-enablement commit.
+select = ["F", "I"]

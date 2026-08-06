@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from alembic import op
 
-from recon.db.base import Base
 from recon.db import models
+from recon.db.base import Base
 
 revision = "0001_initial"
 down_revision = None

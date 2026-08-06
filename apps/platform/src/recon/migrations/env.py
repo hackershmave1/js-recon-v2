@@ -6,8 +6,8 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from recon.config import get_settings
-from recon.db.base import Base
 from recon.db import models  # noqa: F401  (import registers tables on Base.metadata)
+from recon.db.base import Base
 
 config = context.config
 # Migrations run as the owning admin role, not the RLS-restricted app role.

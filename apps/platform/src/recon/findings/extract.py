@@ -28,8 +28,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl
 
-from tree_sitter import Language, Node, Parser
 import tree_sitter_javascript as tsjs
+from tree_sitter import Language, Node, Parser
 
 from recon.findings.wrappers import WrapperRule, wrapper_callees
 
