@@ -27,7 +27,10 @@ export function RunWorkspace() {
     <Shell runId={id}>
       <section id="overview">
         {findings && <OverviewPanel data={findings} />}
-        <RunProgress runId={id} onFindings={setFindings} onState={setState} />
+        {/* key by run id so switching runs remounts with fresh state/refs — the
+            monotonic-guard refs (stateRef/liveProgressRef) must not bleed across
+            runs (a prior terminal run would otherwise freeze the next run's badge). */}
+        <RunProgress key={id} runId={id} onFindings={setFindings} onState={setState} />
         <DiscoveryEmpty runId={id} state={state} />
       </section>
       {tenantId && (

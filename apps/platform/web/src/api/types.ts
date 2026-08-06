@@ -55,7 +55,7 @@ export type AssetStatus = "pending" | "ok" | "failed";
 export interface AssetsManifest {
   domain: string | null;
   status: "pending" | "ok" | "capped" | "timeout";
-  assets: { url: string; source: string; fetch_status: AssetStatus; analyze_status: AssetStatus }[];
+  assets: { url: string; source: string; fetch_status: AssetStatus; analyze_status: AssetStatus; fetch_error?: string | null; analyze_error?: string | null }[];
 }
 // Cross-file base-URL rule (design REQ-C2): an analyst-supplied prefix or
 // finding-set mapping that prepends a base to relative paths missing one,

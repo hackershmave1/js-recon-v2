@@ -87,4 +87,115 @@ describe("RunProgress", () => {
     render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
     expect(await screen.findByRole("button", { name: /resume/i })).toBeInTheDocument();
   });
+
+  it("keeps a live 'discovering' when a late QUEUED status snapshot resolves after it (Bug 1)", async () => {
+    // The initial getStatus() is dispatched at onOpen while the run is still QUEUED,
+    // but resolves AFTER the live run.transition→discovering. The monotonic guard
+    // must reject that stale regression instead of snapping the badge back to Queued.
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "queued", stage: null, done: 0, total: 0, pct: 0, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onOpen?.();                                          // dispatches refresh() -> stale "queued"
+      h.onEvent({ id: "1", event: "run.transition", data: '{"from":"queued","to":"discovering"}' });
+    });
+    const onFindings = vi.fn();
+    render(<TenantProvider><RunProgress runId="r" onFindings={onFindings} /></TenantProvider>);
+    await waitFor(() => expect(onFindings).toHaveBeenCalled());       // refresh() fully ran (incl. the ignored stale state)
+    expect(screen.getByText("discovering")).toBeInTheDocument();
+    expect(screen.queryByText("queued")).not.toBeInTheDocument();
+    expect(screen.getByText("Discover").closest("li")!.className).toContain("is-active");
+  });
+
+  it("advances through live stage transitions (Bug 1 regression)", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "queued", stage: null, done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      for (const to of ["discovering", "fetching", "ingesting", "analyzing"]) {
+        h.onEvent({ id: to, event: "run.transition", data: JSON.stringify({ to }) });
+      }
+    });
+    render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
+    await waitFor(() => expect(screen.getByText("analyzing")).toBeInTheDocument());
+    expect(screen.getByText("Analyze").closest("li")!.className).toContain("is-active");
+    expect(screen.getByText("Discover").closest("li")!.className).toContain("is-complete");
+  });
+
+  it("does not let a late active snapshot revive a terminal PARTIAL (Bug 1)", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "correlating", stage: "correlating", done: 3, total: 4, pct: 75, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    const onFindings = vi.fn();
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onEvent({ id: "1", event: "run.transition", data: '{"to":"partial"}' });
+      h.onOpen?.();                                          // late refresh reads a stale "correlating"
+    });
+    render(<TenantProvider><RunProgress runId="r" onFindings={onFindings} /></TenantProvider>);
+    await waitFor(() => expect(onFindings).toHaveBeenCalled());
+    expect(screen.getByText("PARTIAL")).toBeInTheDocument();
+    expect(screen.queryByText("correlating")).not.toBeInTheDocument();
+  });
+
+  it("shows where a PARTIAL run stopped instead of a blank pipeline (Bug 2)", async () => {
+    // stage is nulled on the backend at terminal for get_status callers, so the
+    // panel pins the last ACTIVE stage from the transition stream and feeds it to
+    // RunPipeline -> "Stopped in Correlate", not "ended before completing".
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "queued", stage: null, done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      for (const to of ["discovering", "fetching", "ingesting", "analyzing", "correlating"]) {
+        h.onEvent({ id: to, event: "run.transition", data: JSON.stringify({ to }) });
+      }
+      h.onEvent({ id: "end", event: "run.transition", data: '{"to":"partial"}' });
+    });
+    render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
+    const badge = await screen.findByText("PARTIAL");
+    expect(badge.className).toContain("chip-partial");
+    expect(screen.getByText(/Stopped in/)).toBeInTheDocument();
+    expect(screen.getByText(/4 of 5 stages completed/)).toBeInTheDocument();
+    expect(screen.queryByText(/ended before completing/i)).not.toBeInTheDocument();
+  });
+
+  it("preserves the stage when a running crawl is paused mid-stage (Bug 2)", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "queued", stage: null, done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      for (const to of ["discovering", "fetching", "ingesting"]) {
+        h.onEvent({ id: to, event: "run.transition", data: JSON.stringify({ to }) });
+      }
+      h.onEvent({ id: "p", event: "run.transition", data: '{"to":"paused"}' });
+    });
+    render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
+    await screen.findByRole("button", { name: /resume/i });
+    expect(screen.getByText("Ingest", { selector: ".rp-step-label" }).closest("li")!.className).toContain("is-paused");
+    expect(screen.getByText("Discover").closest("li")!.className).toContain("is-complete");
+  });
+
+  it("drives the live progress bar from job.progress events (Bug 3)", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "analyzing", stage: "analyzing", done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onOpen?.();
+      h.onEvent({ id: "1", event: "job.progress", data: '{"job_id":"j","done":2,"total":4,"eta_seconds":null}' });
+    });
+    render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
+    await waitFor(() => expect(screen.getByText("2 of 4")).toBeInTheDocument());
+    expect(screen.getByText("50%")).toBeInTheDocument();
+  });
+
+  it("surfaces a blocked crawl's fetch outcome with the dominant reason", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "partial", stage: "correlating", done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(api, "getAssets").mockResolvedValue({
+      domain: "freedomcare.com", status: "ok",
+      assets: [
+        { url: "https://freedomcare.com/ok.js", source: "html", fetch_status: "ok", analyze_status: "ok" },
+        { url: "https://freedomcare.com/a.js", source: "html", fetch_status: "failed", analyze_status: "pending", fetch_error: "target returned HTTP 403" },
+        { url: "https://freedomcare.com/b.js", source: "html", fetch_status: "failed", analyze_status: "pending", fetch_error: "target returned HTTP 403" },
+        { url: "https://freedomcare.com/c.js", source: "html", fetch_status: "failed", analyze_status: "pending", fetch_error: "target returned HTTP 403" },
+      ],
+    });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => { h.onOpen?.(); });
+    render(<TenantProvider><RunProgress runId="r" onFindings={() => {}} /></TenantProvider>);
+    await waitFor(() => expect(screen.getByText(/4 assets · 1 fetched/)).toBeInTheDocument());
+    expect(screen.getByText(/3 failed — target returned HTTP 403/)).toBeInTheDocument();
+  });
 });

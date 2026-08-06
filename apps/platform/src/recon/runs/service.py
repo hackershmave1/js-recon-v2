@@ -84,7 +84,13 @@ def _apply_transition(
     if stage is not None:
         values["stage"] = stage.value
     if to_state in TERMINAL_STATES:
-        values["stage"] = None
+        # Keep run.stage = the last active stage reached; do NOT null it. The
+        # run-progress stepper needs it to render "stopped in <stage>" for a
+        # partial/failed/cancelled run — get_status would otherwise report a null
+        # stage (queries.py) and the pipeline would render blank at the finish.
+        # Nothing keys off a null stage at terminal: coordinator finalize uses the
+        # `completed` arg + the discover.assets event + run_assets, and the worker
+        # compares run.state, never run.stage.
         values["ended_at"] = _utcnow()
     if run.started_at is None and to_state in sm.ACTIVE_STATES:
         values["started_at"] = _utcnow()

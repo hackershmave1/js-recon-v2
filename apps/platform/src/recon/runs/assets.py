@@ -32,6 +32,10 @@ class AssetRow:
     # crawled asset or one the extension captured without a map. Default keeps
     # existing constructors (tests, older callers) working unchanged.
     source_map_ref: str | None = None
+    # Why a fetch/analyze FAILED (bounded string) so the UI can surface a blocked
+    # crawl's dominant reason (e.g. "target returned HTTP 403"); None otherwise.
+    fetch_error: str | None = None
+    analyze_error: str | None = None
 
 
 def seed_pending(session: Session, *, tenant_id: str, run_id: str, urls: list[str]) -> None:
@@ -58,6 +62,7 @@ def list_for_run(tenant_id: str, run_id: str) -> list[AssetRow]:
                 id=str(r.id), url=r.url, input_ref=r.input_ref,
                 fetch_status=r.fetch_status, analyze_status=r.analyze_status,
                 source_map_ref=r.source_map_ref,
+                fetch_error=r.fetch_error, analyze_error=r.analyze_error,
             )
             for r in rows
         ]

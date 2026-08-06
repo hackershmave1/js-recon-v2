@@ -46,4 +46,8 @@ def get_assets_with_status(tenant_id: str, run_id: str) -> dict | None:
         row = status_by_url.get(url) if url else None
         entry["fetch_status"] = row.fetch_status if row else "pending"
         entry["analyze_status"] = row.analyze_status if row else "pending"
+        # Surface WHY a fetch/analyze failed so the UI can explain a blocked crawl
+        # (e.g. a Cloudflare 403) rather than showing an empty result.
+        entry["fetch_error"] = row.fetch_error if row else None
+        entry["analyze_error"] = row.analyze_error if row else None
     return manifest

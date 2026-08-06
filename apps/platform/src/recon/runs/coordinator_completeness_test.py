@@ -51,6 +51,21 @@ def test_one_fetch_fail_is_partial(redis, authorized_session):
     assert _finalize(redis, tenant, run_id) == "partial"
 
 
+def test_finalize_keeps_last_stage_for_progress_ui(redis, authorized_session):
+    # A terminal transition must KEEP run.stage = the last active stage (here
+    # CORRELATING), not null it: the run-progress stepper reads it via get_status
+    # to render "stopped in <stage>" for a partial/failed/cancelled run instead of
+    # a blank pipeline. Regression for the null-stage-at-terminal fix.
+    tenant, session_id = authorized_session
+    run_id = _crawl_run_at_correlating(redis, tenant, session_id,
+                                       crawl_status="ok", urls=["https://acme.io/a.js"])
+    aid = assets.list_for_run(tenant, run_id)[0].id
+    with tenant_session(tenant) as s:
+        assets.set_fetch_failed(s, aid, "404")
+    assert _finalize(redis, tenant, run_id) == "partial"
+    assert queries.get_status(tenant, run_id).stage == RunStage.CORRELATING.value
+
+
 def test_capped_crawl_is_partial(redis, authorized_session):
     tenant, session_id = authorized_session
     run_id = _crawl_run_at_correlating(redis, tenant, session_id,
