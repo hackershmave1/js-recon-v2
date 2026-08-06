@@ -75,9 +75,20 @@ def read_batch(
     block_ms: int = 2000,
 ) -> list[tuple[str, dict[str, Any]]]:
     """Claim up to ``count`` new messages for this consumer (adds to the PEL)."""
-    result = redis.xreadgroup(
-        GROUP, consumer, {queue_key(queue): ">"}, count=count, block=block_ms
-    )
+    try:
+        result = redis.xreadgroup(
+            GROUP, consumer, {queue_key(queue): ">"}, count=count, block=block_ms
+        )
+    except ResponseError:
+        # Self-heal a vanished consumer group: a Redis restart/flush with no
+        # persistence drops the stream and its group, so the next read raises
+        # (real Redis: "NOGROUP …"). Recreating is idempotent; retry once. A
+        # genuine command error is NOT a missing group — it recurs on the retry
+        # and propagates, so a real bug stays loud instead of being swallowed.
+        ensure_group(redis, queue)
+        result = redis.xreadgroup(
+            GROUP, consumer, {queue_key(queue): ">"}, count=count, block=block_ms
+        )
     if not result:
         return []
     _key, entries = result[0]
@@ -129,9 +140,17 @@ def reclaim_stalled(
     count: int = 10,
 ) -> list[tuple[str, dict[str, Any]]]:
     """Reclaim messages abandoned by a crashed worker (idle > threshold)."""
-    result = redis.xautoclaim(
-        queue_key(queue), GROUP, consumer, min_idle_ms, start_id="0-0", count=count
-    )
+    try:
+        result = redis.xautoclaim(
+            queue_key(queue), GROUP, consumer, min_idle_ms, start_id="0-0", count=count
+        )
+    except ResponseError:
+        # Same vanished-group self-heal as read_batch (Redis restart/flush): recreate
+        # the group (idempotent) and retry once; a real error recurs and propagates.
+        ensure_group(redis, queue)
+        result = redis.xautoclaim(
+            queue_key(queue), GROUP, consumer, min_idle_ms, start_id="0-0", count=count
+        )
     # redis-py returns [next_cursor, claimed, deleted]; older/fake returns 2 items.
     claimed = result[1] if len(result) >= 2 else []
     out: list[tuple[str, dict[str, Any]]] = []

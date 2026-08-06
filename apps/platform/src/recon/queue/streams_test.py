@@ -86,3 +86,51 @@ def test_reclaim_stalled_returns_abandoned_messages(redis):
     except Exception as exc:  # pragma: no cover - fakeredis xautoclaim gaps
         pytest.skip(f"fakeredis lacks xautoclaim support: {exc}")
     assert any(m["job_id"] == "j1" for _mid, m in reclaimed)
+
+
+def test_read_batch_self_heals_after_group_lost(redis):
+    # A Redis restart/flush with no persistence drops the stream + consumer group;
+    # the next read must NOT crash the worker — it recreates the group and yields
+    # nothing this round (real Redis raises NOGROUP here; fakeredis phrases it
+    # differently, which is why the self-heal keys on recreate-and-retry, not on the
+    # error string).
+    streams.enqueue(redis, QueueName.FETCH, _msg())
+    redis.flushall()
+    assert streams.read_batch(redis, QueueName.FETCH, "w1", block_ms=20) == []
+    # The group is back: a freshly enqueued job reads normally.
+    streams.enqueue(redis, QueueName.FETCH, _msg(job_id="j2"))
+    batch = streams.read_batch(redis, QueueName.FETCH, "w1", block_ms=100)
+    assert [m["job_id"] for _mid, m in batch] == ["j2"]
+
+
+def test_read_batch_reraises_a_non_group_error(redis):
+    # The self-heal must not swallow a genuine command error (that would spin the
+    # worker silently). ensure_group succeeds (group already exists) and the retry
+    # re-hits the real error, which propagates.
+    class Boom(streams.ResponseError):
+        pass
+
+    calls = {"n": 0}
+    real = redis.xreadgroup
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        raise Boom("ERR something structurally wrong")
+
+    redis.xreadgroup = flaky  # type: ignore[assignment]
+    try:
+        with pytest.raises(streams.ResponseError, match="structurally wrong"):
+            streams.read_batch(redis, QueueName.FETCH, "w1", block_ms=20)
+    finally:
+        redis.xreadgroup = real  # type: ignore[assignment]
+    assert calls["n"] == 2  # first attempt + one retry after ensure_group
+
+
+def test_reclaim_stalled_self_heals_after_group_lost(redis):
+    redis.flushall()
+    try:
+        assert (
+            streams.reclaim_stalled(redis, QueueName.FETCH, "w1", min_idle_ms=0) == []
+        )
+    except Exception as exc:  # pragma: no cover - fakeredis xautoclaim gaps
+        pytest.skip(f"fakeredis lacks xautoclaim support: {exc}")
