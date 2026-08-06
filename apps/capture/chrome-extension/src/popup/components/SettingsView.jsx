@@ -71,7 +71,7 @@ export function SettingsView({ vm }) {
             <span style={{ fontFamily: F.mono, fontSize: '10.5px', color: C.faint }}>{vm.latency}</span>
           </div>
           <Label>Workspace URL</Label>
-          <input value={vm.wsUrl} onInput={(e) => vm.setWsUrl(e.target.value)} placeholder="http://localhost:3000"
+          <input value={vm.wsUrl} onInput={(e) => vm.setWsUrl(e.target.value)} placeholder="http://localhost:8000"
                  style={{ ...inputStyle, marginBottom: '12px' }} />
           <button onClick={vm.testConnection} style={{
             width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',

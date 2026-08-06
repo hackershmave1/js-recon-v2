@@ -33,8 +33,8 @@ async function run() {
   assert.equal(withUrl('recon.example.com/').resolveApiBase(), 'http://recon.example.com', 'scheme-less + trailing slash');
 
   // Defaults to localhost when no workspace URL is set.
-  assert.equal(withUrl('').resolveApiBase(), 'http://localhost:3000', 'empty workspace URL defaults to localhost');
-  assert.equal(new WorkspaceClient({ getSettings: () => ({}) }).resolveApiBase(), 'http://localhost:3000', 'missing workspace URL defaults to localhost');
+  assert.equal(withUrl('').resolveApiBase(), 'http://localhost:8000', 'empty workspace URL defaults to localhost');
+  assert.equal(new WorkspaceClient({ getSettings: () => ({}) }).resolveApiBase(), 'http://localhost:8000', 'missing workspace URL defaults to localhost');
 
   console.log('test_workspace_client: ok');
   process.exit(0);

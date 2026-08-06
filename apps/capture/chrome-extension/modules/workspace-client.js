@@ -15,10 +15,10 @@ export class WorkspaceClient {
   }
 
   // Workspace API origin (no trailing slash) for non-ingestion calls (health, analyze).
-  // Single source of truth: the user-entered Workspace URL (default localhost:3000).
+  // Single source of truth: the user-entered Workspace URL (default localhost:8000).
   resolveApiBase() {
     const s = this.getSettings() || {};
-    let base = (s.workspaceUrl || '').trim() || 'http://localhost:3000';
+    let base = (s.workspaceUrl || '').trim() || 'http://localhost:8000';
     // A scheme-less workspace URL (e.g. "localhost:3000") would resolve relative to the
     // extension origin and fail — prepend http:// so it's an absolute URL.
     if (base && !/^[a-z][a-z0-9+.-]*:\/\//i.test(base)) base = 'http://' + base;

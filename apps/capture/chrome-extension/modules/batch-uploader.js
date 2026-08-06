@@ -8,7 +8,7 @@ export class BatchUploader {
     // the analyze trigger that awaits it. Overridable (tests set it small).
     this.uploadTimeoutMs = 30000;
     this.uploadTimer = null;
-    this.apiEndpoint = this.normalizeEndpoint('http://localhost:3000/api/save-files');
+    this.apiEndpoint = this.normalizeEndpoint('http://localhost:8000/api/save-files');
     this.performAnalysisOnUpload = false;
     // Session scope (root domains + include-subdomains) chosen when a new session is
     // started; carried into save-files metadata so the backend seeds the session's scope.
@@ -303,7 +303,7 @@ export class BatchUploader {
 
   normalizeEndpoint(url) {
     if (!url || typeof url !== 'string') {
-      return 'http://localhost:3000/api/save-files';
+      return 'http://localhost:8000/api/save-files';
     }
 
     try {
@@ -313,7 +313,7 @@ export class BatchUploader {
       parsed.hash = '';
       return parsed.toString();
     } catch (error) {
-      return 'http://localhost:3000/api/save-files';
+      return 'http://localhost:8000/api/save-files';
     }
   }
 

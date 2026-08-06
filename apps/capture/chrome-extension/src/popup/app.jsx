@@ -208,7 +208,7 @@ export function App() {
   }
 
   function openWorkspace() {
-    const base = settings?.workspaceUrl || 'http://localhost:3000';
+    const base = settings?.workspaceUrl || 'http://localhost:8000';
     // Deep-link the current capture session so the workspace opens INTO it instead of
     // defaulting to whatever session is newest (a recon crawl, a second engagement, or
     // the workspace's own self-capture). The session id is the backend session's primary

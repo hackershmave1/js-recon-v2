@@ -84,12 +84,12 @@ class Settings(BaseSettings):
     s3_bucket: str = "recon-artifacts"
     s3_region: str = "us-east-1"
 
-    # Flag-gated (Phase 1): mount POST /api/save-files + /api/sessions/{id}/
-    # analyze/start so the Chrome extension can push captured JS into the normal
-    # run/analyze path (real S3 storage, worker-driven). Off by default; the
-    # extension is not cut over to the platform until the convergence completes.
-    # See api/app.py + api/capture_router.py.
-    enable_capture_ingest: bool = False
+    # Mounts POST /api/save-files + /api/sessions/{id}/analyze/start so the Chrome
+    # extension can push captured JS into the normal run/analyze path (real S3
+    # storage, worker-driven). ON by default post-cutover (Phase 4): the extension
+    # is converged onto the platform, so this is a first-class capability, not a
+    # spike toggle. See api/app.py + api/capture_router.py.
+    enable_capture_ingest: bool = True
     capture_tenant_name: str = "capture-spike"
 
     # Realtime / durability (REQ-R2, REQ-R3).
