@@ -1,32 +1,31 @@
 # js-recon-v2
 
-A monorepo of two JS/API-recon apps that recover a backend's API surface from JavaScript —
-one **statically**, one from **runtime capture**. See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full picture, the boundary between
-them, and the extension <-> backend contract.
+The JS/API-recon **platform** — it recovers a backend's API surface from JavaScript — plus a
+Chrome **extension** that captures runtime (post-authentication) JS and feeds it to the platform
+for the same analysis. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full picture and
+the extension <-> platform ingest contract.
 
 ```
 apps/
-├── platform/   Static recon platform (FastAPI + Redis worker + MinIO + React/Vite).   API :8000
-└── capture/    Runtime capture: chrome-extension/ + api/ (FastAPI) + web/ (RECON Workspace).  :3000
+├── platform/   The recon platform — the whole product (FastAPI + Redis worker + MinIO/S3 +
+│               multi-tenant Postgres; React/Vite workspace).   API :8000
+└── capture/
+    └── chrome-extension/   MV3 extension — captures the JS the browser loads behind auth and
+                            pushes it to the platform. Default backend http://localhost:8000.
 ```
 
 ## Quick start
 
-**Capture app** (extension + workspace):
-
-```bash
-docker start jsse-test-pg
-cd apps/capture/api
-DATABASE_URL=postgresql://jsextractor:changeme123@localhost:5433/js_extractor STORAGE_PATH=C:/jsse-store uv run uvicorn app.main:app --host 127.0.0.1 --port 3000
-# open http://localhost:3000 ; load apps/capture/chrome-extension unpacked
-```
-
-**Platform app**:
+Bring up the platform (API + workspace):
 
 ```bash
 cd apps/platform
-docker compose up -d --build   # API at http://localhost:8000
+docker compose up -d --build   # http://localhost:8000
 ```
+
+Then load the extension: open `chrome://extensions`, turn on **Developer mode**, click **Load
+unpacked**, and select `apps/capture/chrome-extension`. Its default backend is
+`http://localhost:8000` and capture ingest is enabled by default, so captured JS flows straight
+into the platform's run/analyze pipeline.
 
 Per-app docs live under each app directory.
