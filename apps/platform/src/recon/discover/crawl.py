@@ -59,18 +59,21 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
     # failure surfaces loudly in the DLQ instead of silently completing with 0
     # assets. (Katana still resolves the host itself, so rebinding mid-crawl stays
     # a residual risk — see the module docstring / the deferred egress-proxy slice.)
+    settings = get_settings()
     try:
-        egress.validate_target(_seed_url(target), engagement.scope_hosts)
+        egress.validate_target(
+            _seed_url(target), engagement.scope_hosts, allow_local=settings.allow_local_egress
+        )
     except egress.EgressBlocked as exc:
         raise retry.FatalError(f"crawl seed blocked by egress guard: {exc}") from exc
 
-    settings = get_settings()
     argv = katana.build_argv(
         katana_bin=settings.katana_bin, domain=target,
         scope_hosts=engagement.scope_hosts, depth=settings.crawl_depth,
         crawl_duration_seconds=settings.crawl_duration_seconds,
         headless=settings.crawl_headless,
         system_chrome_path=settings.system_chrome_path,
+        js_crawl=settings.crawl_js_crawl,
     )
     result = harness.run_crawl(
         redis, argv, tenant_id=tenant_id, run_id=run_id, job_id=job_id,
@@ -80,7 +83,10 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
         max_output_bytes=settings.crawl_max_output_bytes,
     )
 
-    in_scope = _revalidate(katana.parse_assets(result.stdout), engagement.scope_hosts)
+    in_scope = _revalidate(
+        katana.parse_assets(result.stdout), engagement.scope_hosts,
+        allow_local=settings.allow_local_egress,
+    )
     capped = len(in_scope) > settings.crawl_max_assets
     kept = in_scope[: settings.crawl_max_assets]
     status = "timeout" if result.timed_out else ("capped" if capped else "ok")
@@ -105,11 +111,13 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
     log.info("discover.done", run_id=run_id, count=len(kept), status=status)
 
 
-def _revalidate(urls: list[str], scope_hosts: list[str]) -> list[str]:
+def _revalidate(
+    urls: list[str], scope_hosts: list[str], *, allow_local: bool = False
+) -> list[str]:
     kept: list[str] = []
     for url in urls:
         try:
-            egress.validate_target(url, scope_hosts)
+            egress.validate_target(url, scope_hosts, allow_local=allow_local)
         except egress.EgressBlocked:
             continue
         kept.append(url)

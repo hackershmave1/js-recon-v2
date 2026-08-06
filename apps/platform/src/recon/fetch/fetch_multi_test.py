@@ -83,3 +83,66 @@ def test_fetch_loop_honors_cancel(redis, authorized_session, monkeypatch):
     rows = {r.url: r for r in assets.list_for_run(tenant, run_id)}
     assert rows["https://acme.io/a.js"].fetch_status == "ok"
     assert rows["https://acme.io/b.js"].fetch_status == "pending"
+
+
+def test_fetch_loop_links_external_source_map(redis, authorized_session, monkeypatch):
+    # REQ-CE2: a JS asset that references an external //# sourceMappingURL= gets its
+    # .map fetched (through the egress guard), stored, and linked to the asset row.
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/app.js"])
+
+    def fake_fetch(url, scope, **kw):
+        if url.endswith(".map"):
+            return b'{"version":3,"sources":["src/app.js"],"mappings":"AAAA"}'
+        return b'fetch("/api/x");\n//# sourceMappingURL=app.js.map\n'
+
+    monkeypatch.setattr(fetch, "fetch_url", fake_fetch)
+    fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    row = {r.url: r for r in assets.list_for_run(tenant, run_id)}["https://acme.io/app.js"]
+    assert row.fetch_status == "ok"
+    assert row.input_ref is not None
+    assert row.source_map_ref is not None  # the .map was fetched, stored, linked
+
+
+def test_fetch_loop_bad_source_map_is_soft_miss(redis, authorized_session, monkeypatch):
+    # REQ-CE2 load-bearing invariant: a blocked/failing .map must NEVER fail the
+    # asset (that would drop its JS finding). The asset stays fetch_ok with no
+    # source_map_ref, and analyze later falls back to the minified bundle.
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/app.js"])
+
+    def fake_fetch(url, scope, **kw):
+        if url.endswith(".map"):
+            raise retry.FatalError("HTTP 404")
+        return b'fetch("/api/x");\n//# sourceMappingURL=app.js.map\n'
+
+    monkeypatch.setattr(fetch, "fetch_url", fake_fetch)
+    fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    row = {r.url: r for r in assets.list_for_run(tenant, run_id)}["https://acme.io/app.js"]
+    assert row.fetch_status == "ok"        # NOT failed — the JS fetch succeeded
+    assert row.input_ref is not None
+    assert row.source_map_ref is None      # the bad .map was a soft miss, not linked
+
+
+def test_fetch_loop_source_map_generic_error_is_soft_miss(redis, authorized_session, monkeypatch):
+    # Pins the BREADTH of the helper's `except Exception` (fetch.py _fetch_and_store_
+    # source_map): a NON-fetch error while handling the .map — a malformed ref, a
+    # storage hiccup, here a plain ValueError — must ALSO be swallowed as a soft miss.
+    # If a later edit narrowed the catch to the fetch-error trio, this ValueError would
+    # propagate out of the run and drop the asset's JS finding (the spec §5.2 regression).
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/app.js"])
+
+    def fake_fetch(url, scope, **kw):
+        if url.endswith(".map"):
+            raise ValueError("boom: not a fetch-classified error")
+        return b'fetch("/api/x");\n//# sourceMappingURL=app.js.map\n'
+
+    monkeypatch.setattr(fetch, "fetch_url", fake_fetch)
+    fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)  # must not raise
+
+    row = {r.url: r for r in assets.list_for_run(tenant, run_id)}["https://acme.io/app.js"]
+    assert row.fetch_status == "ok"
+    assert row.source_map_ref is None

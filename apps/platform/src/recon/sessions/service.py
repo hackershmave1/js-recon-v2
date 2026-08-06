@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
 from recon.db.models import Engagement, EngagementSession, Finding, Run, RunAsset, Tenant
 from recon.domain import FindingType
@@ -99,16 +100,21 @@ def _resolve_scope_hosts(scope_hosts: list[str], target: str | None) -> list[str
     authorizes exactly the domain (and its subdomains) the user typed. A target
     whose host is not itself a valid scope entry (an IP literal, ``localhost``)
     does NOT seed scope; that crawl is refused later by the fail-fast/seed guard.
+    (Exception: with the dev-only ``RECON_ALLOW_LOCAL_EGRESS`` flag, ``localhost``
+    is a valid scope entry and DOES seed, so a local test target works end-to-end.)
     """
+    allow_local = get_settings().allow_local_egress
     cleaned: list[str] = []
     for entry in scope_hosts:
-        normalized = egress.normalize_scope_entry(entry)
+        normalized = egress.normalize_scope_entry(entry, allow_local=allow_local)
         if normalized is None:
             raise SessionInvalid(f"invalid scope host: {entry!r}")
         if normalized not in cleaned:
             cleaned.append(normalized)
     if not cleaned and target:
-        default_host = egress.normalize_scope_entry(egress.host_of(target))
+        default_host = egress.normalize_scope_entry(
+            egress.host_of(target), allow_local=allow_local
+        )
         if default_host is not None:
             cleaned.append(default_host)
     return cleaned

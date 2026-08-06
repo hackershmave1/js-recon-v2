@@ -60,7 +60,10 @@ def start_run(
     # upload session) is refused here with a clear 400 instead of dying later in
     # the worker's seed guard. This is the cheap name-only check; the worker still
     # does the full DNS/public-IP SSRF check on the seed (S2).
-    if body.target and not egress.host_in_scope(egress.host_of(body.target), session.scope_hosts):
+    if body.target and not egress.host_in_scope(
+        egress.host_of(body.target), session.scope_hosts,
+        allow_local=get_settings().allow_local_egress,
+    ):
         raise HTTPException(
             status_code=400,
             detail=f"crawl target {body.target!r} is not in the session scope",
