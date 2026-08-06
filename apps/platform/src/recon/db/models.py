@@ -141,7 +141,11 @@ class EngagementSession(Base):
     archived_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
     engagement: Mapped["Engagement | None"] = relationship(back_populates="sessions")
-    runs: Mapped[list["Run"]] = relationship(back_populates="session")
+    # passive_deletes: the run.session_id FK is ON DELETE CASCADE (see Run below),
+    # so let the DB cascade a session delete to its runs (and their children) rather
+    # than SQLAlchemy nullifying run.session_id first — which the NOT NULL column
+    # rejects, 500ing delete_session for any session that has runs.
+    runs: Mapped[list["Run"]] = relationship(back_populates="session", passive_deletes=True)
 
 
 class Run(Base):

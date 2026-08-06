@@ -107,6 +107,23 @@ def test_rename_archive_and_delete(tenant, redis):
     assert client.get("/sessions?archived=true", headers=_hdr(tenant)).json()["count"] == 0
 
 
+def test_delete_session_with_runs_cascades(tenant, redis):
+    # Regression: deleting a session that HAS runs must DB-cascade (run.session_id
+    # is ON DELETE CASCADE) rather than SQLAlchemy nullifying the child runs first —
+    # the NOT NULL column rejected that and 500'd delete_session. The prior delete
+    # test above used a run-less session, so this path was never exercised.
+    client = _client()
+    session_id = _new_session(client, tenant)
+    _upload_run(client, tenant, session_id)
+    assert client.get(f"/sessions/{session_id}/runs", headers=_hdr(tenant)).status_code == 200
+
+    r = client.delete(f"/sessions/{session_id}", headers=_hdr(tenant))
+    assert r.status_code == 204, r.text
+    # Session gone, and its run cascaded away (the runs listing 404s with the session).
+    assert client.get("/sessions?archived=true", headers=_hdr(tenant)).json()["count"] == 0
+    assert client.get(f"/sessions/{session_id}/runs", headers=_hdr(tenant)).status_code == 404
+
+
 def test_rename_empty_is_400(tenant, redis):
     client = _client()
     session_id = _new_session(client, tenant)
