@@ -221,7 +221,15 @@ def validate_target(url: str, scope_hosts: list[str], *, allow_local: bool = Fal
 
     try:
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
-    except socket.gaierror as exc:
+    except (OSError, UnicodeError) as exc:
+        # Every resolution failure fails CLOSED as an egress block, not an uncaught
+        # error. socket.gaierror (NXDOMAIN/no-such-host) and socket.timeout are both
+        # OSError; a malformed / over-long IDNA host (a label > 63 chars) raises
+        # UnicodeError from the C resolver. Folding them all here keeps an
+        # unresolvable crawl SEED a clean, FATAL block (the run finalizes with a
+        # reason) instead of a generic exception the worker mis-classifies as
+        # transient (retry.is_retryable defaults unknown -> retryable) and burns
+        # every attempt before dead-lettering — a "dead job" for a bad domain.
         raise EgressBlocked(f"DNS resolution failed for {host}") from exc
     ips = tuple(sorted({info[4][0] for info in infos}))
     if not ips:

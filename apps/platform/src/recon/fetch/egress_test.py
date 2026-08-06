@@ -153,6 +153,29 @@ def test_validate_target_blocks_in_scope_resolving_to_private(monkeypatch):
         egress.validate_target("https://acme.io/meta", _SCOPE)
 
 
+@pytest.mark.parametrize(
+    "exc",
+    [
+        socket.gaierror("Name or service not known"),
+        socket.timeout("timed out"),
+        UnicodeError("label empty or too long"),
+    ],
+    ids=["gaierror", "timeout", "unicode"],
+)
+def test_validate_target_blocks_on_any_resolution_failure(monkeypatch, exc):
+    # An in-scope host whose resolution fails is a CLEAN egress block, whatever the
+    # failure mode: gaierror (NXDOMAIN) and socket.timeout are OSError; a malformed
+    # / over-long IDNA host raises UnicodeError from the C resolver. All must fail
+    # closed as EgressBlocked so a bad crawl seed finalizes the run with a reason
+    # rather than being mis-read as transient and retried to death (task_620d9c98).
+    def boom(host, port, *args, **kwargs):
+        raise exc
+
+    monkeypatch.setattr(socket, "getaddrinfo", boom)
+    with pytest.raises(EgressBlocked, match="DNS resolution failed"):
+        egress.validate_target("https://acme.io/app.js", _SCOPE)
+
+
 def test_validate_target_blocks_bad_scheme():
     with pytest.raises(EgressBlocked, match="scheme"):
         egress.validate_target("file:///etc/passwd", _SCOPE)
