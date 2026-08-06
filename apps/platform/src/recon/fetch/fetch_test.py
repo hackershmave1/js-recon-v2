@@ -43,6 +43,25 @@ def test_fetch_returns_body(monkeypatch):
     assert body == b"console.log(1);"
 
 
+def test_fetch_sends_browser_headers(monkeypatch):
+    # A default python-httpx User-Agent trips naive WAF/bot filters (Cloudflare
+    # bot-fight 403s it); the fetcher must present a browser-shaped request.
+    _stub_public_dns(monkeypatch)
+    seen: dict[str, str] = {}
+
+    def handler(request):
+        seen["ua"] = request.headers.get("user-agent", "")
+        seen["lang"] = request.headers.get("accept-language", "")
+        return httpx.Response(200, content=b"x")
+
+    fetch.fetch_url(
+        "https://acme.io/app.js", _SCOPE, timeout_s=5, max_bytes=1000, transport=_mock(handler)
+    )
+    assert "Mozilla/5.0" in seen["ua"]
+    assert "python-httpx" not in seen["ua"].lower()
+    assert seen["lang"]  # Accept-Language present
+
+
 def test_fetch_out_of_scope_blocked(monkeypatch):
     _stub_public_dns(monkeypatch)
     with pytest.raises(egress.EgressBlocked, match="scope"):

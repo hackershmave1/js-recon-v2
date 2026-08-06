@@ -49,6 +49,22 @@ log = get_logger("recon.fetch")
 
 _MAX_REDIRECTS = 5
 
+# Present a browser-shaped request. The default python-httpx User-Agent trips
+# naive bot filters — e.g. Cloudflare bot-fight at default settings 403s it — which
+# blocks otherwise-public assets; a realistic UA + Accept headers clears those
+# gates. It does NOT solve a JS/managed challenge (that needs a real browser —
+# headless/extension). Accept-Encoding stays "identity" so the streamed
+# decoded-byte cap still equals the received-byte cap (see fetch_url).
+_FETCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+    ),
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "identity",
+}
+
 
 @contextlib.contextmanager
 def _pin_dns(host: str, ips: tuple[str, ...]) -> Iterator[None]:
@@ -112,10 +128,9 @@ def fetch_url(
                     f"URL host parse mismatch: {httpx.URL(current).host} vs {target.host}"
                 )
             with _pin_dns(target.host, target.ips):
-                # identity encoding so a decoded-byte cap == received-byte cap.
-                with client.stream(
-                    "GET", current, headers={"Accept-Encoding": "identity"}
-                ) as response:
+                # Browser-shaped headers (see _FETCH_HEADERS); identity encoding so
+                # a decoded-byte cap == received-byte cap.
+                with client.stream("GET", current, headers=_FETCH_HEADERS) as response:
                     if response.is_redirect:
                         location = response.headers.get("location")
                         if not location:
