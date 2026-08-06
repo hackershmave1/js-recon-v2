@@ -18,7 +18,9 @@ from recon.discover import queries as discover_queries
 from recon.domain import AssetStatus, JobState, QueueName, RunStage, RunState
 from recon.observability import get_logger
 from recon.queue import streams
-from recon.runs import assets as run_assets, service, state_machine as sm
+from recon.runs import assets as run_assets
+from recon.runs import service
+from recon.runs import state_machine as sm
 from recon.runs.service import RunView
 
 log = get_logger("recon.runs.coordinator")

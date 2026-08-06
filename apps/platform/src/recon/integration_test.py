@@ -120,7 +120,7 @@ def test_cancel_stops_the_run(redis, authorized_session):
 
 def test_duplicate_delivery_is_idempotent(redis, authorized_session):
     tenant, session_id = authorized_session
-    view = coordinator.start_run(redis, tenant_id=tenant, session_id=session_id)
+    coordinator.start_run(redis, tenant_id=tenant, session_id=session_id)
 
     streams.ensure_group(redis, streams.QueueName.DISCOVER)
     batch = streams.read_batch(redis, streams.QueueName.DISCOVER, "w", block_ms=100)

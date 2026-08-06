@@ -5,9 +5,9 @@ import pytest
 
 from recon import storage
 from recon.db.base import tenant_session
+from recon.discover import queries
 from recon.events.log import record_event
 from recon.runs import service as runs_service
-from recon.discover import queries
 
 pytestmark = pytest.mark.integration  # DB + object storage; needs the docker stack
 

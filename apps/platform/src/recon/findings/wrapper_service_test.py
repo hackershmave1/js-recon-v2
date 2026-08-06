@@ -54,8 +54,10 @@ def test_add_wrapper_upserts_on_callee(authorized_session):
 def test_add_wrapper_invalid_callee_raises(authorized_session):
     tenant, session_id = authorized_session
     run_id = _run(tenant, session_id)
+    # `a.b` is a VALID dotted receiver since wrapper-teaching (this.httpClient/svc.api);
+    # a hyphen is a genuine non-identifier, so it still exercises the rejection path.
     with pytest.raises(InvalidWrapperCallee):
-        wrapper_service.add_rule(tenant, run_id, callee="a.b")
+        wrapper_service.add_rule(tenant, run_id, callee="a-b")
 
 
 def test_add_wrapper_unknown_run_is_none(authorized_session):

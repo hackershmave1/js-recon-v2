@@ -184,7 +184,6 @@ def test_pin_dns_ipv6_sockaddr():
 
 @pytest.mark.integration
 def test_fetch_run_stores_input_and_is_idempotent(redis, authorized_session, monkeypatch):
-    from sqlalchemy import update
 
     from recon.db import models
     from recon.db.base import tenant_session

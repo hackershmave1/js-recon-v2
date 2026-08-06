@@ -1,5 +1,5 @@
 from recon.probe import serialize
-from recon.probe.reconstruct import QueryParam, ReconstructedRequest
+from recon.probe.reconstruct import ReconstructedRequest
 
 
 def _req(**overrides):

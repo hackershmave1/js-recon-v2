@@ -14,6 +14,8 @@ unit tests -- no infra.
 
 from __future__ import annotations
 
+from recon.findings import extract, normalize
+from recon.spec import classify
 from recon.spec.classify import (
     Classification,
     SpecSummary,
@@ -23,10 +25,7 @@ from recon.spec.classify import (
     is_partial,
     summarize,
 )
-from recon.spec import classify
 from recon.spec.ingest import DocumentedOp, ingest_spec
-from recon.findings import normalize, extract
-
 
 # --- Regex parity (drift guard) -----------------------------------------------
 

@@ -7,8 +7,7 @@ import pytest
 from recon.db.base import tenant_session
 from recon.fetch import fetch
 from recon.queue import retry
-from recon.runs import assets
-from recon.runs import service
+from recon.runs import assets, service
 
 pytestmark = pytest.mark.integration
 

@@ -11,7 +11,6 @@ import hashlib
 
 from recon.findings import normalize as nz
 
-
 # --- entropy -----------------------------------------------------------------
 
 def test_shannon_entropy_empty_is_zero():
