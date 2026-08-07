@@ -529,7 +529,7 @@ def test_save_files_non_object_map_skipped(make_capture_client):
 def _run_two_writers(target):
     """Run ``target`` (a no-arg callable returning an id) in two threads and return
     both results. A thread's exception is re-raised so the test fails, not hangs."""
-    results: dict[int, str] = {}
+    results: dict[int, object] = {}  # id (D1 races) or response dict (D14 race)
     errors: list[BaseException] = []
 
     def worker(idx: int) -> None:
@@ -604,3 +604,46 @@ def test_concurrent_first_batches_resolve_to_one_run(make_capture_client, redis,
             select(func.count()).select_from(Run).where(Run.capture_external_id == sid)
         )
     assert n == 1  # exactly one open accumulator run
+
+
+# --------------------------------------------------------------------------- #
+# DEBT D14: concurrent analyze/start enqueues exactly ONE walk. Two simultaneous
+# calls for one session both clear the _run_has_job fast-path gate (barrier-synced
+# at that seam), then race the guarded seal; the loser's guarded UPDATE matches 0
+# rows and returns idempotent instead of enqueuing a second DISCOVERING walk. Red
+# without the seal-CAS (both inserts commit — no unique key on (run_id, stage)),
+# green with it.
+# --------------------------------------------------------------------------- #
+
+
+def test_concurrent_analyze_start_enqueues_one_walk(make_capture_client, monkeypatch):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    _save(client, sid, [_file("https://acme.io/a.js", "fetch('/api/v1/users');", sid)])
+    tid = _tenant_id(client.capture_tenant_name)
+
+    barrier = threading.Barrier(2, timeout=30)
+    real_has_job = capture_router._run_has_job
+
+    def rendezvous_has_job(tenant_id: str, run_id: str) -> bool:
+        found = real_has_job(tenant_id, run_id)
+        if not found:  # both callers meet past the gate, before either seals
+            barrier.wait()
+        return found
+
+    monkeypatch.setattr(capture_router, "_run_has_job", rendezvous_has_job)
+
+    # Call the endpoint fn directly in two threads (not via TestClient, whose portal
+    # would serialize the requests and deadlock the barrier) — mirrors the D1 tests.
+    a, b = _run_two_writers(lambda: capture_router.analyze_start(sid))
+
+    assert a["started"] is True and b["started"] is True  # both callers see success
+    assert sum("job" in r for r in (a, b)) == 1  # exactly one winner returned a job
+    run_id = a.get("runId") or b.get("runId")
+    with tenant_session(tid) as s:
+        n_jobs = s.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(Job.run_id == run_id, Job.stage == "discovering")
+        )
+    assert n_jobs == 1  # exactly one walk enqueued, not two
