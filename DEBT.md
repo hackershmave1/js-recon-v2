@@ -65,10 +65,19 @@ as coverage grows; never lower it.
 
 ## Supply chain / security (a security tool with an unscanned supply chain)
 
-### D6 · No dependency/secret scanning [S–M]
-No `dependabot.yml`, no `pip-audit`/`npm audit`, no `gitleaks`, no CodeQL. Add each
-(~one config file). High embarrassment / low effort for a tool whose job is scanning
-other people's code.
+### D6 · No dependency/secret scanning [S–M] — ✅ RESOLVED 2026-08-07
+Added `.github/dependabot.yml` (weekly version-update PRs for the `uv` Python project
++ both npm projects + github-actions + Docker base images), `.gitleaks.toml`, and
+`.github/workflows/security.yml` (push/PR + weekly schedule) with three advisory
+gates: `gitleaks dir` (secret scan of the working TREE — history is intentionally NOT
+scanned: a secret-detection tool's history is saturated with fixture tokens, measured
+at 437 fixture-only findings across 380 commits vs 0 in the tree; a one-time history
+triage confirmed all 437 sit in fixture/test/deleted-v1 paths, no real leak),
+`pip-audit` (clean today), and `npm audit --audit-level=high` for web + extension.
+Fixed a pre-existing dev-only `undici` HIGH in web via a non-breaking `npm audit fix`
+so the web gate is green. CodeQL DEFERRED (needs GitHub Advanced Security, unavailable
+on private Free-tier — the same limit that blocks branch protection). Both §4 gates
+passed (design: BUILD WITH CHANGES, then ENDORSED the working-tree-scan pivot).
 
 ### D7 · Image build isn't lock-pinned [M]
 `host-tests` now installs `uv sync --frozen`, but the Dockerfile (integration lane +

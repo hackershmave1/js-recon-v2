@@ -1,0 +1,41 @@
+version: 2
+
+# Dependency version-update PRs for every ecosystem in the monorepo. Alerts (the
+# passive advisory feed) are enabled separately in repo Settings and need no config.
+# CodeQL is intentionally NOT here (it needs GitHub Advanced Security, unavailable on
+# a private Free-tier repo). See DEBT.md D6.
+updates:
+  # Python backend — the `uv` ecosystem updates uv.lock AND the pyproject pins
+  # together, so CI's `uv sync --frozen` stays consistent (a `pip` ecosystem entry
+  # would edit pyproject floors but never the lock, desyncing --frozen).
+  - package-ecosystem: "uv"
+    directory: "/apps/platform"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # React/Vite SPA.
+  - package-ecosystem: "npm"
+    directory: "/apps/platform/web"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # MV3 capture extension.
+  - package-ecosystem: "npm"
+    directory: "/apps/capture/chrome-extension"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # Keep the pinned GitHub Actions SHAs/tags fresh.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Base-image CVEs on the pinned FROMs in apps/platform/Dockerfile.
+  - package-ecosystem: "docker"
+    directory: "/apps/platform"
+    schedule:
+      interval: "weekly"

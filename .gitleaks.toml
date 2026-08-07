@@ -1,0 +1,41 @@
+# gitleaks config for js-recon-v2 (DEBT D6). Extends the built-in ruleset and
+# scans the CURRENT working tree (`gitleaks dir`) — the code that would actually
+# ship — rather than full git history. History is deliberately NOT scanned: this is
+# a secret-detection tool, so its history is saturated with hundreds of intentional
+# fake-secret fixtures (incl. a since-deleted v1 rule corpus), which would make a
+# history gate pure noise. The job's real job is "don't let a REAL secret ship", for
+# which the working tree is the right surface.
+#
+# Allowlist is scoped deliberately: vendored/generated trees (never our source) and
+# the tool's own fake-secret fixtures/test corpus. The two files that ALSO carry
+# real product code use exact-token regexes, so a REAL secret added to them later is
+# still caught rather than blanket-suppressed.
+title = "js-recon-v2"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Vendored trees + the tool's own planted fake-secret corpus"
+paths = [
+  # --- vendored / generated / non-source (dependencies, build output, other-branch
+  #     worktrees, review artifacts) — never our code, so never scanned ---
+  '''(^|/)\.venv/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)dist/''',
+  '''(^|/)build/''',
+  '''(^|/)\.claude/''',
+  '''(^|/)\.superpowers/''',
+  '''(^|/)archive/''',
+  # --- deliberate fake-secret fixtures (whole-tree / doc; entirely fake tokens) ---
+  '''test-targets/recon-range/''',                                  # the vulnerable fixture target
+  '''docs/superpowers/plans/2026-08-05-recon-range\.md''',          # doc quoting those fixtures
+]
+# For files that ALSO carry real product/test code, allowlist the EXACT fake token
+# (not the whole path) so a REAL secret added there later is still caught.
+regexes = [
+  '''AKIA2E4XZ7K9QW3RT8YV''',                            # findings/rules/aws_access_key_id.yml example
+  '''sk_live_1234567890abcdef1234567890abcdef''',        # apps/capture/tests/test_b004_smart_triggers.py fixture
+  '''aZ9kQ2mB7xL4wP0rT6uY1eC5''',                        # apps/platform/src/recon/findings/normalize_test.py fixture
+  '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0''',  # chrome-extension/tests/test_asset_classifier.mjs example JWT
+]
