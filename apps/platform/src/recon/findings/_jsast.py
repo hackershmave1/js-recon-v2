@@ -1,0 +1,185 @@
+"""Tree-sitter JavaScript AST primitives shared by the extractor (DEBT D11 leaf).
+
+The dependency-free base of the ``findings`` extractor: the parser singleton and
+sink vocabulary, the raw dataclasses the extractor emits (:class:`RawParam`,
+:class:`RawEndpoint`, :class:`Extraction`) plus the base-URL environment record
+(:class:`BaseEnv`), the low-level tree-walking helpers, and the param builders.
+Imports only the standard library and tree-sitter — the leaf of the import DAG
+``_jsast`` <- ``_base_env`` <- ``extract`` — so it can be shared without cycles.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from dataclasses import dataclass, field
+from urllib.parse import parse_qsl
+
+import tree_sitter_javascript as tsjs
+from tree_sitter import Language, Node, Parser
+
+_LANGUAGE = Language(tsjs.language())
+_PARSER = Parser(_LANGUAGE)
+
+HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+_GLOBAL_OBJECTS = frozenset({"window", "globalThis", "self"})
+_JQUERY = frozenset({"$", "jQuery"})
+# jQuery helper -> HTTP method (config-driven ones resolve method from the config).
+_JQUERY_METHODS = {"get": "GET", "post": "POST", "getJSON": "GET"}
+
+
+@dataclass(frozen=True)
+class RawParam:
+    name: str
+    location: str  # "query" | "body"
+
+
+@dataclass(frozen=True)
+class RawEndpoint:
+    kind: str  # fetch | xhr | axios | jquery | websocket
+    method: str
+    url: str
+    params: tuple[RawParam, ...]
+    line: int
+    col: int
+    start_byte: int
+    end_byte: int
+    snippet: str
+    # Provenance: the callee of the taught wrapper this endpoint came from, else
+    # None. NOT folded into `kind` — `kind` stays "axios" so the POST-body
+    # Content-Type gate at reconstruct.py:176 still fires (spec §7 / §12 Imp 3).
+    wrapper: str | None = None
+
+
+@dataclass
+class Extraction:
+    endpoints: list[RawEndpoint] = field(default_factory=list)
+    unattributed: int = 0  # sinks detected but URL not statically resolvable (REQ-C2)
+
+
+@dataclass(frozen=True)
+class BaseEnv:
+    instances: dict[str, str | None]  # axios.create var -> base literal, or None if dynamic
+    default_base: str | None  # axios.defaults.baseURL literal
+    const_prefixes: dict[str, str]  # const name -> string literal (for `${NAME}` prefixes)
+
+
+# --- tree helpers ------------------------------------------------------------
+
+
+def _walk(node: Node) -> Iterator[Node]:
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        yield current
+        stack.extend(reversed(current.children))
+
+
+def _text(node: Node | None) -> str:
+    return (node.text or b"").decode("utf-8", "replace") if node is not None else ""
+
+
+def _string_value(node: Node | None) -> str | None:
+    """Resolve a string/template literal to its text; ``None`` if not static.
+
+    Template strings keep their ``${...}`` substitutions verbatim so the shape
+    survives (`/users/${id}` stays visible) instead of being dropped or guessed.
+    """
+    if node is None:
+        return None
+    if node.type == "string":
+        text = _text(node)
+        if len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]:
+            return text[1:-1]
+        return text
+    if node.type == "template_string":
+        text = _text(node)
+        return text[1:-1] if text.startswith("`") and text.endswith("`") else text
+    return None
+
+
+def _args(call: Node) -> list[Node]:
+    arguments = call.child_by_field_name("arguments")
+    return list(arguments.named_children) if arguments is not None else []
+
+
+def _object_pairs(node: Node | None) -> dict[str, Node]:
+    """Map an object literal's keys to their value nodes (string + identifier keys)."""
+    pairs: dict[str, Node] = {}
+    if node is None or node.type != "object":
+        return pairs
+    for child in node.named_children:
+        if child.type != "pair":
+            continue
+        key_node = child.child_by_field_name("key")
+        value_node = child.child_by_field_name("value")
+        if key_node is None or value_node is None:
+            continue
+        if key_node.type in ("string", "template_string"):
+            key = _string_value(key_node)
+        else:  # property_identifier / identifier
+            key = _text(key_node)
+        if key:
+            pairs[key] = value_node
+    return pairs
+
+
+# --- param extraction --------------------------------------------------------
+
+
+def _query_params(url: str) -> list[RawParam]:
+    query = url.split("?", 1)[1] if "?" in url else ""
+    seen: dict[str, None] = {}
+    for key, _value in parse_qsl(query, keep_blank_values=True):
+        if key:
+            seen.setdefault(key, None)
+    return [RawParam(name, "query") for name in seen]
+
+
+def _body_params(node: Node | None) -> list[RawParam]:
+    return [RawParam(name, "body") for name in _object_pairs(node)]
+
+
+def _body_params_from_value(node: Node | None) -> list[RawParam]:
+    """Body params from an object literal OR a ``JSON.stringify({...})`` wrapper
+    (the near-universal way a JSON body is built)."""
+    if node is None:
+        return []
+    if node.type == "object":
+        return _body_params(node)
+    if node.type == "call_expression":
+        fn = node.child_by_field_name("function")
+        if fn is not None and _text(fn) == "JSON.stringify":
+            inner = _args(node)
+            if inner and inner[0].type == "object":
+                return _body_params(inner[0])
+    return []
+
+
+def _config_query_params(config: Node | None) -> list[RawParam]:
+    """axios's ``params`` config key is serialized into the query string."""
+    params_obj = _object_pairs(config).get("params")
+    return [RawParam(name, "query") for name in _object_pairs(params_obj)]
+
+
+def _endpoint(
+    kind: str,
+    method: str,
+    url: str,
+    params: list[RawParam],
+    call: Node,
+    wrapper: str | None = None,
+) -> RawEndpoint:
+    row, col = call.start_point
+    deduped = list(dict.fromkeys(params))  # preserve order, drop repeats
+    return RawEndpoint(
+        kind=kind,
+        method=method.upper(),
+        url=url,
+        params=tuple(deduped),
+        line=row + 1,
+        col=col,
+        start_byte=call.start_byte,
+        end_byte=call.end_byte,
+        snippet=_text(call)[:200],
+        wrapper=wrapper,
+    )

@@ -176,7 +176,7 @@ def _is_proper_suffix(shorter: list[str], longer: list[str]) -> bool:
 #       branches (steps 5-6, design §5.3, gate B2), so a bare-tail match
 #       against a *different* documented op is caught before either shadow
 #       verdict can fire; and
-#   (b) `recon.findings.extract._join_base` must keep only ever PREPENDING a
+#   (b) `recon.findings._base_env._join_base` must keep only ever PREPENDING a
 #       resolved base to a path, never rewriting/truncating the path itself,
 #       so a resolved-base client path still ends in the same literal suffix
 #       the spec's path does.
