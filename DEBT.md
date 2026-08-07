@@ -149,10 +149,31 @@ minority, so the heavy lane catches most real bugs. Grow the small-test layer.
 Architectural "why" (Redis Streams, RLS-in-DB, SIGSTOP-rejected, export-only GraphQL)
 lives in per-slice specs + off-repo memory. Add `docs/adr/` (MADR); backfill ~8.
 
-### D11 · Files over the ~300-line cap [M]
-`findings/extract.py` 619, `db/models.py` 586, `findings/analyze.py` 556,
-`api/capture_router.py` 519, `findings/queries.py` 455, `fetch/fetch.py` 422. Split
-the top few by responsibility.
+### D11 · Files over the ~300-line cap [M] — ⏳ PARTIAL 2026-08-07 (extract.py split)
+`findings/extract.py` (639, 2.1x) split into a 3-module import DAG — `_jsast.py` (185,
+leaf: tree-sitter parser/AST helpers + value dataclasses + param builders) ← `_base_env.py`
+(251, REQ-C2 base-URL resolution) ← `extract.py` (276, network-sink handlers + `extract()`).
+Pure move (per-symbol AST diff proved byte-identical; §4 code gate SHIP-WITH-NITS), with an
+`__all__` re-export shim so `analyze.py`/`classify.py`/tests keep importing `RawEndpoint`,
+`HTTP_METHODS`, `collect_base_env`, `_PARSER` from `recon.findings.extract` unchanged (matters
+under D3's now-strict `no_implicit_reexport`). All three modules are mypy-strict-clean.
+
+**Deferred (evidence-backed, both §4 design engineers):**
+- `db/models.py` (596) — DON'T split: a cohesive declarative schema (17 classes + 35
+  FK/`back_populates` cross-refs + the RLS `*_TABLES` tuples read by Alembic `env.py`). With
+  `from __future__ import annotations`, `relationship()` targets resolve only via the class
+  registry, so a package split makes `__init__` load-bearing for ORM registration (a bypassing
+  `from recon.db.models.run import Run` silently breaks `configure_mappers()`). High fragility,
+  zero behavior gain.
+- `api/capture_router.py` (654) — DEFER: the D1/D8a tests *rendezvous-monkeypatch*
+  `capture_router.<helper>` (e.g. `monkeypatch.setattr(capture_router, "_run_has_job", …)`);
+  moving a handler/helper to a sibling module silently breaks the patch (a test would pass while
+  testing nothing). Also can't reach the cap (~420 residual). Needs a careful test-aware slice.
+- `findings/analyze.py` (659, the largest) — DEFER: a clean record-trio seam exists but it
+  touches the outbox/RLS/REQ-A3–A4 invariants and `reextract.py` imports `_extract_endpoints`;
+  higher-risk, own slice. `findings/queries.py` (455) + `fetch/fetch.py` (462): smaller
+  overages, low priority (fetch is SSRF-fail-closed-critical — don't fragment).
+(The DEBT.md counts above were stale pre-split; actuals measured 2026-08-07.)
 
 ### D12 · Stale branches [S]
 `spike/platform-ingest` (now == `main`), the `claude/*` worktree branches, and
