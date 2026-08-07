@@ -180,6 +180,22 @@ under D3's now-strict `no_implicit_reexport`). All three modules are mypy-strict
 `claude/busy-boyd-e00cc4` (its AKIA fix is superseded on main) can be pruned +
 `git worktree prune`.
 
+### D15 · Tenant-UUID entry friction [S] — ✅ RESOLVED 2026-08-07
+The SPA's `TenantGate` forced a first-time operator to paste a tenant UUID they don't
+know. Persisted last-tenant was already handled (localStorage). Added an opt-in
+build-time `VITE_DEFAULT_TENANT_ID` (`web/.env.example`): when nothing is persisted,
+`TenantContext` falls back to it as a cold-start default — silent pass-through, never
+persisted (so it tracks the build), an explicit last-used tenant always wins, and the
+gate still validates it via `isValidTenant` (an invalid default fails safe to the form).
+A tenant *picker* stays DEFERRED on purpose — a `GET /tenants` enumeration would leak
+other tenants' identities under the RLS model; a per-caller `GET /me`-style identity
+endpoint is the strategic replacement (out of scope here). Caveat documented in
+`.env.example`: Vite inlines the var into the bundle, so it's for single-tenant/dev
+builds only, not a shared multi-tenant prod bundle. Both §4 gates passed (design: BUILD
+WITH CHANGES — the scope caveat + this ledger entry, both addressed; code review: SHIP
+WITH NITS — the precedence test was strengthened to assert the *effective* tenant, not
+just unclobbered storage). Frontend lane green (oxlint + tsc-strict + vitest 136 + build).
+
 ## Parked work
 
 ### D13 · Enrichment slice [M] — parked, design-gated
