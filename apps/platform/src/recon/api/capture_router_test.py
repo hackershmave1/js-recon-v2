@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import uuid
 
 import pytest
@@ -20,10 +21,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from recon import storage
+from recon.api import capture_router
 from recon.api.app import create_app
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
-from recon.db.models import Job, Run, Tenant
+from recon.db.models import EngagementSession, Job, Run, Tenant
 from recon.discover import queries as discover_queries
 from recon.domain import RunState
 from recon.fetch import egress, fetch
@@ -511,3 +513,94 @@ def test_save_files_non_object_map_skipped(make_capture_client):
     assert body["stored"] == 1
     tid = _tenant_id(client.capture_tenant_name)
     assert _asset(tid, body["runId"], "https://acme.io/a.js").source_map_ref is None
+
+
+# --------------------------------------------------------------------------- #
+# DEBT D1: get-or-create is race-safe. Two concurrent writers for the same
+# ext sessionId must resolve to ONE session and ONE open run — never silently
+# duplicate rows that analyze/start would split, orphaning captured post-auth JS.
+# Each test forces the interleave with a threading.Barrier at the lookup seam, so
+# both writers finish their existence-check (miss) before either inserts; the
+# unique key then rejects the loser, which self-heals to the winner. Without the
+# unique index both inserts would commit -> two rows (verified red).
+# --------------------------------------------------------------------------- #
+
+
+def _run_two_writers(target):
+    """Run ``target`` (a no-arg callable returning an id) in two threads and return
+    both results. A thread's exception is re-raised so the test fails, not hangs."""
+    results: dict[int, str] = {}
+    errors: list[BaseException] = []
+
+    def worker(idx: int) -> None:
+        try:
+            results[idx] = target()
+        except BaseException as exc:  # noqa: BLE001 - surfaced via the assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in (0, 1)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    if errors:
+        raise errors[0]
+    assert len(results) == 2, "a writer thread did not finish within the timeout"
+    return results[0], results[1]
+
+
+def test_concurrent_batches_resolve_to_one_session(make_capture_client, monkeypatch):
+    client = make_capture_client()
+    tid = capture_router._get_or_create_tenant(client.capture_tenant_name)
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+
+    barrier = threading.Barrier(2, timeout=30)
+    real_find = capture_router._find_session_by_external_id
+
+    def rendezvous_find(tenant_id: str, ext_session_id: str):
+        found = real_find(tenant_id, ext_session_id)
+        if found is None:  # both threads meet here after their miss, before inserting
+            barrier.wait()
+        return found
+
+    monkeypatch.setattr(capture_router, "_find_session_by_external_id", rendezvous_find)
+
+    a, b = _run_two_writers(lambda: capture_router._get_or_create_session(tid, sid))
+
+    assert a == b  # both callers got the same session id
+    with tenant_session(tid) as s:
+        n = s.scalar(
+            select(func.count())
+            .select_from(EngagementSession)
+            .where(EngagementSession.external_id == sid)
+        )
+    assert n == 1  # exactly one session, no orphan
+
+
+def test_concurrent_first_batches_resolve_to_one_run(make_capture_client, redis, monkeypatch):
+    client = make_capture_client()
+    tid = capture_router._get_or_create_tenant(client.capture_tenant_name)
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    session_id = capture_router._get_or_create_session(tid, sid)  # session exists, no run yet
+
+    barrier = threading.Barrier(2, timeout=30)
+    real_find = capture_router._find_open_capture_run
+
+    def rendezvous_find(tenant_id: str, ext_session_id: str):
+        found = real_find(tenant_id, ext_session_id)
+        if found is None:
+            barrier.wait()
+        return found
+
+    monkeypatch.setattr(capture_router, "_find_open_capture_run", rendezvous_find)
+
+    a, b = _run_two_writers(
+        lambda: capture_router._accumulating_run_id(tid, session_id, sid, redis)
+    )
+
+    assert a == b  # both batches accumulate into the same run
+    with tenant_session(tid) as s:
+        n = s.scalar(
+            select(func.count()).select_from(Run).where(Run.capture_external_id == sid)
+        )
+    assert n == 1  # exactly one open accumulator run

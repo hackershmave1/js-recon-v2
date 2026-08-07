@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from redis import Redis
 from sqlalchemy import desc, select, update
+from sqlalchemy.orm import Session
 
 from recon import storage
 from recon.config import get_settings
@@ -36,44 +37,63 @@ STAGE_QUEUE: dict[RunStage, QueueName] = {
 }
 
 
-def enqueue_stage(
-    redis: Redis, *, tenant_id: str, run_id: str, stage: RunStage
-) -> str:
-    """Create the job row and put its message on the stage's queue.
+def create_stage_job(
+    session: Session, *, tenant_id: str, run_id: str, stage: RunStage
+) -> tuple[str, dict]:
+    """Insert the stage's Job row using the CALLER's transaction and return
+    ``(job_id, message)`` for a later :func:`publish_stage_job`.
 
-    NOTE (follow-up, REQ-A3): the job row commit and the Redis enqueue are two
+    Split out of :func:`enqueue_stage` so a caller can commit the Job row in the
+    SAME transaction as other run state (capture ``analyze/start`` seals the run's
+    accumulator marker together with the Job insert, so the run can never be left
+    sealed-but-jobless — DEBT D1). The Redis enqueue stays a separate post-commit
+    step (see the outbox NOTE on :func:`publish_stage_job`)."""
+    queue = STAGE_QUEUE[stage]
+    max_attempts = get_settings().retry_max_attempts
+    job = Job(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        queue=queue.value,
+        stage=stage.value,
+        state=JobState.QUEUED.value,
+        max_attempts=max_attempts,
+    )
+    session.add(job)
+    session.flush()
+    message = {
+        "job_id": str(job.id),
+        "run_id": str(run_id),
+        "tenant_id": tenant_id,
+        "queue": queue.value,
+        "stage": stage.value,
+        "attempts": 0,
+        "max_attempts": max_attempts,
+    }
+    return str(job.id), message
+
+
+def publish_stage_job(redis: Redis, message: dict) -> None:
+    """Put a job message (from :func:`create_stage_job`) on its stage's queue.
+
+    NOTE (follow-up, REQ-A3): the job row commit and this Redis enqueue are two
     steps. A crash between them strands a QUEUED job with no stream message. The
     slice-2 transactional outbox (which REQ-A3 requires for findings) will cover
     job enqueue too; until then a QUEUED-job reconciler sweep is the stopgap.
     """
-    queue = STAGE_QUEUE[stage]
-    max_attempts = get_settings().retry_max_attempts
-    with tenant_session(tenant_id) as session:
-        job = Job(
-            tenant_id=tenant_id,
-            run_id=run_id,
-            queue=queue.value,
-            stage=stage.value,
-            state=JobState.QUEUED.value,
-            max_attempts=max_attempts,
-        )
-        session.add(job)
-        session.flush()
-        job_id = str(job.id)
+    queue = QueueName(message["queue"])
     streams.ensure_group(redis, queue)
-    streams.enqueue(
-        redis,
-        queue,
-        {
-            "job_id": job_id,
-            "run_id": str(run_id),
-            "tenant_id": tenant_id,
-            "queue": queue.value,
-            "stage": stage.value,
-            "attempts": 0,
-            "max_attempts": max_attempts,
-        },
-    )
+    streams.enqueue(redis, queue, message)
+
+
+def enqueue_stage(
+    redis: Redis, *, tenant_id: str, run_id: str, stage: RunStage
+) -> str:
+    """Create the job row (own transaction) and put its message on the queue."""
+    with tenant_session(tenant_id) as session:
+        job_id, message = create_stage_job(
+            session, tenant_id=tenant_id, run_id=run_id, stage=stage
+        )
+    publish_stage_job(redis, message)
     return job_id
 
 

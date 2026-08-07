@@ -38,7 +38,8 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from redis import Redis
-from sqlalchemy import exists, select
+from sqlalchemy import exists, select, text, update
+from sqlalchemy.exc import IntegrityError
 
 from recon import storage
 from recon.api.deps import get_redis
@@ -78,20 +79,43 @@ def capture_health() -> dict:
 
 
 def _get_or_create_tenant(name: str) -> str:
+    """The single capture tenant, keyed on the fixed ``capture_tenant_name``.
+
+    ``tenant.name`` intentionally carries no unique constraint (the multi-tenant
+    platform allows duplicate display names), so a first-ever *concurrent* bootstrap
+    could otherwise insert two capture tenants and partition sessions across them
+    (DEBT D1). Fast path: a plain SELECT (the tenant already exists on all but the
+    first request, so no lock on the hot path). On a miss, serialize the create with
+    a transaction-scoped advisory lock keyed on the name and re-check *under* it, so
+    two racing bootstraps can't both insert. Lock + recheck + INSERT live in ONE
+    admin transaction (``create_tenant`` isn't reused — it would open its own
+    session and the lock would guard nothing); the xact lock auto-releases at commit.
+    """
     with admin_session() as session:
-        existing = session.scalar(select(Tenant).where(Tenant.name == name))
+        existing = session.scalar(select(Tenant.id).where(Tenant.name == name))
         if existing is not None:
-            return str(existing.id)
-    # No row yet — create_tenant opens its own admin_session.
-    return sessions_service.create_tenant(name)
-
-
-def _find_session_by_name(tenant_id: str, ext_session_id: str) -> str | None:
-    with tenant_session(tenant_id) as session:
-        row = session.scalar(
-            select(EngagementSession).where(EngagementSession.name == ext_session_id)
+            return str(existing)
+    with admin_session() as session:
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": name}
         )
-        return str(row.id) if row is not None else None
+        existing = session.scalar(select(Tenant.id).where(Tenant.name == name))
+        if existing is not None:
+            return str(existing)
+        tenant = Tenant(name=name)
+        session.add(tenant)
+        session.flush()
+        return str(tenant.id)
+
+
+def _find_session_by_external_id(tenant_id: str, ext_session_id: str) -> str | None:
+    with tenant_session(tenant_id) as session:
+        row_id = session.scalar(
+            select(EngagementSession.id).where(
+                EngagementSession.external_id == ext_session_id
+            )
+        )
+        return str(row_id) if row_id is not None else None
 
 
 def _safe_uuid(value: Any) -> str | None:
@@ -105,22 +129,18 @@ def _safe_uuid(value: Any) -> str | None:
         return None
 
 
-def _get_or_create_session(
-    tenant_id: str, ext_session_id: str, engagement_id: str | None = None
+def _create_capture_session(
+    tenant_id: str, ext_session_id: str, engagement_id: str | None
 ) -> str:
-    # Map the extension's sessionId -> a platform session idempotently, keyed by
-    # name, so a retried batch reuses the session instead of piling up duplicates.
-    existing = _find_session_by_name(tenant_id, ext_session_id)
-    if existing is not None:
-        return existing
     # EMPTY scope (§4 defect B: scope is inert here — captured assets never egress).
     # Bind the engagement (projectId) if it resolves cleanly, but NEVER raise on the
     # ingest hot path (§4 defect A): a foreign/deleted engagement makes create_session
     # raise SessionInvalid *before* any row is added, so we retry unbound. A malformed
-    # id was already filtered to None by _safe_uuid upstream.
+    # id was already filtered to None by _safe_uuid upstream. external_id is the
+    # idempotency key (DEBT D1); name mirrors it for the UI label.
     try:
         view = sessions_service.create_session(
-            tenant_id, name=ext_session_id, scope_hosts=[],
+            tenant_id, name=ext_session_id, external_id=ext_session_id, scope_hosts=[],
             authorized_by="chrome-extension-capture", engagement_id=engagement_id,
         )
     except sessions_service.SessionInvalid:
@@ -128,10 +148,31 @@ def _get_or_create_session(
             "capture.session.engagement_ignored", session=ext_session_id, engagement_id=engagement_id
         )
         view = sessions_service.create_session(
-            tenant_id, name=ext_session_id, scope_hosts=[],
+            tenant_id, name=ext_session_id, external_id=ext_session_id, scope_hosts=[],
             authorized_by="chrome-extension-capture", engagement_id=None,
         )
     return view.id
+
+
+def _get_or_create_session(
+    tenant_id: str, ext_session_id: str, engagement_id: str | None = None
+) -> str:
+    # Map the extension's sessionId -> a platform session idempotently, keyed by
+    # external_id (UNIQUE(tenant_id, external_id)), so a retried OR concurrent batch
+    # reuses the session instead of piling up duplicates (DEBT D1).
+    existing = _find_session_by_external_id(tenant_id, ext_session_id)
+    if existing is not None:
+        return existing
+    try:
+        return _create_capture_session(tenant_id, ext_session_id, engagement_id)
+    except IntegrityError:
+        # Lost the create race to a concurrent batch for the same sessionId — the
+        # unique key rejected the duplicate. Re-select the winner (committed by now at
+        # READ COMMITTED; same tenant GUC, so RLS matches — never None here).
+        resolved = _find_session_by_external_id(tenant_id, ext_session_id)
+        if resolved is None:
+            raise
+        return resolved
 
 
 # --------------------------------------------------------------------------- #
@@ -139,29 +180,43 @@ def _get_or_create_session(
 # --------------------------------------------------------------------------- #
 
 
-def _accumulating_run_id(tenant_id: str, session_id: str, redis: Redis) -> str:
-    """The session's open run to append this batch to: its latest QUEUED run that
-    has no Job yet. Once ``analyze/start`` enqueues a Job the run is "sealed", so
-    the next batch opens a fresh run (a new capture round). ``target`` stays None:
-    an upload run must never be crawled/fetched — the discover/fetch stages no-op
-    on a target-less, pre-fetched run (``crawl.py:45`` / ``fetch.py:171``)."""
+def _find_open_capture_run(tenant_id: str, ext_session_id: str) -> str | None:
+    """The session's OPEN capture accumulator run, identified by the
+    ``capture_external_id`` marker (UNIQUE(tenant_id, capture_external_id)).
+    analyze/start nulls the marker to seal a round, so a sealed run is excluded here
+    and the next batch opens a fresh one."""
     with tenant_session(tenant_id) as session:
         run_id = session.scalar(
-            select(Run.id)
-            .where(
-                Run.session_id == str(session_id),
-                Run.state == RunState.QUEUED.value,
-                ~exists(select(Job.id).where(Job.run_id == Run.id)),
-            )
-            .order_by(Run.created_at.desc())
-            .limit(1)
+            select(Run.id).where(Run.capture_external_id == ext_session_id)
         )
-        if run_id is not None:
-            return str(run_id)
-    view = runs_service.create_run(
-        redis, tenant_id=tenant_id, session_id=str(session_id), target=None
-    )
-    return view.id
+        return str(run_id) if run_id is not None else None
+
+
+def _accumulating_run_id(
+    tenant_id: str, session_id: str, ext_session_id: str, redis: Redis
+) -> str:
+    """The session's open run to append this batch to, keyed on the
+    ``capture_external_id`` marker so a retried OR concurrent first batch can't open
+    duplicate rounds (DEBT D1): the loser's ``create_run`` hits the unique key and
+    self-heals to the winner. Sealed by analyze/start nulling the marker, so the next
+    batch opens a fresh run (a new capture round). ``target`` stays None: an upload
+    run must never be crawled/fetched — the discover/fetch stages no-op on a
+    target-less, pre-fetched run (``crawl.py:45`` / ``fetch.py:171``)."""
+    existing = _find_open_capture_run(tenant_id, ext_session_id)
+    if existing is not None:
+        return existing
+    try:
+        view = runs_service.create_run(
+            redis, tenant_id=tenant_id, session_id=str(session_id),
+            target=None, capture_external_id=ext_session_id,
+        )
+        return view.id
+    except IntegrityError:
+        # Lost the open-round create race — the concurrent batch created it; re-select.
+        resolved = _find_open_capture_run(tenant_id, ext_session_id)
+        if resolved is None:
+            raise
+        return resolved
 
 
 def _valid_file(f: dict, max_bytes: int) -> tuple[str, bytes] | None:
@@ -244,7 +299,7 @@ def save_files(payload: SaveFilesIn) -> dict:
         }
     engagement_id = _safe_uuid(meta.get("projectId"))  # bind the project if it resolves; else unbound
     session_id = _get_or_create_session(tenant_id, ext_session_id, engagement_id)
-    run_id = _accumulating_run_id(tenant_id, session_id, redis)
+    run_id = _accumulating_run_id(tenant_id, session_id, ext_session_id, redis)
 
     file_results: list[dict] = []
     keys_by_url: dict[str, str] = {}
@@ -353,7 +408,7 @@ def analyze_start(ext_session_id: str) -> dict:
     redis = get_redis()
     settings = get_settings()
     tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
-    session_id = _find_session_by_name(tenant_id, ext_session_id)
+    session_id = _find_session_by_external_id(tenant_id, ext_session_id)
     if session_id is None:
         raise HTTPException(status_code=404, detail="unknown capture session")
 
@@ -380,6 +435,14 @@ def analyze_start(ext_session_id: str) -> dict:
     assets_ref = storage.put_blob(
         tenant_id, run_id, "assets", json.dumps(manifest).encode("utf-8")
     )
+    # One transaction: record discover.assets, SEAL the run (null the capture
+    # accumulator marker so the next batch opens a fresh round), and insert the Job
+    # row. Sealing atomically WITH the Job insert is load-bearing (§4): if the marker
+    # were nulled in a separate, earlier commit and Job creation then failed, the run
+    # would be sealed-but-jobless — invisible to the accumulator, the progress reader,
+    # and this endpoint's own idempotency guard — and a concurrent batch would open a
+    # new run, orphaning this run's captured post-auth JS (DEBT D1). The Redis enqueue
+    # + event publish are the post-commit outbox step (coordinator.publish_stage_job).
     with tenant_session(tenant_id) as session:
         event = record_event(
             session,
@@ -388,10 +451,14 @@ def analyze_start(ext_session_id: str) -> dict:
             event_type="discover.assets",
             payload={"count": len(rows), "assets_ref": assets_ref, "status": "ok"},
         )
+        session.execute(
+            update(Run).where(Run.id == run_id).values(capture_external_id=None)
+        )
+        job_id, job_message = coordinator.create_stage_job(
+            session, tenant_id=tenant_id, run_id=run_id, stage=RunStage.DISCOVERING
+        )
     publish(redis, event)  # after commit — a subscriber must never see an unpersisted event
-    job_id = coordinator.enqueue_stage(
-        redis, tenant_id=tenant_id, run_id=run_id, stage=RunStage.DISCOVERING
-    )
+    coordinator.publish_stage_job(redis, job_message)
     log.info("capture.analyze_start", session=ext_session_id, run_id=run_id, count=len(rows), job=job_id)
     return {"started": True, "job": job_id, "runId": run_id}
 
@@ -448,7 +515,7 @@ def _idle_job() -> dict:
 def analyze_progress(ext_session_id: str) -> dict:
     settings = get_settings()
     tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
-    session_id = _find_session_by_name(tenant_id, ext_session_id)
+    session_id = _find_session_by_external_id(tenant_id, ext_session_id)
     if session_id is None:
         raise HTTPException(status_code=404, detail="unknown capture session")
 

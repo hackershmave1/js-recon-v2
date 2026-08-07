@@ -112,6 +112,15 @@ class EngagementSession(Base):
     named to avoid confusion with a SQLAlchemy ``Session``."""
 
     __tablename__ = "session"
+    __table_args__ = (
+        # Capture-ingest idempotency key (DEBT D1): holds the Chrome extension's
+        # sessionId for a capture session, NULL for every other session. Postgres
+        # UNIQUE is NULLS DISTINCT, so the non-capture NULL rows never collide — the
+        # constraint binds only capture rows, one per (tenant, ext sessionId), so two
+        # concurrent ingest batches can't create duplicate sessions (self-healed on
+        # IntegrityError in capture_router). Added in migration 0011.
+        Index("uq_session_tenant_external_id", "tenant_id", "external_id", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
@@ -121,6 +130,7 @@ class EngagementSession(Base):
         UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="SET NULL")
     )
     name: Mapped[str | None] = mapped_column(Text)
+    external_id: Mapped[str | None] = mapped_column(Text)
     # Declared in-scope hosts; egress scope is never derived from crawled URLs (REQ-P2).
     scope_hosts: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
@@ -158,6 +168,18 @@ class Run(Base):
             _enum_check("stage", RunStage) + " OR stage IS NULL", name="ck_run_stage"
         ),
         Index("ix_run_tenant_session", "tenant_id", "session_id"),
+        # Capture-ingest "open accumulator" marker (DEBT D1): = the extension's
+        # sessionId while THIS run is the session's open capture round, NULL for a
+        # non-capture run and for a SEALED capture round (analyze/start nulls it in
+        # the same tx that inserts the Job). NULLS DISTINCT → only open accumulators
+        # bind, one per (tenant, ext sessionId), so concurrent first batches can't
+        # create duplicate runs. Added in migration 0011.
+        Index(
+            "uq_run_tenant_capture_external_id",
+            "tenant_id",
+            "capture_external_id",
+            unique=True,
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
@@ -189,6 +211,8 @@ class Run(Base):
     # paths from it (analyze stage). Added in migration 0003.
     source_map_ref: Mapped[str | None] = mapped_column(Text)
     target: Mapped[str | None] = mapped_column(Text)
+    # Capture-ingest open-accumulator marker (see __table_args__). Added in 0011.
+    capture_external_id: Mapped[str | None] = mapped_column(Text)
     error: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
     started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
