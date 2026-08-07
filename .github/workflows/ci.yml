@@ -24,7 +24,7 @@ jobs:
         working-directory: apps/platform
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       # Reproducible install from the committed lockfile (--frozen fails if
