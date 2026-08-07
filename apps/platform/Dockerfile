@@ -25,6 +25,17 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
+# Pin Python deps to the committed lock (uv.lock) instead of resolving pyproject's
+# >= floors fresh at build, so the image matches CI's `uv sync --frozen`. Export the
+# locked, prod-only (no dev) set to a hash-pinned requirements.txt via uv; the
+# runtime stage pip-installs exactly that. `uv export` is offline — it just
+# serializes the lock. (DEBT D7.)
+FROM python:3.11-slim-bookworm AS deps-export
+COPY --from=ghcr.io/astral-sh/uv:0.11.31 /uv /usr/local/bin/uv
+WORKDIR /app
+COPY pyproject.toml uv.lock README.md ./
+RUN uv export --frozen --no-dev --no-emit-project --format requirements-txt -o requirements.txt
+
 # Single application image; the same image runs as the API, the worker, and the
 # one-shot migration job (the command differs per compose service).
 FROM python:3.11-slim-bookworm
@@ -40,11 +51,16 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends chromium \
     && rm -rf /var/lib/apt/lists/*
 
-# Dependencies first for layer caching, then the source.
+# Dependencies first for layer caching: install the exact locked set (exported
+# above from uv.lock), then the project itself NON-editably (--no-deps, a real wheel
+# build) so its packaged rule data (findings/rules/*.yml) is validated in the image
+# rather than silently picked up from a src checkout. (DEBT D7.)
+COPY --from=deps-export /app/requirements.txt ./
+RUN pip install -r requirements.txt
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY alembic.ini ./
-RUN pip install .
+RUN pip install --no-deps .
 
 # Front-end build output; RECON_SPA_DIST_DIR (compose) points the API at it.
 COPY --from=web-build /web/dist ./web/dist

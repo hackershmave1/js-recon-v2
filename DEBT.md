@@ -79,10 +79,15 @@ so the web gate is green. CodeQL DEFERRED (needs GitHub Advanced Security, unava
 on private Free-tier — the same limit that blocks branch protection). Both §4 gates
 passed (design: BUILD WITH CHANGES, then ENDORSED the working-tree-scan pivot).
 
-### D7 · Image build isn't lock-pinned [M]
-`host-tests` now installs `uv sync --frozen`, but the Dockerfile (integration lane +
-prod image) still `pip install`s from `pyproject` `>=` floors. Pin the image build to
-the lock too.
+### D7 · Image build isn't lock-pinned [M] — ✅ RESOLVED 2026-08-07
+`apps/platform/Dockerfile` now installs Python deps from the committed lock instead
+of `pyproject` `>=` floors: a `deps-export` stage runs `uv export --frozen --no-dev`
+to a hash-pinned `requirements.txt`, and the runtime stage `pip install -r`s that,
+then `pip install --no-deps .` for the project (kept NON-editable — a real wheel
+build — so its packaged `findings/rules/*.yml` data stays validated in the image, the
+gap the integration-lane AKIA test catches). The image now matches CI's
+`uv sync --frozen`; verified by a full image build. Web was already `npm ci`-pinned.
+Both §4 gates passed.
 
 ## Maintainability
 
