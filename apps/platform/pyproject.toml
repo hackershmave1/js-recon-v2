@@ -26,7 +26,7 @@ dependencies = [
     # Out-of-process secret scanner (MongoDB Kingfisher). The wheel bundles the
     # platform binary and exposes a `kingfisher` console script; pinned so the
     # rule-id -> provider map (recon.findings.normalize) stays stable.
-    "kingfisher-bin==1.106.0",
+    "kingfisher-bin==1.110.0",
     # HTTP client for the fetch stage (pulling target assets through the egress guard).
     "httpx>=0.27",
     # OpenAPI 3.x / Swagger 2.0 schema validation for the untrusted spec-ingest

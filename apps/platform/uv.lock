@@ -455,15 +455,15 @@ wheels = [
 
 [[package]]
 name = "kingfisher-bin"
-version = "1.106.0"
+version = "1.110.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bf/e1/31a23049d38b9a0e996cbb560a9c4c5e5a31cb7e9a947c3d0dc526e37e20/kingfisher_bin-1.106.0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:823520314d3b1b2d5bb63c093c45b74142fd66a2ee1dde71cfea0b91117ad533", size = 14360970, upload-time = "2026-07-08T08:44:06.583Z" },
-    { url = "https://files.pythonhosted.org/packages/65/26/538c8d561eb4d408aa4a70f38456f2a3655bc6d717ff97349a871966889a/kingfisher_bin-1.106.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:ab36dd47789c628df802d203dda45ae137123a90c0470f1dbb8ce1b55f8a3c69", size = 12743399, upload-time = "2026-07-08T08:44:09.216Z" },
-    { url = "https://files.pythonhosted.org/packages/19/2e/5560ba5b9820e3355325d78abda8d358a06efccf94219b5b13c6d4c6fbad/kingfisher_bin-1.106.0-py3-none-manylinux_2_17_aarch64.musllinux_1_2_aarch64.whl", hash = "sha256:9dcd33a8f8e39095b76995a008c85e52b75c0b127363baeb7aa193e14da93651", size = 14226687, upload-time = "2026-07-08T08:44:11.187Z" },
-    { url = "https://files.pythonhosted.org/packages/a1/7b/6140aa0b0995e91d41af3047a69d45a3ecba8f0bf369ab714ee96e685798/kingfisher_bin-1.106.0-py3-none-manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl", hash = "sha256:5c4e83591b8a568447bb8150d99eb181b4dec54bef7209df10bf1a09dd0fc82e", size = 15065455, upload-time = "2026-07-08T08:44:13.126Z" },
-    { url = "https://files.pythonhosted.org/packages/8a/64/1f9a5254a9ec75852d4dfac69915c64a52dce7d3140f4992a7cb8eae02ac/kingfisher_bin-1.106.0-py3-none-win_amd64.whl", hash = "sha256:55361bfca24545a3cb477d1e56c2733ea509e68ebbaf3e1f79e11fe92169e151", size = 28272007, upload-time = "2026-07-08T08:44:15.258Z" },
-    { url = "https://files.pythonhosted.org/packages/c8/81/27343946b2a83ac607e75f0b5b2b90cfe8594481f374efd8cac207bed5dc/kingfisher_bin-1.106.0-py3-none-win_arm64.whl", hash = "sha256:f198b6a25e0b01c854d8ba0d8df4b08c0aa1d987f3e5d9e3833fdc826a7052d8", size = 26605572, upload-time = "2026-07-08T08:44:18.318Z" },
+    { url = "https://files.pythonhosted.org/packages/44/24/1a12d6d26b20a6167b6986ce18fe2cb9fb79a955799064cc140418473992/kingfisher_bin-1.110.0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:4ce964e0655358fe7ce9a2edbc02a316dc3677c9cc1cb3e2484cd145139a1551", size = 13844705, upload-time = "2026-07-31T22:59:35.789Z" },
+    { url = "https://files.pythonhosted.org/packages/18/f8/d02ef2f2fdf13946f404a323e2051a318fa1bcdda9aee4a5e6b4b1f063f5/kingfisher_bin-1.110.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3778be8b7bb028e594e3ad4fb07f47e699ce5c6a0842cd2ca984d69256f09239", size = 12294734, upload-time = "2026-07-31T22:59:38.09Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/df/6c9e026f80f1feb0233bd438f4a1ef3cbe47217eaa39d7eeacf0e00bcfe8/kingfisher_bin-1.110.0-py3-none-manylinux_2_17_aarch64.musllinux_1_2_aarch64.whl", hash = "sha256:613d12a8042a6957c1643856f0eb380b04361070b3d570d22874a11ce71a570c", size = 13891449, upload-time = "2026-07-31T22:59:40.157Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/b8/0337e3f9b5d34c393e9ed9ed625a4cf1a983505233057b943da99c1e919c/kingfisher_bin-1.110.0-py3-none-manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl", hash = "sha256:030d8ab74a09ec8f0f30e9106c23c75728175c4a0a2c916a4cdf6e343f240e58", size = 14666033, upload-time = "2026-07-31T22:59:42.732Z" },
+    { url = "https://files.pythonhosted.org/packages/25/8d/e46ff8621ede00c1a2cf124ed88824ea9e99a20f7ccd6fd974d4cbcc218b/kingfisher_bin-1.110.0-py3-none-win_amd64.whl", hash = "sha256:f533f0e74cc0bc89e9bd7a04316ceef7bf6824d85ec4b8f3b3aab77d3f26333e", size = 27333511, upload-time = "2026-07-31T22:59:45.69Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/be/04cfb72d8d61577dc24e5a614f11f3aab9fc373a092580738b250fb1e537/kingfisher_bin-1.110.0-py3-none-win_arm64.whl", hash = "sha256:b46bfed3e7a97f226d0654fb4feb8d1361887b4d315f5388d521b6b33991ade7", size = 25792626, upload-time = "2026-07-31T22:59:49.121Z" },
 ]
 
 [[package]]
@@ -998,7 +998,7 @@ requires-dist = [
     { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.21" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "kingfisher-bin", specifier = "==1.106.0" },
+    { name = "kingfisher-bin", specifier = "==1.110.0" },
     { name = "openapi-spec-validator", specifier = ">=0.9,<0.10" },
     { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "pydantic", specifier = ">=2.6" },
