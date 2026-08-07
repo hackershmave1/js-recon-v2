@@ -47,9 +47,28 @@ lane now also runs `ruff format --check src` so the format can't drift.
 **Deferred** (tracked follow-up): `TC`/`TCH` (39 stylistic typing-only-import
 relocations that fight `from __future__ import annotations`). Both §4 gates passed.
 
-### D3 · mypy — no Python type checking [M–L]
-No mypy/pyright anywhere. Introduce incrementally: `--strict` on `recon.findings` +
-`recon.spec` first, widen module-by-module, then gate in CI.
+### D3 · mypy — no Python type checking [M–L] — ✅ RESOLVED 2026-08-07
+Introduced mypy 2.3.0 (dev extra + `uv.lock`) with a per-module `strict = true`
+override on `recon.findings.*` + `recon.spec.*` in `[tool.mypy]`; the base config
+follows all other imports *silently* so out-of-scope errors (e.g. `db/models.py`'s
+194) never enter this gate, and colocated `*_test.py` are excluded. Fixed all 37
+resulting errors: 25 pure annotations (`no-untyped-def` + `dict[str, Any]` generics),
+5 SQLAlchemy DML `Result` typings (`cast(CursorResult[Any], …).rowcount`), and 7
+targeted fixes. The 3 real None-safety sites were resolved by *invariant*, not blind
+guard: an `assert asset.input_ref is not None` in `analyze._analyze_assets` (an
+OK-fetched asset always has `input_ref` — `runs/assets.set_fetch_ok` writes it +
+`fetch_status=OK` atomically, and the loop only reaches OK assets); `(node.text or
+b"")` in `extract._text` (tree-sitter stub Optional, matching the fn's empty-on-
+absence contract); and `row.reason or ""` in `queries._run_spec_summary` (value-
+neutral — a null reason can never equal `"suffix-verify"`, the only value `summarize`
+reads). No stub packages (untyped 3rd-party → `Any`); the one `SafeLoader` subclass in
+`ingest.py` carries `# type: ignore[misc]` (adding `types-PyYAML` would *introduce* a
+new `no-untyped-call`). CI's host-tests lane now runs `mypy src/recon/findings
+src/recon/spec` (hermetic) and fails loudly if the override ever stops matching (no
+silent non-strict downgrade). Fast lane stays 421-green; ruff clean. Both §4 gates
+passed (design: Meta SHIP / Google BUILD-WITH-CHANGES — both deltas simplifications;
+code: SHIP WITH ONE NIT, nit addressed). **Widen next**, module-by-module; `db/models.py`
+(194) is the natural follow-up. Design: `docs/superpowers/specs/2026-08-07-mypy-d3-design.md`.
 
 ### D4 · TypeScript strict off [S] — ✅ RESOLVED 2026-08-07
 Enabled `"strict": true` in both `apps/platform/web/tsconfig.app.json` and

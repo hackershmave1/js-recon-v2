@@ -36,6 +36,19 @@ jobs:
         run: |
           uv run ruff check src
           uv run ruff format --check src
+      # DEBT D3: static type checking, strict on recon.findings + recon.spec only
+      # (per-module override in [tool.mypy]). Hermetic — no infra/engines/network —
+      # so it belongs in the fast host lane. Widen module-by-module as more packages
+      # are annotated. The `unused section` guard fails loudly if a future rename ever
+      # stops the override matching those packages — otherwise mypy would silently run
+      # NON-strict and still pass (a false-green gate). mypy errors fail via pipefail.
+      - name: Type check (mypy — strict on findings + spec)
+        run: |
+          uv run mypy src/recon/findings src/recon/spec 2>&1 | tee mypy.out
+          if grep -q 'unused section' mypy.out; then
+            echo '::error::mypy strict override no longer matches recon.findings/recon.spec — gate would run non-strict'
+            exit 1
+          fi
       - name: Unit + engine contract tests (no infra) + coverage floor
         env:
           RECON_REQUIRE_ENGINES: "1"

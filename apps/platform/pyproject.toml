@@ -46,6 +46,10 @@ dev = [
     "pytest-cov>=5.0",
     "fakeredis>=2.21",
     "ruff>=0.16,<0.17",
+    # DEBT D3: static type checking, strict on recon.findings + recon.spec first
+    # (see [tool.mypy]). No stub packages needed — untyped 3rd-party deps (redis,
+    # boto3, tree_sitter, yaml) resolve to Any via ignore_missing_imports.
+    "mypy>=1.11",
 ]
 
 [tool.setuptools.packages.find]
@@ -92,3 +96,25 @@ extend-immutable-calls = [
     "fastapi.Path",
     "fastapi.Security",
 ]
+
+[tool.mypy]
+# DEBT D3: mypy is introduced INCREMENTALLY. Only recon.findings + recon.spec are
+# type-checked strictly (the per-module override below); every other module is
+# followed *silently* so intra-repo imports resolve without dragging out-of-scope
+# errors (e.g. db/models.py's 194) into this gate. Widen module-by-module later.
+# Relative paths resolve against the CWD, which is apps/platform for both the dev
+# command and CI's host-tests lane.
+python_version = "3.11"
+mypy_path = "src"
+explicit_package_bases = true
+ignore_missing_imports = true
+follow_imports = "silent"
+exclude = ['_test\.py$']
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+# The two packages hardened first. `strict = true` is the honest, complete --strict
+# bundle (per-module `strict` is accepted by the pinned mypy); mypy is lock-pinned,
+# so the bundle can only expand at a deliberate `uv lock`.
+module = ["recon.findings.*", "recon.spec.*"]
+strict = true
