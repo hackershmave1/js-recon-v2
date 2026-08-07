@@ -18,7 +18,7 @@ FROM golang:1.25-bookworm AS katana-build
 RUN go install github.com/projectdiscovery/katana/cmd/katana@v1.6.1
 
 # Build the front-end SPA (Node), copied into the runtime image below.
-FROM node:20-bookworm AS web-build
+FROM node:25-bookworm AS web-build
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
