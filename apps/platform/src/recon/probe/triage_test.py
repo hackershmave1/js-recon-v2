@@ -25,10 +25,15 @@ def _run_with_finding(tenant, session_id):
         session.flush()
         run_id = str(run.id)
         result = store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.ENDPOINT,
-            value="GET /ping", path="input.js",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value="GET /ping",
+            path="input.js",
             occurrence=store.Occurrence(host="api.acme.io", raw_url="/ping"),
-            attributes={"method": "GET", "kind": "fetch"}, first_stage="analyzing",
+            attributes={"method": "GET", "kind": "fetch"},
+            first_stage="analyzing",
         )
         return run_id, result.finding_hash
 
@@ -59,9 +64,12 @@ def test_set_triage_upserts_and_emits_event():
 
 def test_set_triage_unknown_run_returns_none():
     tenant = sessions_service.create_tenant("tri-2")
-    assert triage.set_triage_for_run(
-        tenant, "00000000-0000-0000-0000-000000000000", "b" * 64, status="confirmed"
-    ) is None
+    assert (
+        triage.set_triage_for_run(
+            tenant, "00000000-0000-0000-0000-000000000000", "b" * 64, status="confirmed"
+        )
+        is None
+    )
 
 
 def test_set_triage_invalid_status_raises():
@@ -80,6 +88,4 @@ def test_set_triage_unknown_finding_returns_none():
         tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
     )
     run_id = _run(tenant, session_view.id)
-    assert triage.set_triage_for_run(
-        tenant, run_id, "d" * 64, status="confirmed"
-    ) is None
+    assert triage.set_triage_for_run(tenant, run_id, "d" * 64, status="confirmed") is None

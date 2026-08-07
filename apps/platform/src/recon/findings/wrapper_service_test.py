@@ -21,6 +21,7 @@ def _run(tenant, session_id):
 
 def _run_with_source(redis, tenant, session_id, source: bytes) -> str:
     from sqlalchemy import update
+
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
     key = storage.put_blob(tenant, view.id, "input", source)
     with tenant_session(tenant) as session:
@@ -62,23 +63,28 @@ def test_add_wrapper_invalid_callee_raises(authorized_session):
 
 def test_add_wrapper_unknown_run_is_none(authorized_session):
     tenant, _session_id = authorized_session
-    assert wrapper_service.add_rule(
-        tenant, "00000000-0000-0000-0000-000000000000", callee="api"
-    ) is None
+    assert (
+        wrapper_service.add_rule(tenant, "00000000-0000-0000-0000-000000000000", callee="api")
+        is None
+    )
 
 
 def test_add_wrapper_reextracts_and_recovers_endpoint(redis, authorized_session):
     tenant, session_id = authorized_session
-    run_id = _run_with_source(redis, tenant, session_id, b"const api = makeClient(); api.get('/svc');")
+    run_id = _run_with_source(
+        redis, tenant, session_id, b"const api = makeClient(); api.get('/svc');"
+    )
 
     res = wrapper_service.add_rule(tenant, run_id, callee="api")
 
     assert res["recovered"] >= 1
     with tenant_session(tenant) as session:
         values = {
-            f.value for f in session.execute(
+            f.value
+            for f in session.execute(
                 select(models.Finding).where(
-                    models.Finding.run_id == run_id, models.Finding.type == "endpoint",
+                    models.Finding.run_id == run_id,
+                    models.Finding.type == "endpoint",
                 )
             ).scalars()
         }

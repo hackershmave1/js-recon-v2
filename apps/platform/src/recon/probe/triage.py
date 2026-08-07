@@ -57,8 +57,12 @@ def set_triage_for_run(
             return None
 
         insert_stmt = pg_insert(models.FindingTriage).values(
-            tenant_id=str(tenant_id), session_id=session_id, finding_hash=finding_hash,
-            status=status, note=note, actor=actor,
+            tenant_id=str(tenant_id),
+            session_id=session_id,
+            finding_hash=finding_hash,
+            status=status,
+            note=note,
+            actor=actor,
         )
         upsert = insert_stmt.on_conflict_do_update(
             index_elements=["session_id", "finding_hash"],
@@ -88,6 +92,8 @@ def set_triage_for_run(
             payload={"finding_hash": finding_hash, "status": status, "actor": actor},
         )
         return TriageState(
-            status=status, note=persisted_note, actor=persisted_actor,
+            status=status,
+            note=persisted_note,
+            actor=persisted_actor,
             updated_at=updated_at.isoformat(),
         )

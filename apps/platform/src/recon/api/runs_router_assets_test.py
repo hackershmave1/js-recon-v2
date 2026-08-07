@@ -1,5 +1,6 @@
 """GET /runs/{id}/assets: 404 unknown run, pending placeholder, manifest
 passthrough, per-asset status."""
+
 import json
 from unittest.mock import patch
 
@@ -30,22 +31,26 @@ def test_assets_returns_manifest_when_present():
             }
         ],
     }
-    with patch("recon.api.runs_router.queries.get_status", return_value=object()), \
-         patch(
-             "recon.api.runs_router.discover_queries.get_assets_with_status",
-             return_value=manifest,
-         ):
+    with (
+        patch("recon.api.runs_router.queries.get_status", return_value=object()),
+        patch(
+            "recon.api.runs_router.discover_queries.get_assets_with_status",
+            return_value=manifest,
+        ),
+    ):
         res = client.get("/runs/r-1/assets", headers={"X-Tenant-Id": TENANT})
     assert res.status_code == 200
     assert res.json() == manifest
 
 
 def test_assets_pending_before_discovery():
-    with patch("recon.api.runs_router.queries.get_status", return_value=object()), \
-         patch(
-             "recon.api.runs_router.discover_queries.get_assets_with_status",
-             return_value=None,
-         ):
+    with (
+        patch("recon.api.runs_router.queries.get_status", return_value=object()),
+        patch(
+            "recon.api.runs_router.discover_queries.get_assets_with_status",
+            return_value=None,
+        ),
+    ):
         res = client.get("/runs/r-1/assets", headers={"X-Tenant-Id": TENANT})
     assert res.status_code == 200
     assert res.json() == {"domain": None, "status": "pending", "assets": []}
@@ -75,25 +80,20 @@ def test_assets_includes_per_asset_status(authorized_session, redis):
     )
     # Seed only 3 assets; the 4th (unseeded_url) will have no run_asset row
     with tenant_session(tenant_id) as s:
-        assets.seed_pending(
-            s, tenant_id=tenant_id, run_id=run.id, urls=seeded_urls
-        )
+        assets.seed_pending(s, tenant_id=tenant_id, run_id=run.id, urls=seeded_urls)
     manifest = {
         "domain": "acme.io",
         "status": "ok",
         "assets": [{"url": u, "source": "katana"} for u in all_urls],
     }
-    manifest_ref = storage.put_blob(
-        tenant_id, run.id, "assets", json.dumps(manifest).encode()
-    )
+    manifest_ref = storage.put_blob(tenant_id, run.id, "assets", json.dumps(manifest).encode())
     with tenant_session(tenant_id) as s:
         record_event(
             s,
             tenant_id=tenant_id,
             run_id=run.id,
             event_type="discover.assets",
-            payload={"count": len(all_urls), "assets_ref": manifest_ref,
-                     "status": "ok"},
+            payload={"count": len(all_urls), "assets_ref": manifest_ref, "status": "ok"},
         )
     # Set mixed statuses: ok, failed, pending (unchanged)
     asset_list = assets.list_for_run(tenant_id, run.id)
@@ -105,9 +105,7 @@ def test_assets_includes_per_asset_status(authorized_session, redis):
         # asset_list[1] left at pending analyze
         # asset_list[2] left at pending analyze (due to fetch failure)
     # GET /runs/{id}/assets
-    res = client.get(
-        f"/runs/{run.id}/assets", headers={"X-Tenant-Id": tenant_id}
-    )
+    res = client.get(f"/runs/{run.id}/assets", headers={"X-Tenant-Id": tenant_id})
     assert res.status_code == 200
     body = res.json()
     assert body["domain"] == "acme.io"

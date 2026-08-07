@@ -23,9 +23,13 @@ def test_run_asset_is_tenant_isolated_by_rls():
     )
     run_id = _make_run(tenant_a, sv.id)
     with tenant_session(tenant_a) as session:
-        session.add(models.RunAsset(
-            tenant_id=tenant_a, run_id=run_id, url="https://acme.io/app.js",
-        ))
+        session.add(
+            models.RunAsset(
+                tenant_id=tenant_a,
+                run_id=run_id,
+                url="https://acme.io/app.js",
+            )
+        )
     with tenant_session(tenant_a) as session:
         row = session.query(models.RunAsset).one()
         assert row.fetch_status == "pending" and row.analyze_status == "pending"
@@ -42,13 +46,19 @@ def test_occurrence_has_run_asset_id_column():
     run_id = _make_run(tenant, sv.id)
     with tenant_session(tenant) as session:
         finding = models.Finding(
-            tenant_id=tenant, run_id=run_id, finding_hash="a" * 64,
-            type="endpoint", value="GET /x", path="input.js",
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_hash="a" * 64,
+            type="endpoint",
+            value="GET /x",
+            path="input.js",
         )
         session.add(finding)
         session.flush()
         occ = models.FindingOccurrence(
-            tenant_id=tenant, finding_id=finding.id, occurrence_hash="b" * 64,
+            tenant_id=tenant,
+            finding_id=finding.id,
+            occurrence_hash="b" * 64,
         )
         session.add(occ)
         session.flush()
@@ -66,20 +76,28 @@ def test_deleting_run_asset_sets_occurrence_run_asset_id_null():
     run_id = _make_run(tenant, sv.id)
     with tenant_session(tenant) as session:
         asset = models.RunAsset(
-            tenant_id=tenant, run_id=run_id, url="https://acme.io/app.js",
+            tenant_id=tenant,
+            run_id=run_id,
+            url="https://acme.io/app.js",
         )
         session.add(asset)
         session.flush()
         asset_id = str(asset.id)
 
         finding = models.Finding(
-            tenant_id=tenant, run_id=run_id, finding_hash="c" * 64,
-            type="endpoint", value="GET /y", path="app.js",
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_hash="c" * 64,
+            type="endpoint",
+            value="GET /y",
+            path="app.js",
         )
         session.add(finding)
         session.flush()
         occ = models.FindingOccurrence(
-            tenant_id=tenant, finding_id=finding.id, occurrence_hash="d" * 64,
+            tenant_id=tenant,
+            finding_id=finding.id,
+            occurrence_hash="d" * 64,
             run_asset_id=asset_id,
         )
         session.add(occ)

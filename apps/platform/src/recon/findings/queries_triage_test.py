@@ -17,10 +17,15 @@ def _run_with_endpoint(tenant, session_id):
         session.flush()
         run_id = str(run.id)
         result = store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.ENDPOINT,
-            value="GET /orders", path="input.js",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value="GET /orders",
+            path="input.js",
             occurrence=store.Occurrence(host="api.acme.io", raw_url="/orders"),
-            attributes={"method": "GET", "kind": "fetch"}, first_stage="analyzing",
+            attributes={"method": "GET", "kind": "fetch"},
+            first_stage="analyzing",
         )
         return run_id, result.finding_hash
 

@@ -34,11 +34,18 @@ def _seed_revealable(tenant, session_id, token):
         session.get(models.Run, run_id).input_ref = input_ref
     with tenant_session(tenant) as session:
         result = store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.SECRET,
-            value=value, path="input.js",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.SECRET,
+            value=value,
+            path="input.js",
             occurrence=store.Occurrence(
-                source_path="input.js", line=1, col=0,
-                offset_start=offset, offset_end=offset + len(token.encode("utf-8")),
+                source_path="input.js",
+                line=1,
+                col=0,
+                offset_start=offset,
+                offset_end=offset + len(token.encode("utf-8")),
                 engine="kingfisher",
             ),
             attributes={"rule": "stripe", "name": "Stripe"},
@@ -62,14 +69,19 @@ def test_reveal_route_returns_value(client, authorized_session):
 def test_reveal_route_offsetless_is_422(client, authorized_session):
     tenant, session_id = authorized_session
     with tenant_session(tenant) as session:
-        run = models.Run(tenant_id=tenant, session_id=session_id, state="done",
-                         input_ref="t/r/input/x")
+        run = models.Run(
+            tenant_id=tenant, session_id=session_id, state="done", input_ref="t/r/input/x"
+        )
         session.add(run)
         session.flush()
         run_id = str(run.id)
         result = store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.SECRET,
-            value=normalize.normalize_secret_value("sk_live_NOPE", "stripe"), path="input.js",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.SECRET,
+            value=normalize.normalize_secret_value("sk_live_NOPE", "stripe"),
+            path="input.js",
             occurrence=store.Occurrence(source_path="input.js", line=1, col=0, engine="kingfisher"),
             attributes={"rule": "stripe", "name": "Stripe"},
         )
@@ -83,6 +95,7 @@ def test_reveal_route_offsetless_is_422(client, authorized_session):
 def test_reveal_route_unknown_run_is_404(client, tenant):
     resp = client.post(
         "/runs/00000000-0000-0000-0000-000000000000/findings/" + "a" * 64 + "/reveal",
-        json={}, headers=_headers(tenant),
+        json={},
+        headers=_headers(tenant),
     )
     assert resp.status_code == 404

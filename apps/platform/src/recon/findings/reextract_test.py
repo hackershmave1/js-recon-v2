@@ -26,9 +26,7 @@ def _seed_single(redis, tenant, session_id, source: bytes) -> str:
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
     key = storage.put_blob(tenant, view.id, "input", source)
     with tenant_session(tenant) as session:
-        session.execute(
-            update(models.Run).where(models.Run.id == view.id).values(input_ref=key)
-        )
+        session.execute(update(models.Run).where(models.Run.id == view.id).values(input_ref=key))
     return view.id
 
 
@@ -37,36 +35,51 @@ def _seed_crawl(redis, tenant, session_id, blobs: dict[str, bytes]) -> str:
     with tenant_session(tenant) as session:
         for url, src in blobs.items():
             key = storage.put_blob(tenant, view.id, "input", src)
-            session.add(models.RunAsset(
-                tenant_id=tenant, run_id=view.id, url=url, input_ref=key,
-                fetch_status=AssetStatus.OK.value, analyze_status=AssetStatus.PENDING.value,
-            ))
+            session.add(
+                models.RunAsset(
+                    tenant_id=tenant,
+                    run_id=view.id,
+                    url=url,
+                    input_ref=key,
+                    fetch_status=AssetStatus.OK.value,
+                    analyze_status=AssetStatus.PENDING.value,
+                )
+            )
     return view.id
 
 
 def _endpoint_findings(tenant, run_id) -> dict[str, models.Finding]:
     with tenant_session(tenant) as session:
-        rows = session.execute(
-            select(models.Finding).where(
-                models.Finding.run_id == run_id, models.Finding.type == "endpoint",
+        rows = (
+            session.execute(
+                select(models.Finding).where(
+                    models.Finding.run_id == run_id,
+                    models.Finding.type == "endpoint",
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return {r.value: r for r in rows}
 
 
 def _coverage_event_count(tenant, run_id) -> int:
     with tenant_session(tenant) as session:
-        return len(session.execute(
-            select(models.RunEvent.id).where(
-                models.RunEvent.run_id == run_id,
-                models.RunEvent.type == "analyze.coverage",
-            )
-        ).all())
+        return len(
+            session.execute(
+                select(models.RunEvent.id).where(
+                    models.RunEvent.run_id == run_id,
+                    models.RunEvent.type == "analyze.coverage",
+                )
+            ).all()
+        )
 
 
 def test_reextract_recovers_wrapper_endpoint(redis, authorized_session):
     tenant, session_id = authorized_session
-    run_id = _seed_single(redis, tenant, session_id, b"const api = makeClient(); api.get('/users');")
+    run_id = _seed_single(
+        redis, tenant, session_id, b"const api = makeClient(); api.get('/users');"
+    )
 
     written = reextract.reextract_run(tenant, run_id, [WrapperRule("api")])
 
@@ -83,7 +96,9 @@ def test_reextract_recovers_wrapper_endpoint(redis, authorized_session):
 def test_reextract_preserves_native_hashes_and_adds_wrapper(redis, authorized_session):
     tenant, session_id = authorized_session
     run_id = _seed_single(
-        redis, tenant, session_id,
+        redis,
+        tenant,
+        session_id,
         b"fetch('/native'); const api = makeClient(); api.get('/w');",
     )
     analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id)  # natives recorded
@@ -116,7 +131,9 @@ def test_reextract_is_idempotent(redis, authorized_session):
 def test_reextract_multi_asset_does_not_reemit_coverage(redis, authorized_session):
     tenant, session_id = authorized_session
     run_id = _seed_crawl(
-        redis, tenant, session_id,
+        redis,
+        tenant,
+        session_id,
         {"https://acme.io/a.js": b"const api = makeClient(); api.get('/a');"},
     )
     analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id)  # one asset -> one coverage event
@@ -124,7 +141,9 @@ def test_reextract_multi_asset_does_not_reemit_coverage(redis, authorized_sessio
 
     reextract.reextract_run(tenant, run_id, [WrapperRule("api")])
 
-    assert _coverage_event_count(tenant, run_id) == before  # no coverage double-count (§12 Blocker 1)
+    assert (
+        _coverage_event_count(tenant, run_id) == before
+    )  # no coverage double-count (§12 Blocker 1)
     assert "GET /a" in _endpoint_findings(tenant, run_id)
 
 
@@ -143,7 +162,8 @@ def test_reextract_multi_asset_preserves_capture_map_path(redis, authorized_sess
     def fake_recover(map_bytes, **_kwargs):
         return sourcemapper.RecoveredSources(
             files=[sourcemapper.RecoveredFile("app/src/api.js", recovered_src)],
-            status="ok", origin="capture",
+            status="ok",
+            origin="capture",
         )
 
     monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
@@ -152,11 +172,17 @@ def test_reextract_multi_asset_preserves_capture_map_path(redis, authorized_sess
     input_key = storage.put_blob(tenant, view.id, "input", recovered_src)
     map_key = storage.put_blob(tenant, view.id, "source_map", b'{"version":3}')
     with tenant_session(tenant) as session:
-        session.add(models.RunAsset(
-            tenant_id=tenant, run_id=view.id, url="https://acme.io/app.js",
-            input_ref=input_key, source_map_ref=map_key,
-            fetch_status=AssetStatus.OK.value, analyze_status=AssetStatus.OK.value,
-        ))
+        session.add(
+            models.RunAsset(
+                tenant_id=tenant,
+                run_id=view.id,
+                url="https://acme.io/app.js",
+                input_ref=input_key,
+                source_map_ref=map_key,
+                fetch_status=AssetStatus.OK.value,
+                analyze_status=AssetStatus.OK.value,
+            )
+        )
 
     reextract.reextract_run(tenant, view.id, [WrapperRule("api")])
 
@@ -168,9 +194,12 @@ def test_reextract_multi_asset_preserves_capture_map_path(redis, authorized_sess
 
 def test_reextract_unknown_run_is_none(redis, authorized_session):
     tenant, _session_id = authorized_session
-    assert reextract.reextract_run(
-        tenant, "00000000-0000-0000-0000-000000000000", [WrapperRule("api")]
-    ) is None
+    assert (
+        reextract.reextract_run(
+            tenant, "00000000-0000-0000-0000-000000000000", [WrapperRule("api")]
+        )
+        is None
+    )
 
 
 def test_reextract_missing_blob_raises(redis, authorized_session):
@@ -178,7 +207,8 @@ def test_reextract_missing_blob_raises(redis, authorized_session):
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
     with tenant_session(tenant) as session:
         session.execute(
-            update(models.Run).where(models.Run.id == view.id)
+            update(models.Run)
+            .where(models.Run.id == view.id)
             .values(input_ref=f"{tenant}/{view.id}/input/deadbeef")  # no such object
         )
     with pytest.raises(reextract.SourceBlobMissing):

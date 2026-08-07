@@ -21,7 +21,11 @@ def test_add_list_delete_prefix_rule(authorized_session):
     run_id = _run(tenant, session_id)
 
     res = base_url_service.add_rule(
-        tenant, run_id, kind="prefix", base_url="/location", path_prefix="/address",
+        tenant,
+        run_id,
+        kind="prefix",
+        base_url="/location",
+        path_prefix="/address",
     )
     assert res["rule"]["kind"] == "prefix" and res["rule"]["base_url"] == "/location"
 
@@ -45,12 +49,20 @@ def test_add_rule_invalid_base_raises(authorized_session):
     tenant, session_id = authorized_session
     run_id = _run(tenant, session_id)
     with pytest.raises(InvalidBaseUrl):
-        base_url_service.add_rule(tenant, run_id, kind="prefix", base_url="ftp://x", path_prefix="/p")
+        base_url_service.add_rule(
+            tenant, run_id, kind="prefix", base_url="ftp://x", path_prefix="/p"
+        )
 
 
 def test_add_rule_unknown_run_is_none(authorized_session):
     tenant, _session_id = authorized_session
-    assert base_url_service.add_rule(
-        tenant, "00000000-0000-0000-0000-000000000000",
-        kind="prefix", base_url="/a", path_prefix="/p",
-    ) is None
+    assert (
+        base_url_service.add_rule(
+            tenant,
+            "00000000-0000-0000-0000-000000000000",
+            kind="prefix",
+            base_url="/a",
+            path_prefix="/p",
+        )
+        is None
+    )

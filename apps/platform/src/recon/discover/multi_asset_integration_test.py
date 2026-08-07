@@ -70,7 +70,10 @@ def _seed_crawl_run(redis, tenant, session_id, urls):
     with tenant_session(tenant) as s:
         assets.seed_pending(s, tenant_id=tenant, run_id=view.id, urls=urls)
         record_event(
-            s, tenant_id=tenant, run_id=view.id, event_type="discover.assets",
+            s,
+            tenant_id=tenant,
+            run_id=view.id,
+            event_type="discover.assets",
             payload={"count": len(urls), "assets_ref": "x", "status": "ok"},
         )
     return view.id
@@ -83,10 +86,16 @@ def _walk_to_correlating(redis, tenant, run_id) -> None:
     CORRELATING). Mirrors ``coordinator_completeness_test.py``'s
     ``_crawl_run_at_correlating``; kept as a separate step here since the real
     fetch/analyze work above does not itself depend on ``run.state``."""
-    for st in (RunState.DISCOVERING, RunState.FETCHING, RunState.INGESTING,
-               RunState.ANALYZING, RunState.CORRELATING):
-        service.transition(redis, tenant_id=tenant, run_id=run_id, to_state=st,
-                           stage=RunStage(st.value))
+    for st in (
+        RunState.DISCOVERING,
+        RunState.FETCHING,
+        RunState.INGESTING,
+        RunState.ANALYZING,
+        RunState.CORRELATING,
+    ):
+        service.transition(
+            redis, tenant_id=tenant, run_id=run_id, to_state=st, stage=RunStage(st.value)
+        )
 
 
 def _run_state(tenant, run_id) -> tuple[str, dict]:
@@ -205,14 +214,22 @@ def test_real_katana_discovers_multiple_js_assets(engines_required):
     (same skip-guard, same fixture, same duration/settings)."""
     settings = get_settings()
     argv = katana.build_argv(
-        katana_bin=settings.katana_bin, domain=FIXTURE_URL, scope_hosts=SCOPE,
-        depth=settings.crawl_depth, crawl_duration_seconds=30.0,
+        katana_bin=settings.katana_bin,
+        domain=FIXTURE_URL,
+        scope_hosts=SCOPE,
+        depth=settings.crawl_depth,
+        crawl_duration_seconds=30.0,
     )
     try:
         with patch("recon.discover.harness.progress.beat"):
             result = harness.run_crawl(
-                None, argv, tenant_id="t", run_id="r", job_id="j",
-                duration_seconds=30.0, kill_grace_seconds=5.0,
+                None,
+                argv,
+                tenant_id="t",
+                run_id="r",
+                job_id="j",
+                duration_seconds=30.0,
+                kill_grace_seconds=5.0,
                 heartbeat_interval_seconds=5.0,
                 max_output_bytes=settings.crawl_max_output_bytes,
             )

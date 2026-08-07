@@ -40,9 +40,7 @@ def _drive(redis, run_id, tenant, *, max_passes=30) -> str:
 def _findings(tenant, run_id):
     with tenant_session(tenant) as session:
         return list(
-            session.execute(
-                select(models.Finding).where(models.Finding.run_id == run_id)
-            ).scalars()
+            session.execute(select(models.Finding).where(models.Finding.run_id == run_id)).scalars()
         )
 
 
@@ -244,11 +242,17 @@ def _seed_capture_asset(redis, tenant, session_id, *, js: bytes, map_blob: bytes
     input_key = storage.put_blob(tenant, view.id, "input", js)
     map_key = storage.put_blob(tenant, view.id, "source_map", map_blob)
     with tenant_session(tenant) as session:
-        session.add(models.RunAsset(
-            tenant_id=tenant, run_id=view.id, url="https://acme.io/app.js",
-            input_ref=input_key, source_map_ref=map_key,
-            fetch_status=AssetStatus.OK.value, analyze_status=AssetStatus.PENDING.value,
-        ))
+        session.add(
+            models.RunAsset(
+                tenant_id=tenant,
+                run_id=view.id,
+                url="https://acme.io/app.js",
+                input_ref=input_key,
+                source_map_ref=map_key,
+                fetch_status=AssetStatus.OK.value,
+                analyze_status=AssetStatus.PENDING.value,
+            )
+        )
     return view.id
 
 
@@ -263,7 +267,8 @@ def test_capture_asset_recovers_sources_from_its_map(redis, authorized_session, 
     def fake_recover(map_bytes, **_kwargs):
         return sourcemapper.RecoveredSources(
             files=[sourcemapper.RecoveredFile("app/src/api.js", b'fetch("/api/widgets/7");')],
-            status="ok", origin="capture",
+            status="ok",
+            origin="capture",
         )
 
     monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
@@ -279,7 +284,9 @@ def test_capture_asset_recovers_sources_from_its_map(redis, authorized_session, 
     assert endpoints[0].value == "GET /api/widgets/{id}"
 
 
-def test_capture_asset_bad_map_falls_back_and_asset_still_ok(redis, authorized_session, monkeypatch):
+def test_capture_asset_bad_map_falls_back_and_asset_still_ok(
+    redis, authorized_session, monkeypatch
+):
     # THE safety guarantee: an unparseable capture map must NOT fail the asset (which
     # would drop ALL its findings). It falls back to bundle analysis, the asset ends
     # OK (not analyze_failed), and coverage honestly reports "capture-error".
@@ -304,7 +311,9 @@ def test_capture_asset_bad_map_falls_back_and_asset_still_ok(redis, authorized_s
     endpoint_values = {f.value for f in _findings(tenant, run_id) if f.type == "endpoint"}
     assert "GET /api/health" in endpoint_values  # bundle analyzed as the fallback
     with tenant_session(tenant):
-        row = next(r for r in run_assets.list_for_run(tenant, run_id) if r.url == "https://acme.io/app.js")
+        row = next(
+            r for r in run_assets.list_for_run(tenant, run_id) if r.url == "https://acme.io/app.js"
+        )
     assert row.analyze_status == AssetStatus.OK.value  # asset kept, not failed
 
 
@@ -321,7 +330,8 @@ def test_legacy_uploaded_bad_map_still_raises(redis, authorized_session, monkeyp
 
     tenant, session_id = authorized_session
     monkeypatch.setattr(
-        sourcemapper, "recover_sources",
+        sourcemapper,
+        "recover_sources",
         lambda *a, **k: (_ for _ in ()).throw(engines.EngineError("bad map")),
     )
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
@@ -329,7 +339,8 @@ def test_legacy_uploaded_bad_map_still_raises(redis, authorized_session, monkeyp
     map_key = storage.put_blob(tenant, view.id, "source_map", b'{"version":3}')
     with tenant_session(tenant) as session:
         session.execute(
-            update(models.Run).where(models.Run.id == view.id)
+            update(models.Run)
+            .where(models.Run.id == view.id)
             .values(input_ref=input_key, source_map_ref=map_key)
         )
     with pytest.raises(engines.EngineError):

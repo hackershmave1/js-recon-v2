@@ -40,9 +40,7 @@ class PatchSessionBody(BaseModel):
 
 
 @router.post("/sessions", status_code=201)
-def create_session(
-    body: CreateSessionBody, tenant_id: str = Depends(get_tenant_id)
-) -> dict:
+def create_session(body: CreateSessionBody, tenant_id: str = Depends(get_tenant_id)) -> dict:
     try:
         view = service.create_session(
             tenant_id,
@@ -61,9 +59,7 @@ def create_session(
 
 
 @router.get("/sessions")
-def list_sessions(
-    archived: bool = False, tenant_id: str = Depends(get_tenant_id)
-) -> dict:
+def list_sessions(archived: bool = False, tenant_id: str = Depends(get_tenant_id)) -> dict:
     summaries = service.list_sessions(tenant_id, include_archived=archived)
     return {
         "count": len(summaries),
@@ -72,9 +68,7 @@ def list_sessions(
 
 
 @router.get("/sessions/{session_id}/runs")
-def list_session_runs(
-    session_id: str, tenant_id: str = Depends(get_tenant_id)
-) -> dict:
+def list_session_runs(session_id: str, tenant_id: str = Depends(get_tenant_id)) -> dict:
     runs = service.list_runs_for_session(tenant_id, session_id)
     if runs is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -100,18 +94,14 @@ def patch_session(
         if view is None:
             raise HTTPException(status_code=404, detail="session not found")
     if body.archived is not None:
-        view = service.set_session_archived(
-            tenant_id, session_id, archived=body.archived
-        )
+        view = service.set_session_archived(tenant_id, session_id, archived=body.archived)
         if view is None:
             raise HTTPException(status_code=404, detail="session not found")
     return _session_view_dict(view)
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
-def delete_session(
-    session_id: str, tenant_id: str = Depends(get_tenant_id)
-) -> Response:
+def delete_session(session_id: str, tenant_id: str = Depends(get_tenant_id)) -> Response:
     if not service.delete_session(tenant_id, session_id):
         raise HTTPException(status_code=404, detail="session not found")
     return Response(status_code=204)
@@ -153,9 +143,7 @@ def _summary_dict(summary: service.SessionSummary) -> dict:
         "engagement_id": summary.engagement_id,
         "archived": summary.archived,
         "created_at": summary.created_at,
-        "latest_run": (
-            _run_ref_dict(summary.latest_run) if summary.latest_run else None
-        ),
+        "latest_run": (_run_ref_dict(summary.latest_run) if summary.latest_run else None),
         "files": summary.files,
         "endpoints": summary.endpoints,
         "secrets": summary.secrets,

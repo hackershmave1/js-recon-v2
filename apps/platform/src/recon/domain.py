@@ -81,7 +81,7 @@ class AssetStatus(StrEnum):
 class BaseUrlRuleKind(StrEnum):
     """How a manual base-URL rule selects the findings it re-resolves (REQ-C2)."""
 
-    PREFIX = "prefix"        # matches ops whose path starts with path_prefix (segment-wise)
+    PREFIX = "prefix"  # matches ops whose path starts with path_prefix (segment-wise)
     SELECTION = "selection"  # matches ops whose endpoint finding_hash is in finding_hashes
 
 

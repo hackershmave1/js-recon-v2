@@ -29,9 +29,7 @@ def list_engagements(tenant_id: str = Depends(get_tenant_id)) -> dict:
 
 
 @router.post("/engagements", status_code=201)
-def create_engagement(
-    body: CreateEngagementBody, tenant_id: str = Depends(get_tenant_id)
-) -> dict:
+def create_engagement(body: CreateEngagementBody, tenant_id: str = Depends(get_tenant_id)) -> dict:
     try:
         view = service.create_engagement(
             tenant_id,

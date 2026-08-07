@@ -50,8 +50,12 @@ def set_finding_triage(
     if body.status not in triage.VALID_STATUSES:
         raise HTTPException(status_code=400, detail="invalid triage status")
     state = triage.set_triage_for_run(
-        tenant_id, run_id, finding_hash,
-        status=body.status, note=body.note, actor=body.actor,
+        tenant_id,
+        run_id,
+        finding_hash,
+        status=body.status,
+        note=body.note,
+        actor=body.actor,
     )
     if state is None:
         raise HTTPException(status_code=404, detail="run or finding not found")

@@ -62,17 +62,27 @@ def reextract_run(tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]) 
                     # the wrapper endpoint under `input.js` — a divergent finding_hash,
                     # i.e. a duplicate finding instead of an update (§12 Imp 4).
                     written += _reextract_blob(
-                        session, tenant_id=tenant_id, run_id=run_id,
-                        input_ref=asset.input_ref, source_map_ref=asset.source_map_ref,
+                        session,
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        input_ref=asset.input_ref,
+                        source_map_ref=asset.source_map_ref,
                         source_map_origin="capture",
-                        run_asset_id=asset.id, asset_url=asset.url, wrappers=wrappers,
+                        run_asset_id=asset.id,
+                        asset_url=asset.url,
+                        wrappers=wrappers,
                     )
         elif input_ref:  # legacy single-blob run (with its own source map, if any)
             with tenant_session(tenant_id) as session:
                 written += _reextract_blob(
-                    session, tenant_id=tenant_id, run_id=run_id,
-                    input_ref=input_ref, source_map_ref=source_map_ref,
-                    run_asset_id=None, asset_url=None, wrappers=wrappers,
+                    session,
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    input_ref=input_ref,
+                    source_map_ref=source_map_ref,
+                    run_asset_id=None,
+                    asset_url=None,
+                    wrappers=wrappers,
                 )
     except ClientError as exc:  # storage.get_blob on a vanished blob (§12 Minor 9)
         raise SourceBlobMissing(str(exc)) from exc
@@ -80,16 +90,27 @@ def reextract_run(tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]) 
 
 
 def _reextract_blob(
-    session, *, tenant_id: str, run_id: str, input_ref: str,
-    source_map_ref: str | None, source_map_origin: str = "uploaded",
-    run_asset_id: str | None, asset_url: str | None,
+    session,
+    *,
+    tenant_id: str,
+    run_id: str,
+    input_ref: str,
+    source_map_ref: str | None,
+    source_map_origin: str = "uploaded",
+    run_asset_id: str | None,
+    asset_url: str | None,
     wrappers: Sequence[WrapperRule],
 ) -> int:
     raw = storage.get_blob(input_ref)
     source = raw.decode("utf-8", "replace")
     return _extract_endpoints(
-        session, tenant_id=tenant_id, run_id=run_id, source=source,
-        source_map_ref=source_map_ref, source_map_origin=source_map_origin,
-        run_asset_id=run_asset_id, asset_url=asset_url,
+        session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        source=source,
+        source_map_ref=source_map_ref,
+        source_map_origin=source_map_origin,
+        run_asset_id=run_asset_id,
+        asset_url=asset_url,
         wrappers=wrappers,
     ).written

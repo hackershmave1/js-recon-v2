@@ -1,4 +1,5 @@
 """SPA serving: assets + Accept-based client-route fallback, no-op when absent."""
+
 from __future__ import annotations
 
 from pathlib import Path

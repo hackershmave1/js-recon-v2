@@ -112,9 +112,7 @@ def _resolve_scope_hosts(scope_hosts: list[str], target: str | None) -> list[str
         if normalized not in cleaned:
             cleaned.append(normalized)
     if not cleaned and target:
-        default_host = egress.normalize_scope_entry(
-            egress.host_of(target), allow_local=allow_local
-        )
+        default_host = egress.normalize_scope_entry(egress.host_of(target), allow_local=allow_local)
         if default_host is not None:
             cleaned.append(default_host)
     return cleaned
@@ -157,7 +155,7 @@ def create_session(
             scope_hosts=resolved_scope,
             authorization_ack=True,
             authorized_by=authorized_by,
-            authorized_at=dt.datetime.now(dt.timezone.utc),
+            authorized_at=dt.datetime.now(dt.UTC),
             engagement_id=engagement_id,
         )
         session.add(row)
@@ -172,9 +170,7 @@ def get_session(tenant_id: str, session_id: str) -> SessionView | None:
         return _view(row) if row else None
 
 
-def list_sessions(
-    tenant_id: str, *, include_archived: bool = False
-) -> list[SessionSummary]:
+def list_sessions(tenant_id: str, *, include_archived: bool = False) -> list[SessionSummary]:
     """Every session for the tenant, newest first, each with its latest run's
     stats. RLS confines the result to this tenant; archived sessions are hidden
     unless ``include_archived``."""
@@ -186,25 +182,19 @@ def list_sessions(
         return [_summary(session, row) for row in rows]
 
 
-def list_runs_for_session(
-    tenant_id: str, session_id: str
-) -> list[RunRefView] | None:
+def list_runs_for_session(tenant_id: str, session_id: str) -> list[RunRefView] | None:
     """A session's runs, newest first, or ``None`` if the session is not visible
     to the tenant (RLS) or does not exist (the HTTP layer maps that to 404)."""
     with tenant_session(tenant_id) as session:
         if session.get(EngagementSession, session_id) is None:
             return None
         rows = session.scalars(
-            select(Run)
-            .where(Run.session_id == str(session_id))
-            .order_by(Run.created_at.desc())
+            select(Run).where(Run.session_id == str(session_id)).order_by(Run.created_at.desc())
         ).all()
         return [_run_ref(run) for run in rows]
 
 
-def rename_session(
-    tenant_id: str, session_id: str, *, name: str
-) -> SessionView | None:
+def rename_session(tenant_id: str, session_id: str, *, name: str) -> SessionView | None:
     if not name or not name.strip():
         raise SessionInvalid("a session name is required")
     with tenant_session(tenant_id) as session:
@@ -216,14 +206,12 @@ def rename_session(
         return _view(row)
 
 
-def set_session_archived(
-    tenant_id: str, session_id: str, *, archived: bool
-) -> SessionView | None:
+def set_session_archived(tenant_id: str, session_id: str, *, archived: bool) -> SessionView | None:
     with tenant_session(tenant_id) as session:
         row = session.get(EngagementSession, session_id)
         if row is None:
             return None
-        row.archived_at = dt.datetime.now(dt.timezone.utc) if archived else None
+        row.archived_at = dt.datetime.now(dt.UTC) if archived else None
         session.flush()
         return _view(row)
 
@@ -271,10 +259,7 @@ def _run_ref(run: Run) -> RunRefView:
 
 def _summary(db: Session, row: EngagementSession) -> SessionSummary:
     latest = db.scalars(
-        select(Run)
-        .where(Run.session_id == str(row.id))
-        .order_by(Run.created_at.desc())
-        .limit(1)
+        select(Run).where(Run.session_id == str(row.id)).order_by(Run.created_at.desc()).limit(1)
     ).first()
     files = endpoints = secrets = coverage_pct = None
     if latest is not None:
@@ -304,31 +289,25 @@ def _summary(db: Session, row: EngagementSession) -> SessionSummary:
     )
 
 
-def _run_stats(
-    db: Session, run: Run
-) -> tuple[int, int, int, int | None]:
+def _run_stats(db: Session, run: Run) -> tuple[int, int, int, int | None]:
     """(files, endpoints, secrets, coverage_pct) for one run — a cheap read, not
     the heavy findings read-model (§4 fold M4)."""
     run_id = str(run.id)
     # endpoints / secrets: COUNT(*) grouped by finding type, this run only.
-    type_counts = {
-        row_type: count
-        for row_type, count in db.execute(
+    type_counts = dict(
+        db.execute(
             select(Finding.type, func.count())
             .where(Finding.run_id == run_id)
             .group_by(Finding.type)
         ).all()
-    }
+    )
     endpoints = int(type_counts.get(FindingType.ENDPOINT.value, 0))
     secrets = int(type_counts.get(FindingType.SECRET.value, 0))
     # files (§4 fold M1): the run's discovered-asset count for a crawl; 1 for a
     # single-blob upload; else 0. NOT coverage.files (which is per-source-path and
     # double-counts across assets).
     asset_count = (
-        db.scalar(
-            select(func.count()).select_from(RunAsset).where(RunAsset.run_id == run_id)
-        )
-        or 0
+        db.scalar(select(func.count()).select_from(RunAsset).where(RunAsset.run_id == run_id)) or 0
     )
     if asset_count:
         files = int(asset_count)

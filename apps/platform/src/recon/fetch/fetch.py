@@ -25,7 +25,7 @@ from __future__ import annotations
 import contextlib
 import socket
 import time
-from typing import Iterator
+from collections.abc import Iterator
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -86,7 +86,13 @@ def _pin_dns(host: str, ips: tuple[str, ...]) -> Iterator[None]:
         for ip in ips:
             if ":" in ip:
                 results.append(
-                    (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (ip, service, 0, 0))
+                    (
+                        socket.AF_INET6,
+                        socket.SOCK_STREAM,
+                        socket.IPPROTO_TCP,
+                        "",
+                        (ip, service, 0, 0),
+                    )
                 )
             else:
                 results.append(
@@ -131,33 +137,36 @@ def fetch_url(
                 raise egress.EgressBlocked(
                     f"URL host parse mismatch: {httpx.URL(current).host} vs {target.host}"
                 )
-            with _pin_dns(target.host, target.ips):
-                # Browser-shaped headers (see _FETCH_HEADERS); identity encoding so
-                # a decoded-byte cap == received-byte cap.
-                with client.stream("GET", current, headers=_FETCH_HEADERS) as response:
-                    if response.is_redirect:
-                        location = response.headers.get("location")
-                        if not location:
-                            raise retry.FatalError("redirect without a Location header")
-                        current = urljoin(current, location)  # resolves relative / //host
-                        continue
-                    if not 200 <= response.status_code < 300:
-                        # 429/5xx are worth a retry; other statuses (4xx, non-redirect
-                        # 3xx) are deterministic and fail fast.
-                        message = f"target returned HTTP {response.status_code}"
-                        if retry.http_retryable(response.status_code):
-                            # Honor the target's own backoff ask (REQ-Q3) when present.
-                            retry_after = _parse_retry_after(response.headers.get("retry-after"))
-                            raise retry.RetryableError(message, retry_after=retry_after)
-                        raise retry.FatalError(message)
-                    body = bytearray()
-                    for chunk in response.iter_bytes():
-                        if time.monotonic() > deadline:
-                            raise retry.RetryableError("overall fetch deadline exceeded")
-                        body.extend(chunk)
-                        if len(body) > max_bytes:
-                            raise retry.FatalError(f"response exceeds {max_bytes} bytes")
-                    return bytes(body)
+            # Pin DNS on the validated host and stream within one scope (enter order
+            # = pin then stream; exit reverses). Browser-shaped headers (see
+            # _FETCH_HEADERS); identity encoding so a decoded-byte cap == received-byte cap.
+            with (
+                _pin_dns(target.host, target.ips),
+                client.stream("GET", current, headers=_FETCH_HEADERS) as response,
+            ):
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise retry.FatalError("redirect without a Location header")
+                    current = urljoin(current, location)  # resolves relative / //host
+                    continue
+                if not 200 <= response.status_code < 300:
+                    # 429/5xx are worth a retry; other statuses (4xx, non-redirect
+                    # 3xx) are deterministic and fail fast.
+                    message = f"target returned HTTP {response.status_code}"
+                    if retry.http_retryable(response.status_code):
+                        # Honor the target's own backoff ask (REQ-Q3) when present.
+                        retry_after = _parse_retry_after(response.headers.get("retry-after"))
+                        raise retry.RetryableError(message, retry_after=retry_after)
+                    raise retry.FatalError(message)
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    if time.monotonic() > deadline:
+                        raise retry.RetryableError("overall fetch deadline exceeded")
+                    body.extend(chunk)
+                    if len(body) > max_bytes:
+                        raise retry.FatalError(f"response exceeds {max_bytes} bytes")
+                return bytes(body)
     raise retry.FatalError(f"exceeded {max_redirects} redirects")
 
 
@@ -242,7 +251,12 @@ def _parse_retry_after(value: str | None) -> float | None:
 
 
 def _await_host_slot(
-    redis: Redis, host: str, *, tenant_id: str, run_id: str, job_id: str | None,
+    redis: Redis,
+    host: str,
+    *,
+    tenant_id: str,
+    run_id: str,
+    job_id: str | None,
     settings: Settings,
 ) -> None:
     """Acquire the per-host politeness slot, re-checking until ``check()`` yields it.
@@ -274,13 +288,22 @@ def _beat_sleep(
         remaining -= nap
         if job_id and remaining > 0:
             progress.beat(
-                redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id,
-                done=0, total=0, emit_event=False,
+                redis,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                job_id=job_id,
+                done=0,
+                total=0,
+                emit_event=False,
             )
 
 
 def _fetch_assets(
-    redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None,
+    redis: Redis,
+    *,
+    tenant_id: str,
+    run_id: str,
+    job_id: str | None,
     rows: list[run_assets.AssetRow],
 ) -> None:
     """Fetch every not-yet-terminal asset of a crawl run (REQ-C1/D5), best-effort.
@@ -321,8 +344,10 @@ def _fetch_assets(
             )
         try:
             content = fetch_url(
-                asset.url, engagement.scope_hosts,
-                timeout_s=settings.fetch_timeout_seconds, max_bytes=settings.max_fetch_bytes,
+                asset.url,
+                engagement.scope_hosts,
+                timeout_s=settings.fetch_timeout_seconds,
+                max_bytes=settings.max_fetch_bytes,
                 allow_local=settings.allow_local_egress,
             )
         except (egress.EgressBlocked, retry.FatalError, retry.RetryableError) as exc:
@@ -332,7 +357,10 @@ def _fetch_assets(
             retry_after = getattr(exc, "retry_after", None)
             if retry_after:  # honor the target's host-wide backoff even though we drop it
                 _beat_sleep(
-                    redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id,
+                    redis,
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    job_id=job_id,
                     seconds=float(retry_after),
                 )
             continue
@@ -345,8 +373,15 @@ def _fetch_assets(
         # with fetch_ok in the one tx below.
         map_key = (
             _fetch_and_store_source_map(
-                redis, js=content, asset_url=asset.url, scope_hosts=engagement.scope_hosts,
-                tenant_id=tenant_id, run_id=run_id, job_id=job_id, done=i, total=total,
+                redis,
+                js=content,
+                asset_url=asset.url,
+                scope_hosts=engagement.scope_hosts,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                job_id=job_id,
+                done=i,
+                total=total,
                 settings=settings,
             )
             if settings.crawl_fetch_source_maps
@@ -357,8 +392,11 @@ def _fetch_assets(
             if map_key:
                 run_assets.set_source_map_ref(s, asset.id, map_key)
         log.info(
-            "fetch.asset_done", run_id=run_id, url=asset.url,
-            bytes=len(content), source_map=bool(map_key),
+            "fetch.asset_done",
+            run_id=run_id,
+            url=asset.url,
+            bytes=len(content),
+            source_map=bool(map_key),
         )
 
 
@@ -402,8 +440,10 @@ def _fetch_and_store_source_map(
                 redis, host, tenant_id=tenant_id, run_id=run_id, job_id=job_id, settings=settings
             )
         map_bytes = fetch_url(
-            map_url, scope_hosts,
-            timeout_s=settings.fetch_timeout_seconds, max_bytes=settings.max_fetch_bytes,
+            map_url,
+            scope_hosts,
+            timeout_s=settings.fetch_timeout_seconds,
+            max_bytes=settings.max_fetch_bytes,
             allow_local=settings.allow_local_egress,
         )
         return storage.put_blob(tenant_id, run_id, "source_map", map_bytes)

@@ -32,9 +32,7 @@ def test_unknown_error_defaults_to_retryable():
 def test_backoff_is_bounded_by_ceiling():
     rng = random.Random(1234)
     for attempt in range(1, 8):
-        delay = retry.compute_delay(
-            attempt, base_delay=1.0, max_delay=60.0, rng=rng
-        )
+        delay = retry.compute_delay(attempt, base_delay=1.0, max_delay=60.0, rng=rng)
         ceiling = min(60.0, 1.0 * (2 ** (attempt - 1)))
         assert 0.0 <= delay <= ceiling
 

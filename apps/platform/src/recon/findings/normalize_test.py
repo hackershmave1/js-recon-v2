@@ -13,6 +13,7 @@ from recon.findings import normalize as nz
 
 # --- entropy -----------------------------------------------------------------
 
+
 def test_shannon_entropy_empty_is_zero():
     assert nz.shannon_entropy("") == 0.0
 
@@ -25,6 +26,7 @@ def test_shannon_entropy_orders_slug_below_token():
 
 
 # --- path-segment templating (§4.1) -----------------------------------------
+
 
 def test_template_segment_numeric_and_uuid_and_hex():
     assert nz.template_segment("4821") == "{id}"
@@ -46,6 +48,7 @@ def test_template_segment_collapses_high_entropy_token():
 
 
 # --- source-path normalization (§3) -----------------------------------------
+
 
 def test_source_path_strips_scheme_keeps_webpack_namespace():
     assert nz.normalize_source_path("webpack://app/src/api/users.js") == "app/src/api/users.js"
@@ -86,6 +89,7 @@ def test_source_path_null_vs_empty_are_distinct_from_no_map():
 
 
 # --- endpoint normalization (§4.1) ------------------------------------------
+
 
 def test_endpoint_templates_path_and_sorts_query_keys():
     ep = nz.normalize_endpoint(
@@ -130,6 +134,7 @@ def test_endpoint_websocket():
 
 # --- param normalization (§4.3) ---------------------------------------------
 
+
 def test_param_value_binds_to_operation():
     op = nz.endpoint_operation("post", "https://api.x/login")
     assert op == "POST /login"
@@ -137,6 +142,7 @@ def test_param_value_binds_to_operation():
 
 
 # --- secret normalization (§4.2) --------------------------------------------
+
 
 def test_secret_strips_trailing_delimiter_for_stable_hash():
     # M2: engine v2 captures a trailing quote; identity must not churn.
@@ -175,6 +181,7 @@ def test_secret_does_not_strip_token_legal_chars():
 
 # --- hashing (§5) ------------------------------------------------------------
 
+
 def test_finding_hash_ignores_volatile_fields_by_construction():
     # Only (type, value, path) are inputs, so two sightings differing solely in
     # col/evidence produce the same hash (REQ-D3 retry idempotency).
@@ -186,9 +193,7 @@ def test_finding_hash_ignores_volatile_fields_by_construction():
 
 def test_finding_hash_no_cross_type_collision():
     same_value = "stripe:deadbeef"
-    assert nz.finding_hash("secret", same_value, "p") != nz.finding_hash(
-        "param", same_value, "p"
-    )
+    assert nz.finding_hash("secret", same_value, "p") != nz.finding_hash("param", same_value, "p")
 
 
 def test_finding_hash_changes_with_path_when_scoped():
@@ -198,7 +203,7 @@ def test_finding_hash_changes_with_path_when_scoped():
 
 
 def test_occurrence_hash_is_deterministic_and_offset_sensitive():
-    base = dict(host="api.x", raw_url="/users/1", path="app/a.js", start=10, end=20)
+    base = {"host": "api.x", "raw_url": "/users/1", "path": "app/a.js", "start": 10, "end": 20}
     assert nz.occurrence_hash(**base) == nz.occurrence_hash(**base)
     moved = {**base, "start": 99, "end": 109}
     assert nz.occurrence_hash(**base) != nz.occurrence_hash(**moved)
@@ -211,6 +216,7 @@ def test_occurrence_hash_tolerates_none_and_bytes():  # review LOW-4
 
 
 # --- regressions from the code review -----------------------------------------
+
 
 def test_source_path_protects_camelcase_stems_from_collapse():  # review HIGH-1
     a = nz.normalize_source_path("app/src/Base64Encoder.js")
@@ -269,9 +275,7 @@ def test_operation_of_param_value_strips_location_and_name():
 
 def test_operation_helpers_roundtrip_from_builders():
     operation = nz.endpoint_operation("POST", "https://api.acme.io/api/users/42")
-    endpoint_value = nz.normalize_endpoint(
-        "POST", "https://api.acme.io/api/users/42?a=1"
-    ).value
+    endpoint_value = nz.normalize_endpoint("POST", "https://api.acme.io/api/users/42?a=1").value
     param_value = nz.normalize_param_value(operation, "body", "name")
     assert nz.operation_of_endpoint_value(endpoint_value) == operation
     assert nz.operation_of_param_value(param_value) == operation

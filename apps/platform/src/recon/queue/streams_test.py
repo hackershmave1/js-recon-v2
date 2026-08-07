@@ -80,9 +80,7 @@ def test_reclaim_stalled_returns_abandoned_messages(redis):
     claimed = streams.read_batch(redis, QueueName.FETCH, "w1", block_ms=100)
     assert len(claimed) == 1
     try:
-        reclaimed = streams.reclaim_stalled(
-            redis, QueueName.FETCH, "w2", min_idle_ms=0, count=10
-        )
+        reclaimed = streams.reclaim_stalled(redis, QueueName.FETCH, "w2", min_idle_ms=0, count=10)
     except Exception as exc:  # pragma: no cover - fakeredis xautoclaim gaps
         pytest.skip(f"fakeredis lacks xautoclaim support: {exc}")
     assert any(m["job_id"] == "j1" for _mid, m in reclaimed)
@@ -129,8 +127,6 @@ def test_read_batch_reraises_a_non_group_error(redis):
 def test_reclaim_stalled_self_heals_after_group_lost(redis):
     redis.flushall()
     try:
-        assert (
-            streams.reclaim_stalled(redis, QueueName.FETCH, "w1", min_idle_ms=0) == []
-        )
+        assert streams.reclaim_stalled(redis, QueueName.FETCH, "w1", min_idle_ms=0) == []
     except Exception as exc:  # pragma: no cover - fakeredis xautoclaim gaps
         pytest.skip(f"fakeredis lacks xautoclaim support: {exc}")

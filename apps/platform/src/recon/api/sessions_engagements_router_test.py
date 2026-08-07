@@ -86,17 +86,13 @@ def test_rename_archive_and_delete(tenant, redis):
     session_id = _new_session(client, tenant)
 
     # Rename -> the card's host label reflects it (name-first, M3).
-    r = client.patch(
-        f"/sessions/{session_id}", headers=_hdr(tenant), json={"name": "Acme prod"}
-    )
+    r = client.patch(f"/sessions/{session_id}", headers=_hdr(tenant), json={"name": "Acme prod"})
     assert r.status_code == 200 and r.json()["name"] == "Acme prod"
     card = client.get("/sessions", headers=_hdr(tenant)).json()["sessions"][0]
     assert card["host"] == "Acme prod"
 
     # Archive -> hidden by default, visible with ?archived=true.
-    r = client.patch(
-        f"/sessions/{session_id}", headers=_hdr(tenant), json={"archived": True}
-    )
+    r = client.patch(f"/sessions/{session_id}", headers=_hdr(tenant), json={"archived": True})
     assert r.status_code == 200 and r.json()["archived"] is True
     assert client.get("/sessions", headers=_hdr(tenant)).json()["count"] == 0
     shown = client.get("/sessions?archived=true", headers=_hdr(tenant)).json()
@@ -127,9 +123,7 @@ def test_delete_session_with_runs_cascades(tenant, redis):
 def test_rename_empty_is_400(tenant, redis):
     client = _client()
     session_id = _new_session(client, tenant)
-    r = client.patch(
-        f"/sessions/{session_id}", headers=_hdr(tenant), json={"name": "  "}
-    )
+    r = client.patch(f"/sessions/{session_id}", headers=_hdr(tenant), json={"name": "  "})
     assert r.status_code == 400
 
 
@@ -140,9 +134,10 @@ def test_patch_and_runs_404_for_unknown_or_cross_tenant(tenant, redis):
 
     missing = str(uuid.uuid4())
     assert client.get(f"/sessions/{missing}/runs", headers=_hdr(tenant)).status_code == 404
-    assert client.patch(
-        f"/sessions/{missing}", headers=_hdr(tenant), json={"name": "x"}
-    ).status_code == 404
+    assert (
+        client.patch(f"/sessions/{missing}", headers=_hdr(tenant), json={"name": "x"}).status_code
+        == 404
+    )
     # Cross-tenant: the session exists, but not for this tenant (RLS) -> 404.
     assert client.get(f"/sessions/{session_id}/runs", headers=_hdr(other)).status_code == 404
     assert client.delete(f"/sessions/{session_id}", headers=_hdr(other)).status_code == 404
@@ -201,9 +196,9 @@ def test_empty_engagement_name_is_400(tenant, redis):
 def test_session_rejects_another_tenants_engagement(tenant, redis):
     client = _client()
     other = sessions_service.create_tenant(f"other-{uuid.uuid4().hex[:8]}")
-    foreign = client.post(
-        "/engagements", headers=_hdr(other), json={"name": "Theirs"}
-    ).json()["engagement_id"]
+    foreign = client.post("/engagements", headers=_hdr(other), json={"name": "Theirs"}).json()[
+        "engagement_id"
+    ]
     # RLS hides the engagement from `tenant`, so attaching a session to it is rejected
     # (a clean 400, not a silent inert cross-tenant FK reference).
     r = client.post(

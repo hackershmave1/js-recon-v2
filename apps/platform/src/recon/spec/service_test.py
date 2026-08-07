@@ -50,10 +50,15 @@ def _seed_endpoint(tenant: str, run_id: str, value: str) -> str:
     """Record one ENDPOINT finding on `run_id` and return its `finding_hash`."""
     with tenant_session(tenant) as session:
         result = store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.ENDPOINT,
-            value=value, path="input.js",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value=value,
+            path="input.js",
             occurrence=store.Occurrence(host="acme.io", raw_url="/x"),
-            attributes={"method": value.split(" ", 1)[0]}, first_stage="analyzing",
+            attributes={"method": value.split(" ", 1)[0]},
+            first_stage="analyzing",
         )
         return result.finding_hash
 
@@ -88,9 +93,7 @@ def test_attach_classifies_endpoint_findings():
 
         # REQ-S3: a durable, value-free audit event with the per-bucket counts.
         events = (
-            session.query(models.RunEvent)
-            .filter_by(run_id=run_id, type="spec.classified")
-            .all()
+            session.query(models.RunEvent).filter_by(run_id=run_id, type="spec.classified").all()
         )
         assert len(events) == 1
         assert events[0].payload["documented"] == 1
@@ -170,9 +173,7 @@ def test_reattach_retags():
         assert rows[wipe_hash].status == "documented"
 
         session_spec = (
-            session.query(models.SessionSpec)
-            .filter_by(session_id=str(session_view.id))
-            .one()
+            session.query(models.SessionSpec).filter_by(session_id=str(session_view.id)).one()
         )
         expected_ref_b = _object_key_of(tenant, run_id, OPENAPI_WITH_ADMIN_WIPE)
         assert session_spec.spec_ref == expected_ref_b

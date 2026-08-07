@@ -20,13 +20,11 @@ from recon.events.log import emit
 
 
 def _utcnow() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 def _lease_until() -> dt.datetime:
-    return _utcnow() + dt.timedelta(
-        seconds=get_settings().heartbeat_stall_threshold_seconds
-    )
+    return _utcnow() + dt.timedelta(seconds=get_settings().heartbeat_stall_threshold_seconds)
 
 
 def claim_job(tenant_id: str, job_id: str, *, total: int = 0) -> bool:

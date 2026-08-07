@@ -17,13 +17,17 @@ def _selection(hashes, base):
 
 
 def test_prefix_rule_prepends_whole_path():
-    r = resolve_operation("GET", "/address/search", ("h1",), False, [_prefix("/address", "/location")])
+    r = resolve_operation(
+        "GET", "/address/search", ("h1",), False, [_prefix("/address", "/location")]
+    )
     assert r.path == "/location/address/search"
     assert r.host is None and r.changed is True
 
 
 def test_selection_rule_matches_by_hash():
-    r = resolve_operation("GET", "/address/search", ("h1",), False, [_selection(["h1"], "/location")])
+    r = resolve_operation(
+        "GET", "/address/search", ("h1",), False, [_selection(["h1"], "/location")]
+    )
     assert r.path == "/location/address/search" and r.changed is True
 
 
@@ -41,18 +45,24 @@ def test_longest_prefix_wins():
 
 def test_segment_boundary_match_only():
     # '/address' must NOT match '/address-svc/...'
-    r = resolve_operation("GET", "/address-svc/x", ("h1",), False, [_prefix("/address", "/location")])
+    r = resolve_operation(
+        "GET", "/address-svc/x", ("h1",), False, [_prefix("/address", "/location")]
+    )
     assert r.path == "/address-svc/x" and r.changed is False
 
 
 def test_absolute_op_is_not_rebased():
     # has_host True => the op already carries a resolved host; never re-base it (gate B1).
-    r = resolve_operation("GET", "/location/address/search", ("h1",), True, [_prefix("/location", "/x")])
+    r = resolve_operation(
+        "GET", "/location/address/search", ("h1",), True, [_prefix("/location", "/x")]
+    )
     assert r.path == "/location/address/search" and r.changed is False
 
 
 def test_host_bearing_base_sets_host_and_scheme():
-    r = resolve_operation("GET", "/x", ("h1",), False, [_prefix("/x", "https://api.example.com/v3")])
+    r = resolve_operation(
+        "GET", "/x", ("h1",), False, [_prefix("/x", "https://api.example.com/v3")]
+    )
     assert r.path == "/v3/x"
     assert r.host == "api.example.com" and r.scheme == "https"
 

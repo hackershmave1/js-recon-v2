@@ -33,15 +33,15 @@ class QueryParam:
 
 @dataclass(frozen=True)
 class ReconstructedRequest:
-    operation: str          # METHOD + templated path (the grouping key)
+    operation: str  # METHOD + templated path (the grouping key)
     method: str
-    path: str               # templated path
+    path: str  # templated path
     hosts: tuple[str, ...]  # distinct occurrence hosts; may be empty (relative URL)
     query_params: tuple[QueryParam, ...]
     body_params: tuple[str, ...]
     content_type: str | None
     example_url: str | None  # a representative concrete occurrence.raw_url
-    probeable: bool          # False for websocket operations
+    probeable: bool  # False for websocket operations
     endpoint_hashes: tuple[str, ...]  # every contributing endpoint finding_hash
 
 
@@ -50,7 +50,9 @@ def _method_and_path(operation: str) -> tuple[str, str]:
     return method, path or "/"
 
 
-def _apply_rule(request: ReconstructedRequest, rules: list[base_url.BaseUrlRule]) -> ReconstructedRequest:
+def _apply_rule(
+    request: ReconstructedRequest, rules: list[base_url.BaseUrlRule]
+) -> ReconstructedRequest:
     """Apply the base-URL overlay to one assembled request (post param-join, gate
     B2). Candidate gate uses request.hosts (empty == host-less)."""
     if not request.probeable:
@@ -126,12 +128,16 @@ def build_requests(
     for operation in sorted(endpoints):
         endpoint_findings = endpoints[operation]
         method, path = _method_and_path(operation)
-        hosts = tuple(sorted({
-            occurrence.host
-            for finding in endpoint_findings
-            for occurrence in finding.occurrences
-            if occurrence.host
-        }))
+        hosts = tuple(
+            sorted(
+                {
+                    occurrence.host
+                    for finding in endpoint_findings
+                    for occurrence in finding.occurrences
+                    if occurrence.host
+                }
+            )
+        )
         # Select example_url deterministically: iterate findings in sorted-by-hash order
         example_url = next(
             (
@@ -157,10 +163,7 @@ def build_requests(
                 body_params.append(name)
 
         # Sort query_params and body_params by name for deterministic output
-        sorted_query_params = tuple(
-            query_params[name]
-            for name in sorted(query_params.keys())
-        )
+        sorted_query_params = tuple(query_params[name] for name in sorted(query_params.keys()))
         sorted_body_params = tuple(sorted(body_params))
 
         kinds = {f.attributes.get("kind") for f in endpoint_findings}
@@ -173,7 +176,9 @@ def build_requests(
                 hosts=hosts,
                 query_params=sorted_query_params,
                 body_params=sorted_body_params,
-                content_type="application/json" if (sorted_body_params and kinds <= _JSON_BODY_KINDS) else None,
+                content_type="application/json"
+                if (sorted_body_params and kinds <= _JSON_BODY_KINDS)
+                else None,
                 example_url=example_url,
                 probeable=method not in _WEBSOCKET_METHODS,
                 endpoint_hashes=tuple(sorted(f.finding_hash for f in endpoint_findings)),

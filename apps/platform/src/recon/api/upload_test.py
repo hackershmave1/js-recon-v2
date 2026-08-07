@@ -23,7 +23,9 @@ pytestmark = pytest.mark.integration
 
 _JS = b'const r = await fetch("/api/users/42", {method:"POST", body:JSON.stringify({name:"n"})});\n'
 
-_TERMINAL = {s.value for s in (RunState.DONE, RunState.PARTIAL, RunState.FAILED, RunState.CANCELLED)}
+_TERMINAL = {
+    s.value for s in (RunState.DONE, RunState.PARTIAL, RunState.FAILED, RunState.CANCELLED)
+}
 
 
 @pytest.fixture()

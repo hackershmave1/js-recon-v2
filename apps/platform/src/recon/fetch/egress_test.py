@@ -22,15 +22,22 @@ def _fake_getaddrinfo(ip: str):
 @pytest.mark.parametrize(
     "ip",
     [
-        "127.0.0.1", "::1", "::ffff:127.0.0.1",  # loopback (incl. IPv4-mapped)
-        "10.0.0.5", "172.16.0.1", "192.168.1.1",  # private
-        "169.254.169.254", "fd00:ec2::254",  # cloud metadata (link-local / ULA)
+        "127.0.0.1",
+        "::1",
+        "::ffff:127.0.0.1",  # loopback (incl. IPv4-mapped)
+        "10.0.0.5",
+        "172.16.0.1",
+        "192.168.1.1",  # private
+        "169.254.169.254",
+        "fd00:ec2::254",  # cloud metadata (link-local / ULA)
         "0.0.0.0",  # unspecified
-        "224.0.0.1", "ff02::1",  # multicast (IPv4 + IPv6) — report is_global=True
+        "224.0.0.1",
+        "ff02::1",  # multicast (IPv4 + IPv6) — report is_global=True
         "192.0.2.1",  # reserved (TEST-NET, is_reserved/is_private)
         "100.64.0.1",  # CGNAT (RFC 6598) — leaks past an enumerated deny-list
         "64:ff9b::7f00:1",  # NAT64 of 127.0.0.1 — is_global but reserved
-        "2002:a9fe:a9fe::", "2002:7f00:1::",  # 6to4 of 169.254.169.254 / 127.0.0.1 — is_global
+        "2002:a9fe:a9fe::",
+        "2002:7f00:1::",  # 6to4 of 169.254.169.254 / 127.0.0.1 — is_global
     ],
 )
 def test_is_public_ip_blocks_dangerous(ip):
@@ -40,7 +47,10 @@ def test_is_public_ip_blocks_dangerous(ip):
 @pytest.mark.parametrize(
     "ip",
     [
-        "8.8.8.8", "1.1.1.1", "93.184.216.34", "2606:4700:4700::1111",
+        "8.8.8.8",
+        "1.1.1.1",
+        "93.184.216.34",
+        "2606:4700:4700::1111",
         "2002:0808:0808::",  # 6to4 of 8.8.8.8 — routes to a public IPv4, so allowed
     ],
 )
@@ -87,10 +97,23 @@ def test_is_valid_scope_entry():
     for good in ["acme.io", "cdn.acme.io", "ACME.IO", "acme.io.", "a.b.c.example.com"]:
         assert egress.is_valid_scope_entry(good) is True, good
     for bad in [
-        "", "   ", "com", "io", "localhost", "internal",  # empty / single-label
-        "co.uk", "github.io", "s3.amazonaws.com",  # public suffixes
-        "10.0.0.1", "127.0.0.1",  # IP literals
-        "acme.io:8443", "https://acme.io", "acme.io/app", "a@b.com", "*.acme.io", "ac me.io",
+        "",
+        "   ",
+        "com",
+        "io",
+        "localhost",
+        "internal",  # empty / single-label
+        "co.uk",
+        "github.io",
+        "s3.amazonaws.com",  # public suffixes
+        "10.0.0.1",
+        "127.0.0.1",  # IP literals
+        "acme.io:8443",
+        "https://acme.io",
+        "acme.io/app",
+        "a@b.com",
+        "*.acme.io",
+        "ac me.io",
     ]:
         assert egress.is_valid_scope_entry(bad) is False, bad
 
@@ -99,9 +122,16 @@ def test_is_valid_scope_entry_rejects_control_chars_and_numeric_shortforms():
     # LDH allowlist, not a char-denylist: control chars, empty labels, and
     # dotted-numeric IP short-forms are rejected at create time (not silently kept).
     for bad in [
-        "127.1", "0x7f.0.0.1", "1.2.3.4",  # IPv4 literal / short forms
-        "acme..io", ".acme.io", "acme.io\x00", "ac\nme.io", "acme\t.io",  # empty label / control char
-        "-acme.io", "acme-.io",  # leading / trailing hyphen label
+        "127.1",
+        "0x7f.0.0.1",
+        "1.2.3.4",  # IPv4 literal / short forms
+        "acme..io",
+        ".acme.io",
+        "acme.io\x00",
+        "ac\nme.io",
+        "acme\t.io",  # empty label / control char
+        "-acme.io",
+        "acme-.io",  # leading / trailing hyphen label
     ]:
         assert egress.is_valid_scope_entry(bad) is False, repr(bad)
     assert egress.is_valid_scope_entry("a1.acme-corp.io") is True  # a normal host still passes
@@ -157,7 +187,7 @@ def test_validate_target_blocks_in_scope_resolving_to_private(monkeypatch):
     "exc",
     [
         socket.gaierror("Name or service not known"),
-        socket.timeout("timed out"),
+        TimeoutError("timed out"),
         UnicodeError("label empty or too long"),
     ],
     ids=["gaierror", "timeout", "unicode"],
@@ -223,11 +253,12 @@ def test_is_public_ip_allow_local_permits_loopback_and_private(ip):
 @pytest.mark.parametrize(
     "ip",
     [
-        "169.254.169.254",         # IPv4 cloud-metadata (link-local)
+        "169.254.169.254",  # IPv4 cloud-metadata (link-local)
         "::ffff:169.254.169.254",  # IPv4-mapped metadata — the unwrap must run first
-        "2002:a9fe:a9fe::",        # 6to4 of 169.254.169.254 — the unwrap must run first
-        "fe80::1",                 # IPv6 link-local
-        "224.0.0.1", "ff02::1",    # multicast
+        "2002:a9fe:a9fe::",  # 6to4 of 169.254.169.254 — the unwrap must run first
+        "fe80::1",  # IPv6 link-local
+        "224.0.0.1",
+        "ff02::1",  # multicast
     ],
 )
 def test_is_public_ip_allow_local_still_blocks_metadata_and_linklocal(ip):
@@ -264,9 +295,7 @@ def test_host_in_scope_allow_local_localhost():
 
 def test_validate_target_allow_local_reaches_localhost(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("127.0.0.1"))
-    target = egress.validate_target(
-        "http://localhost:4173/app.js", ["localhost"], allow_local=True
-    )
+    target = egress.validate_target("http://localhost:4173/app.js", ["localhost"], allow_local=True)
     assert target.host == "localhost" and target.ips == ("127.0.0.1",)
 
 

@@ -151,9 +151,7 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
         spec_status_by_hash = {
             row.finding_hash: row
             for row in session.scalars(
-                select(FindingSpecStatus).where(
-                    FindingSpecStatus.session_id == str(run.session_id)
-                )
+                select(FindingSpecStatus).where(FindingSpecStatus.session_id == str(run.session_id))
             ).all()
         }
         findings = session.scalars(
@@ -171,9 +169,7 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
         # attribution. One query for every asset the run owns serves both.
         asset_refs = {
             str(a.id): _AssetRef(input_ref=a.input_ref, url=a.url)
-            for a in session.scalars(
-                select(RunAsset).where(RunAsset.run_id == str(run_id))
-            ).all()
+            for a in session.scalars(select(RunAsset).where(RunAsset.run_id == str(run_id))).all()
         }
         # Design §6.4: a real (possibly all-zero) summary once a spec is attached
         # to the session at all; `None` distinguishes "never attached" from
@@ -421,7 +417,9 @@ def _triage_view(row: FindingTriage | None) -> TriageView | None:
     if row is None:
         return None
     return TriageView(
-        status=row.status, note=row.note, actor=row.actor,
+        status=row.status,
+        note=row.note,
+        actor=row.actor,
         updated_at=row.updated_at.isoformat(),
     )
 

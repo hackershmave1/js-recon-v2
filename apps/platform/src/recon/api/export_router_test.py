@@ -33,10 +33,17 @@ def _seed(tenant, session_id):
         session.flush()
         run_id = str(run.id)
         store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.ENDPOINT,
-            value="GET /location/address/search", path="input.js",
-            occurrence=store.Occurrence(host="acme.io", raw_url="https://acme.io/location/address/search"),
-            attributes={"method": "GET", "kind": "fetch"}, first_stage="analyzing",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value="GET /location/address/search",
+            path="input.js",
+            occurrence=store.Occurrence(
+                host="acme.io", raw_url="https://acme.io/location/address/search"
+            ),
+            attributes={"method": "GET", "kind": "fetch"},
+            first_stage="analyzing",
         )
         return run_id
 

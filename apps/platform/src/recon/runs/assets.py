@@ -43,9 +43,7 @@ def seed_pending(session: Session, *, tenant_id: str, run_id: str, urls: list[st
         return
     session.execute(
         pg_insert(models.RunAsset)
-        .values([
-            {"tenant_id": str(tenant_id), "run_id": str(run_id), "url": u} for u in urls
-        ])
+        .values([{"tenant_id": str(tenant_id), "run_id": str(run_id), "url": u} for u in urls])
         .on_conflict_do_nothing(index_elements=["run_id", "url"])
     )
 
@@ -59,25 +57,28 @@ def list_for_run(tenant_id: str, run_id: str) -> list[AssetRow]:
         ).all()
         return [
             AssetRow(
-                id=str(r.id), url=r.url, input_ref=r.input_ref,
-                fetch_status=r.fetch_status, analyze_status=r.analyze_status,
+                id=str(r.id),
+                url=r.url,
+                input_ref=r.input_ref,
+                fetch_status=r.fetch_status,
+                analyze_status=r.analyze_status,
                 source_map_ref=r.source_map_ref,
-                fetch_error=r.fetch_error, analyze_error=r.analyze_error,
+                fetch_error=r.fetch_error,
+                analyze_error=r.analyze_error,
             )
             for r in rows
         ]
 
 
 def _set(session: Session, asset_id: str, values: dict) -> None:
-    session.execute(
-        update(models.RunAsset).where(models.RunAsset.id == asset_id).values(**values)
-    )
+    session.execute(update(models.RunAsset).where(models.RunAsset.id == asset_id).values(**values))
 
 
 def set_fetch_ok(session: Session, asset_id: str, input_ref: str) -> None:
     _set(
-        session, asset_id,
-        {"input_ref": input_ref, "fetch_status": AssetStatus.OK.value, "fetch_error": None}
+        session,
+        asset_id,
+        {"input_ref": input_ref, "fetch_status": AssetStatus.OK.value, "fetch_error": None},
     )
 
 
@@ -90,8 +91,9 @@ def set_source_map_ref(session: Session, asset_id: str, source_map_ref: str) -> 
 
 def set_fetch_failed(session: Session, asset_id: str, error: str) -> None:
     _set(
-        session, asset_id,
-        {"fetch_status": AssetStatus.FAILED.value, "fetch_error": error[:_ERR_CAP]}
+        session,
+        asset_id,
+        {"fetch_status": AssetStatus.FAILED.value, "fetch_error": error[:_ERR_CAP]},
     )
 
 
@@ -101,6 +103,7 @@ def set_analyze_ok(session: Session, asset_id: str) -> None:
 
 def set_analyze_failed(session: Session, asset_id: str, error: str) -> None:
     _set(
-        session, asset_id,
-        {"analyze_status": AssetStatus.FAILED.value, "analyze_error": error[:_ERR_CAP]}
+        session,
+        asset_id,
+        {"analyze_status": AssetStatus.FAILED.value, "analyze_error": error[:_ERR_CAP]},
     )

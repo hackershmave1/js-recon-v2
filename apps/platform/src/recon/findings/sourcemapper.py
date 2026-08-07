@@ -125,7 +125,9 @@ def recover_sources(
     settings = get_settings()
     bin_path = bin_path or settings.sourcemapper_bin
     timeout_s = timeout_s if timeout_s is not None else settings.engine_timeout_seconds
-    cap = max_recovered_bytes if max_recovered_bytes is not None else settings.engine_max_output_bytes
+    cap = (
+        max_recovered_bytes if max_recovered_bytes is not None else settings.engine_max_output_bytes
+    )
 
     with tempfile.TemporaryDirectory(prefix="sm-") as workdir:
         map_path = os.path.join(workdir, "in.map")

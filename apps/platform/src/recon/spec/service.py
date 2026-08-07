@@ -209,7 +209,9 @@ def _classify_session(
         for (value,) in session.execute(
             select(models.Finding.value)
             .distinct()
-            .join(models.FindingOccurrence, models.FindingOccurrence.finding_id == models.Finding.id)
+            .join(
+                models.FindingOccurrence, models.FindingOccurrence.finding_id == models.Finding.id
+            )
             .join(models.Run, models.Run.id == models.Finding.run_id)
             .where(
                 models.Run.session_id == session_id,

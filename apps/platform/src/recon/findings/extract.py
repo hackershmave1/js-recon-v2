@@ -93,6 +93,7 @@ def extract(source: str | bytes, wrappers: Sequence[WrapperRule] = ()) -> Extrac
 
 # --- tree helpers ------------------------------------------------------------
 
+
 def _walk(node: Node):
     stack = [node]
     while stack:
@@ -159,6 +160,7 @@ def _object_pairs(node: Node | None) -> dict[str, Node]:
 # file — redeclared, shadowed by a parameter, or reassigned — is EXCLUDED
 # rather than resolved to a possibly-wrong base. Wired into `extract()` and
 # the sink handlers below by "URL resolution at the sink (Task 2)".
+
 
 @dataclass(frozen=True)
 class BaseEnv:
@@ -270,9 +272,12 @@ def _is_axios_create(node: Node) -> bool:
     if node.type != "call_expression":
         return False
     fn = node.child_by_field_name("function")
-    return fn is not None and fn.type == "member_expression" \
-        and _text(fn.child_by_field_name("object")) == "axios" \
+    return (
+        fn is not None
+        and fn.type == "member_expression"
+        and _text(fn.child_by_field_name("object")) == "axios"
         and _text(fn.child_by_field_name("property")) == "create"
+    )
 
 
 def _base_url_arg(create_call: Node) -> str | None:
@@ -283,6 +288,7 @@ def _base_url_arg(create_call: Node) -> str | None:
 
 
 # --- param extraction --------------------------------------------------------
+
 
 def _query_params(url: str) -> list[RawParam]:
     query = url.split("?", 1)[1] if "?" in url else ""
@@ -320,7 +326,11 @@ def _config_query_params(config: Node | None) -> list[RawParam]:
 
 
 def _endpoint(
-    kind: str, method: str, url: str, params: list[RawParam], call: Node,
+    kind: str,
+    method: str,
+    url: str,
+    params: list[RawParam],
+    call: Node,
     wrapper: str | None = None,
 ) -> RawEndpoint:
     row, col = call.start_point
@@ -416,7 +426,7 @@ def _fold_const_prefix(node: Node, env: BaseEnv) -> str | None:
     # remainder itself starts with `/` (a prefix stored with its own trailing
     # slash, e.g. `const API = '/v3/'`, joined against `${API}/pets`) — handle
     # that one case directly instead of routing through `_join_base`.
-    remainder = body[len(leading):]
+    remainder = body[len(leading) :]
     if remainder.startswith("/"):
         return prefix.rstrip("/") + remainder  # de-dupe only the ambiguous boundary
     return prefix + remainder  # pure template concatenation, no inserted slash
@@ -440,6 +450,7 @@ def _resolve_url(node: Node | None, env: BaseEnv, base: str) -> str | None:
 
 
 # --- sink handlers -----------------------------------------------------------
+
 
 def _handle_call(call: Node, result: Extraction, env: BaseEnv, callees: frozenset[str]) -> None:
     fn = call.child_by_field_name("function")
@@ -531,7 +542,11 @@ def _axios_call(call: Node, result: Extraction, env: BaseEnv, base: str = "") ->
 
 
 def _axios_member(
-    call: Node, prop: str, result: Extraction, env: BaseEnv, base: str = "",
+    call: Node,
+    prop: str,
+    result: Extraction,
+    env: BaseEnv,
+    base: str = "",
     wrapper: str | None = None,
 ) -> None:
     args = _args(call)
@@ -558,7 +573,11 @@ def _axios_member(
 
 
 def _axios_from_config(
-    config: Node, call: Node, result: Extraction, env: BaseEnv, base: str = "",
+    config: Node,
+    call: Node,
+    result: Extraction,
+    env: BaseEnv,
+    base: str = "",
     wrapper: str | None = None,
 ) -> None:
     pairs = _object_pairs(config)
@@ -584,7 +603,9 @@ def _jquery(call: Node, prop: str, result: Extraction) -> None:
         if url is None:
             result.unattributed += 1
             return
-        method = (_string_value(pairs.get("type")) or _string_value(pairs.get("method")) or "GET").upper()
+        method = (
+            _string_value(pairs.get("type")) or _string_value(pairs.get("method")) or "GET"
+        ).upper()
         # jQuery sends `data` as the query string for GET/HEAD, else as the body.
         location = "query" if method in ("GET", "HEAD") else "body"
         params = _query_params(url) + [
@@ -600,9 +621,7 @@ def _jquery(call: Node, prop: str, result: Extraction) -> None:
         if len(args) >= 2 and args[1].type == "object":
             location = "body" if prop == "post" else "query"  # $.get sends query
             params += [RawParam(name, location) for name in _object_pairs(args[1])]
-        result.endpoints.append(
-            _endpoint("jquery", _JQUERY_METHODS[prop], url, params, call)
-        )
+        result.endpoints.append(_endpoint("jquery", _JQUERY_METHODS[prop], url, params, call))
 
 
 def _handle_new(new: Node, result: Extraction) -> None:

@@ -110,6 +110,7 @@ def test_line_number_is_one_based():
 
 # --- regressions from the code review ----------------------------------------
 
+
 def test_axios_params_config_is_query_not_body():  # review HIGH-1
     ep = _only('axios({url:"/s", method:"get", params:{a:1}, data:{b:2}})')
     locations = {(p.name, p.location) for p in ep.params}
@@ -148,6 +149,7 @@ def test_json_stringify_body_is_mined():  # review MEDIUM-3
 # Pure pre-pass: records only statically-certain, unshadowed base-URL bindings.
 # Not yet wired into `extract()` — that's Task 2.
 
+
 def _env(src: str):
     return collect_base_env(_PARSER.parse(src.encode()).root_node, src.encode())
 
@@ -170,8 +172,7 @@ def test_collect_base_env_unknown_base_is_none_not_dropped():
 
 def test_collect_base_env_scope_collision_poisons_name():
     env = _env(
-        "const loc = axios.create({ baseURL: '/a' }); "
-        "items.forEach((loc) => loc.get('/x'));"
+        "const loc = axios.create({ baseURL: '/a' }); items.forEach((loc) => loc.get('/x'));"
     )
     assert "loc" not in env.instances  # param `loc` shadows -> unresolvable
 
@@ -195,6 +196,7 @@ def test_collect_base_env_function_declaration_poisons_name():
 # escaped poisoning — `collect_base_env` would then guess a base for it,
 # violating the "never guess a base" invariant.
 
+
 def test_collect_base_env_destructured_param_poisons_name():
     # `{ loc }` is a destructured parameter — a shorthand `loc` inside it
     # shadows the outer `loc` axios instance just as a bare param would.
@@ -208,27 +210,20 @@ def test_collect_base_env_destructured_param_poisons_name():
 def test_collect_base_env_destructured_declaration_poisons_name():
     # `const { loc } = require(...)` redeclares `loc` via destructuring —
     # must poison exactly like `const loc = require(...)` would.
-    env = _env(
-        "const loc = axios.create({ baseURL: '/a' }); "
-        "const { loc } = require('./x');"
-    )
+    env = _env("const loc = axios.create({ baseURL: '/a' }); const { loc } = require('./x');")
     assert "loc" not in env.instances
 
 
 def test_collect_base_env_default_param_poisons_name():
     # `function f(loc = 1)` binds `loc` via an `assignment_pattern` — the
     # default value itself (`1`) must not be mistaken for a binding.
-    env = _env(
-        "const loc = axios.create({ baseURL: '/a' }); function f(loc = 1) {}"
-    )
+    env = _env("const loc = axios.create({ baseURL: '/a' }); function f(loc = 1) {}")
     assert "loc" not in env.instances
 
 
 def test_collect_base_env_rest_param_poisons_name():
     # `function f(...loc)` binds `loc` via a `rest_pattern`.
-    env = _env(
-        "const loc = axios.create({ baseURL: '/a' }); function f(...loc) {}"
-    )
+    env = _env("const loc = axios.create({ baseURL: '/a' }); function f(...loc) {}")
     assert "loc" not in env.instances
 
 
@@ -238,18 +233,21 @@ def test_collect_base_env_rest_param_poisons_name():
 # paths; an unknown-base instance is attributed (relative), never dropped;
 # `.open` on any receiver still routes to XHR, not an axios join.
 
+
 def _urls(src: str):
     return [(e.method, e.url) for e in extract(src).endpoints]
 
 
 def test_axios_create_instance_call_joins_base():
     assert ("POST", "/location/address/search") in _urls(
-        "const loc = axios.create({ baseURL: '/location' }); loc.post('/address/search', b);")
+        "const loc = axios.create({ baseURL: '/location' }); loc.post('/address/search', b);"
+    )
 
 
 def test_axios_defaults_base_joins_bare_call():
     assert ("GET", "https://h/api/pets") in _urls(
-        "axios.defaults.baseURL = 'https://h/api'; axios.get('/pets');")
+        "axios.defaults.baseURL = 'https://h/api'; axios.get('/pets');"
+    )
 
 
 def test_const_prefix_template_folds():
@@ -259,18 +257,21 @@ def test_const_prefix_template_folds():
 def test_unknown_base_instance_attributed_relative_not_dropped():
     # recognized instance, base unknown -> endpoint present with the relative path
     assert ("GET", "/x") in _urls(
-        "const c = w.c; const a = axios.create({ baseURL: c }); a.get('/x');")
+        "const c = w.c; const a = axios.create({ baseURL: c }); a.get('/x');"
+    )
 
 
 def test_absolute_url_ignores_base():
     assert ("GET", "https://other/z") in _urls(
-        "const loc = axios.create({ baseURL: '/location' }); loc.get('https://other/z');")
+        "const loc = axios.create({ baseURL: '/location' }); loc.get('https://other/z');"
+    )
 
 
 def test_open_on_instance_still_routes_to_xhr():
     # `.open(METHOD, url)` on any receiver keeps the XHR shape, not axios-join
     assert ("GET", "/raw") in _urls(
-        "const loc = axios.create({ baseURL: '/location' }); loc.open('GET', '/raw');")
+        "const loc = axios.create({ baseURL: '/location' }); loc.open('GET', '/raw');"
+    )
 
 
 # --- fix round 1: Task-2 review findings on the URL-resolution helpers -------
@@ -281,6 +282,7 @@ def test_open_on_instance_still_routes_to_xhr():
 #    substring test, so a *relative* path that merely embeds a URL later on
 #    (e.g. a redirect query param) was wrongly treated as absolute and the
 #    base was silently dropped instead of joined.
+
 
 def test_const_prefix_trailing_slash_does_not_double_up():  # review Important
     assert ("GET", "/v3/pets") in _urls("const API = '/v3/'; fetch(`${API}/pets`);")
@@ -307,6 +309,7 @@ def test_const_prefix_fold_generalizes_to_axios_get():  # generalization coverag
 # literal, where JS just concatenates strings: `'/v' + '2/pets'` is `/v2/pets`,
 # not `/v/2/pets`. `_join_base` remains correct and untouched for its actual
 # base/instance-join callers; only `_fold_const_prefix`'s use of it was wrong.
+
 
 def test_const_prefix_folds_as_plain_concatenation():  # RED against round-1 code
     # JS evaluates `` `${API}2/pets` `` with API='/v' as `'/v' + '2/pets'`
@@ -338,7 +341,10 @@ def test_wrapper_member_call_is_recognized():
     eps = _wrapped("const api = makeClient(); api.get('/users');", ["api"])
     assert len(eps) == 1
     assert (eps[0].kind, eps[0].method, eps[0].url, eps[0].wrapper) == (
-        "axios", "GET", "/users", "api",
+        "axios",
+        "GET",
+        "/users",
+        "api",
     )
 
 
@@ -357,7 +363,9 @@ def test_dotted_receiver_wrapper_is_recognized():
         ["this.httpClient"],
     )
     assert (eps[0].method, eps[0].url, eps[0].wrapper) == (
-        "GET", "/api/v2/users/${e}", "this.httpClient",
+        "GET",
+        "/api/v2/users/${e}",
+        "this.httpClient",
     )
 
 
@@ -382,9 +390,7 @@ def test_native_axios_collision_takes_native_path_not_wrapper():
 def test_axios_create_instance_collision_keeps_base_not_wrapper():
     # An axios.create instance var named like the wrapper keeps its real base
     # (instance branch precedes the wrapper branch); tag stays None, base applies.
-    eps = _wrapped(
-        "const api = axios.create({baseURL:'/b'}); api.get('/x');", ["api"]
-    )
+    eps = _wrapped("const api = axios.create({baseURL:'/b'}); api.get('/x');", ["api"])
     assert ("GET", "/b/x", None) in [(e.method, e.url, e.wrapper) for e in eps]
 
 

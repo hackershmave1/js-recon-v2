@@ -25,9 +25,9 @@ from recon.findings import normalize
 # Denial code -> HTTP status. The taxonomy lives with the service that produces it;
 # the router (recon.api.probe_router) maps the code to a response.
 DENIAL_STATUS: dict[str, int] = {
-    "no_offsets": 422,   # the secret has no byte location — un-revealable (rare)
+    "no_offsets": 422,  # the secret has no byte location — un-revealable (rare)
     "source_gone": 410,  # the source blob is absent (never set, or purged)
-    "integrity": 409,    # the slice no longer hashes to the finding identity
+    "integrity": 409,  # the slice no longer hashes to the finding identity
 }
 
 
@@ -73,13 +73,28 @@ def reveal_secret(
         # botocore BotoCoreError) is still a reveal ATTEMPT and must be audited
         # (REQ-S3). Record a value-free denial, then re-raise so the API still
         # surfaces the 500 — we do not mask an infra fault as a normal outcome.
-        _audit(tenant_id, run_id, finding_hash, target, actor, reason,
-               event_type="secret.reveal_denied", denial="error")
+        _audit(
+            tenant_id,
+            run_id,
+            finding_hash,
+            target,
+            actor,
+            reason,
+            event_type="secret.reveal_denied",
+            denial="error",
+        )
         raise
 
-    _audit(tenant_id, run_id, finding_hash, target, actor, reason,
-           event_type=("secret.revealed" if outcome.revealed else "secret.reveal_denied"),
-           denial=outcome.denial)
+    _audit(
+        tenant_id,
+        run_id,
+        finding_hash,
+        target,
+        actor,
+        reason,
+        event_type=("secret.revealed" if outcome.revealed else "secret.reveal_denied"),
+        denial=outcome.denial,
+    )
     return outcome
 
 
@@ -167,10 +182,7 @@ def _reveal_candidates(occurrences):
     All occurrences of one finding_hash decode to the same stripped token, so any
     one of them is a correct reveal source; which one actually HAS a readable
     blob is a separate question handled by ``_first_resolvable_occurrence``."""
-    candidates = [
-        o for o in occurrences
-        if o.offset_start is not None and o.offset_end is not None
-    ]
+    candidates = [o for o in occurrences if o.offset_start is not None and o.offset_end is not None]
     return sorted(
         candidates,
         key=lambda o: (o.source_path or "", o.offset_start or 0, o.occurrence_hash),
@@ -222,7 +234,7 @@ def _derive(target: _Target) -> RevealOutcome:
     # blob with utf-8/replace before byte_offset, so a stray non-UTF-8 byte would
     # shift raw-byte offsets. Re-encoding the replaced string reproduces that space.
     data = raw.decode("utf-8", "replace").encode("utf-8")
-    sliced = data[target.offset_start:target.offset_end].decode("utf-8", "replace")
+    sliced = data[target.offset_start : target.offset_end].decode("utf-8", "replace")
     if normalize.normalize_secret_value(sliced, target.rule) != target.value:
         return RevealOutcome(revealed=False, denial="integrity")
     return RevealOutcome(revealed=True, value=sliced)

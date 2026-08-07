@@ -15,9 +15,7 @@ _TOKEN = "sk_" + "live_" + "SECRETVALUE00"
 
 def _run(tenant, session_id, *, input_ref):
     with tenant_session(tenant) as session:
-        run = models.Run(
-            tenant_id=tenant, session_id=session_id, state="done", input_ref=input_ref
-        )
+        run = models.Run(tenant_id=tenant, session_id=session_id, state="done", input_ref=input_ref)
         session.add(run)
         session.flush()
         return str(run.id)
@@ -32,10 +30,16 @@ def _add_secret(tenant, run_id, *, offsets, run_asset_id=None):
     value = normalize.normalize_secret_value(_TOKEN, "stripe")
     with tenant_session(tenant) as session:
         result = store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.SECRET,
-            value=value, path="input.js",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.SECRET,
+            value=value,
+            path="input.js",
             occurrence=store.Occurrence(
-                source_path="input.js", line=1, col=0,
+                source_path="input.js",
+                line=1,
+                col=0,
                 offset_start=offsets[0] if offsets else None,
                 offset_end=offsets[1] if offsets else None,
                 evidence=_TOKEN,  # a legacy-style plaintext row: must be redacted at read
@@ -49,9 +53,12 @@ def _add_secret(tenant, run_id, *, offsets, run_asset_id=None):
 
 def test_secret_evidence_redacted_and_revealable_true():
     tenant = sessions_service.create_tenant("rd-1")
-    _t, session_id = tenant, sessions_service.create_session(
-        tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
-    ).id
+    _t, session_id = (
+        tenant,
+        sessions_service.create_session(
+            tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
+        ).id,
+    )
     run_id = _run(tenant, session_id, input_ref=f"{tenant}/x/input/deadbeef")
     secret_hash = _add_secret(tenant, run_id, offsets=(10, 30))
 
@@ -95,9 +102,7 @@ def test_crawl_run_secret_revealable_from_its_own_asset_blob():
         )
     asset_fetched = assets.list_for_run(tenant, run_fetched)[0]
     with tenant_session(tenant) as session:
-        assets.set_fetch_ok(
-            session, asset_fetched.id, f"{tenant}/{run_fetched}/input/deadbeef"
-        )
+        assets.set_fetch_ok(session, asset_fetched.id, f"{tenant}/{run_fetched}/input/deadbeef")
     h1 = _add_secret(tenant, run_fetched, offsets=(10, 30), run_asset_id=asset_fetched.id)
     r1 = queries.list_findings(tenant, run_fetched)
     assert next(f for f in r1.findings if f.finding_hash == h1).revealable is True
@@ -121,11 +126,17 @@ def test_endpoint_evidence_is_preserved():
     run_id = _run(tenant, session_id, input_ref=None)
     with tenant_session(tenant) as session:
         store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.ENDPOINT,
-            value="GET /orders", path="input.js",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value="GET /orders",
+            path="input.js",
             occurrence=store.Occurrence(
-                host="api.acme.io", raw_url="/orders",
-                evidence='fetch("/orders")', engine="vespasian",
+                host="api.acme.io",
+                raw_url="/orders",
+                evidence='fetch("/orders")',
+                engine="vespasian",
             ),
             attributes={"method": "GET", "kind": "fetch"},
         )
@@ -170,7 +181,10 @@ def test_occurrence_asset_url_for_crawl_run_and_none_for_legacy():
 def _record_coverage(tenant, run_id, **payload):
     with tenant_session(tenant) as session:
         record_event(
-            session, tenant_id=tenant, run_id=run_id, event_type="analyze.coverage",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            event_type="analyze.coverage",
             payload=payload,
         )
 
@@ -188,17 +202,31 @@ def test_multi_asset_coverage_sums_across_assets_not_last_only():
     run_id = _run(tenant, session_id, input_ref=None)
     with tenant_session(tenant) as session:
         assets.seed_pending(
-            session, tenant_id=tenant, run_id=run_id,
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
             urls=["https://acme.io/a.js", "https://acme.io/b.js"],
         )
     _record_coverage(
-        tenant, run_id, attributed=5, unattributed=0, secrets=2, secrets_engine="ok",
-        sources_recovered=0, source_map="none",
+        tenant,
+        run_id,
+        attributed=5,
+        unattributed=0,
+        secrets=2,
+        secrets_engine="ok",
+        sources_recovered=0,
+        source_map="none",
         files=[{"path": "input.js", "attributed": 5, "unattributed": 0}],
     )
     _record_coverage(
-        tenant, run_id, attributed=3, unattributed=0, secrets=0, secrets_engine="ok",
-        sources_recovered=0, source_map="none",
+        tenant,
+        run_id,
+        attributed=3,
+        unattributed=0,
+        secrets=0,
+        secrets_engine="ok",
+        sources_recovered=0,
+        source_map="none",
         files=[{"path": "input.js", "attributed": 3, "unattributed": 0}],
     )
 
@@ -218,12 +246,26 @@ def test_legacy_single_asset_coverage_still_latest_event_wins():
     ).id
     run_id = _run(tenant, session_id, input_ref=f"{tenant}/x/input/deadbeef")
     _record_coverage(
-        tenant, run_id, attributed=1, unattributed=0, secrets=9, secrets_engine="ok",
-        sources_recovered=0, source_map="none", files=[],
+        tenant,
+        run_id,
+        attributed=1,
+        unattributed=0,
+        secrets=9,
+        secrets_engine="ok",
+        sources_recovered=0,
+        source_map="none",
+        files=[],
     )
     _record_coverage(
-        tenant, run_id, attributed=4, unattributed=1, secrets=0, secrets_engine="ok",
-        sources_recovered=0, source_map="none", files=[],
+        tenant,
+        run_id,
+        attributed=4,
+        unattributed=1,
+        secrets=0,
+        secrets_engine="ok",
+        sources_recovered=0,
+        source_map="none",
+        files=[],
     )
 
     result = queries.list_findings(tenant, run_id)

@@ -18,14 +18,24 @@ def test_list_rules_for_run_returns_typed_rules(authorized_session):
     tenant, session_id = authorized_session
     with tenant_session(tenant) as session:
         run_id = _add_run(session, tenant, session_id)
-        session.add(models.SessionBaseUrl(
-            tenant_id=tenant, session_id=session_id, kind="prefix",
-            path_prefix="/address", base_url="/location",
-        ))
-        session.add(models.SessionBaseUrl(
-            tenant_id=tenant, session_id=session_id, kind="selection",
-            finding_hashes=["abc"], base_url="https://api.example.com",
-        ))
+        session.add(
+            models.SessionBaseUrl(
+                tenant_id=tenant,
+                session_id=session_id,
+                kind="prefix",
+                path_prefix="/address",
+                base_url="/location",
+            )
+        )
+        session.add(
+            models.SessionBaseUrl(
+                tenant_id=tenant,
+                session_id=session_id,
+                kind="selection",
+                finding_hashes=["abc"],
+                base_url="https://api.example.com",
+            )
+        )
 
     rules = queries.list_base_url_rules(tenant, run_id)
     kinds = {r.kind for r in rules}
@@ -48,14 +58,24 @@ def test_overlapping_selection_rules_load_most_recent_first(authorized_session):
     tenant, session_id = authorized_session
     with tenant_session(tenant) as session:
         run_id = _add_run(session, tenant, session_id)
-        session.add(models.SessionBaseUrl(
-            tenant_id=tenant, session_id=session_id, kind="selection",
-            finding_hashes=["h"], base_url="/old",
-        ))
+        session.add(
+            models.SessionBaseUrl(
+                tenant_id=tenant,
+                session_id=session_id,
+                kind="selection",
+                finding_hashes=["h"],
+                base_url="/old",
+            )
+        )
     with tenant_session(tenant) as session:
-        session.add(models.SessionBaseUrl(
-            tenant_id=tenant, session_id=session_id, kind="selection",
-            finding_hashes=["h"], base_url="/new",
-        ))
+        session.add(
+            models.SessionBaseUrl(
+                tenant_id=tenant,
+                session_id=session_id,
+                kind="selection",
+                finding_hashes=["h"],
+                base_url="/new",
+            )
+        )
     selections = [r for r in queries.list_base_url_rules(tenant, run_id) if r.kind == "selection"]
     assert [r.base_url for r in selections] == ["/new", "/old"]  # most-recent first

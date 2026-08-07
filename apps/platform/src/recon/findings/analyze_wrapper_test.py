@@ -25,7 +25,9 @@ def test_future_run_analyze_recognizes_taught_wrapper(redis, authorized_session)
     _teach(tenant, session_id, "api")  # config exists BEFORE the run is analyzed
 
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
-    key = storage.put_blob(tenant, view.id, "input", b"const api = makeClient(); api.get('/future');")
+    key = storage.put_blob(
+        tenant, view.id, "input", b"const api = makeClient(); api.get('/future');"
+    )
     with tenant_session(tenant) as session:
         session.execute(update(models.Run).where(models.Run.id == view.id).values(input_ref=key))
 
@@ -33,9 +35,11 @@ def test_future_run_analyze_recognizes_taught_wrapper(redis, authorized_session)
 
     with tenant_session(tenant) as session:
         found = {
-            f.value: f for f in session.execute(
+            f.value: f
+            for f in session.execute(
                 select(models.Finding).where(
-                    models.Finding.run_id == view.id, models.Finding.type == "endpoint",
+                    models.Finding.run_id == view.id,
+                    models.Finding.type == "endpoint",
                 )
             ).scalars()
         }

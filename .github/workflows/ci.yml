@@ -32,8 +32,10 @@ jobs:
       # flip CI red/green with no code change.
       - name: Install (locked + dev extras + the Kingfisher wheel)
         run: uv sync --frozen --extra dev --python 3.11
-      - name: Lint (ruff — pyflakes + import sort)
-        run: uv run ruff check src
+      - name: Lint (ruff check) + format check
+        run: |
+          uv run ruff check src
+          uv run ruff format --check src
       - name: Unit + engine contract tests (no infra) + coverage floor
         env:
           RECON_REQUIRE_ENGINES: "1"

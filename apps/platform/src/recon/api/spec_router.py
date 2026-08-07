@@ -46,9 +46,7 @@ async def attach_spec(
         # loop instead, stalling every other tenant's request for the
         # duration -- run_in_threadpool restores the same off-loop guarantee
         # sync routes get automatically.
-        summary = await run_in_threadpool(
-            service.attach_and_classify, tenant_id, run_id, raw_spec
-        )
+        summary = await run_in_threadpool(service.attach_and_classify, tenant_id, run_id, raw_spec)
     except SpecError as exc:
         raise HTTPException(status_code=422, detail=f"invalid spec: {exc}") from exc
     if summary is None:

@@ -16,17 +16,17 @@ from urllib.parse import urlsplit
 
 @dataclass(frozen=True)
 class BaseUrlRule:
-    kind: str                              # "prefix" | "selection"
-    base_url: str                          # 'https://api.example.com/v3' or '/location'
-    path_prefix: str | None = None         # kind == "prefix"
-    finding_hashes: tuple[str, ...] = ()   # kind == "selection"
+    kind: str  # "prefix" | "selection"
+    base_url: str  # 'https://api.example.com/v3' or '/location'
+    path_prefix: str | None = None  # kind == "prefix"
+    finding_hashes: tuple[str, ...] = ()  # kind == "selection"
 
 
 @dataclass(frozen=True)
 class ResolvedOp:
     path: str
-    host: str | None      # netloc (host[:port]) if base_url carried one, else None
-    scheme: str | None    # scheme if base_url carried one, else None
+    host: str | None  # netloc (host[:port]) if base_url carried one, else None
+    scheme: str | None  # scheme if base_url carried one, else None
     changed: bool
 
 
@@ -73,7 +73,9 @@ def _split_base(base_url: str) -> tuple[str | None, str | None, str]:
     return None, None, base_url.rstrip("/")
 
 
-def _match(path: str, endpoint_hashes: tuple[str, ...], rules: list[BaseUrlRule]) -> BaseUrlRule | None:
+def _match(
+    path: str, endpoint_hashes: tuple[str, ...], rules: list[BaseUrlRule]
+) -> BaseUrlRule | None:
     """At most one rule applies: a selection rule (explicit) beats every prefix
     rule; among prefix rules the longest (most segments) matching prefix wins."""
     hashset = set(endpoint_hashes)
@@ -82,9 +84,15 @@ def _match(path: str, endpoint_hashes: tuple[str, ...], rules: list[BaseUrlRule]
             return rule
     best: BaseUrlRule | None = None
     for rule in rules:
-        if rule.kind == "prefix" and rule.path_prefix and _is_segment_prefix(rule.path_prefix, path):
-            if best is None or len(_segments(rule.path_prefix)) > len(_segments(best.path_prefix or "")):
-                best = rule
+        if (
+            rule.kind == "prefix"
+            and rule.path_prefix
+            and _is_segment_prefix(rule.path_prefix, path)
+        ) and (
+            best is None
+            or len(_segments(rule.path_prefix)) > len(_segments(best.path_prefix or ""))
+        ):
+            best = rule
     return best
 
 

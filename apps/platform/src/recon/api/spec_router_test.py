@@ -11,7 +11,11 @@ from recon.sessions import service as sessions_service
 pytestmark = pytest.mark.integration
 
 _SUMMARY_KEYS = {
-    "documented", "shadow", "unresolved", "suffix_verify", "base_url_incompleteness_ratio",
+    "documented",
+    "shadow",
+    "unresolved",
+    "suffix_verify",
+    "base_url_incompleteness_ratio",
 }
 
 # A minimal, schema-valid OpenAPI 3.0 doc documenting exactly one operation --
@@ -39,10 +43,15 @@ def _seed(tenant, session_id):
         session.flush()
         run_id = str(run.id)
         store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.ENDPOINT,
-            value="GET /location/address/search", path="input.js",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value="GET /location/address/search",
+            path="input.js",
             occurrence=store.Occurrence(host="acme.io", raw_url="/location/address/search"),
-            attributes={"method": "GET", "kind": "fetch"}, first_stage="analyzing",
+            attributes={"method": "GET", "kind": "fetch"},
+            first_stage="analyzing",
         )
         return run_id
 
@@ -56,16 +65,26 @@ def _seed_documented_and_shadow(tenant, session_id):
         session.flush()
         run_id = str(run.id)
         documented = store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.ENDPOINT,
-            value="GET /location/address/search", path="input.js",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value="GET /location/address/search",
+            path="input.js",
             occurrence=store.Occurrence(host="acme.io", raw_url="/location/address/search"),
-            attributes={"method": "GET", "kind": "fetch"}, first_stage="analyzing",
+            attributes={"method": "GET", "kind": "fetch"},
+            first_stage="analyzing",
         )
         shadow = store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.ENDPOINT,
-            value="POST /admin/wipe", path="input.js",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value="POST /admin/wipe",
+            path="input.js",
             occurrence=store.Occurrence(host="acme.io", raw_url="/admin/wipe"),
-            attributes={"method": "POST", "kind": "fetch"}, first_stage="analyzing",
+            attributes={"method": "POST", "kind": "fetch"},
+            first_stage="analyzing",
         )
         return run_id, documented.finding_hash, shadow.finding_hash
 

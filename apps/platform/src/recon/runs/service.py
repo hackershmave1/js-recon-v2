@@ -47,7 +47,7 @@ class RunView:
 
 
 def _utcnow() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 def _snapshot(run: Run) -> RunView:
@@ -99,14 +99,10 @@ def _apply_transition(
 
     # Guarded update: only transition if still in the state we read (REQ-A2).
     result = session.execute(
-        update(Run)
-        .where(Run.id == run.id, Run.state == frm.value)
-        .values(**values)
+        update(Run).where(Run.id == run.id, Run.state == frm.value).values(**values)
     )
     if result.rowcount != 1:
-        raise TransitionConflict(
-            f"run {run.id} was not in expected state {frm.value}"
-        )
+        raise TransitionConflict(f"run {run.id} was not in expected state {frm.value}")
 
     payload: dict[str, Any] = {"from": frm.value, "to": to_state.value}
     if event_payload_extra:
@@ -195,9 +191,7 @@ def request_pause(redis: Redis, *, tenant_id: str, run_id: str) -> RunView:
             raise RunNotFound(run_id)
         if sm.is_terminal(RunState(run.state)):
             raise TransitionConflict("cannot pause a terminal run")
-        session.execute(
-            update(Run).where(Run.id == run.id).values(pause_requested=True)
-        )
+        session.execute(update(Run).where(Run.id == run.id).values(pause_requested=True))
         session.refresh(run)
         events.append(
             record_event(
@@ -209,9 +203,7 @@ def request_pause(redis: Redis, *, tenant_id: str, run_id: str) -> RunView:
             )
         )
         if RunState(run.state) == RunState.QUEUED:
-            events.append(
-                _apply_transition(session, run, RunState.PAUSED, tenant_id=tenant_id)
-            )
+            events.append(_apply_transition(session, run, RunState.PAUSED, tenant_id=tenant_id))
         snapshot = _snapshot(run)
     for event in events:
         publish(redis, event)
@@ -228,9 +220,7 @@ def request_cancel(redis: Redis, *, tenant_id: str, run_id: str) -> RunView:
             raise RunNotFound(run_id)
         if sm.is_terminal(RunState(run.state)):
             return _snapshot(run)
-        session.execute(
-            update(Run).where(Run.id == run.id).values(cancel_requested=True)
-        )
+        session.execute(update(Run).where(Run.id == run.id).values(cancel_requested=True))
         session.refresh(run)
         events.append(
             record_event(
@@ -242,9 +232,7 @@ def request_cancel(redis: Redis, *, tenant_id: str, run_id: str) -> RunView:
             )
         )
         if RunState(run.state) in (RunState.QUEUED, RunState.PAUSED):
-            events.append(
-                _apply_transition(session, run, RunState.CANCELLED, tenant_id=tenant_id)
-            )
+            events.append(_apply_transition(session, run, RunState.CANCELLED, tenant_id=tenant_id))
         snapshot = _snapshot(run)
     for event in events:
         publish(redis, event)
@@ -261,9 +249,7 @@ def resume(redis: Redis, *, tenant_id: str, run_id: str) -> tuple[RunView, RunSt
         if RunState(run.state) != RunState.PAUSED:
             raise TransitionConflict("only a paused run can be resumed")
         target_stage = (
-            RunStage(run.resumed_from_stage)
-            if run.resumed_from_stage
-            else RunStage.DISCOVERING
+            RunStage(run.resumed_from_stage) if run.resumed_from_stage else RunStage.DISCOVERING
         )
         event = _apply_transition(
             session,

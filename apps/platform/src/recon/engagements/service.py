@@ -55,9 +55,7 @@ def create_engagement(
 
 def list_engagements(tenant_id: str) -> list[EngagementView]:
     with tenant_session(tenant_id) as session:
-        rows = session.scalars(
-            select(Engagement).order_by(Engagement.created_at.desc())
-        ).all()
+        rows = session.scalars(select(Engagement).order_by(Engagement.created_at.desc())).all()
         return [_view(row) for row in rows]
 
 

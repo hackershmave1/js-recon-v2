@@ -15,7 +15,9 @@ def redis():
 
 def test_publish_then_replay_from_start(redis):
     stream.publish(redis, "r1", pg_id=1, event_type="run.created", payload={"a": 1}, maxlen=1000)
-    stream.publish(redis, "r1", pg_id=2, event_type="run.transition", payload={"to": "fetching"}, maxlen=1000)
+    stream.publish(
+        redis, "r1", pg_id=2, event_type="run.transition", payload={"to": "fetching"}, maxlen=1000
+    )
     events = stream.replay(redis, "r1", last_id=None)
     assert [e["type"] for e in events] == ["run.created", "run.transition"]
     assert events[0]["payload"] == {"a": 1}

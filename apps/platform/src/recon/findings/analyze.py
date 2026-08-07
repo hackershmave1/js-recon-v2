@@ -146,7 +146,11 @@ def _session_wrappers(tenant_id: str, run_id: str) -> list[WrapperRule]:
 
 
 def _analyze_assets(
-    redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None,
+    redis: Redis,
+    *,
+    tenant_id: str,
+    run_id: str,
+    job_id: str | None,
     rows: list[run_assets.AssetRow],
     wrappers: Sequence[WrapperRule] = (),
 ) -> Coverage:
@@ -246,7 +250,9 @@ def _analyze_assets(
             # propagates instead, straight to the worker's job-level retry.
             publish(redis, coverage_event)
             log.info(
-                "analyze.asset_done", run_id=run_id, url=asset.url,
+                "analyze.asset_done",
+                run_id=run_id,
+                url=asset.url,
                 findings=coverage.findings_written,
             )
             agg = _merge_coverage(agg, coverage)
@@ -306,16 +312,26 @@ def _extract_endpoints(
         bucket[1] += extraction.unattributed
         for endpoint in extraction.endpoints:
             written += _record_endpoint(
-                session, tenant_id, run_id, path, source_name, endpoint,
-                run_asset_id=run_asset_id, asset_url=asset_url,
+                session,
+                tenant_id,
+                run_id,
+                path,
+                source_name,
+                endpoint,
+                run_asset_id=run_asset_id,
+                asset_url=asset_url,
             )
     files = tuple(
         FileCoverage(path=path, attributed=counts[0], unattributed=counts[1])
         for path, counts in sorted(per_file.items())
     )
     return _EndpointExtraction(
-        written=written, attributed=attributed, unattributed=unattributed,
-        sources_recovered=sources_recovered, source_map=source_map_status, files=files,
+        written=written,
+        attributed=attributed,
+        unattributed=unattributed,
+        sources_recovered=sources_recovered,
+        source_map=source_map_status,
+        files=files,
     )
 
 
@@ -351,9 +367,14 @@ def _analyze_blob(
     scan = kingfisher.scan(raw)
 
     endpoints = _extract_endpoints(
-        session, tenant_id=tenant_id, run_id=run_id, source=source,
-        source_map_ref=source_map_ref, source_map_origin=source_map_origin,
-        run_asset_id=run_asset_id, asset_url=asset_url,
+        session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        source=source,
+        source_map_ref=source_map_ref,
+        source_map_origin=source_map_origin,
+        run_asset_id=run_asset_id,
+        asset_url=asset_url,
         wrappers=wrappers,
     )
     written = endpoints.written
@@ -367,8 +388,15 @@ def _analyze_blob(
     secret_cursors: dict[tuple[str, str], int] = {}
     for secret in scan.secrets:
         written += _record_secret(
-            session, tenant_id, run_id, secret_path, source, secret, secret_cursors,
-            run_asset_id=run_asset_id, asset_url=asset_url,
+            session,
+            tenant_id,
+            run_id,
+            secret_path,
+            source,
+            secret,
+            secret_cursors,
+            run_asset_id=run_asset_id,
+            asset_url=asset_url,
         )
     coverage_event = record_event(
         session,
@@ -389,9 +417,13 @@ def _analyze_blob(
         },
     )
     coverage = Coverage(
-        endpoints.attributed, endpoints.unattributed, written,
-        secrets=len(scan.secrets), secrets_engine=scan.status,
-        sources_recovered=endpoints.sources_recovered, source_map=endpoints.source_map,
+        endpoints.attributed,
+        endpoints.unattributed,
+        written,
+        secrets=len(scan.secrets),
+        secrets_engine=scan.status,
+        sources_recovered=endpoints.sources_recovered,
+        source_map=endpoints.source_map,
         files=endpoints.files,
     )
     return coverage, coverage_event
@@ -475,17 +507,36 @@ def _resolve_source_map(
 
 
 def _record_endpoint(
-    session, tenant_id: str, run_id: str, path: str, source_path: str, ep: RawEndpoint,
-    *, run_asset_id: str | None = None, asset_url: str | None = None,
+    session,
+    tenant_id: str,
+    run_id: str,
+    path: str,
+    source_path: str,
+    ep: RawEndpoint,
+    *,
+    run_asset_id: str | None = None,
+    asset_url: str | None = None,
 ) -> int:
     normalized = normalize.normalize_endpoint(ep.method, ep.url)
     written = _write(
-        session, tenant_id, run_id, FindingType.ENDPOINT, normalized.value, path,
+        session,
+        tenant_id,
+        run_id,
+        FindingType.ENDPOINT,
+        normalized.value,
+        path,
         occurrence=store.Occurrence(
-            host=normalized.host, raw_url=ep.url, source_path=source_path,
-            line=ep.line, col=ep.col, offset_start=ep.start_byte, offset_end=ep.end_byte,
-            evidence=ep.snippet, engine="vespasian",
-            run_asset_id=run_asset_id, asset_url=asset_url,
+            host=normalized.host,
+            raw_url=ep.url,
+            source_path=source_path,
+            line=ep.line,
+            col=ep.col,
+            offset_start=ep.start_byte,
+            offset_end=ep.end_byte,
+            evidence=ep.snippet,
+            engine="vespasian",
+            run_asset_id=run_asset_id,
+            asset_url=asset_url,
         ),
         attributes=(
             {"kind": ep.kind, "method": ep.method, "wrapper": ep.wrapper}
@@ -497,12 +548,23 @@ def _record_endpoint(
     for param in ep.params:
         value = normalize.normalize_param_value(operation, param.location, param.name)
         written += _write(
-            session, tenant_id, run_id, FindingType.PARAM, value, path,
+            session,
+            tenant_id,
+            run_id,
+            FindingType.PARAM,
+            value,
+            path,
             occurrence=store.Occurrence(
-                host=normalized.host, raw_url=ep.url, source_path=source_path,
-                line=ep.line, col=ep.col, offset_start=ep.start_byte, offset_end=ep.end_byte,
+                host=normalized.host,
+                raw_url=ep.url,
+                source_path=source_path,
+                line=ep.line,
+                col=ep.col,
+                offset_start=ep.start_byte,
+                offset_end=ep.end_byte,
                 engine="vespasian",
-                run_asset_id=run_asset_id, asset_url=asset_url,
+                run_asset_id=run_asset_id,
+                asset_url=asset_url,
             ),
             attributes={"location": param.location, "name": param.name},
         )
@@ -510,9 +572,16 @@ def _record_endpoint(
 
 
 def _record_secret(
-    session, tenant_id: str, run_id: str, path: str, source: str,
-    secret: RawSecret, cursors: dict[tuple[str, str], int],
-    *, run_asset_id: str | None = None, asset_url: str | None = None,
+    session,
+    tenant_id: str,
+    run_id: str,
+    path: str,
+    source: str,
+    secret: RawSecret,
+    cursors: dict[tuple[str, str], int],
+    *,
+    run_asset_id: str | None = None,
+    asset_url: str | None = None,
 ) -> int:
     # value = provider:sha256(token) — the raw token is never hashed in cleartext.
     value = normalize.normalize_secret_value(secret.snippet, secret.rule_id)
@@ -535,13 +604,23 @@ def _record_secret(
     else:
         offset_start = offset_end = None
     return _write(
-        session, tenant_id, run_id, FindingType.SECRET, value, path,
+        session,
+        tenant_id,
+        run_id,
+        FindingType.SECRET,
+        value,
+        path,
         occurrence=store.Occurrence(
-            source_path=_SOURCE_NAME, line=secret.line, col=secret.column_start,
-            offset_start=offset_start, offset_end=offset_end,
-            engine="kingfisher", confidence=secret.confidence,
+            source_path=_SOURCE_NAME,
+            line=secret.line,
+            col=secret.column_start,
+            offset_start=offset_start,
+            offset_end=offset_end,
+            engine="kingfisher",
+            confidence=secret.confidence,
             verified=True if secret.validation_status == "Active" else None,
-            run_asset_id=run_asset_id, asset_url=asset_url,
+            run_asset_id=run_asset_id,
+            asset_url=asset_url,
         ),
         attributes={"rule": secret.rule_id, "name": secret.rule_name},
     )
@@ -549,8 +628,14 @@ def _record_secret(
 
 def _write(session, tenant_id, run_id, finding_type, value, path, *, occurrence, attributes) -> int:
     result = store.record_finding(
-        session, tenant_id=tenant_id, run_id=run_id, finding_type=finding_type,
-        value=value, path=path, occurrence=occurrence, attributes=attributes,
+        session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        finding_type=finding_type,
+        value=value,
+        path=path,
+        occurrence=occurrence,
+        attributes=attributes,
         first_stage="analyzing",
     )
     return int(result.finding_created) + int(result.occurrence_created)

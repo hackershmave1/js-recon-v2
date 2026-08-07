@@ -117,8 +117,6 @@ def run_engine(
         )
     if completed.returncode not in ok_returncodes:
         # stderr goes on the exception attribute, never in the persisted message.
-        raise EngineError(
-            f"{argv[0]} exited {completed.returncode}", stderr=completed.stderr
-        )
+        raise EngineError(f"{argv[0]} exited {completed.returncode}", stderr=completed.stderr)
 
     return EngineResult(completed.returncode, completed.stdout, completed.stderr)

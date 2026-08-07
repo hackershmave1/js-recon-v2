@@ -50,9 +50,7 @@ _ARRAY_KEY_RE = re.compile(r"\[\d*\]$")
 # Percent-decode only unreserved octets before templating, so an encoded literal
 # (%41 -> A) is compared correctly while a reserved char (e.g. %2F) stays encoded
 # and cannot forge an extra path segment.
-_UNRESERVED = frozenset(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
-)
+_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 _PCT_RE = re.compile(r"%([0-9A-Fa-f]{2})")
 
 # Secret match boundaries are engine-defined; strip surrounding delimiters an
@@ -96,6 +94,7 @@ def shannon_entropy(text: str) -> float:
 # ---------------------------------------------------------------------------
 # Source-path normalization (§3) — best-effort stable across rebuilds.
 # ---------------------------------------------------------------------------
+
 
 def _split_scheme(source: str) -> tuple[str | None, str]:
     """Split a source into (authority, path). The scheme is dropped; the
@@ -172,6 +171,7 @@ def normalize_source_path(source: str | None) -> str:
 # Endpoint / param value normalization (§4.1, §4.3)
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class Endpoint:
     """A normalized endpoint. ``value`` is hashed; ``host`` is occurrence-only
@@ -207,9 +207,7 @@ def template_segment(segment: str) -> str:
 
 
 def _templatize_path(path: str) -> str:
-    segments = [
-        template_segment(_decode_unreserved(seg)) for seg in path.split("/") if seg != ""
-    ]
+    segments = [template_segment(_decode_unreserved(seg)) for seg in path.split("/") if seg != ""]
     return "/" + "/".join(segments) if segments else "/"
 
 
@@ -266,6 +264,7 @@ def operation_of_param_value(value: str) -> str:
 # Secret value normalization (§4.2)
 # ---------------------------------------------------------------------------
 
+
 def strip_secret_delimiters(raw_token: str) -> str:
     return raw_token.strip(_SECRET_DELIMS)
 
@@ -299,6 +298,7 @@ def normalize_secret_value(raw_token: str, rule_id: str) -> str:
 # ---------------------------------------------------------------------------
 # Hashing (§5)
 # ---------------------------------------------------------------------------
+
 
 def _canonical(obj: dict[str, object]) -> bytes:
     # allow_nan=False: NaN/Inf are non-standard JSON and would break cross-process

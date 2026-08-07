@@ -33,14 +33,41 @@ _LABEL_RE = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
 # engagement never declared (e.g. every ``*.github.io`` site). NOT a full public-
 # suffix list — just common shared-hosting suffixes; a bare single-label TLD
 # (``com``) is already rejected structurally (no dot) by is_valid_scope_entry.
-_PUBLIC_SUFFIX_DENYLIST = frozenset({
-    "co.uk", "org.uk", "gov.uk", "ac.uk", "co.jp", "com.au", "com.br", "co.in", "co.za",
-    "github.io", "gitlab.io", "herokuapp.com", "web.app", "firebaseapp.com",
-    "pages.dev", "workers.dev", "netlify.app", "vercel.app", "now.sh",
-    "cloudfront.net", "amazonaws.com", "s3.amazonaws.com", "azurewebsites.net",
-    "blob.core.windows.net", "appspot.com", "run.app", "blogspot.com",
-    "wordpress.com", "glitch.me", "repl.co", "surge.sh",
-})
+_PUBLIC_SUFFIX_DENYLIST = frozenset(
+    {
+        "co.uk",
+        "org.uk",
+        "gov.uk",
+        "ac.uk",
+        "co.jp",
+        "com.au",
+        "com.br",
+        "co.in",
+        "co.za",
+        "github.io",
+        "gitlab.io",
+        "herokuapp.com",
+        "web.app",
+        "firebaseapp.com",
+        "pages.dev",
+        "workers.dev",
+        "netlify.app",
+        "vercel.app",
+        "now.sh",
+        "cloudfront.net",
+        "amazonaws.com",
+        "s3.amazonaws.com",
+        "azurewebsites.net",
+        "blob.core.windows.net",
+        "appspot.com",
+        "run.app",
+        "blogspot.com",
+        "wordpress.com",
+        "glitch.me",
+        "repl.co",
+        "surge.sh",
+    }
+)
 
 
 class EgressBlocked(Exception):
@@ -190,7 +217,9 @@ def is_public_ip(ip_str: str, *, allow_local: bool = False) -> bool:
     return ip.is_global and not ip.is_reserved and not ip.is_multicast
 
 
-def validate_target(url: str, scope_hosts: list[str], *, allow_local: bool = False) -> ValidatedTarget:
+def validate_target(
+    url: str, scope_hosts: list[str], *, allow_local: bool = False
+) -> ValidatedTarget:
     """Enforce the full policy on ``url`` or raise :class:`EgressBlocked`.
 
     Resolves the host and requires ALL resolved addresses to be public — a single

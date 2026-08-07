@@ -53,18 +53,29 @@ def add_rule(
         if run is None:
             return None
         session_id = str(run.session_id)
-        values = dict(
-            tenant_id=tenant_id, session_id=session_id, kind=kind,
-            path_prefix=path_prefix, finding_hashes=finding_hashes,
-            base_url=base_url, actor=actor,
-        )
+        values = {
+            "tenant_id": tenant_id,
+            "session_id": session_id,
+            "kind": kind,
+            "path_prefix": path_prefix,
+            "finding_hashes": finding_hashes,
+            "base_url": base_url,
+            "actor": actor,
+        }
         if kind == "prefix":
-            stmt = pg_insert(models.SessionBaseUrl).values(**values).on_conflict_do_update(
-                index_elements=["session_id", "path_prefix"],
-                set_={"base_url": base_url, "actor": actor, "updated_at": func.now()},
-            ).returning(models.SessionBaseUrl)
+            stmt = (
+                pg_insert(models.SessionBaseUrl)
+                .values(**values)
+                .on_conflict_do_update(
+                    index_elements=["session_id", "path_prefix"],
+                    set_={"base_url": base_url, "actor": actor, "updated_at": func.now()},
+                )
+                .returning(models.SessionBaseUrl)
+            )
         else:
-            stmt = pg_insert(models.SessionBaseUrl).values(**values).returning(models.SessionBaseUrl)
+            stmt = (
+                pg_insert(models.SessionBaseUrl).values(**values).returning(models.SessionBaseUrl)
+            )
         row = session.scalars(stmt).one()
         result = _as_dict(row)
     run_summary = reclassify_run(tenant_id, run_id)  # own transaction (gate N5)

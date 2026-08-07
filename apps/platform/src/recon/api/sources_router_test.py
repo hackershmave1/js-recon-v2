@@ -132,8 +132,12 @@ def test_same_url_in_two_runs_serves_each_runs_own_bytes(client, authorized_sess
     url, other = "https://cdn.acme.io/app.js", "https://acme.io/other.js"
     run_a = _seed_crawl(tenant, session_id, url, "AAA = 1\n", other)
     run_b = _seed_crawl(tenant, session_id, url, "BBB = 2\n", other)
-    got_a = client.get(f"/runs/{run_a}/sources/content", params={"path": url}, headers=_headers(tenant))
-    got_b = client.get(f"/runs/{run_b}/sources/content", params={"path": url}, headers=_headers(tenant))
+    got_a = client.get(
+        f"/runs/{run_a}/sources/content", params={"path": url}, headers=_headers(tenant)
+    )
+    got_b = client.get(
+        f"/runs/{run_b}/sources/content", params={"path": url}, headers=_headers(tenant)
+    )
     assert got_a.json()["content"] == "AAA = 1\n"
     assert got_b.json()["content"] == "BBB = 2\n"
 

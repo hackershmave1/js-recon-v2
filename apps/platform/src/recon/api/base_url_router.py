@@ -30,21 +30,32 @@ class BaseUrlRuleIn(BaseModel):
 
 def _validate_shape(rule: BaseUrlRuleIn) -> None:
     if rule.kind == "prefix" and (not rule.path_prefix or rule.finding_hashes):
-        raise HTTPException(status_code=422, detail="a prefix rule needs path_prefix and no finding_hashes")
+        raise HTTPException(
+            status_code=422, detail="a prefix rule needs path_prefix and no finding_hashes"
+        )
     if rule.kind == "selection" and (not rule.finding_hashes or rule.path_prefix):
-        raise HTTPException(status_code=422, detail="a selection rule needs finding_hashes and no path_prefix")
+        raise HTTPException(
+            status_code=422, detail="a selection rule needs finding_hashes and no path_prefix"
+        )
 
 
 @router.post("/runs/{run_id}/base-url")
 async def add_base_url_rule(
-    run_id: str, rule: BaseUrlRuleIn, tenant_id: str = Depends(get_tenant_id),
+    run_id: str,
+    rule: BaseUrlRuleIn,
+    tenant_id: str = Depends(get_tenant_id),
 ) -> dict:
     _validate_shape(rule)
     try:
         result = await run_in_threadpool(
-            base_url_service.add_rule, tenant_id, run_id,
-            kind=rule.kind, base_url=rule.base_url, path_prefix=rule.path_prefix,
-            finding_hashes=rule.finding_hashes, actor=rule.actor,
+            base_url_service.add_rule,
+            tenant_id,
+            run_id,
+            kind=rule.kind,
+            base_url=rule.base_url,
+            path_prefix=rule.path_prefix,
+            finding_hashes=rule.finding_hashes,
+            actor=rule.actor,
         )
     except InvalidBaseUrl as exc:
         raise HTTPException(status_code=422, detail=f"invalid base_url: {exc}") from exc
@@ -55,7 +66,8 @@ async def add_base_url_rule(
 
 @router.get("/runs/{run_id}/base-url")
 async def list_base_url_rules(
-    run_id: str, tenant_id: str = Depends(get_tenant_id),
+    run_id: str,
+    tenant_id: str = Depends(get_tenant_id),
 ) -> list[dict]:
     rules = await run_in_threadpool(base_url_service.list_rules, tenant_id, run_id)
     if rules is None:
@@ -65,7 +77,9 @@ async def list_base_url_rules(
 
 @router.delete("/runs/{run_id}/base-url/{rule_id}", status_code=204)
 async def delete_base_url_rule(
-    run_id: str, rule_id: str, tenant_id: str = Depends(get_tenant_id),
+    run_id: str,
+    rule_id: str,
+    tenant_id: str = Depends(get_tenant_id),
 ) -> Response:
     deleted = await run_in_threadpool(base_url_service.delete_rule, tenant_id, run_id, rule_id)
     if deleted is None:
