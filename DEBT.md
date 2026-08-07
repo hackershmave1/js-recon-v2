@@ -82,6 +82,16 @@ so the web gate is green. CodeQL DEFERRED (needs GitHub Advanced Security, unava
 on private Free-tier — the same limit that blocks branch protection). Both §4 gates
 passed (design: BUILD WITH CHANGES, then ENDORSED the working-tree-scan pivot).
 
+**Update 2026-08-07 — Dependabot version-updates PAUSED (config removed):** at the
+maintainer's request ("too early to be dealing with it"), `.github/dependabot.yml` was
+removed after its first run opened 15 update PRs (#6–#20, all closed). This pauses only
+the *auto-update-PR bot*; the *scanning* half of D6 — `gitleaks` + `pip-audit` +
+`npm audit` in `security.yml` — is untouched and still gates, so D6's core resolution
+stands. Repo-level Dependabot alerts + security auto-updates were already off
+(`automated-security-fixes` → `enabled:false`, `vulnerability-alerts` → 404), so no
+version PRs can regenerate. To re-enable later, restore `.github/dependabot.yml` from
+PR #5 (`git checkout 922335c -- .github/dependabot.yml`).
+
 ### D7 · Image build isn't lock-pinned [M] — ✅ RESOLVED 2026-08-07
 `apps/platform/Dockerfile` now installs Python deps from the committed lock instead
 of `pyproject` `>=` floors: a `deps-export` stage runs `uv export --frozen --no-dev`
