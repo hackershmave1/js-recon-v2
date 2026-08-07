@@ -20,19 +20,18 @@ deliberately non-unique). Covered by a live-PG two-writer concurrency test
 (`capture_router_test.py`, verified red-without-index → green-with-index). Both §4
 gates passed (design: BUILD WITH CHANGES; code: SHIP).
 
-### D14 · Concurrent `analyze/start` can double-enqueue a walk [S] — pre-existing, low-impact
-`apps/platform/src/recon/api/capture_router.py` `analyze_start`: the `_run_has_job`
-idempotency gate (:421) and the seal+Job-insert transaction (:446) are separate, and
-`job` has no unique key on `(run_id, stage)` (`db/models.py`), so two simultaneous
-`analyze/start` calls for one session can both pass the gate and enqueue two
-DISCOVERING walks. Pre-existing (the old code had the same gate→enqueue TOCTOU) and
-self-limiting — the coordinator's guarded state transitions make the second walk a
-no-op (`runs/service.py:_apply_transition` → `TransitionConflict`, caught in
-`coordinator.advance`) — so it wastes work, not data. `analyze/start` is a single
-user click, so the window is tiny. Close later by gating the Job insert on a
-guarded UPDATE (rowcount) or a partial unique index on the QUEUED discover job.
-Surfaced by the D1 §4 code review; left out of that slice on purpose (no run
-state-machine changes).
+### D14 · Concurrent `analyze/start` can double-enqueue a walk [S] — ✅ RESOLVED 2026-08-07
+Closed via a guarded-seal CAS in `capture_router.py` `analyze_start`: the seal that
+nulls the `capture_external_id` marker is now `UPDATE run SET capture_external_id=NULL
+WHERE id=:run AND capture_external_id IS NOT NULL`, and only the caller whose
+`rowcount == 1` proceeds to insert the DISCOVERING Job — the loser returns the
+idempotent "already started" (mirrors `runs/service._apply_transition`'s guarded-UPDATE
+idiom; relies on D1's "a capture run has a Job ⟺ its marker is NULL" invariant). Two
+concurrent `analyze/start` calls now enqueue exactly ONE walk. Covered by a live-PG
+two-writer test (`capture_router_test.py::test_concurrent_analyze_start_enqueues_one_walk`,
+verified **red — 2 jobs — without the guard, green with it**). No migration (reuses
+D1's atomic seal); approach A (a partial unique index) was rejected as unnecessary
+heft since `analyze_start` is the sole capture enqueue path. Both §4 gates passed.
 
 ## Enforcement / tooling (deferred from the CI-keystone slice)
 
@@ -78,10 +77,23 @@ the lock too.
 
 ## Maintainability
 
-### D8 · Unversioned contracts [M]
-The extension↔platform ingest contract (`capture_router.py`) and the OpenAPI export
-(`probe/reconstruct.py`) carry no version field and no consumer-contract test. Add a
-version + a schema test that fails on wire-shape drift (Hyrum's law).
+### D8 · Unversioned contracts [M] — D8a ✅ RESOLVED 2026-08-07; D8b open [S]
+Two wire contracts carried no version field and no consumer-contract test.
+
+**D8a (capture ingest — DONE):** `capture_router.py` now stamps a server-authored
+`CAPTURE_CONTRACT_VERSION` on the `GET /api/health` handshake (response-side only —
+additive, so deployed extensions that ignore the health body aren't broken), and a
+hermetic fast-lane `capture_contract_test.py` pins the wire shapes the extension
+depends on (health / save-files / analyze-start / progress envelopes + the
+`GET /api/projects` bare-array invariant), so drift fails in the fast lane instead of
+silently in prod. Both §4 gates passed (design: BUILD WITH CHANGES; code: APPROVE
+WITH NITS).
+
+**D8b (OpenAPI export — OPEN):** the export serializer is `probe/openapi.py` (NOT
+`probe/reconstruct.py` as previously written here); it already emits `openapi: 3.0.3`
+with a colocated `openapi_test.py`, so the remaining work is a small explicit
+contract/version marker + a drift test. Must precede any D13 (enrichment) resume,
+which extends that output.
 
 ### D9 · Test-pyramid inversion [L, ongoing]
 42/75 backend test files need live PG/Redis/MinIO; the fast hermetic layer is the

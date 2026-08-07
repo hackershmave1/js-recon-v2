@@ -58,6 +58,14 @@ log = get_logger("recon.api.capture")
 
 router = APIRouter(prefix="/api", tags=["capture"])
 
+# Version of the platform<->extension INGEST wire contract (server-authored, and
+# distinct from the extension's own build version, which it sends as
+# ``metadata.version``). Bump it when the request/response shapes below change in a
+# way a client must notice. Surfaced response-side on the health handshake only —
+# additive, so backward-compatible: deployed extensions read only specific response
+# keys and ignore the health body, so adding a field can't break them (DEBT D8a).
+CAPTURE_CONTRACT_VERSION = "1.0"
+
 
 class SaveFilesIn(BaseModel):
     """Lenient by design: ``files`` is a list of raw dicts validated per-file in
@@ -69,8 +77,10 @@ class SaveFilesIn(BaseModel):
 
 @router.get("/health")
 def capture_health() -> dict:
-    """Mirror the extension's workspace-client health probe."""
-    return {"status": "ok", "mode": "platform"}
+    """The extension's workspace-client health probe (``testConnection``). Carries the
+    ingest ``contractVersion`` so a client can detect wire-shape drift; the current
+    extension ignores the body, so adding the field is backward-compatible."""
+    return {"status": "ok", "mode": "platform", "contractVersion": CAPTURE_CONTRACT_VERSION}
 
 
 # --------------------------------------------------------------------------- #
@@ -426,7 +436,10 @@ def analyze_start(ext_session_id: str) -> dict:
     # Store an assets manifest so GET /runs/{id}/assets reads back (trap T5), then
     # emit the discover.assets event: the coordinator uses it to (a) short-circuit
     # the crawl stage and (b) finalize DONE/PARTIAL from per-asset status. status
-    # MUST be the literal "ok" (coordinator._finalize_state).
+    # MUST be the literal "ok" (coordinator._finalize_state). This put stays OUTSIDE
+    # the seal transaction below on purpose, so the run-row lock never spans this S3
+    # round-trip; on the rare concurrent-loser path it's a harmless content-addressed
+    # re-write of identical bytes (do NOT move it into the winner-only branch).
     manifest = {
         "domain": _manifest_domain(rows, ext_session_id),
         "status": "ok",
@@ -435,24 +448,34 @@ def analyze_start(ext_session_id: str) -> dict:
     assets_ref = storage.put_blob(
         tenant_id, run_id, "assets", json.dumps(manifest).encode("utf-8")
     )
-    # One transaction: record discover.assets, SEAL the run (null the capture
-    # accumulator marker so the next batch opens a fresh round), and insert the Job
-    # row. Sealing atomically WITH the Job insert is load-bearing (§4): if the marker
-    # were nulled in a separate, earlier commit and Job creation then failed, the run
-    # would be sealed-but-jobless — invisible to the accumulator, the progress reader,
-    # and this endpoint's own idempotency guard — and a concurrent batch would open a
-    # new run, orphaning this run's captured post-auth JS (DEBT D1). The Redis enqueue
-    # + event publish are the post-commit outbox step (coordinator.publish_stage_job).
+    # ONE transaction: seal the run, record discover.assets, and insert the Job — all
+    # atomic. The seal is a GUARDED update (DEBT D14): null the capture accumulator
+    # marker only while it is still set, and let the rowcount elect a single winner.
+    # Two concurrent analyze/start calls both clear the _run_has_job fast-path gate
+    # above, then race here; under READ COMMITTED the loser blocks on the run row lock,
+    # re-evaluates the predicate against the winner's committed row (marker now NULL),
+    # matches 0 rows, and returns idempotent WITHOUT enqueuing a second DISCOVERING
+    # walk (same guarded-UPDATE idiom as runs/service._apply_transition). Sealing stays
+    # atomic WITH the Job insert — the D1 invariant "a capture run has a Job <=> its
+    # marker is NULL": were the marker nulled in a separate earlier commit and the Job
+    # insert then failed, the run would be sealed-but-jobless (invisible to the
+    # accumulator, the progress reader, and this endpoint's own guard) and a concurrent
+    # batch would open a new run, orphaning this run's captured post-auth JS. The Redis
+    # enqueue + event publish are the post-commit outbox step (publish_stage_job).
     with tenant_session(tenant_id) as session:
+        sealed = session.execute(
+            update(Run)
+            .where(Run.id == run_id, Run.capture_external_id.is_not(None))
+            .values(capture_external_id=None)
+        )
+        if sealed.rowcount != 1:
+            return {"started": True, "message": "analysis already started", "runId": run_id}
         event = record_event(
             session,
             tenant_id=tenant_id,
             run_id=run_id,
             event_type="discover.assets",
             payload={"count": len(rows), "assets_ref": assets_ref, "status": "ok"},
-        )
-        session.execute(
-            update(Run).where(Run.id == run_id).values(capture_external_id=None)
         )
         job_id, job_message = coordinator.create_stage_job(
             session, tenant_id=tenant_id, run_id=run_id, stage=RunStage.DISCOVERING
