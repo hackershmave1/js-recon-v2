@@ -33,7 +33,11 @@ def _drive(redis, run_id, tenant, *, max_passes=30) -> str:
         worker.run_once(redis, "test-worker", block_ms=50)
         status = queries.get_status(tenant, run_id)
         if status and RunState(status.state) in {
-            RunState.DONE, RunState.PARTIAL, RunState.FAILED, RunState.CANCELLED, RunState.PAUSED
+            RunState.DONE,
+            RunState.PARTIAL,
+            RunState.FAILED,
+            RunState.CANCELLED,
+            RunState.PAUSED,
         }:
             return status.state
     return queries.get_status(tenant, run_id).state
@@ -58,8 +62,11 @@ def test_transition_is_atomic_under_concurrency(redis, authorized_session):
     def attempt():
         try:
             service.transition(
-                redis, tenant_id=tenant, run_id=view.id,
-                to_state=RunState.DISCOVERING, stage=RunStage.DISCOVERING,
+                redis,
+                tenant_id=tenant,
+                run_id=view.id,
+                to_state=RunState.DISCOVERING,
+                stage=RunStage.DISCOVERING,
             )
             results.append("ok")
         except (service.TransitionConflict, sm.InvalidTransition):

@@ -42,17 +42,36 @@ def test_record_finding_is_idempotent_on_retry(authorized_session):
     tenant, session_id = authorized_session
     run_id = _make_run(tenant, session_id)
     endpoint = normalize.normalize_endpoint("GET", "https://api.acme.io/users/42")
-    occ = Occurrence(host=endpoint.host, raw_url="/users/42", source_path="app/api.js",
-                     offset_start=10, offset_end=20)
+    occ = Occurrence(
+        host=endpoint.host,
+        raw_url="/users/42",
+        source_path="app/api.js",
+        offset_start=10,
+        offset_end=20,
+    )
 
     with tenant_session(tenant) as s:
-        first = record_finding(s, tenant_id=tenant, run_id=run_id,
-                               finding_type=FindingType.ENDPOINT, value=endpoint.value,
-                               path="app/api.js", occurrence=occ, first_stage="analyzing")
+        first = record_finding(
+            s,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value=endpoint.value,
+            path="app/api.js",
+            occurrence=occ,
+            first_stage="analyzing",
+        )
     with tenant_session(tenant) as s:  # a stage retry re-emits the identical finding
-        second = record_finding(s, tenant_id=tenant, run_id=run_id,
-                                finding_type=FindingType.ENDPOINT, value=endpoint.value,
-                                path="app/api.js", occurrence=occ, first_stage="analyzing")
+        second = record_finding(
+            s,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value=endpoint.value,
+            path="app/api.js",
+            occurrence=occ,
+            first_stage="analyzing",
+        )
 
     assert first.finding_created and first.occurrence_created
     assert not second.finding_created and not second.occurrence_created
@@ -73,14 +92,36 @@ def test_over_merge_keeps_distinct_occurrences(authorized_session):
     assert e1.value == e2.value
 
     with tenant_session(tenant) as s:
-        r1 = record_finding(s, tenant_id=tenant, run_id=run_id,
-                            finding_type=FindingType.ENDPOINT, value=e1.value, path="app/api.js",
-                            occurrence=Occurrence(host=e1.host, raw_url="/users/1",
-                                                  source_path="app/api.js", offset_start=1, offset_end=2))
-        r2 = record_finding(s, tenant_id=tenant, run_id=run_id,
-                            finding_type=FindingType.ENDPOINT, value=e2.value, path="app/api.js",
-                            occurrence=Occurrence(host=e2.host, raw_url="/users/2",
-                                                  source_path="app/api.js", offset_start=3, offset_end=4))
+        r1 = record_finding(
+            s,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value=e1.value,
+            path="app/api.js",
+            occurrence=Occurrence(
+                host=e1.host,
+                raw_url="/users/1",
+                source_path="app/api.js",
+                offset_start=1,
+                offset_end=2,
+            ),
+        )
+        r2 = record_finding(
+            s,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value=e2.value,
+            path="app/api.js",
+            occurrence=Occurrence(
+                host=e2.host,
+                raw_url="/users/2",
+                source_path="app/api.js",
+                offset_start=3,
+                offset_end=4,
+            ),
+        )
 
     assert r1.finding_hash == r2.finding_hash
     assert r1.finding_created and not r2.finding_created  # one identity
@@ -99,10 +140,24 @@ def test_same_identity_in_two_runs_is_two_findings(authorized_session):
     occ = Occurrence(raw_url="/health", source_path="app/api.js")
 
     with tenant_session(tenant) as s:
-        ra = record_finding(s, tenant_id=tenant, run_id=run_a, finding_type=FindingType.ENDPOINT,
-                            value=endpoint.value, path="app/api.js", occurrence=occ)
-        rb = record_finding(s, tenant_id=tenant, run_id=run_b, finding_type=FindingType.ENDPOINT,
-                            value=endpoint.value, path="app/api.js", occurrence=occ)
+        ra = record_finding(
+            s,
+            tenant_id=tenant,
+            run_id=run_a,
+            finding_type=FindingType.ENDPOINT,
+            value=endpoint.value,
+            path="app/api.js",
+            occurrence=occ,
+        )
+        rb = record_finding(
+            s,
+            tenant_id=tenant,
+            run_id=run_b,
+            finding_type=FindingType.ENDPOINT,
+            value=endpoint.value,
+            path="app/api.js",
+            occurrence=occ,
+        )
 
     assert ra.finding_hash == rb.finding_hash
     assert ra.finding_created and rb.finding_created
@@ -114,9 +169,15 @@ def test_findings_are_tenant_isolated(authorized_session):
     run_id = _make_run(tenant_a, session_id)
     endpoint = normalize.normalize_endpoint("GET", "/secret-endpoint")
     with tenant_session(tenant_a) as s:
-        record_finding(s, tenant_id=tenant_a, run_id=run_id, finding_type=FindingType.ENDPOINT,
-                       value=endpoint.value, path="app/api.js",
-                       occurrence=Occurrence(raw_url="/secret-endpoint", source_path="app/api.js"))
+        record_finding(
+            s,
+            tenant_id=tenant_a,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value=endpoint.value,
+            path="app/api.js",
+            occurrence=Occurrence(raw_url="/secret-endpoint", source_path="app/api.js"),
+        )
 
     tenant_b = sessions_service.create_tenant("intruder-findings")
     with tenant_session(tenant_b) as s:

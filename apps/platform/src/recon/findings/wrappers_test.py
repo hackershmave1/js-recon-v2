@@ -30,16 +30,12 @@ def test_validate_callee_accepts_bare_identifiers(callee):
     validate_callee(callee)  # does not raise
 
 
-@pytest.mark.parametrize(
-    "callee", ["this.httpClient", "this.http", "a.b", "a.b.c", "svc.$api"]
-)
+@pytest.mark.parametrize("callee", ["this.httpClient", "this.http", "a.b", "a.b.c", "svc.$api"])
 def test_validate_callee_accepts_dotted_receivers(callee):
     validate_callee(callee)  # does not raise — dotted receiver (spec §4 fast-follow)
 
 
-@pytest.mark.parametrize(
-    "callee", ["", "1abc", "a b", "api()", ".x", "a.", "a..b", "a.1b"]
-)
+@pytest.mark.parametrize("callee", ["", "1abc", "a b", "api()", ".x", "a.", "a..b", "a.1b"])
 def test_validate_callee_rejects_non_identifiers(callee):
     with pytest.raises(InvalidWrapperCallee):
         validate_callee(callee)

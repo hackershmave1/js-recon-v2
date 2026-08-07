@@ -68,15 +68,21 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
         raise retry.FatalError(f"crawl seed blocked by egress guard: {exc}") from exc
 
     argv = katana.build_argv(
-        katana_bin=settings.katana_bin, domain=target,
-        scope_hosts=engagement.scope_hosts, depth=settings.crawl_depth,
+        katana_bin=settings.katana_bin,
+        domain=target,
+        scope_hosts=engagement.scope_hosts,
+        depth=settings.crawl_depth,
         crawl_duration_seconds=settings.crawl_duration_seconds,
         headless=settings.crawl_headless,
         system_chrome_path=settings.system_chrome_path,
         js_crawl=settings.crawl_js_crawl,
     )
     result = harness.run_crawl(
-        redis, argv, tenant_id=tenant_id, run_id=run_id, job_id=job_id,
+        redis,
+        argv,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        job_id=job_id,
         duration_seconds=settings.crawl_duration_seconds,
         kill_grace_seconds=settings.crawl_kill_grace_seconds,
         heartbeat_interval_seconds=settings.crawl_heartbeat_interval_seconds,
@@ -84,7 +90,8 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
     )
 
     in_scope = _revalidate(
-        katana.parse_assets(result.stdout), engagement.scope_hosts,
+        katana.parse_assets(result.stdout),
+        engagement.scope_hosts,
         allow_local=settings.allow_local_egress,
     )
     capped = len(in_scope) > settings.crawl_max_assets
@@ -92,18 +99,17 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
     status = "timeout" if result.timed_out else ("capped" if capped else "ok")
 
     manifest = {
-        "domain": target, "status": status,
+        "domain": target,
+        "status": status,
         "assets": [{"url": u, "source": "katana"} for u in kept],
     }
-    assets_ref = storage.put_blob(
-        tenant_id, run_id, "assets", json.dumps(manifest).encode("utf-8")
-    )
+    assets_ref = storage.put_blob(tenant_id, run_id, "assets", json.dumps(manifest).encode("utf-8"))
     with tenant_session(tenant_id) as session:
-        assets.seed_pending(
-            session, tenant_id=tenant_id, run_id=run_id, urls=kept
-        )
+        assets.seed_pending(session, tenant_id=tenant_id, run_id=run_id, urls=kept)
         event = record_event(
-            session, tenant_id=tenant_id, run_id=run_id,
+            session,
+            tenant_id=tenant_id,
+            run_id=run_id,
             event_type="discover.assets",
             payload={"count": len(kept), "assets_ref": assets_ref, "status": status},
         )
@@ -111,9 +117,7 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
     log.info("discover.done", run_id=run_id, count=len(kept), status=status)
 
 
-def _revalidate(
-    urls: list[str], scope_hosts: list[str], *, allow_local: bool = False
-) -> list[str]:
+def _revalidate(urls: list[str], scope_hosts: list[str], *, allow_local: bool = False) -> list[str]:
     kept: list[str] = []
     for url in urls:
         try:
@@ -124,9 +128,7 @@ def _revalidate(
     return kept
 
 
-def _load_target(
-    tenant_id: str, run_id: str
-) -> tuple[str | None, str | None, str | None]:
+def _load_target(tenant_id: str, run_id: str) -> tuple[str | None, str | None, str | None]:
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
         if run is None:

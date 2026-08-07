@@ -62,6 +62,7 @@ def test_fetch_loop_honors_cancel(redis, authorized_session, monkeypatch):
     # starts — so this guards against a future refactor hoisting the control
     # check out of the loop body.
     from recon.runs import service as run_service
+
     tenant, session_id = authorized_session
     urls = ["https://acme.io/a.js", "https://acme.io/b.js"]
     run_id = _crawl_run(redis, tenant, session_id, urls)
@@ -120,9 +121,9 @@ def test_fetch_loop_bad_source_map_is_soft_miss(redis, authorized_session, monke
     fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
 
     row = {r.url: r for r in assets.list_for_run(tenant, run_id)}["https://acme.io/app.js"]
-    assert row.fetch_status == "ok"        # NOT failed — the JS fetch succeeded
+    assert row.fetch_status == "ok"  # NOT failed — the JS fetch succeeded
     assert row.input_ref is not None
-    assert row.source_map_ref is None      # the bad .map was a soft miss, not linked
+    assert row.source_map_ref is None  # the bad .map was a soft miss, not linked
 
 
 def test_fetch_loop_source_map_generic_error_is_soft_miss(redis, authorized_session, monkeypatch):

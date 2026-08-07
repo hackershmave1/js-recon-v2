@@ -38,11 +38,17 @@ def build_argv(
 ) -> list[str]:
     target = domain if "://" in domain else f"https://{domain}"
     argv = [
-        katana_bin, "-u", target,
-        "-jsonl", "-silent",
-        "-depth", str(depth),
-        "-crawl-duration", f"{crawl_duration_seconds:g}",
-        "-field-scope", "rdn",
+        katana_bin,
+        "-u",
+        target,
+        "-jsonl",
+        "-silent",
+        "-depth",
+        str(depth),
+        "-crawl-duration",
+        f"{crawl_duration_seconds:g}",
+        "-field-scope",
+        "rdn",
     ]
     if js_crawl:
         # -jc parses lazy/dynamic import() chunk URLs out of the JS and follows

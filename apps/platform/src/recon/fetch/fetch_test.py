@@ -21,7 +21,9 @@ _SCOPE = ["acme.io"]
 
 def _stub_public_dns(monkeypatch):
     def resolver(host, service, *args, **kwargs):
-        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", service))]
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", service))
+        ]
 
     monkeypatch.setattr(socket, "getaddrinfo", resolver)
 
@@ -66,7 +68,10 @@ def test_fetch_out_of_scope_blocked(monkeypatch):
     _stub_public_dns(monkeypatch)
     with pytest.raises(egress.EgressBlocked, match="scope"):
         fetch.fetch_url(
-            "https://evil.example/app.js", _SCOPE, timeout_s=5, max_bytes=1000,
+            "https://evil.example/app.js",
+            _SCOPE,
+            timeout_s=5,
+            max_bytes=1000,
             transport=_mock(lambda r: httpx.Response(200)),
         )
 
@@ -75,7 +80,10 @@ def test_fetch_size_cap_enforced(monkeypatch):
     _stub_public_dns(monkeypatch)
     with pytest.raises(retry.FatalError, match="exceeds"):
         fetch.fetch_url(
-            "https://acme.io/big.js", _SCOPE, timeout_s=5, max_bytes=10,
+            "https://acme.io/big.js",
+            _SCOPE,
+            timeout_s=5,
+            max_bytes=10,
             transport=_mock(lambda r: httpx.Response(200, content=b"x" * 100)),
         )
 
@@ -98,8 +106,13 @@ def test_fetch_redirect_out_of_scope_blocked(monkeypatch):
     _stub_public_dns(monkeypatch)
     with pytest.raises(egress.EgressBlocked, match="scope"):
         fetch.fetch_url(
-            "https://acme.io/a", _SCOPE, timeout_s=5, max_bytes=1000,
-            transport=_mock(lambda r: httpx.Response(302, headers={"location": "https://evil.example/x"})),
+            "https://acme.io/a",
+            _SCOPE,
+            timeout_s=5,
+            max_bytes=1000,
+            transport=_mock(
+                lambda r: httpx.Response(302, headers={"location": "https://evil.example/x"})
+            ),
         )
 
 
@@ -107,8 +120,13 @@ def test_fetch_redirect_bad_scheme_blocked(monkeypatch):
     _stub_public_dns(monkeypatch)
     with pytest.raises(egress.EgressBlocked, match="scheme"):
         fetch.fetch_url(
-            "https://acme.io/a", _SCOPE, timeout_s=5, max_bytes=1000,
-            transport=_mock(lambda r: httpx.Response(302, headers={"location": "file:///etc/passwd"})),
+            "https://acme.io/a",
+            _SCOPE,
+            timeout_s=5,
+            max_bytes=1000,
+            transport=_mock(
+                lambda r: httpx.Response(302, headers={"location": "file:///etc/passwd"})
+            ),
         )
 
 
@@ -116,8 +134,13 @@ def test_fetch_too_many_redirects(monkeypatch):
     _stub_public_dns(monkeypatch)
     with pytest.raises(retry.FatalError, match="redirects"):
         fetch.fetch_url(
-            "https://acme.io/loop", _SCOPE, timeout_s=5, max_bytes=1000,
-            transport=_mock(lambda r: httpx.Response(302, headers={"location": "https://acme.io/loop"})),
+            "https://acme.io/loop",
+            _SCOPE,
+            timeout_s=5,
+            max_bytes=1000,
+            transport=_mock(
+                lambda r: httpx.Response(302, headers={"location": "https://acme.io/loop"})
+            ),
         )
 
 
@@ -125,7 +148,10 @@ def test_fetch_5xx_is_retryable(monkeypatch):
     _stub_public_dns(monkeypatch)
     with pytest.raises(retry.RetryableError, match="HTTP 503"):
         fetch.fetch_url(
-            "https://acme.io/a", _SCOPE, timeout_s=5, max_bytes=1000,
+            "https://acme.io/a",
+            _SCOPE,
+            timeout_s=5,
+            max_bytes=1000,
             transport=_mock(lambda r: httpx.Response(503)),
         )
 
@@ -135,7 +161,10 @@ def test_fetch_4xx_is_fatal(monkeypatch):
     _stub_public_dns(monkeypatch)
     with pytest.raises(retry.FatalError, match="HTTP 404"):
         fetch.fetch_url(
-            "https://acme.io/a", _SCOPE, timeout_s=5, max_bytes=1000,
+            "https://acme.io/a",
+            _SCOPE,
+            timeout_s=5,
+            max_bytes=1000,
             transport=_mock(lambda r: httpx.Response(404)),
         )
 
@@ -146,7 +175,10 @@ def test_fetch_429_is_retryable_and_honors_retry_after(monkeypatch):
     _stub_public_dns(monkeypatch)
     with pytest.raises(retry.RetryableError, match="HTTP 429") as excinfo:
         fetch.fetch_url(
-            "https://acme.io/a", _SCOPE, timeout_s=5, max_bytes=1000,
+            "https://acme.io/a",
+            _SCOPE,
+            timeout_s=5,
+            max_bytes=1000,
             transport=_mock(lambda r: httpx.Response(429, headers={"retry-after": "12"})),
         )
     assert excinfo.value.retry_after == 12.0
@@ -156,7 +188,10 @@ def test_fetch_429_without_retry_after_has_none(monkeypatch):
     _stub_public_dns(monkeypatch)
     with pytest.raises(retry.RetryableError) as excinfo:
         fetch.fetch_url(
-            "https://acme.io/a", _SCOPE, timeout_s=5, max_bytes=1000,
+            "https://acme.io/a",
+            _SCOPE,
+            timeout_s=5,
+            max_bytes=1000,
             transport=_mock(lambda r: httpx.Response(429)),
         )
     assert excinfo.value.retry_after is None

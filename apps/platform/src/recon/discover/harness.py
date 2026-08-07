@@ -56,9 +56,7 @@ def run_crawl(
     # reliable on both lanes.
     deadline = time.perf_counter() + duration_seconds + kill_grace_seconds
     out = tempfile.TemporaryFile()
-    proc = subprocess.Popen(
-        argv, stdout=out, stderr=subprocess.DEVNULL, start_new_session=True
-    )
+    proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.DEVNULL, start_new_session=True)
     timed_out = False
     step = 0
     try:
@@ -69,8 +67,12 @@ def run_crawl(
             except subprocess.TimeoutExpired:
                 step += 1
                 progress.beat(
-                    redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id,
-                    done=step, total=0,
+                    redis,
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    job_id=job_id,
+                    done=step,
+                    total=0,
                 )
                 if time.perf_counter() > deadline:
                     timed_out = True

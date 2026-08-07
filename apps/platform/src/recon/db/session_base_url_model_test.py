@@ -12,11 +12,22 @@ def test_session_base_url_table_shape():
     table = models.SessionBaseUrl.__table__
     assert table.name == "session_base_url"
     cols = set(table.columns.keys())
-    assert {"id", "tenant_id", "session_id", "kind", "path_prefix",
-            "finding_hashes", "base_url", "actor", "created_at", "updated_at"} <= cols
+    assert {
+        "id",
+        "tenant_id",
+        "session_id",
+        "kind",
+        "path_prefix",
+        "finding_hashes",
+        "base_url",
+        "actor",
+        "created_at",
+        "updated_at",
+    } <= cols
     # A unique (session_id, path_prefix) so prefix rules upsert; selection rows (NULL prefix) don't collide.
     assert any(
-        isinstance(c, UniqueConstraint) and {col.name for col in c.columns} == {"session_id", "path_prefix"}
+        isinstance(c, UniqueConstraint)
+        and {col.name for col in c.columns} == {"session_id", "path_prefix"}
         for c in table.constraints
     )
     # The kind CHECK + the "exactly one match field per kind" CHECK both present.

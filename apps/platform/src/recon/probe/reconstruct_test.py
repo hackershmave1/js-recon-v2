@@ -4,26 +4,44 @@ from recon.probe import reconstruct
 
 def _occ(host=None, raw_url=None):
     return OccurrenceView(
-        host=host, raw_url=raw_url, source_path=None, line=1, col=1,
-        offset_start=0, offset_end=1, evidence=None, engine="vespasian",
-        confidence=None, verified=None,
+        host=host,
+        raw_url=raw_url,
+        source_path=None,
+        line=1,
+        col=1,
+        offset_start=0,
+        offset_end=1,
+        evidence=None,
+        engine="vespasian",
+        confidence=None,
+        verified=None,
     )
 
 
 def _endpoint(value, *, host=None, raw_url=None, finding_hash="e1"):
     method = value.split(" ", 1)[0]
     return FindingView(
-        finding_hash=finding_hash, type="endpoint", value=value, path="input.js",
-        severity=None, attributes={"method": method, "kind": "fetch"},
-        first_stage="analyzing", occurrences=[_occ(host=host, raw_url=raw_url)],
+        finding_hash=finding_hash,
+        type="endpoint",
+        value=value,
+        path="input.js",
+        severity=None,
+        attributes={"method": method, "kind": "fetch"},
+        first_stage="analyzing",
+        occurrences=[_occ(host=host, raw_url=raw_url)],
     )
 
 
 def _param(value, location, name, finding_hash="p1"):
     return FindingView(
-        finding_hash=finding_hash, type="param", value=value, path="input.js",
-        severity=None, attributes={"location": location, "name": name},
-        first_stage="analyzing", occurrences=[],
+        finding_hash=finding_hash,
+        type="param",
+        value=value,
+        path="input.js",
+        severity=None,
+        attributes={"location": location, "name": name},
+        first_stage="analyzing",
+        occurrences=[],
     )
 
 
@@ -96,8 +114,15 @@ def test_build_groups_multiple_query_variants_into_one_operation():
     """MED-2: distinct query-key variants of the same operation are one triage
     unit — endpoint_hashes carries every contributing finding_hash, sorted."""
     findings = [
-        _endpoint("GET /search?q", host="api.acme.io", raw_url="/search?q=shoes", finding_hash="e1"),
-        _endpoint("GET /search?page&q", host="api.acme.io", raw_url="/search?page=2&q=shoes", finding_hash="e2"),
+        _endpoint(
+            "GET /search?q", host="api.acme.io", raw_url="/search?q=shoes", finding_hash="e1"
+        ),
+        _endpoint(
+            "GET /search?page&q",
+            host="api.acme.io",
+            raw_url="/search?page=2&q=shoes",
+            finding_hash="e2",
+        ),
     ]
     reqs = reconstruct.build_requests(findings)
     assert len(reqs) == 1
@@ -109,9 +134,14 @@ def test_build_omits_content_type_for_jquery_body():
     application/json would be a lie the artifact then ships to the target."""
     findings = [
         FindingView(
-            finding_hash="e1", type="endpoint", value="POST /api/users/{id}", path="input.js",
-            severity=None, attributes={"method": "POST", "kind": "jquery"},
-            first_stage="analyzing", occurrences=[_occ(host="api.acme.io", raw_url="/api/users/42")],
+            finding_hash="e1",
+            type="endpoint",
+            value="POST /api/users/{id}",
+            path="input.js",
+            severity=None,
+            attributes={"method": "POST", "kind": "jquery"},
+            first_stage="analyzing",
+            occurrences=[_occ(host="api.acme.io", raw_url="/api/users/42")],
         ),
         _param("POST /api/users/{id} body:name", "body", "name"),
     ]

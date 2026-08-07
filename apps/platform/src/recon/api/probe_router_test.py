@@ -26,10 +26,15 @@ def _seed(tenant, session_id):
         session.flush()
         run_id = str(run.id)
         result = store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.ENDPOINT,
-            value="POST /api/users/{id}", path="input.js",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value="POST /api/users/{id}",
+            path="input.js",
             occurrence=store.Occurrence(host="api.acme.io", raw_url="/api/users/42"),
-            attributes={"method": "POST", "kind": "fetch"}, first_stage="analyzing",
+            attributes={"method": "POST", "kind": "fetch"},
+            first_stage="analyzing",
         )
         return run_id, result.finding_hash
 

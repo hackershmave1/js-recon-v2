@@ -38,14 +38,10 @@ def record_event(
     Flushes so the row's ``id`` is assigned; the caller publishes to Redis after
     the surrounding transaction commits.
     """
-    row = RunEvent(
-        tenant_id=tenant_id, run_id=run_id, type=event_type, payload=payload
-    )
+    row = RunEvent(tenant_id=tenant_id, run_id=run_id, type=event_type, payload=payload)
     session.add(row)
     session.flush()
-    return RecordedEvent(
-        pg_id=row.id, run_id=str(run_id), event_type=event_type, payload=payload
-    )
+    return RecordedEvent(pg_id=row.id, run_id=str(run_id), event_type=event_type, payload=payload)
 
 
 def publish(redis: Redis, event: RecordedEvent) -> str:

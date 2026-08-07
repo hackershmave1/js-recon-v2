@@ -106,9 +106,7 @@ def _get_or_create_tenant(name: str) -> str:
         if existing is not None:
             return str(existing)
     with admin_session() as session:
-        session.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": name}
-        )
+        session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": name})
         existing = session.scalar(select(Tenant.id).where(Tenant.name == name))
         if existing is not None:
             return str(existing)
@@ -121,9 +119,7 @@ def _get_or_create_tenant(name: str) -> str:
 def _find_session_by_external_id(tenant_id: str, ext_session_id: str) -> str | None:
     with tenant_session(tenant_id) as session:
         row_id = session.scalar(
-            select(EngagementSession.id).where(
-                EngagementSession.external_id == ext_session_id
-            )
+            select(EngagementSession.id).where(EngagementSession.external_id == ext_session_id)
         )
         return str(row_id) if row_id is not None else None
 
@@ -139,9 +135,7 @@ def _safe_uuid(value: Any) -> str | None:
         return None
 
 
-def _create_capture_session(
-    tenant_id: str, ext_session_id: str, engagement_id: str | None
-) -> str:
+def _create_capture_session(tenant_id: str, ext_session_id: str, engagement_id: str | None) -> str:
     # EMPTY scope (§4 defect B: scope is inert here — captured assets never egress).
     # Bind the engagement (projectId) if it resolves cleanly, but NEVER raise on the
     # ingest hot path (§4 defect A): a foreign/deleted engagement makes create_session
@@ -150,16 +144,26 @@ def _create_capture_session(
     # idempotency key (DEBT D1); name mirrors it for the UI label.
     try:
         view = sessions_service.create_session(
-            tenant_id, name=ext_session_id, external_id=ext_session_id, scope_hosts=[],
-            authorized_by="chrome-extension-capture", engagement_id=engagement_id,
+            tenant_id,
+            name=ext_session_id,
+            external_id=ext_session_id,
+            scope_hosts=[],
+            authorized_by="chrome-extension-capture",
+            engagement_id=engagement_id,
         )
     except sessions_service.SessionInvalid:
         log.warning(
-            "capture.session.engagement_ignored", session=ext_session_id, engagement_id=engagement_id
+            "capture.session.engagement_ignored",
+            session=ext_session_id,
+            engagement_id=engagement_id,
         )
         view = sessions_service.create_session(
-            tenant_id, name=ext_session_id, external_id=ext_session_id, scope_hosts=[],
-            authorized_by="chrome-extension-capture", engagement_id=None,
+            tenant_id,
+            name=ext_session_id,
+            external_id=ext_session_id,
+            scope_hosts=[],
+            authorized_by="chrome-extension-capture",
+            engagement_id=None,
         )
     return view.id
 
@@ -196,15 +200,11 @@ def _find_open_capture_run(tenant_id: str, ext_session_id: str) -> str | None:
     analyze/start nulls the marker to seal a round, so a sealed run is excluded here
     and the next batch opens a fresh one."""
     with tenant_session(tenant_id) as session:
-        run_id = session.scalar(
-            select(Run.id).where(Run.capture_external_id == ext_session_id)
-        )
+        run_id = session.scalar(select(Run.id).where(Run.capture_external_id == ext_session_id))
         return str(run_id) if run_id is not None else None
 
 
-def _accumulating_run_id(
-    tenant_id: str, session_id: str, ext_session_id: str, redis: Redis
-) -> str:
+def _accumulating_run_id(tenant_id: str, session_id: str, ext_session_id: str, redis: Redis) -> str:
     """The session's open run to append this batch to, keyed on the
     ``capture_external_id`` marker so a retried OR concurrent first batch can't open
     duplicate rounds (DEBT D1): the loser's ``create_run`` hits the unique key and
@@ -217,8 +217,11 @@ def _accumulating_run_id(
         return existing
     try:
         view = runs_service.create_run(
-            redis, tenant_id=tenant_id, session_id=str(session_id),
-            target=None, capture_external_id=ext_session_id,
+            redis,
+            tenant_id=tenant_id,
+            session_id=str(session_id),
+            target=None,
+            capture_external_id=ext_session_id,
         )
         return view.id
     except IntegrityError:
@@ -286,7 +289,11 @@ def _seed_fetched_assets(
         }
         for url, key in keys_by_url.items():
             row = by_url.get(url)
-            if row is not None and row.fetch_status == AssetStatus.PENDING.value and not row.input_ref:
+            if (
+                row is not None
+                and row.fetch_status == AssetStatus.PENDING.value
+                and not row.input_ref
+            ):
                 assets.set_fetch_ok(session, str(row.id), key)
                 map_key = map_keys_by_url.get(url)
                 if map_key:
@@ -304,10 +311,16 @@ def save_files(payload: SaveFilesIn) -> dict:
     tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
     if not ext_session_id:
         return {
-            "success": True, "sessionId": None, "runId": None,
-            "stored": 0, "failed": 0, "files": [],
+            "success": True,
+            "sessionId": None,
+            "runId": None,
+            "stored": 0,
+            "failed": 0,
+            "files": [],
         }
-    engagement_id = _safe_uuid(meta.get("projectId"))  # bind the project if it resolves; else unbound
+    engagement_id = _safe_uuid(
+        meta.get("projectId")
+    )  # bind the project if it resolves; else unbound
     session_id = _get_or_create_session(tenant_id, ext_session_id, engagement_id)
     run_id = _accumulating_run_id(tenant_id, session_id, ext_session_id, redis)
 
@@ -327,20 +340,28 @@ def save_files(payload: SaveFilesIn) -> dict:
         parsed = _valid_file(f, settings.max_upload_bytes)
         if parsed is None:
             failed += 1
-            file_results.append({
-                "url": f.get("url"), "contentHash": content_hash,
-                "stored": False, "error": "invalid or oversized file",
-            })
+            file_results.append(
+                {
+                    "url": f.get("url"),
+                    "contentHash": content_hash,
+                    "stored": False,
+                    "error": "invalid or oversized file",
+                }
+            )
             continue
         url, data = parsed
         if url in keys_by_url:
             # A repeat url within one batch: keep the first (first-wins). Don't
             # store an orphan blob or double-count — the asset already maps to the
             # first file's content.
-            file_results.append({
-                "url": url, "contentHash": content_hash,
-                "stored": False, "error": "duplicate url in batch",
-            })
+            file_results.append(
+                {
+                    "url": url,
+                    "contentHash": content_hash,
+                    "stored": False,
+                    "error": "duplicate url in batch",
+                }
+            )
             continue
         try:
             key = storage.put_blob(tenant_id, run_id, "input", data)
@@ -359,16 +380,25 @@ def save_files(payload: SaveFilesIn) -> dict:
         keys_by_url[url] = key
         total_bytes += len(data)
         stored += 1
-        file_results.append({
-            "url": url, "contentHash": content_hash, "runId": run_id, "stored": True,
-        })
+        file_results.append(
+            {
+                "url": url,
+                "contentHash": content_hash,
+                "runId": run_id,
+                "stored": True,
+            }
+        )
 
     if keys_by_url:
         _seed_fetched_assets(tenant_id, run_id, keys_by_url, map_keys_by_url)
 
     log.info(
-        "capture.save_files", session=ext_session_id, run_id=run_id,
-        stored=stored, failed=failed, bytes=total_bytes,
+        "capture.save_files",
+        session=ext_session_id,
+        run_id=run_id,
+        stored=stored,
+        failed=failed,
+        bytes=total_bytes,
         duration_ms=round((time.monotonic() - store_started) * 1000),
     )
     return {
@@ -400,9 +430,7 @@ def _latest_run_id(tenant_id: str, session_id: str) -> str | None:
 
 def _run_has_job(tenant_id: str, run_id: str) -> bool:
     with tenant_session(tenant_id) as session:
-        return bool(
-            session.scalar(select(exists(select(Job.id).where(Job.run_id == str(run_id)))))
-        )
+        return bool(session.scalar(select(exists(select(Job.id).where(Job.run_id == str(run_id))))))
 
 
 def _manifest_domain(rows: list, fallback: str) -> str:
@@ -445,9 +473,7 @@ def analyze_start(ext_session_id: str) -> dict:
         "status": "ok",
         "assets": [{"url": r.url, "source": "extension"} for r in rows],
     }
-    assets_ref = storage.put_blob(
-        tenant_id, run_id, "assets", json.dumps(manifest).encode("utf-8")
-    )
+    assets_ref = storage.put_blob(tenant_id, run_id, "assets", json.dumps(manifest).encode("utf-8"))
     # ONE transaction: seal the run, record discover.assets, and insert the Job — all
     # atomic. The seal is a GUARDED update (DEBT D14): null the capture accumulator
     # marker only while it is still set, and let the rowcount elect a single winner.
@@ -482,7 +508,9 @@ def analyze_start(ext_session_id: str) -> dict:
         )
     publish(redis, event)  # after commit — a subscriber must never see an unpersisted event
     coordinator.publish_stage_job(redis, job_message)
-    log.info("capture.analyze_start", session=ext_session_id, run_id=run_id, count=len(rows), job=job_id)
+    log.info(
+        "capture.analyze_start", session=ext_session_id, run_id=run_id, count=len(rows), job=job_id
+    )
     return {"started": True, "job": job_id, "runId": run_id}
 
 
@@ -520,7 +548,10 @@ def _asset_progress_status(row: assets.AssetRow, *, run_analyzing: bool, run_ter
     ``inFlight = queued + analyzing`` reaches 0 instead of polling "running" forever."""
     if row.analyze_status == AssetStatus.OK.value:
         return "completed"
-    if row.analyze_status == AssetStatus.FAILED.value or row.fetch_status == AssetStatus.FAILED.value:
+    if (
+        row.analyze_status == AssetStatus.FAILED.value
+        or row.fetch_status == AssetStatus.FAILED.value
+    ):
         return "failed"
     if run_terminal:
         return "failed"
@@ -529,7 +560,14 @@ def _asset_progress_status(row: assets.AssetRow, *, run_analyzing: bool, run_ter
 
 def _idle_job() -> dict:
     return {
-        "counts": {"queued": 0, "analyzing": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0},
+        "counts": {
+            "queued": 0,
+            "analyzing": 0,
+            "completed": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "total": 0,
+        },
         "files": [],
     }
 
@@ -550,7 +588,14 @@ def analyze_progress(ext_session_id: str) -> dict:
     run_analyzing = run_state == RunState.ANALYZING
     run_terminal = run_state in TERMINAL_STATES
     rows = assets.list_for_run(tenant_id, run_id)
-    counts = {"queued": 0, "analyzing": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": len(rows)}
+    counts = {
+        "queued": 0,
+        "analyzing": 0,
+        "completed": 0,
+        "failed": 0,
+        "cancelled": 0,
+        "total": len(rows),
+    }
     files = []
     for row in rows:
         status = _asset_progress_status(row, run_analyzing=run_analyzing, run_terminal=run_terminal)

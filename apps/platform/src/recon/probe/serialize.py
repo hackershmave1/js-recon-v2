@@ -24,7 +24,7 @@ _BASE_URL_PLACEHOLDER = "{{base_url}}"
 
 def _control_free(text: str) -> str:
     """Drop control characters (< 0x20 and DEL) — the anti-injection primitive."""
-    return "".join(ch for ch in text if 0x20 <= ord(ch) != 0x7f)
+    return "".join(ch for ch in text if 0x20 <= ord(ch) != 0x7F)
 
 
 def _request_parts(request: ReconstructedRequest) -> tuple[str, str, str]:
@@ -65,7 +65,11 @@ def to_curl(request: ReconstructedRequest) -> str | None:
     url = (base + origin)[:_MAX_URL]
     quoted_url = "'" + url.replace("'", "'\\''") + "'"
     # Cap host in comment (attacker-controlled via JS string literal)
-    host_note = f"  (host: {_control_free(request.hosts[0])[:_MAX_URL]})" if request.hosts else "  (host unknown)"
+    host_note = (
+        f"  (host: {_control_free(request.hosts[0])[:_MAX_URL]})"
+        if request.hosts
+        else "  (host unknown)"
+    )
     lines = [
         f"# {_control_free(request.operation)[:_MAX_URL]}{host_note}",
         "# add auth/headers here",
@@ -85,7 +89,9 @@ def to_curl(request: ReconstructedRequest) -> str | None:
         lines.append(curl)
     if len(request.hosts) > 1:
         # Cap the whole "other hosts" line (hosts are attacker-controlled)
-        other_hosts_line = ("# other hosts: " + ", ".join(_control_free(h) for h in request.hosts[1:]))[:_MAX_URL]
+        other_hosts_line = (
+            "# other hosts: " + ", ".join(_control_free(h) for h in request.hosts[1:])
+        )[:_MAX_URL]
         lines.append(other_hosts_line)
     return "\n".join(lines)
 

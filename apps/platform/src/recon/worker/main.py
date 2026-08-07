@@ -48,9 +48,7 @@ def _to_paused(redis: Redis, tenant_id: str, run_id: str, stage: RunStage) -> No
 
 
 def _to_cancelled(redis: Redis, tenant_id: str, run_id: str) -> None:
-    service.transition(
-        redis, tenant_id=tenant_id, run_id=run_id, to_state=RunState.CANCELLED
-    )
+    service.transition(redis, tenant_id=tenant_id, run_id=run_id, to_state=RunState.CANCELLED)
 
 
 def _enter_stage(redis: Redis, tenant_id: str, run_id: str, stage: RunStage, state: str) -> bool:
@@ -162,9 +160,17 @@ def process_message(redis: Redis, queue: QueueName, msg_id: str, message: dict) 
             return ci.kind
         except Exception as exc:  # noqa: BLE001 - failure routing is intentional
             return _handle_failure(
-                redis, queue, msg_id, message, exc,
-                tenant_id=tenant_id, run_id=run_id, job_id=job_id,
-                stage=stage, attempts=attempts, max_attempts=max_attempts,
+                redis,
+                queue,
+                msg_id,
+                message,
+                exc,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                job_id=job_id,
+                stage=stage,
+                attempts=attempts,
+                max_attempts=max_attempts,
             )
 
         # Only advance if we still hold the job — guards against a duplicate that
@@ -176,9 +182,18 @@ def process_message(redis: Redis, queue: QueueName, msg_id: str, message: dict) 
 
 
 def _handle_failure(
-    redis: Redis, queue: QueueName, msg_id: str, message: dict, exc: Exception,
-    *, tenant_id: str, run_id: str, job_id: str, stage: RunStage,
-    attempts: int, max_attempts: int,
+    redis: Redis,
+    queue: QueueName,
+    msg_id: str,
+    message: dict,
+    exc: Exception,
+    *,
+    tenant_id: str,
+    run_id: str,
+    job_id: str,
+    stage: RunStage,
+    attempts: int,
+    max_attempts: int,
 ) -> str:
     settings = get_settings()
     attempt_no = attempts + 1
@@ -213,9 +228,7 @@ def _handle_failure(
     return "dead"
 
 
-def run_once(
-    redis: Redis, consumer: str, *, batch: int = 10, block_ms: int = 1000
-) -> int:
+def run_once(redis: Redis, consumer: str, *, batch: int = 10, block_ms: int = 1000) -> int:
     """One maintenance + drain pass across the served queues. Returns messages
     processed. Called in a loop by :func:`serve_forever`; tests call it directly."""
     stall_ms = int(get_settings().heartbeat_stall_threshold_seconds * 1000)

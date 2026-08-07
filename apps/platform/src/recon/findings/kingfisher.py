@@ -159,9 +159,7 @@ def byte_offset(source: str, line: int | None, column: int | None) -> int | None
     return len(prefix.encode("utf-8"))
 
 
-def locate_snippet(
-    source: str, snippet: str, *, search_from: int = 0
-) -> tuple[int, int] | None:
+def locate_snippet(source: str, snippet: str, *, search_from: int = 0) -> tuple[int, int] | None:
     """Byte ``[start, end)`` of ``snippet`` within ``source``, located by CONTENT.
 
     In the utf-8/replace byte space reveal slices (see ``recon.probe.reveal``:
@@ -211,9 +209,14 @@ def scan(
             handle.write(source)
         # Scan the file (not the dir) so no sibling/symlink is ever walked.
         argv = [
-            engines.resolve_bin(bin_path), "scan", target,
-            "--format", "json",
-            "--no-validate", "--no-update-check", "--no-dedup",
+            engines.resolve_bin(bin_path),
+            "scan",
+            target,
+            "--format",
+            "json",
+            "--no-validate",
+            "--no-update-check",
+            "--no-dedup",
         ]
         # Load the shipped standalone-AKIA rule. A missing file is a PACKAGING
         # regression (the wheel dropped the data file), not a per-run condition, so

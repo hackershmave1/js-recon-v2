@@ -17,8 +17,11 @@ def test_record_secret_stores_offsets_but_not_plaintext():
     token = "sk_" + "live_" + "AKIAEXAMPLE1234567890"
     source = f'const k = "{token}";\n'
     secret = RawSecret(
-        rule_id="stripe", rule_name="Stripe", snippet=token,
-        line=1, column_start=source.index(token),
+        rule_id="stripe",
+        rule_name="Stripe",
+        snippet=token,
+        line=1,
+        column_start=source.index(token),
     )
     with tenant_session(tenant) as session:
         run = models.Run(tenant_id=tenant, session_id=view.id, state="done")
@@ -32,5 +35,5 @@ def test_record_secret_stores_offsets_but_not_plaintext():
         assert occurrence.evidence is None  # model A: no plaintext at rest
         assert occurrence.offset_start is not None and occurrence.offset_end is not None
         # the stored offsets bound the token in the source's byte space
-        sliced = source.encode("utf-8")[occurrence.offset_start:occurrence.offset_end]
+        sliced = source.encode("utf-8")[occurrence.offset_start : occurrence.offset_end]
         assert sliced.decode("utf-8") == token

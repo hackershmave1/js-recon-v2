@@ -52,9 +52,7 @@ def _enum_check(column: str, enum_cls) -> str:
 
 
 def _now_col(**kwargs) -> Mapped[dt.datetime]:
-    return mapped_column(
-        DateTime(timezone=True), server_default=text("now()"), **kwargs
-    )
+    return mapped_column(DateTime(timezone=True), server_default=text("now()"), **kwargs)
 
 
 class Tenant(Base):
@@ -164,9 +162,7 @@ class Run(Base):
     __tablename__ = "run"
     __table_args__ = (
         CheckConstraint(_enum_check("state", RunState), name="ck_run_state"),
-        CheckConstraint(
-            _enum_check("stage", RunStage) + " OR stage IS NULL", name="ck_run_stage"
-        ),
+        CheckConstraint(_enum_check("stage", RunStage) + " OR stage IS NULL", name="ck_run_stage"),
         Index("ix_run_tenant_session", "tenant_id", "session_id"),
         # Capture-ingest "open accumulator" marker (DEBT D1): = the extension's
         # sessionId while THIS run is the session's open capture round, NULL for a
@@ -204,7 +200,7 @@ class Run(Base):
     completeness: Mapped[dict] = mapped_column(
         JSONB,
         nullable=False,
-        server_default=text("'{\"fetch_ok\": false, \"analyze_ok\": false}'::jsonb"),
+        server_default=text('\'{"fetch_ok": false, "analyze_ok": false}\'::jsonb'),
     )
     input_ref: Mapped[str | None] = mapped_column(Text)  # object-storage key (REQ-D2)
     # Optional uploaded source map blob key; Sourcemapper recovers real per-source
@@ -245,13 +241,9 @@ class Job(Base):
         String(20), nullable=False, server_default=JobState.QUEUED.value
     )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-    max_attempts: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("5")
-    )
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("5"))
     priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-    payload: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'::jsonb")
-    )
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     # Progress record (REQ-R1).
     done: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     total: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
@@ -280,9 +272,7 @@ class RunEvent(Base):
         UUID(as_uuid=True), ForeignKey("run.id", ondelete="CASCADE"), nullable=False
     )
     type: Mapped[str] = mapped_column(Text, nullable=False)
-    payload: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'::jsonb")
-    )
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
 
@@ -336,9 +326,7 @@ class FindingOccurrence(Base):
 
     __tablename__ = "finding_occurrence"
     __table_args__ = (
-        UniqueConstraint(
-            "finding_id", "occurrence_hash", name="uq_occurrence_finding_hash"
-        ),
+        UniqueConstraint("finding_id", "occurrence_hash", name="uq_occurrence_finding_hash"),
         Index("ix_occurrence_finding", "tenant_id", "finding_id"),
     )
 
@@ -426,9 +414,7 @@ class FindingTriage(Base):
     __tablename__ = "finding_triage"
     __table_args__ = (
         UniqueConstraint("session_id", "finding_hash", name="uq_triage_session_finding"),
-        CheckConstraint(
-            "status IN ('open', 'confirmed', 'dismissed')", name="ck_triage_status"
-        ),
+        CheckConstraint("status IN ('open', 'confirmed', 'dismissed')", name="ck_triage_status"),
         Index("ix_triage_session", "tenant_id", "session_id"),
     )
 

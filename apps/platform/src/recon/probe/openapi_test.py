@@ -47,9 +47,16 @@ from recon.probe.reconstruct import QueryParam, ReconstructedRequest
 
 def _req(**kw):
     base = dict(
-        operation="GET /x", method="GET", path="/x", hosts=(),
-        query_params=(), body_params=(), content_type=None,
-        example_url=None, probeable=True, endpoint_hashes=(),
+        operation="GET /x",
+        method="GET",
+        path="/x",
+        hosts=(),
+        query_params=(),
+        body_params=(),
+        content_type=None,
+        example_url=None,
+        probeable=True,
+        endpoint_hashes=(),
     )
     base.update(kw)
     return ReconstructedRequest(**base)
@@ -65,8 +72,12 @@ def test_query_params_omit_null_example():
 
 
 def test_body_with_content_type_is_typed_request_body():
-    req = _req(method="POST", operation="POST /x", body_params=("street", "city"),
-               content_type="application/json")
+    req = _req(
+        method="POST",
+        operation="POST /x",
+        body_params=("street", "city"),
+        content_type="application/json",
+    )
     op = _operation_object(req, [])
     schema = op["requestBody"]["content"]["application/json"]["schema"]
     assert schema["type"] == "object"
@@ -96,23 +107,34 @@ from recon.probe.openapi import build_openapi
 
 
 def test_build_validates_and_shapes_a_document():
-    req = _req(operation="GET /users/${id}/orders", method="GET",
-               path="/users/${id}/orders", hosts=("api.example.com",),
-               query_params=(QueryParam("page", None),), example_url=None)
+    req = _req(
+        operation="GET /users/${id}/orders",
+        method="GET",
+        path="/users/${id}/orders",
+        hosts=("api.example.com",),
+        query_params=(QueryParam("page", None),),
+        example_url=None,
+    )
     doc = build_openapi([req], run_id="5ac48ca0-db51-420c-939f-000000000000")
     validate(doc)  # must not raise
     assert doc["openapi"] == "3.0.3"
     assert "/users/{id}/orders" in doc["paths"]
     assert doc["servers"] == [
-        {"url": "https://api.example.com",
-         "description": "Host observed; scheme/port inferred where not seen in a concrete URL."}
+        {
+            "url": "https://api.example.com",
+            "description": "Host observed; scheme/port inferred where not seen in a concrete URL.",
+        }
     ]
 
 
 def test_websocket_excluded_from_paths_and_surfaced():
-    ws = _req(operation="WSS wss://api.example.com/live", method="WSS",
-              path="wss://api.example.com/live", probeable=False,
-              example_url="wss://api.example.com/live")
+    ws = _req(
+        operation="WSS wss://api.example.com/live",
+        method="WSS",
+        path="wss://api.example.com/live",
+        probeable=False,
+        example_url="wss://api.example.com/live",
+    )
     doc = build_openapi([ws], run_id="00000000-0000-0000-0000-000000000000")
     validate(doc)
     assert doc["paths"] == {}
@@ -120,8 +142,12 @@ def test_websocket_excluded_from_paths_and_surfaced():
 
 
 def test_nonstandard_method_excluded_from_paths_and_surfaced():
-    req = _req(operation="PURGE /cache/x", method="PURGE", path="/cache/x",
-               example_url="https://cdn.example.com/cache/x")
+    req = _req(
+        operation="PURGE /cache/x",
+        method="PURGE",
+        path="/cache/x",
+        example_url="https://cdn.example.com/cache/x",
+    )
     doc = build_openapi([req], run_id="00000000-0000-0000-0000-000000000000")
     validate(doc)  # must NOT raise
     assert doc["paths"] == {}
@@ -138,10 +164,18 @@ def test_mixed_valid_and_nonstandard_still_exports_valid():
 
 
 def test_canonicalization_collision_merges():
-    a = _req(operation="GET /users/${id}", method="GET", path="/users/${id}",
-             query_params=(QueryParam("a", None),))
-    b = _req(operation="GET /users/{id}", method="GET", path="/users/{id}",
-             query_params=(QueryParam("b", None),))
+    a = _req(
+        operation="GET /users/${id}",
+        method="GET",
+        path="/users/${id}",
+        query_params=(QueryParam("a", None),),
+    )
+    b = _req(
+        operation="GET /users/{id}",
+        method="GET",
+        path="/users/{id}",
+        query_params=(QueryParam("b", None),),
+    )
     doc = build_openapi([a, b], run_id="00000000-0000-0000-0000-000000000000")
     validate(doc)
     assert list(doc["paths"]) == ["/users/{id}"]
@@ -150,12 +184,18 @@ def test_canonicalization_collision_merges():
 
 
 def test_scheme_and_port_from_example_url():
-    req = _req(operation="GET /x", path="/x", hosts=("api.example.com",),
-               example_url="http://api.example.com:8443/x")
+    req = _req(
+        operation="GET /x",
+        path="/x",
+        hosts=("api.example.com",),
+        example_url="http://api.example.com:8443/x",
+    )
     doc = build_openapi([req], run_id="00000000-0000-0000-0000-000000000000")
     assert doc["servers"] == [
-        {"url": "http://api.example.com:8443",
-         "description": "Host observed; scheme/port inferred where not seen in a concrete URL."}
+        {
+            "url": "http://api.example.com:8443",
+            "description": "Host observed; scheme/port inferred where not seen in a concrete URL.",
+        }
     ]
 
 
@@ -167,29 +207,52 @@ def test_empty_run_is_a_valid_empty_document():
 
 
 def test_no_host_omits_servers():
-    doc = build_openapi([_req(path="/x", hosts=(), example_url=None)],
-                        run_id="00000000-0000-0000-0000-000000000000")
+    doc = build_openapi(
+        [_req(path="/x", hosts=(), example_url=None)], run_id="00000000-0000-0000-0000-000000000000"
+    )
     validate(doc)
     assert "servers" not in doc
 
 
 def test_collision_merges_request_bodies():
-    a = _req(operation="POST /users/${id}", method="POST", path="/users/${id}",
-             body_params=("name", "email"), content_type="application/json")
-    b = _req(operation="POST /users/{id}", method="POST", path="/users/{id}",
-             body_params=("token", "secret"), content_type="application/json")
+    a = _req(
+        operation="POST /users/${id}",
+        method="POST",
+        path="/users/${id}",
+        body_params=("name", "email"),
+        content_type="application/json",
+    )
+    b = _req(
+        operation="POST /users/{id}",
+        method="POST",
+        path="/users/{id}",
+        body_params=("token", "secret"),
+        content_type="application/json",
+    )
     doc = build_openapi([a, b], run_id="00000000-0000-0000-0000-000000000000")
     validate(doc)
-    props = doc["paths"]["/users/{id}"]["post"]["requestBody"]["content"]["application/json"]["schema"]["properties"]
+    props = doc["paths"]["/users/{id}"]["post"]["requestBody"]["content"]["application/json"][
+        "schema"
+    ]["properties"]
     assert set(props) == {"name", "email", "token", "secret"}  # no body field dropped
     assert doc["paths"]["/users/{id}"]["post"]["x-recon-confidence"]["body"] == "inferred"
 
 
 def test_collision_merges_names_only_bodies():
-    a = _req(operation="POST /users/${id}", method="POST", path="/users/${id}",
-             body_params=("a",), content_type=None)
-    b = _req(operation="POST /users/{id}", method="POST", path="/users/{id}",
-             body_params=("b",), content_type=None)
+    a = _req(
+        operation="POST /users/${id}",
+        method="POST",
+        path="/users/${id}",
+        body_params=("a",),
+        content_type=None,
+    )
+    b = _req(
+        operation="POST /users/{id}",
+        method="POST",
+        path="/users/{id}",
+        body_params=("b",),
+        content_type=None,
+    )
     doc = build_openapi([a, b], run_id="00000000-0000-0000-0000-000000000000")
     validate(doc)
     op = doc["paths"]["/users/{id}"]["post"]
@@ -199,13 +262,19 @@ def test_collision_merges_names_only_bodies():
 
 
 def test_servers_deduped_per_host():
-    a = _req(operation="GET /x", path="/x", hosts=("api.example.com",),
-             example_url="https://api.example.com:8443/x")
+    a = _req(
+        operation="GET /x",
+        path="/x",
+        hosts=("api.example.com",),
+        example_url="https://api.example.com:8443/x",
+    )
     b = _req(operation="GET /y", path="/y", hosts=("api.example.com",), example_url=None)
     doc = build_openapi([a, b], run_id="00000000-0000-0000-0000-000000000000")
     assert doc["servers"] == [
-        {"url": "https://api.example.com:8443",
-         "description": "Host observed; scheme/port inferred where not seen in a concrete URL."}
+        {
+            "url": "https://api.example.com:8443",
+            "description": "Host observed; scheme/port inferred where not seen in a concrete URL.",
+        }
     ]
 
 
@@ -247,17 +316,25 @@ def test_dump_rejects_unknown_format():
 
 
 def test_servers_strips_userinfo_and_brackets_ipv6():
-    creds = _req(operation="GET /a", path="/a", hosts=(),
-                 example_url="https://user:pass@evil.example.com:9000/a")
+    creds = _req(
+        operation="GET /a",
+        path="/a",
+        hosts=(),
+        example_url="https://user:pass@evil.example.com:9000/a",
+    )
     doc = build_openapi([creds], run_id="00000000-0000-0000-0000-000000000000")
     assert doc["servers"] == [
-        {"url": "https://evil.example.com:9000",
-         "description": "Host observed; scheme/port inferred where not seen in a concrete URL."}
+        {
+            "url": "https://evil.example.com:9000",
+            "description": "Host observed; scheme/port inferred where not seen in a concrete URL.",
+        }
     ]  # no user:pass@ leaked
 
     v6 = _req(operation="GET /b", path="/b", hosts=(), example_url="http://[::1]:8080/b")
     doc6 = build_openapi([v6], run_id="00000000-0000-0000-0000-000000000000")
     assert doc6["servers"] == [
-        {"url": "http://[::1]:8080",
-         "description": "Host observed; scheme/port inferred where not seen in a concrete URL."}
+        {
+            "url": "http://[::1]:8080",
+            "description": "Host observed; scheme/port inferred where not seen in a concrete URL.",
+        }
     ]  # IPv6 brackets preserved

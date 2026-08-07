@@ -59,7 +59,10 @@ def test_external_map_url_returns_external_ref():
 def test_external_map_url_ignores_inline_and_absent():
     b64 = base64.b64encode(json.dumps(_MAP).encode("utf-8")).decode("ascii")
     # An inline data: map needs no fetch -> None (extract_inline_map handles it).
-    assert sourcemapper.external_map_url(_inline_comment(f"data:application/json;base64,{b64}")) is None
+    assert (
+        sourcemapper.external_map_url(_inline_comment(f"data:application/json;base64,{b64}"))
+        is None
+    )
     # No sourceMappingURL comment at all -> None.
     assert sourcemapper.external_map_url("const x = 1;\n") is None
 
@@ -78,10 +81,7 @@ def test_no_sourcemap_comment_is_none():
 def test_last_sourcemap_comment_wins():
     raw = json.dumps(_MAP).encode("utf-8")
     b64 = base64.b64encode(raw).decode("ascii")
-    js = (
-        _inline_comment("old.js.map")
-        + _inline_comment(f"data:application/json;base64,{b64}")
-    )
+    js = _inline_comment("old.js.map") + _inline_comment(f"data:application/json;base64,{b64}")
     extracted = sourcemapper.extract_inline_map(js)
     assert extracted is not None and json.loads(extracted)["sources"] == ["app/src/api.js"]
 
@@ -89,9 +89,15 @@ def test_last_sourcemap_comment_wins():
 def test_legacy_at_comment_and_malformed_base64():
     raw = json.dumps(_MAP).encode("utf-8")
     b64 = base64.b64encode(raw).decode("ascii")
-    assert sourcemapper.extract_inline_map(f"//@ sourceMappingURL=data:application/json;base64,{b64}") is not None
+    assert (
+        sourcemapper.extract_inline_map(f"//@ sourceMappingURL=data:application/json;base64,{b64}")
+        is not None
+    )
     # Malformed base64 payload -> None, never a crash.
-    assert sourcemapper.extract_inline_map("//# sourceMappingURL=data:application/json;base64,!!!!") is None
+    assert (
+        sourcemapper.extract_inline_map("//# sourceMappingURL=data:application/json;base64,!!!!")
+        is None
+    )
 
 
 def test_recover_sources_walks_output_tree(monkeypatch):
@@ -117,7 +123,9 @@ def test_recover_sources_walks_output_tree(monkeypatch):
 
 
 def test_recover_sources_missing_binary_is_unavailable():
-    result = sourcemapper.recover_sources(b'{"version":3}', bin_path="definitely-not-sourcemapper-xyz")
+    result = sourcemapper.recover_sources(
+        b'{"version":3}', bin_path="definitely-not-sourcemapper-xyz"
+    )
     assert result.status == "unavailable"
     assert result.files == []
 

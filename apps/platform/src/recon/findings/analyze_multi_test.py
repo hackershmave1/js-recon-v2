@@ -44,8 +44,12 @@ def test_analyze_loop_dedups_across_assets_with_attribution(redis, authorized_se
     k1 = storage.put_blob(tenant, run_id, "input", src)
     k2 = storage.put_blob(tenant, run_id, "input", src + b" ")  # distinct bytes -> distinct key
     with tenant_session(tenant) as s:
-        assets.seed_pending(s, tenant_id=tenant, run_id=run_id,
-                            urls=["https://acme.io/a.js", "https://acme.io/b.js"])
+        assets.seed_pending(
+            s,
+            tenant_id=tenant,
+            run_id=run_id,
+            urls=["https://acme.io/a.js", "https://acme.io/b.js"],
+        )
     rows = assets.list_for_run(tenant, run_id)
     with tenant_session(tenant) as s:
         assets.set_fetch_ok(s, rows[0].id, k1)
@@ -54,14 +58,20 @@ def test_analyze_loop_dedups_across_assets_with_attribution(redis, authorized_se
     analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
 
     with tenant_session(tenant) as s:
-        findings = s.execute(select(models.Finding).where(models.Finding.run_id == run_id)
-                             ).scalars().all()
+        findings = (
+            s.execute(select(models.Finding).where(models.Finding.run_id == run_id)).scalars().all()
+        )
         endpoint = [f for f in findings if f.type == "endpoint"]
         assert len(endpoint) == 1
-        occ = s.execute(
-            select(models.FindingOccurrence)
-            .where(models.FindingOccurrence.finding_id == endpoint[0].id)
-        ).scalars().all()
+        occ = (
+            s.execute(
+                select(models.FindingOccurrence).where(
+                    models.FindingOccurrence.finding_id == endpoint[0].id
+                )
+            )
+            .scalars()
+            .all()
+        )
         assert {str(o.run_asset_id) for o in occ} == {rows[0].id, rows[1].id}
     assert all(a.analyze_status == "ok" for a in assets.list_for_run(tenant, run_id))
 
@@ -74,8 +84,9 @@ def test_analyze_loop_records_ok_and_failed_per_asset(redis, authorized_session,
     # not an infra one (ClientError/SQLAlchemyError now propagate instead -- see
     # test_analyze_loop_reraises_infra_error_instead_of_recording_failed).
     tenant, session_id = authorized_session
-    run_id = _crawl_run(redis, tenant, session_id,
-                        ["https://acme.io/a.js", "https://acme.io/bad.js"])
+    run_id = _crawl_run(
+        redis, tenant, session_id, ["https://acme.io/a.js", "https://acme.io/bad.js"]
+    )
     rows = {r.url: r for r in assets.list_for_run(tenant, run_id)}
     good_key = storage.put_blob(tenant, run_id, "input", b'fetch("/api/good");')
     bad_key = storage.put_blob(tenant, run_id, "input", b"BOOM_TRIGGER")
@@ -201,8 +212,7 @@ def test_analyze_loop_honors_cancel(redis, authorized_session, monkeypatch):
     from recon.runs import service as run_service
 
     tenant, session_id = authorized_session
-    run_id = _crawl_run(redis, tenant, session_id,
-                        ["https://acme.io/a.js", "https://acme.io/b.js"])
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/a.js", "https://acme.io/b.js"])
     key = storage.put_blob(tenant, run_id, "input", b'fetch("/api/x");')
     rows = assets.list_for_run(tenant, run_id)
     with tenant_session(tenant) as s:

@@ -57,8 +57,11 @@ def test_status_view_exposes_control_flags(redis, authorized_session):
     # transition (only a QUEUED run pauses immediately) — this isolates the
     # flag's effect on the ETag from any state change.
     service.transition(
-        redis, tenant_id=tenant, run_id=view.id,
-        to_state=RunState.DISCOVERING, stage=RunStage.DISCOVERING,
+        redis,
+        tenant_id=tenant,
+        run_id=view.id,
+        to_state=RunState.DISCOVERING,
+        stage=RunStage.DISCOVERING,
     )
     active = queries.get_status(tenant, view.id)
 

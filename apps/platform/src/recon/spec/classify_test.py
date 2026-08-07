@@ -29,6 +29,7 @@ from recon.spec.ingest import DocumentedOp, ingest_spec
 
 # --- Regex parity (drift guard) -----------------------------------------------
 
+
 def test_numeric_uuid_regexes_match_normalize():
     """Guard against accidental drift of the _INT_RE and _UUID_RE regexes
     between classify.py and normalize.py (design §11 risk: a mismatch silently
@@ -40,6 +41,7 @@ def test_numeric_uuid_regexes_match_normalize():
 
 
 # --- compare_key (§5.1) -------------------------------------------------------
+
 
 def test_compare_key_wildcards_all_param_styles():
     assert compare_key("GET /pets/{id}") == "GET /pets/*"
@@ -78,6 +80,7 @@ def test_compare_key_parity_across_param_spellings():
 
 # --- is_partial (§5.2) --------------------------------------------------------
 
+
 def test_is_partial():
     assert is_partial("GET /${API}/pets") is True  # leading interpolation
     assert is_partial("GET /v${n}/pets") is True  # mixed segment
@@ -105,6 +108,7 @@ def test_is_partial_all_literal_path_is_not_partial():
 
 
 # --- is_non_http (§5.1, gate B3) ---------------------------------------------
+
 
 def test_is_non_http():
     assert is_non_http("WS /chat") is True
@@ -210,6 +214,7 @@ def test_no_documented_ops_still_shadows_a_complete_path():
 # aggregation over whatever `Classification`s it's handed, never routed
 # through `classify_operation`.
 
+
 def test_summarize_returns_spec_summary_with_expected_fields():
     # Keyword-args pin the exact field names of the frozen dataclass contract,
     # not just their values by position.
@@ -296,6 +301,7 @@ def test_summary_ratio_computes_expected_fraction():
 # `https:`/`api.example.com`-shaped segment the client side can never produce,
 # and the `documented` bucket would silently empty for any spec that uses a
 # real, host-ful server URL -- exactly the bug this test pins.
+
 
 def test_hostful_server_url_documented_op_matches_client_operation():
     ingested = ingest_spec(

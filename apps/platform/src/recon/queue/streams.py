@@ -49,9 +49,7 @@ def _encode(message: dict[str, Any]) -> dict[str, str]:
 
 def _decode(raw: dict[Any, Any]) -> dict[str, Any]:
     fields = {
-        (k.decode() if isinstance(k, bytes) else k): (
-            v.decode() if isinstance(v, bytes) else v
-        )
+        (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
         for k, v in raw.items()
     }
     return json.loads(fields["data"])
@@ -122,9 +120,7 @@ def promote_due(redis: Redis, queue: QueueName, now: float | None = None) -> int
     return promoted
 
 
-def to_dlq(
-    redis: Redis, queue: QueueName, message: dict[str, Any], error: str
-) -> str:
+def to_dlq(redis: Redis, queue: QueueName, message: dict[str, Any], error: str) -> str:
     """Route a poison message to the per-queue dead-letter stream with its cause."""
     fields = _encode(message)
     fields["error"] = error

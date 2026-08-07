@@ -4,10 +4,16 @@ from recon.probe.reconstruct import ReconstructedRequest
 
 def _req(**overrides):
     base = dict(
-        operation="POST /api/users/{id}", method="POST", path="/api/users/{id}",
-        hosts=("api.acme.io",), query_params=(), body_params=("amount",),
-        content_type="application/json", example_url="/api/users/123",
-        probeable=True, endpoint_hashes=("e1",),
+        operation="POST /api/users/{id}",
+        method="POST",
+        path="/api/users/{id}",
+        hosts=("api.acme.io",),
+        query_params=(),
+        body_params=("amount",),
+        content_type="application/json",
+        example_url="/api/users/123",
+        probeable=True,
+        endpoint_hashes=("e1",),
     )
     base.update(overrides)
     return ReconstructedRequest(**base)
@@ -109,7 +115,12 @@ def test_curl_absolute_example_url_no_double_scheme():
     # example_url is the raw JS literal and may already be absolute — the host
     # must come from it directly, never re-prepended (was: double-scheme bug).
     out = serialize.to_curl(
-        _req(hosts=("api.x.com",), example_url="https://api.x.com/v1/users", body_params=(), content_type=None)
+        _req(
+            hosts=("api.x.com",),
+            example_url="https://api.x.com/v1/users",
+            body_params=(),
+            content_type=None,
+        )
     )
     assert "'https://api.x.com/v1/users'" in out
     assert "api.x.comhttps://" not in out
@@ -118,8 +129,11 @@ def test_curl_absolute_example_url_no_double_scheme():
 def test_http_absolute_example_url_uses_origin_form():
     out = serialize.to_http(
         _req(
-            hosts=("api.x.com",), example_url="https://api.x.com/v1/users",
-            body_params=(), content_type=None, method="GET",
+            hosts=("api.x.com",),
+            example_url="https://api.x.com/v1/users",
+            body_params=(),
+            content_type=None,
+            method="GET",
         )
     )
     assert out.startswith("GET /v1/users HTTP/1.1")

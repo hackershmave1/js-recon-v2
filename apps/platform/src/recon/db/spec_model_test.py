@@ -8,11 +8,15 @@ def test_spec_tables_registered_and_tenant_scoped():
 
 
 def test_finding_spec_status_unique_on_session_hash():
-    uqs = {tuple(c.name for c in u.columns) for u in models.FindingSpecStatus.__table__.constraints
-           if u.__class__.__name__ == "UniqueConstraint"}
+    uqs = {
+        tuple(c.name for c in u.columns)
+        for u in models.FindingSpecStatus.__table__.constraints
+        if u.__class__.__name__ == "UniqueConstraint"
+    }
     assert ("session_id", "finding_hash") in uqs
 
 
 def test_spec_blob_kind_registered():
     from recon import storage
+
     assert "spec" in storage.BLOB_KINDS

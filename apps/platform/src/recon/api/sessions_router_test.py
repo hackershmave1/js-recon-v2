@@ -1,4 +1,5 @@
 """Unknown-tenant mapping: a valid-format but unprovisioned tenant → 400."""
+
 from __future__ import annotations
 
 import uuid

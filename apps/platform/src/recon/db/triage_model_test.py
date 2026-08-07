@@ -14,10 +14,14 @@ def test_finding_triage_is_tenant_isolated_by_rls():
         tenant_a, name="e", scope_hosts=["acme.io"], authorized_by="t"
     )
     with tenant_session(tenant_a) as session:
-        session.add(models.FindingTriage(
-            tenant_id=tenant_a, session_id=session_view.id,
-            finding_hash="h" * 64, status="confirmed",
-        ))
+        session.add(
+            models.FindingTriage(
+                tenant_id=tenant_a,
+                session_id=session_view.id,
+                finding_hash="h" * 64,
+                status="confirmed",
+            )
+        )
     with tenant_session(tenant_a) as session:
         assert session.query(models.FindingTriage).count() == 1
     with tenant_session(tenant_b) as session:

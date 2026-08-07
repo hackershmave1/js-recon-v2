@@ -67,7 +67,12 @@ def test_parse_findings_skips_summary_and_noise_lines():
 
 def test_parse_findings_skips_entries_missing_rule_or_snippet():
     envelope = json.dumps(
-        {"findings": [{"rule": {"id": "kingfisher.aws.1"}, "finding": {}}, {"finding": {"snippet": "x"}}]}
+        {
+            "findings": [
+                {"rule": {"id": "kingfisher.aws.1"}, "finding": {}},
+                {"finding": {"snippet": "x"}},
+            ]
+        }
     ).encode("utf-8")
     assert kingfisher.parse_findings(envelope) == []
 
@@ -116,7 +121,7 @@ def test_locate_snippet_absent_or_empty_is_none():
 
 
 def test_scan_missing_binary_degrades_gracefully():
-    result = kingfisher.scan(b'const x = 1;', bin_path="definitely-not-kingfisher-xyzzy")
+    result = kingfisher.scan(b"const x = 1;", bin_path="definitely-not-kingfisher-xyzzy")
     assert result.status == "unavailable"
     assert result.secrets == []
 
@@ -125,7 +130,7 @@ def test_scan_reraises_genuine_engine_error():
     # A real failure (here: the interpreter run as if it were kingfisher exits
     # non-zero) must NOT be swallowed as "no secrets" — it fails the stage.
     with pytest.raises(engines.EngineError):
-        kingfisher.scan(b'const x = 1;', bin_path=sys.executable)
+        kingfisher.scan(b"const x = 1;", bin_path=sys.executable)
 
 
 def test_scan_real_binary_detects_planted_secret(engines_required):

@@ -53,15 +53,14 @@ def start_run(
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     if not session.authorization_ack:
-        raise HTTPException(
-            status_code=403, detail="session is not authorized for recon"
-        )
+        raise HTTPException(status_code=403, detail="session is not authorized for recon")
     # Fail fast: a crawl target outside the session scope (or under a scopeless
     # upload session) is refused here with a clear 400 instead of dying later in
     # the worker's seed guard. This is the cheap name-only check; the worker still
     # does the full DNS/public-IP SSRF check on the seed (S2).
     if body.target and not egress.host_in_scope(
-        egress.host_of(body.target), session.scope_hosts,
+        egress.host_of(body.target),
+        session.scope_hosts,
         allow_local=get_settings().allow_local_egress,
     ):
         raise HTTPException(
@@ -189,9 +188,7 @@ def _sse_frame(event: dict) -> str:
     )
 
 
-def _event_stream(
-    redis: Redis, tenant_id: str, run_id: str, last_id: str | None
-) -> Iterator[str]:
+def _event_stream(redis: Redis, tenant_id: str, run_id: str, last_id: str | None) -> Iterator[str]:
     # NOTE (follow-up, REQ-R2 hardening): replay currently reads only the Redis
     # fast-path stream. If it is trimmed past the client's Last-Event-ID (or
     # Redis restarts), the durable run_event table must backfill the gap by

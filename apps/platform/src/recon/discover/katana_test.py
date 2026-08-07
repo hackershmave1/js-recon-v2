@@ -4,16 +4,19 @@ from recon.discover import katana
 
 def test_build_argv_standard_by_default():
     argv = katana.build_argv(
-        katana_bin="katana", domain="acme.io", scope_hosts=["acme.io"],
-        depth=3, crawl_duration_seconds=120.0,
+        katana_bin="katana",
+        domain="acme.io",
+        scope_hosts=["acme.io"],
+        depth=3,
+        crawl_duration_seconds=120.0,
     )
     assert argv[0] == "katana"
     assert argv[argv.index("-u") + 1] == "https://acme.io"
     assert "-jsonl" in argv
     assert argv[argv.index("-field-scope") + 1] == "rdn"
     assert "-crawl-scope" in argv
-    assert "-jc" in argv       # REQ-CE1: -jc parses lazy import() chunks out of JS, default on
-    assert "-em" not in argv   # -em js filtered everything; parse_assets filters .js
+    assert "-jc" in argv  # REQ-CE1: -jc parses lazy import() chunks out of JS, default on
+    assert "-em" not in argv  # -em js filtered everything; parse_assets filters .js
     assert "-headless" not in argv  # standard by default
 
 
@@ -21,16 +24,24 @@ def test_build_argv_js_crawl_can_be_disabled():
     # REQ-CE1 kill-switch: -jc is default-on but config-gated, so a katana release
     # that regresses -jc on some target has an off-ramp.
     argv = katana.build_argv(
-        katana_bin="katana", domain="acme.io", scope_hosts=["acme.io"],
-        depth=3, crawl_duration_seconds=120.0, js_crawl=False,
+        katana_bin="katana",
+        domain="acme.io",
+        scope_hosts=["acme.io"],
+        depth=3,
+        crawl_duration_seconds=120.0,
+        js_crawl=False,
     )
     assert "-jc" not in argv
 
 
 def test_build_argv_headless_is_opt_in():
     argv = katana.build_argv(
-        katana_bin="katana", domain="acme.io", scope_hosts=["acme.io"],
-        depth=3, crawl_duration_seconds=120.0, headless=True,
+        katana_bin="katana",
+        domain="acme.io",
+        scope_hosts=["acme.io"],
+        depth=3,
+        crawl_duration_seconds=120.0,
+        headless=True,
     )
     assert "-headless" in argv
     assert "-no-sandbox" in argv
@@ -44,8 +55,12 @@ def test_build_argv_headless_uses_system_chrome_path_when_supplied():
     # Points katana at the image's baked-in chromium so go-rod does not download
     # its own browser at runtime (verified against katana v1.6.1 + chromium 150).
     argv = katana.build_argv(
-        katana_bin="katana", domain="acme.io", scope_hosts=["acme.io"],
-        depth=3, crawl_duration_seconds=120.0, headless=True,
+        katana_bin="katana",
+        domain="acme.io",
+        scope_hosts=["acme.io"],
+        depth=3,
+        crawl_duration_seconds=120.0,
+        headless=True,
         system_chrome_path="/usr/bin/chromium",
     )
     assert "-headless" in argv
@@ -55,22 +70,28 @@ def test_build_argv_headless_uses_system_chrome_path_when_supplied():
 def test_build_argv_system_chrome_path_ignored_without_headless():
     # No headless -> standard crawl, so the chrome path is irrelevant and dropped.
     argv = katana.build_argv(
-        katana_bin="katana", domain="acme.io", scope_hosts=["acme.io"],
-        depth=3, crawl_duration_seconds=120.0, system_chrome_path="/usr/bin/chromium",
+        katana_bin="katana",
+        domain="acme.io",
+        scope_hosts=["acme.io"],
+        depth=3,
+        crawl_duration_seconds=120.0,
+        system_chrome_path="/usr/bin/chromium",
     )
     assert "-headless" not in argv
     assert "-system-chrome-path" not in argv
 
 
 def test_parse_assets_keeps_ordered_unique_js_urls():
-    stdout = b"\n".join([
-        b'{"request":{"endpoint":"https://acme.io/static/app.js"}}',
-        b'not json - skipped',
-        b'{"request":{"endpoint":"https://acme.io/vendor.js"}}',
-        b'{"request":{"endpoint":"https://acme.io/static/app.js"}}',  # dup
-        b'{"request":{"endpoint":"https://acme.io/index.html"}}',      # not .js
-        b'{"endpoint":"https://acme.io/legacy.js"}',                    # top-level field
-    ])
+    stdout = b"\n".join(
+        [
+            b'{"request":{"endpoint":"https://acme.io/static/app.js"}}',
+            b"not json - skipped",
+            b'{"request":{"endpoint":"https://acme.io/vendor.js"}}',
+            b'{"request":{"endpoint":"https://acme.io/static/app.js"}}',  # dup
+            b'{"request":{"endpoint":"https://acme.io/index.html"}}',  # not .js
+            b'{"endpoint":"https://acme.io/legacy.js"}',  # top-level field
+        ]
+    )
     assert katana.parse_assets(stdout) == [
         "https://acme.io/static/app.js",
         "https://acme.io/vendor.js",

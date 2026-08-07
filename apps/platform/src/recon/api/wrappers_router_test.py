@@ -31,7 +31,9 @@ def _run_with_source(redis, tenant, session_id, source: bytes) -> str:
 
 def test_post_wrapper_recovers_and_lists_endpoint(client, redis, authorized_session):
     tenant, session_id = authorized_session
-    run_id = _run_with_source(redis, tenant, session_id, b"const api = makeClient(); api.get('/svc');")
+    run_id = _run_with_source(
+        redis, tenant, session_id, b"const api = makeClient(); api.get('/svc');"
+    )
 
     resp = client.post(f"/runs/{run_id}/wrappers", headers=_headers(tenant), json={"callee": "api"})
     assert resp.status_code == 200
@@ -62,8 +64,9 @@ def test_delete_wrapper(client, authorized_session):
         session.add(run)
         session.flush()
         run_id = str(run.id)
-    rule = client.post(f"/runs/{run_id}/wrappers", headers=_headers(tenant),
-                       json={"callee": "api"}).json()["rule"]
+    rule = client.post(
+        f"/runs/{run_id}/wrappers", headers=_headers(tenant), json={"callee": "api"}
+    ).json()["rule"]
     resp = client.delete(f"/runs/{run_id}/wrappers/{rule['id']}", headers=_headers(tenant))
     assert resp.status_code == 204
     assert client.get(f"/runs/{run_id}/wrappers", headers=_headers(tenant)).json() == []
@@ -82,14 +85,19 @@ def test_invalid_callee_is_422(client, authorized_session):
 
 
 def test_unknown_run_is_404(client, tenant):
-    resp = client.post("/runs/00000000-0000-0000-0000-000000000000/wrappers",
-                       headers=_headers(tenant), json={"callee": "api"})
+    resp = client.post(
+        "/runs/00000000-0000-0000-0000-000000000000/wrappers",
+        headers=_headers(tenant),
+        json={"callee": "api"},
+    )
     assert resp.status_code == 404
 
 
 def test_other_tenant_run_is_404(client, redis, authorized_session):
     owner_tenant, session_id = authorized_session
-    run_id = _run_with_source(redis, owner_tenant, session_id, b"const api = makeClient(); api.get('/x');")
+    run_id = _run_with_source(
+        redis, owner_tenant, session_id, b"const api = makeClient(); api.get('/x');"
+    )
     other = sessions_service.create_tenant("wrapper-other")
     resp = client.post(f"/runs/{run_id}/wrappers", headers=_headers(other), json={"callee": "api"})
     assert resp.status_code == 404

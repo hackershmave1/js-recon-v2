@@ -85,14 +85,10 @@ def publish_stage_job(redis: Redis, message: dict) -> None:
     streams.enqueue(redis, queue, message)
 
 
-def enqueue_stage(
-    redis: Redis, *, tenant_id: str, run_id: str, stage: RunStage
-) -> str:
+def enqueue_stage(redis: Redis, *, tenant_id: str, run_id: str, stage: RunStage) -> str:
     """Create the job row (own transaction) and put its message on the queue."""
     with tenant_session(tenant_id) as session:
-        job_id, message = create_stage_job(
-            session, tenant_id=tenant_id, run_id=run_id, stage=stage
-        )
+        job_id, message = create_stage_job(session, tenant_id=tenant_id, run_id=run_id, stage=stage)
     publish_stage_job(redis, message)
     return job_id
 
@@ -178,9 +174,7 @@ def rerun(redis: Redis, *, tenant_id: str, session_id: str) -> RunView:
             target=target,
         )
     if target:
-        return start_run(
-            redis, tenant_id=tenant_id, session_id=str(session_id), target=target
-        )
+        return start_run(redis, tenant_id=tenant_id, session_id=str(session_id), target=target)
     raise NoRunToRerun("latest run has neither stored input nor a target to re-run")
 
 

@@ -99,10 +99,14 @@ def test_health(make_capture_client):
 def test_save_files_accumulates_one_queued_run(make_capture_client):
     client = make_capture_client()
     sid = f"sess-{uuid.uuid4().hex[:8]}"
-    body = _save(client, sid, [
-        _file("https://acme.io/a.js", "fetch('/api/v1/users');", sid),
-        _file("https://acme.io/b.js", "fetch('/v2/orders',{method:'POST'});", sid),
-    ])
+    body = _save(
+        client,
+        sid,
+        [
+            _file("https://acme.io/a.js", "fetch('/api/v1/users');", sid),
+            _file("https://acme.io/b.js", "fetch('/v2/orders',{method:'POST'});", sid),
+        ],
+    )
     assert body["stored"] == 2 and body["failed"] == 0
     run_id, tid = body["runId"], _tenant_id(client.capture_tenant_name)
 
@@ -154,10 +158,14 @@ def test_duplicate_url_in_batch_first_wins(make_capture_client):
     client = make_capture_client()
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     first, second = "first();", "second();"
-    body = _save(client, sid, [
-        _file("https://acme.io/x.js", first, sid),
-        _file("https://acme.io/x.js", second, sid),  # same url, different content
-    ])
+    body = _save(
+        client,
+        sid,
+        [
+            _file("https://acme.io/x.js", first, sid),
+            _file("https://acme.io/x.js", second, sid),  # same url, different content
+        ],
+    )
     tid = _tenant_id(client.capture_tenant_name)
     rows = run_assets.list_for_run(tid, body["runId"])
     assert len(rows) == 1  # coalesced to a single (run_id, url) asset
@@ -167,10 +175,14 @@ def test_duplicate_url_in_batch_first_wins(make_capture_client):
 def test_oversize_file_is_a_per_file_failure_not_a_batch_drop(make_capture_client):
     client = make_capture_client(RECON_MAX_UPLOAD_BYTES=16)
     sid = f"sess-{uuid.uuid4().hex[:8]}"
-    body = _save(client, sid, [
-        _file("https://acme.io/big.js", "x" * 100, sid),  # over the 16-byte cap
-        _file("https://acme.io/ok.js", "y();", sid),
-    ])
+    body = _save(
+        client,
+        sid,
+        [
+            _file("https://acme.io/big.js", "x" * 100, sid),  # over the 16-byte cap
+            _file("https://acme.io/ok.js", "y();", sid),
+        ],
+    )
     assert body["stored"] == 1 and body["failed"] == 1  # batch survived, sibling stored
     tid = _tenant_id(client.capture_tenant_name)
     rows = run_assets.list_for_run(tid, body["runId"])
@@ -180,13 +192,19 @@ def test_oversize_file_is_a_per_file_failure_not_a_batch_drop(make_capture_clien
 def test_malformed_file_does_not_reject_the_whole_batch(make_capture_client):
     client = make_capture_client()
     sid = f"sess-{uuid.uuid4().hex[:8]}"
-    body = _save(client, sid, [
-        {"url": "https://acme.io/bad.js"},  # missing content -> per-file failure, not a 422
-        _file("https://acme.io/good.js", "ok();", sid),
-    ])
+    body = _save(
+        client,
+        sid,
+        [
+            {"url": "https://acme.io/bad.js"},  # missing content -> per-file failure, not a 422
+            _file("https://acme.io/good.js", "ok();", sid),
+        ],
+    )
     assert body["stored"] == 1 and body["failed"] == 1
     tid = _tenant_id(client.capture_tenant_name)
-    assert {r.url for r in run_assets.list_for_run(tid, body["runId"])} == {"https://acme.io/good.js"}
+    assert {r.url for r in run_assets.list_for_run(tid, body["runId"])} == {
+        "https://acme.io/good.js"
+    }
 
 
 def test_save_files_without_session_id_is_noop(make_capture_client):
@@ -198,11 +216,16 @@ def test_blob_store_failure_returns_503_so_the_extension_retries(make_capture_cl
     # An infra failure (object store down) must be a 5xx: the extension treats any
     # non-429 4xx as a PERMANENT drop of un-recapturable JS, but retries 5xx.
     client = make_capture_client()
-    monkeypatch.setattr("recon.storage.put_blob", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("minio down")))
+    monkeypatch.setattr(
+        "recon.storage.put_blob", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("minio down"))
+    )
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     r = client.post(
         "/api/save-files",
-        json={"metadata": {"sessionId": sid}, "files": [_file("https://acme.io/a.js", "a();", sid)]},
+        json={
+            "metadata": {"sessionId": sid},
+            "files": [_file("https://acme.io/a.js", "a();", sid)],
+        },
     )
     assert r.status_code == 503
 
@@ -220,10 +243,14 @@ def test_analyze_start_unknown_session_is_404(make_capture_client):
 def test_analyze_start_emits_event_and_enqueues_one_walk(make_capture_client):
     client = make_capture_client()
     sid = f"sess-{uuid.uuid4().hex[:8]}"
-    _save(client, sid, [
-        _file("https://acme.io/a.js", "fetch('/api/v1/users');", sid),
-        _file("https://acme.io/b.js", "b();", sid),
-    ])
+    _save(
+        client,
+        sid,
+        [
+            _file("https://acme.io/a.js", "fetch('/api/v1/users');", sid),
+            _file("https://acme.io/b.js", "b();", sid),
+        ],
+    )
     body = client.post(f"/api/sessions/{sid}/analyze/start").json()
     assert body["started"] is True and body["job"]
     run_id, tid = body["runId"], _tenant_id(client.capture_tenant_name)
@@ -232,7 +259,9 @@ def test_analyze_start_emits_event_and_enqueues_one_walk(make_capture_client):
     assert event and event["status"] == "ok" and event["count"] == 2
     with tenant_session(tid) as s:
         n_jobs = s.scalar(
-            select(func.count()).select_from(Job).where(Job.run_id == run_id, Job.stage == "discovering")
+            select(func.count())
+            .select_from(Job)
+            .where(Job.run_id == run_id, Job.stage == "discovering")
         )
         assert n_jobs == 1
 
@@ -276,10 +305,18 @@ def test_analyze_start_with_no_captured_files_is_a_clean_noop(make_capture_clien
 def test_end_to_end_upload_analyze_to_findings(make_capture_client, redis, monkeypatch):
     client = make_capture_client()
     sid = f"sess-{uuid.uuid4().hex[:8]}"
-    _save(client, sid, [
-        _file("https://acme.io/a.js", "fetch('/api/v1/users');", sid),
-        _file("https://acme.io/b.js", "fetch('/api/v1/users'); fetch('/v2/orders',{method:'POST'});", sid),
-    ])
+    _save(
+        client,
+        sid,
+        [
+            _file("https://acme.io/a.js", "fetch('/api/v1/users');", sid),
+            _file(
+                "https://acme.io/b.js",
+                "fetch('/api/v1/users'); fetch('/v2/orders',{method:'POST'});",
+                sid,
+            ),
+        ],
+    )
     started = client.post(f"/api/sessions/{sid}/analyze/start").json()
     assert started["started"]
     run_id, tid = started["runId"], _tenant_id(client.capture_tenant_name)
@@ -289,8 +326,22 @@ def test_end_to_end_upload_analyze_to_findings(make_capture_client, redis, monke
     # ever reached — captured post-auth URLs must never be re-requested.
     calls = {"fetch_url": 0, "validate_target": 0}
     real_fetch, real_validate = fetch.fetch_url, egress.validate_target
-    monkeypatch.setattr(fetch, "fetch_url", lambda *a, **k: (calls.__setitem__("fetch_url", calls["fetch_url"] + 1), real_fetch(*a, **k))[1])
-    monkeypatch.setattr(egress, "validate_target", lambda *a, **k: (calls.__setitem__("validate_target", calls["validate_target"] + 1), real_validate(*a, **k))[1])
+    monkeypatch.setattr(
+        fetch,
+        "fetch_url",
+        lambda *a, **k: (
+            calls.__setitem__("fetch_url", calls["fetch_url"] + 1),
+            real_fetch(*a, **k),
+        )[1],
+    )
+    monkeypatch.setattr(
+        egress,
+        "validate_target",
+        lambda *a, **k: (
+            calls.__setitem__("validate_target", calls["validate_target"] + 1),
+            real_validate(*a, **k),
+        )[1],
+    )
 
     # Drive the REAL worker. No katana/network: discover short-circuits on the
     # event, fetch skips every pre-fetched asset, analyze does the real extraction.
@@ -329,7 +380,14 @@ def test_progress_before_analyze_is_idle(make_capture_client):
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     _save(client, sid, [_file("https://acme.io/a.js", "a();", sid)])
     job = client.get(f"/api/sessions/{sid}/analyze/progress").json()["job"]
-    assert job["counts"] == {"queued": 0, "analyzing": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0}
+    assert job["counts"] == {
+        "queued": 0,
+        "analyzing": 0,
+        "completed": 0,
+        "failed": 0,
+        "cancelled": 0,
+        "total": 0,
+    }
     assert job["files"] == []
 
 
@@ -338,7 +396,11 @@ def test_progress_after_start_before_worker_is_running(make_capture_client):
     # pending assets read "queued" so the popup shows running (inFlight > 0).
     client = make_capture_client()
     sid = f"sess-{uuid.uuid4().hex[:8]}"
-    _save(client, sid, [_file("https://acme.io/a.js", "a();", sid), _file("https://acme.io/b.js", "b();", sid)])
+    _save(
+        client,
+        sid,
+        [_file("https://acme.io/a.js", "a();", sid), _file("https://acme.io/b.js", "b();", sid)],
+    )
     client.post(f"/api/sessions/{sid}/analyze/start")
     job = client.get(f"/api/sessions/{sid}/analyze/progress").json()["job"]
     assert job["counts"]["total"] == 2 and job["counts"]["queued"] == 2
@@ -372,7 +434,8 @@ def test_progress_terminal_run_with_pending_asset_settles(make_capture_client, r
     started = client.post(f"/api/sessions/{sid}/analyze/start").json()
     tid = _tenant_id(client.capture_tenant_name)
     monkeypatch.setattr(
-        analyze_mod, "analyze_run",
+        analyze_mod,
+        "analyze_run",
         lambda *a, **k: (_ for _ in ()).throw(retry.FatalError("analyze exploded")),
     )
     flags = None
@@ -401,7 +464,10 @@ def test_create_then_list_project(make_capture_client):
     client = make_capture_client()
     created = client.post(
         "/api/projects",
-        json={"name": "Acme engagement", "defaults": {"scope": {"rootDomains": ["acme.io", "api.acme.io"]}}},
+        json={
+            "name": "Acme engagement",
+            "defaults": {"scope": {"rootDomains": ["acme.io", "api.acme.io"]}},
+        },
     ).json()
     assert created["id"] and created["name"] == "Acme engagement"
     assert created["defaults"]["scope"]["rootDomains"] == ["acme.io", "api.acme.io"]
@@ -429,7 +495,10 @@ def test_save_files_binds_a_valid_project(make_capture_client):
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     body = client.post(
         "/api/save-files",
-        json={"metadata": {"sessionId": sid, "projectId": pid}, "files": [_file("https://acme.io/a.js", "a();", sid)]},
+        json={
+            "metadata": {"sessionId": sid, "projectId": pid},
+            "files": [_file("https://acme.io/a.js", "a();", sid)],
+        },
     ).json()
     tid = _tenant_id(client.capture_tenant_name)  # tenant exists once a request created it
     assert sessions_service.get_session(tid, body["sessionId"]).engagement_id == pid
@@ -444,7 +513,10 @@ def test_save_files_ignores_garbage_or_foreign_project(make_capture_client):
         sid = f"sess-{uuid.uuid4().hex[:8]}"
         r = client.post(
             "/api/save-files",
-            json={"metadata": {"sessionId": sid, "projectId": bad}, "files": [_file("https://acme.io/a.js", "a();", sid)]},
+            json={
+                "metadata": {"sessionId": sid, "projectId": bad},
+                "files": [_file("https://acme.io/a.js", "a();", sid)],
+            },
         )
         assert r.status_code == 200
         tid = _tenant_id(client.capture_tenant_name)  # tenant exists after the request
@@ -486,7 +558,9 @@ def test_save_files_source_map_retry_is_first_wins(make_capture_client):
     # the input_ref first-wins rule) — the original recovery stays stable.
     client = make_capture_client()
     sid = f"sess-{uuid.uuid4().hex[:8]}"
-    b1 = _save(client, sid, [{**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": _MAP}])
+    b1 = _save(
+        client, sid, [{**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": _MAP}]
+    )
     tid = _tenant_id(client.capture_tenant_name)
     ref1 = _asset(tid, b1["runId"], "https://acme.io/a.js").source_map_ref
     other = {"version": 3, "sources": ["other.js"], "mappings": "BBBB"}
@@ -499,7 +573,9 @@ def test_save_files_oversized_map_skipped_file_still_stored(make_capture_client)
     client = make_capture_client(RECON_MAX_UPLOAD_BYTES=64)
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     big_map = {"version": 3, "sources": ["x"], "mappings": "A" * 200}
-    body = _save(client, sid, [{**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": big_map}])
+    body = _save(
+        client, sid, [{**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": big_map}]
+    )
     assert body["stored"] == 1 and body["failed"] == 0
     tid = _tenant_id(client.capture_tenant_name)
     row = _asset(tid, body["runId"], "https://acme.io/a.js")
@@ -509,7 +585,11 @@ def test_save_files_oversized_map_skipped_file_still_stored(make_capture_client)
 def test_save_files_non_object_map_skipped(make_capture_client):
     client = make_capture_client()
     sid = f"sess-{uuid.uuid4().hex[:8]}"
-    body = _save(client, sid, [{**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": "not-an-object"}])
+    body = _save(
+        client,
+        sid,
+        [{**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": "not-an-object"}],
+    )
     assert body["stored"] == 1
     tid = _tenant_id(client.capture_tenant_name)
     assert _asset(tid, body["runId"], "https://acme.io/a.js").source_map_ref is None
@@ -600,9 +680,7 @@ def test_concurrent_first_batches_resolve_to_one_run(make_capture_client, redis,
 
     assert a == b  # both batches accumulate into the same run
     with tenant_session(tid) as s:
-        n = s.scalar(
-            select(func.count()).select_from(Run).where(Run.capture_external_id == sid)
-        )
+        n = s.scalar(select(func.count()).select_from(Run).where(Run.capture_external_id == sid))
     assert n == 1  # exactly one open accumulator run
 
 

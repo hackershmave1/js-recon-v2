@@ -50,7 +50,9 @@ _UPLOAD_PATH = "input.js"
 @dataclass(frozen=True)
 class SourceFile:
     path: str
-    kind: str  # "asset" (one crawl asset) | "upload" (legacy bundle) | "source" (recovered original)
+    kind: (
+        str  # "asset" (one crawl asset) | "upload" (legacy bundle) | "source" (recovered original)
+    )
     fetch_status: str
     # For kind="source" only: the asset whose source map recovered this original
     # (crawl), or None for a legacy run-level map. It is part of the finding<->source
@@ -89,7 +91,9 @@ def list_sources(tenant_id: str, run_id: str) -> list[SourceFile] | None:
             return None
         input_ref = run.input_ref
     files = (
-        [] if input_ref is None else [SourceFile(path=_UPLOAD_PATH, kind="upload", fetch_status="ok")]
+        []
+        if input_ref is None
+        else [SourceFile(path=_UPLOAD_PATH, kind="upload", fetch_status="ok")]
     )
     return files + (_recovered_sources(tenant_id, run_id) or [])
 
@@ -213,9 +217,7 @@ def _recovered_content(
     return None
 
 
-def _resolve_source_map_ref(
-    tenant_id: str, run_id: str, asset_url: str | None
-) -> str | None:
+def _resolve_source_map_ref(tenant_id: str, run_id: str, asset_url: str | None) -> str | None:
     """The source-map blob key for a recovered original, resolved under RLS. When
     ``asset_url`` is given it is the owning crawl asset's map (``(run_id, url)`` is
     unique, so ``.first()`` is exact); otherwise the legacy run-level map."""

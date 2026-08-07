@@ -86,7 +86,13 @@ def _pin_dns(host: str, ips: tuple[str, ...]) -> Iterator[None]:
         for ip in ips:
             if ":" in ip:
                 results.append(
-                    (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (ip, service, 0, 0))
+                    (
+                        socket.AF_INET6,
+                        socket.SOCK_STREAM,
+                        socket.IPPROTO_TCP,
+                        "",
+                        (ip, service, 0, 0),
+                    )
                 )
             else:
                 results.append(
@@ -242,7 +248,12 @@ def _parse_retry_after(value: str | None) -> float | None:
 
 
 def _await_host_slot(
-    redis: Redis, host: str, *, tenant_id: str, run_id: str, job_id: str | None,
+    redis: Redis,
+    host: str,
+    *,
+    tenant_id: str,
+    run_id: str,
+    job_id: str | None,
     settings: Settings,
 ) -> None:
     """Acquire the per-host politeness slot, re-checking until ``check()`` yields it.
@@ -274,13 +285,22 @@ def _beat_sleep(
         remaining -= nap
         if job_id and remaining > 0:
             progress.beat(
-                redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id,
-                done=0, total=0, emit_event=False,
+                redis,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                job_id=job_id,
+                done=0,
+                total=0,
+                emit_event=False,
             )
 
 
 def _fetch_assets(
-    redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None,
+    redis: Redis,
+    *,
+    tenant_id: str,
+    run_id: str,
+    job_id: str | None,
     rows: list[run_assets.AssetRow],
 ) -> None:
     """Fetch every not-yet-terminal asset of a crawl run (REQ-C1/D5), best-effort.
@@ -321,8 +341,10 @@ def _fetch_assets(
             )
         try:
             content = fetch_url(
-                asset.url, engagement.scope_hosts,
-                timeout_s=settings.fetch_timeout_seconds, max_bytes=settings.max_fetch_bytes,
+                asset.url,
+                engagement.scope_hosts,
+                timeout_s=settings.fetch_timeout_seconds,
+                max_bytes=settings.max_fetch_bytes,
                 allow_local=settings.allow_local_egress,
             )
         except (egress.EgressBlocked, retry.FatalError, retry.RetryableError) as exc:
@@ -332,7 +354,10 @@ def _fetch_assets(
             retry_after = getattr(exc, "retry_after", None)
             if retry_after:  # honor the target's host-wide backoff even though we drop it
                 _beat_sleep(
-                    redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id,
+                    redis,
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    job_id=job_id,
                     seconds=float(retry_after),
                 )
             continue
@@ -345,8 +370,15 @@ def _fetch_assets(
         # with fetch_ok in the one tx below.
         map_key = (
             _fetch_and_store_source_map(
-                redis, js=content, asset_url=asset.url, scope_hosts=engagement.scope_hosts,
-                tenant_id=tenant_id, run_id=run_id, job_id=job_id, done=i, total=total,
+                redis,
+                js=content,
+                asset_url=asset.url,
+                scope_hosts=engagement.scope_hosts,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                job_id=job_id,
+                done=i,
+                total=total,
                 settings=settings,
             )
             if settings.crawl_fetch_source_maps
@@ -357,8 +389,11 @@ def _fetch_assets(
             if map_key:
                 run_assets.set_source_map_ref(s, asset.id, map_key)
         log.info(
-            "fetch.asset_done", run_id=run_id, url=asset.url,
-            bytes=len(content), source_map=bool(map_key),
+            "fetch.asset_done",
+            run_id=run_id,
+            url=asset.url,
+            bytes=len(content),
+            source_map=bool(map_key),
         )
 
 
@@ -402,8 +437,10 @@ def _fetch_and_store_source_map(
                 redis, host, tenant_id=tenant_id, run_id=run_id, job_id=job_id, settings=settings
             )
         map_bytes = fetch_url(
-            map_url, scope_hosts,
-            timeout_s=settings.fetch_timeout_seconds, max_bytes=settings.max_fetch_bytes,
+            map_url,
+            scope_hosts,
+            timeout_s=settings.fetch_timeout_seconds,
+            max_bytes=settings.max_fetch_bytes,
             allow_local=settings.allow_local_egress,
         )
         return storage.put_blob(tenant_id, run_id, "source_map", map_bytes)

@@ -21,7 +21,9 @@ pytestmark = pytest.mark.integration
 
 _JS = 'fetch("/api/health"); axios.post("/api/login", {u:1});'
 
-_TERMINAL = {s.value for s in (RunState.DONE, RunState.PARTIAL, RunState.FAILED, RunState.CANCELLED)}
+_TERMINAL = {
+    s.value for s in (RunState.DONE, RunState.PARTIAL, RunState.FAILED, RunState.CANCELLED)
+}
 
 # A minimal, schema-valid OpenAPI 3.0 doc documenting exactly `_JS`'s "GET
 # /api/health" call and nothing else, so its sibling "POST /api/login" finding
@@ -116,9 +118,7 @@ def test_list_findings_is_tenant_isolated(redis, authorized_session):
     assert findings_queries.list_findings(intruder, view.id) is None
 
 
-def test_list_findings_spec_status_and_summary_none_without_session_spec(
-    redis, authorized_session
-):
+def test_list_findings_spec_status_and_summary_none_without_session_spec(redis, authorized_session):
     # Design §6.4: no spec was ever attached to the run's session -> every
     # finding is unclassified (spec_status is None, the API renders
     # "unclassified") and the run-scoped summary itself is None -- NOT an

@@ -18,9 +18,7 @@ def _py(code: str) -> list[str]:
 
 
 def test_returns_stdout_on_success():
-    result = engines.run_engine(
-        _py("print('hello')"), timeout_s=10, max_output_bytes=1024
-    )
+    result = engines.run_engine(_py("print('hello')"), timeout_s=10, max_output_bytes=1024)
     assert result.returncode == 0
     assert b"hello" in result.stdout
 
@@ -34,9 +32,7 @@ def test_missing_binary_raises_not_available():
 
 def test_timeout_is_raised():
     with pytest.raises(engines.EngineTimeout):
-        engines.run_engine(
-            _py("import time; time.sleep(5)"), timeout_s=0.5, max_output_bytes=1024
-        )
+        engines.run_engine(_py("import time; time.sleep(5)"), timeout_s=0.5, max_output_bytes=1024)
 
 
 def test_unexpected_exit_code_raises():

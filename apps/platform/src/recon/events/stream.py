@@ -40,9 +40,7 @@ def publish(
 def _decode(entry: tuple[Any, dict[Any, Any]]) -> dict[str, Any]:
     entry_id, raw = entry
     fields = {
-        (k.decode() if isinstance(k, bytes) else k): (
-            v.decode() if isinstance(v, bytes) else v
-        )
+        (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
         for k, v in raw.items()
     }
     return {

@@ -28,12 +28,8 @@ engine = create_engine(_settings.database_url, pool_pre_ping=True, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
 # Admin engine: the owning role, for migrations/bootstrap/health only.
-admin_engine = create_engine(
-    _settings.database_admin_url, pool_pre_ping=True, future=True
-)
-AdminSessionLocal = sessionmaker(
-    bind=admin_engine, expire_on_commit=False, future=True
-)
+admin_engine = create_engine(_settings.database_admin_url, pool_pre_ping=True, future=True)
+AdminSessionLocal = sessionmaker(bind=admin_engine, expire_on_commit=False, future=True)
 
 
 @contextmanager

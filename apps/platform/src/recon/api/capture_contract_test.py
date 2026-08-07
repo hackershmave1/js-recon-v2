@@ -49,19 +49,19 @@ def test_health_reports_contract_version(capture_client):
 
 
 def test_save_files_response_envelope(capture_client):
-    with patch.object(capture_router, "_get_or_create_tenant", return_value=TENANT), \
-         patch.object(capture_router, "get_redis", return_value=object()), \
-         patch.object(capture_router, "_get_or_create_session", return_value="sess-1"), \
-         patch.object(capture_router, "_accumulating_run_id", return_value="run-1"), \
-         patch.object(capture_router.storage, "put_blob", return_value="blob-key"), \
-         patch.object(capture_router, "_seed_fetched_assets", return_value=None):
+    with (
+        patch.object(capture_router, "_get_or_create_tenant", return_value=TENANT),
+        patch.object(capture_router, "get_redis", return_value=object()),
+        patch.object(capture_router, "_get_or_create_session", return_value="sess-1"),
+        patch.object(capture_router, "_accumulating_run_id", return_value="run-1"),
+        patch.object(capture_router.storage, "put_blob", return_value="blob-key"),
+        patch.object(capture_router, "_seed_fetched_assets", return_value=None),
+    ):
         res = capture_client.post(
             "/api/save-files",
             json={
                 "metadata": {"sessionId": "ext-1", "version": "3.0.0"},
-                "files": [
-                    {"url": "https://acme.io/a.js", "content": "x=1", "contentHash": "h1"}
-                ],
+                "files": [{"url": "https://acme.io/a.js", "content": "x=1", "contentHash": "h1"}],
             },
         )
     assert res.status_code == 200
@@ -79,8 +79,10 @@ def test_save_files_response_envelope(capture_client):
 
 
 def test_save_files_without_session_returns_empty_envelope(capture_client):
-    with patch.object(capture_router, "_get_or_create_tenant", return_value=TENANT), \
-         patch.object(capture_router, "get_redis", return_value=object()):
+    with (
+        patch.object(capture_router, "_get_or_create_tenant", return_value=TENANT),
+        patch.object(capture_router, "get_redis", return_value=object()),
+    ):
         res = capture_client.post("/api/save-files", json={"metadata": {}, "files": []})
     assert res.status_code == 200
     assert res.json() == {
@@ -94,9 +96,11 @@ def test_save_files_without_session_returns_empty_envelope(capture_client):
 
 
 def test_analyze_start_unknown_session_is_404(capture_client):
-    with patch.object(capture_router, "_get_or_create_tenant", return_value=TENANT), \
-         patch.object(capture_router, "get_redis", return_value=object()), \
-         patch.object(capture_router, "_find_session_by_external_id", return_value=None):
+    with (
+        patch.object(capture_router, "_get_or_create_tenant", return_value=TENANT),
+        patch.object(capture_router, "get_redis", return_value=object()),
+        patch.object(capture_router, "_find_session_by_external_id", return_value=None),
+    ):
         res = capture_client.post("/api/sessions/nope/analyze/start")
     assert res.status_code == 404
 
@@ -105,12 +109,14 @@ def test_analyze_start_idempotent_envelope(capture_client):
     # The extension hard-depends only on ``started`` being a bool (workspace-client.js);
     # pin that invariant rather than over-asserting this endpoint's polymorphic keys.
     row = SimpleNamespace(url="https://acme.io/a.js")
-    with patch.object(capture_router, "_get_or_create_tenant", return_value=TENANT), \
-         patch.object(capture_router, "get_redis", return_value=object()), \
-         patch.object(capture_router, "_find_session_by_external_id", return_value="sess-1"), \
-         patch.object(capture_router, "_latest_run_id", return_value="run-1"), \
-         patch.object(capture_router.assets, "list_for_run", return_value=[row]), \
-         patch.object(capture_router, "_run_has_job", return_value=True):
+    with (
+        patch.object(capture_router, "_get_or_create_tenant", return_value=TENANT),
+        patch.object(capture_router, "get_redis", return_value=object()),
+        patch.object(capture_router, "_find_session_by_external_id", return_value="sess-1"),
+        patch.object(capture_router, "_latest_run_id", return_value="run-1"),
+        patch.object(capture_router.assets, "list_for_run", return_value=[row]),
+        patch.object(capture_router, "_run_has_job", return_value=True),
+    ):
         res = capture_client.post("/api/sessions/ext-1/analyze/start")
     assert res.status_code == 200
     body = res.json()
@@ -120,9 +126,11 @@ def test_analyze_start_idempotent_envelope(capture_client):
 
 
 def test_progress_idle_envelope(capture_client):
-    with patch.object(capture_router, "_get_or_create_tenant", return_value=TENANT), \
-         patch.object(capture_router, "_find_session_by_external_id", return_value="sess-1"), \
-         patch.object(capture_router, "_latest_analyzed_run", return_value=None):
+    with (
+        patch.object(capture_router, "_get_or_create_tenant", return_value=TENANT),
+        patch.object(capture_router, "_find_session_by_external_id", return_value="sess-1"),
+        patch.object(capture_router, "_latest_analyzed_run", return_value=None),
+    ):
         res = capture_client.get("/api/sessions/ext-1/analyze/progress")
     assert res.status_code == 200
     body = res.json()
@@ -130,7 +138,12 @@ def test_progress_idle_envelope(capture_client):
     assert body["sessionId"] == "sess-1"
     assert set(body["job"]) == {"counts", "files"}
     assert set(body["job"]["counts"]) == {
-        "queued", "analyzing", "completed", "failed", "cancelled", "total",
+        "queued",
+        "analyzing",
+        "completed",
+        "failed",
+        "cancelled",
+        "total",
     }
     assert body["job"]["files"] == []
 
@@ -145,10 +158,10 @@ def test_projects_is_a_bare_array(capture_client):
         updated_at="2026-01-01T00:00:00Z",
         in_scope_domains=["acme.io"],
     )
-    with patch.object(capture_router, "_get_or_create_tenant", return_value=TENANT), \
-         patch.object(
-             capture_router.engagements_service, "list_engagements", return_value=[view]
-         ):
+    with (
+        patch.object(capture_router, "_get_or_create_tenant", return_value=TENANT),
+        patch.object(capture_router.engagements_service, "list_engagements", return_value=[view]),
+    ):
         res = capture_client.get("/api/projects")
     assert res.status_code == 200
     body = res.json()

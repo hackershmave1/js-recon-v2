@@ -26,11 +26,17 @@ class WrapperRuleIn(BaseModel):
 
 @router.post("/runs/{run_id}/wrappers")
 async def add_wrapper_rule(
-    run_id: str, rule: WrapperRuleIn, tenant_id: str = Depends(get_tenant_id),
+    run_id: str,
+    rule: WrapperRuleIn,
+    tenant_id: str = Depends(get_tenant_id),
 ) -> dict:
     try:
         result = await run_in_threadpool(
-            wrapper_service.add_rule, tenant_id, run_id, callee=rule.callee, actor=rule.actor,
+            wrapper_service.add_rule,
+            tenant_id,
+            run_id,
+            callee=rule.callee,
+            actor=rule.actor,
         )
     except InvalidWrapperCallee as exc:
         raise HTTPException(status_code=422, detail=f"invalid callee: {exc}") from exc
@@ -43,7 +49,8 @@ async def add_wrapper_rule(
 
 @router.get("/runs/{run_id}/wrappers")
 async def list_wrapper_rules(
-    run_id: str, tenant_id: str = Depends(get_tenant_id),
+    run_id: str,
+    tenant_id: str = Depends(get_tenant_id),
 ) -> list[dict]:
     rules = await run_in_threadpool(wrapper_service.list_rules, tenant_id, run_id)
     if rules is None:
@@ -53,7 +60,9 @@ async def list_wrapper_rules(
 
 @router.delete("/runs/{run_id}/wrappers/{rule_id}", status_code=204)
 async def delete_wrapper_rule(
-    run_id: str, rule_id: str, tenant_id: str = Depends(get_tenant_id),
+    run_id: str,
+    rule_id: str,
+    tenant_id: str = Depends(get_tenant_id),
 ) -> Response:
     deleted = await run_in_threadpool(wrapper_service.delete_rule, tenant_id, run_id, rule_id)
     if deleted is None:

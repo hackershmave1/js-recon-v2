@@ -35,11 +35,19 @@ def _add_secret_finding(tenant, run_id, *, value, source, token, offsets="auto")
         offset_start, offset_end = (None, None) if offsets is None else offsets
     with tenant_session(tenant) as session:
         result = store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.SECRET,
-            value=value, path="input.js",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.SECRET,
+            value=value,
+            path="input.js",
             occurrence=store.Occurrence(
-                source_path="input.js", line=1, col=0,
-                offset_start=offset_start, offset_end=offset_end, engine="kingfisher",
+                source_path="input.js",
+                line=1,
+                col=0,
+                offset_start=offset_start,
+                offset_end=offset_end,
+                engine="kingfisher",
             ),
             attributes={"rule": "stripe", "name": "Stripe"},
         )
@@ -48,11 +56,7 @@ def _add_secret_finding(tenant, run_id, *, value, source, token, offsets="auto")
 
 def _events(tenant, run_id, event_type):
     with tenant_session(tenant) as session:
-        return (
-            session.query(models.RunEvent)
-            .filter_by(run_id=run_id, type=event_type)
-            .all()
-        )
+        return session.query(models.RunEvent).filter_by(run_id=run_id, type=event_type).all()
 
 
 def _seed(tenant, session_id, *, token, source=None, offsets="auto", value=None, input_ref="auto"):
@@ -94,7 +98,7 @@ def test_reveal_aligns_offsets_through_invalid_utf8_bytes():
         tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
     ).id
     token = "sk_" + "live_" + "MULTIBYTE00"
-    raw = b"// \xff\nconst k = \"" + token.encode("utf-8") + b"\";\n"
+    raw = b'// \xff\nconst k = "' + token.encode("utf-8") + b'";\n'
     source = raw.decode("utf-8", "replace")
     line = 2
     col = source.split("\n")[1].index(token)
@@ -106,11 +110,18 @@ def test_reveal_aligns_offsets_through_invalid_utf8_bytes():
     _set_input_ref(tenant, run_id, input_ref)
     with tenant_session(tenant) as session:
         result = store.record_finding(
-            session, tenant_id=tenant, run_id=run_id, finding_type=FindingType.SECRET,
-            value=value, path="input.js",
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.SECRET,
+            value=value,
+            path="input.js",
             occurrence=store.Occurrence(
-                source_path="input.js", line=line, col=col,
-                offset_start=offset, offset_end=offset + len(token.encode("utf-8")),
+                source_path="input.js",
+                line=line,
+                col=col,
+                offset_start=offset,
+                offset_end=offset + len(token.encode("utf-8")),
                 engine="kingfisher",
             ),
             attributes={"rule": "stripe", "name": "Stripe"},
@@ -142,9 +153,7 @@ def test_reveal_missing_input_ref_is_source_gone():
     session_id = sessions_service.create_session(
         tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
     ).id
-    run_id, finding_hash = _seed(
-        tenant, session_id, token="sk_" + "live_" + "X0", input_ref=None
-    )
+    run_id, finding_hash = _seed(tenant, session_id, token="sk_" + "live_" + "X0", input_ref=None)
     outcome = reveal.reveal_secret(tenant, run_id, finding_hash)
     assert outcome.revealed is False and outcome.denial == "source_gone"
     assert reveal.DENIAL_STATUS["source_gone"] == 410
@@ -157,7 +166,9 @@ def test_reveal_purged_blob_is_source_gone():
         tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
     ).id
     run_id, finding_hash = _seed(
-        tenant, session_id, token="sk_" + "live_" + "Y0",
+        tenant,
+        session_id,
+        token="sk_" + "live_" + "Y0",
         input_ref="doesnotexist/run/input/deadbeef",
     )
     outcome = reveal.reveal_secret(tenant, run_id, finding_hash)
@@ -169,9 +180,7 @@ def test_reveal_offsetless_secret_is_denied():
     session_id = sessions_service.create_session(
         tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
     ).id
-    run_id, finding_hash = _seed(
-        tenant, session_id, token="sk_" + "live_" + "Z0", offsets=None
-    )
+    run_id, finding_hash = _seed(tenant, session_id, token="sk_" + "live_" + "Z0", offsets=None)
     outcome = reveal.reveal_secret(tenant, run_id, finding_hash)
     assert outcome.revealed is False and outcome.denial == "no_offsets"
     assert reveal.DENIAL_STATUS["no_offsets"] == 422
