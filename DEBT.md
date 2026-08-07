@@ -35,14 +35,17 @@ heft since `analyze_start` is the sole capture enqueue path. Both §4 gates pass
 
 ## Enforcement / tooling (deferred from the CI-keystone slice)
 
-### D2 · Ruff format sweep + broaden the ruleset [M]
-`ruff check` is scoped to `F,I` (real-bug + import-sort, green today). `ruff format`
-would restyle **110 of 165 files** and the code was never formatted; the broader
-`UP`/`B`/`SIM` modernization rules add ~60 more findings. Do the format sweep as one
-isolated `style:` commit, then broaden `select`. Kept out of the keystone to avoid a
-blame-churning big-bang. (Note: `B008` is FastAPI `Depends()` in defaults — configure
-`extend-immutable-calls`, don't "fix" it; `BLE001` blind-except in the worker loop is
-intentional.)
+### D2 · Ruff format sweep + broaden the ruleset [M] — ✅ RESOLVED 2026-08-07
+Two isolated commits: (1) `style:` `ruff format` across the backend — 111/167 files
+reflowed, pure formatting (fast lane stayed green; SHA in `.git-blame-ignore-revs` so
+blame skips it); (2) broadened `select` to `F,I,UP,B,C4,SIM,PIE,RET` +
+`extend-immutable-calls` for the FastAPI DI markers (the 9 `B008` sites are the
+framework idiom, not bugs). Applied 22 safe + 8 verified-equivalent unsafe autofixes
++ 4 hand-fixes (2 `SIM117` combined-`with`, 1 `SIM115` `# noqa` for a deliberate
+long-lived Popen handle, 1 `B017` → specific `FrozenInstanceError`). CI's host-tests
+lane now also runs `ruff format --check src` so the format can't drift.
+**Deferred** (tracked follow-up): `TC`/`TCH` (39 stylistic typing-only-import
+relocations that fight `from __future__ import annotations`). Both §4 gates passed.
 
 ### D3 · mypy — no Python type checking [M–L]
 No mypy/pyright anywhere. Introduce incrementally: `--strict` on `recon.findings` +

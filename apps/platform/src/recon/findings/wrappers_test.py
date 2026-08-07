@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from recon.findings.wrappers import (
@@ -15,7 +17,7 @@ from recon.findings.wrappers import (
 def test_wrapper_rule_is_frozen_value():
     rule = WrapperRule(callee="api")
     assert rule.callee == "api"
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         rule.callee = "other"  # type: ignore[misc]  # frozen dataclass
 
 

@@ -77,7 +77,7 @@ def _pct(done: int, total: int) -> int:
 
 
 def get_status(tenant_id: str, run_id: str, *, now: dt.datetime | None = None) -> StatusView | None:
-    now = now or dt.datetime.now(dt.timezone.utc)
+    now = now or dt.datetime.now(dt.UTC)
     threshold = get_settings().heartbeat_stall_threshold_seconds
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)

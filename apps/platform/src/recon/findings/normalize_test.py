@@ -203,7 +203,7 @@ def test_finding_hash_changes_with_path_when_scoped():
 
 
 def test_occurrence_hash_is_deterministic_and_offset_sensitive():
-    base = dict(host="api.x", raw_url="/users/1", path="app/a.js", start=10, end=20)
+    base = {"host": "api.x", "raw_url": "/users/1", "path": "app/a.js", "start": 10, "end": 20}
     assert nz.occurrence_hash(**base) == nz.occurrence_hash(**base)
     moved = {**base, "start": 99, "end": 109}
     assert nz.occurrence_hash(**base) != nz.occurrence_hash(**moved)

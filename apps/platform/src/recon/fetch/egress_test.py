@@ -187,7 +187,7 @@ def test_validate_target_blocks_in_scope_resolving_to_private(monkeypatch):
     "exc",
     [
         socket.gaierror("Name or service not known"),
-        socket.timeout("timed out"),
+        TimeoutError("timed out"),
         UnicodeError("label empty or too long"),
     ],
     ids=["gaierror", "timeout", "unicode"],

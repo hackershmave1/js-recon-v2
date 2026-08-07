@@ -71,9 +71,24 @@ line-length = 100
 src = ["src"]
 
 [tool.ruff.lint]
-# Start conservative and GREEN: pyflakes (F — real errors: unused/undefined names,
-# redefinitions) + import sorting (I). Line-length (E501) is deliberately left to
-# `ruff format`, not the linter. A codebase-wide `ruff format` and the broader
-# UP/B/SIM modernization rules are tracked as follow-ups (see DEBT.md) rather than
-# a blame-churning big-bang folded into the CI-enablement commit.
-select = ["F", "I"]
+# Real-bug + import-sort (F, I) plus the pyupgrade / bugbear / comprehension /
+# simplify / flake8-pie / return families. TC (typing-only-import relocation) is
+# deliberately deferred — 39 stylistic findings that fight `from __future__ import
+# annotations` for ~nil runtime benefit (tracked follow-up). E501/formatting is
+# `ruff format`'s job (enforced by `ruff format --check` in CI), not the linter's.
+select = ["F", "I", "UP", "B", "C4", "SIM", "PIE", "RET"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependency-injection markers legitimately live in argument defaults
+# (Depends(), File(), Query(), ...); B008 (function-call-in-default) must treat them
+# as immutable rather than flag them — they are the framework's intended idiom.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.File",
+    "fastapi.Query",
+    "fastapi.Header",
+    "fastapi.Form",
+    "fastapi.Body",
+    "fastapi.Path",
+    "fastapi.Security",
+]

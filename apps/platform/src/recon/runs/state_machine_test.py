@@ -18,7 +18,7 @@ def test_happy_path_is_linear():
         RunState.CORRELATING,
         RunState.DONE,
     ]
-    for frm, to in zip(chain, chain[1:]):
+    for frm, to in zip(chain, chain[1:], strict=False):
         assert sm.can_transition(frm, to), f"{frm} -> {to} should be allowed"
 
 

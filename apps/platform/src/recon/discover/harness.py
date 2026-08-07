@@ -12,6 +12,7 @@ the size cap is applied on read. Host-lane unit tests mock ``Popen``.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -55,7 +56,10 @@ def run_crawl(
     # POSIX high-resolution monotonic clock elsewhere, so the deadline check is
     # reliable on both lanes.
     deadline = time.perf_counter() + duration_seconds + kill_grace_seconds
-    out = tempfile.TemporaryFile()
+    # Deliberate long-lived handle: `out` is owned by the Popen below (its stdout)
+    # for the child's whole lifetime and read after it exits, so a `with` here would
+    # close it too early — hence the SIM115 suppression.
+    out = tempfile.TemporaryFile()  # noqa: SIM115
     proc = subprocess.Popen(argv, stdout=out, stderr=subprocess.DEVNULL, start_new_session=True)
     timed_out = False
     step = 0
@@ -92,7 +96,5 @@ def _kill_group(proc: subprocess.Popen) -> None:
         os.killpg(os.getpgid(proc.pid), _KILL_SIGNAL)
     except (ProcessLookupError, PermissionError, OSError) as exc:  # already gone
         log.warning("discover.kill_group_failed", error=str(exc))
-    try:
+    with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        pass

@@ -1,0 +1,7 @@
+# Revisions to skip in `git blame` — bulk mechanical reformats with no logic
+# change, so blame points at the real author of each line, not the sweep.
+# Enable locally:  git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (GitHub applies this file automatically in its blame view.)
+
+# style: apply ruff format across the backend (DEBT D2)
+96e072a3731d18389cefcd992e54867c875e6cc5

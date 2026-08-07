@@ -20,7 +20,7 @@ from recon.events.log import emit
 
 
 def _utcnow() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 def _lease_until() -> dt.datetime:

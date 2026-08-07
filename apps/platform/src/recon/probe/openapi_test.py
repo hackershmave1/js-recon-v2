@@ -46,18 +46,18 @@ from recon.probe.reconstruct import QueryParam, ReconstructedRequest
 
 
 def _req(**kw):
-    base = dict(
-        operation="GET /x",
-        method="GET",
-        path="/x",
-        hosts=(),
-        query_params=(),
-        body_params=(),
-        content_type=None,
-        example_url=None,
-        probeable=True,
-        endpoint_hashes=(),
-    )
+    base = {
+        "operation": "GET /x",
+        "method": "GET",
+        "path": "/x",
+        "hosts": (),
+        "query_params": (),
+        "body_params": (),
+        "content_type": None,
+        "example_url": None,
+        "probeable": True,
+        "endpoint_hashes": (),
+    }
     base.update(kw)
     return ReconstructedRequest(**base)
 

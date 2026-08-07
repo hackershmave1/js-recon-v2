@@ -155,7 +155,7 @@ def create_session(
             scope_hosts=resolved_scope,
             authorization_ack=True,
             authorized_by=authorized_by,
-            authorized_at=dt.datetime.now(dt.timezone.utc),
+            authorized_at=dt.datetime.now(dt.UTC),
             engagement_id=engagement_id,
         )
         session.add(row)
@@ -211,7 +211,7 @@ def set_session_archived(tenant_id: str, session_id: str, *, archived: bool) -> 
         row = session.get(EngagementSession, session_id)
         if row is None:
             return None
-        row.archived_at = dt.datetime.now(dt.timezone.utc) if archived else None
+        row.archived_at = dt.datetime.now(dt.UTC) if archived else None
         session.flush()
         return _view(row)
 
@@ -294,14 +294,13 @@ def _run_stats(db: Session, run: Run) -> tuple[int, int, int, int | None]:
     the heavy findings read-model (§4 fold M4)."""
     run_id = str(run.id)
     # endpoints / secrets: COUNT(*) grouped by finding type, this run only.
-    type_counts = {
-        row_type: count
-        for row_type, count in db.execute(
+    type_counts = dict(
+        db.execute(
             select(Finding.type, func.count())
             .where(Finding.run_id == run_id)
             .group_by(Finding.type)
         ).all()
-    }
+    )
     endpoints = int(type_counts.get(FindingType.ENDPOINT.value, 0))
     secrets = int(type_counts.get(FindingType.SECRET.value, 0))
     # files (§4 fold M1): the run's discovered-asset count for a crawl; 1 for a

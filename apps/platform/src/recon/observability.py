@@ -8,9 +8,10 @@ id automatically — the same id flows API -> queue -> worker.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Iterator
+from typing import Any
 
 import structlog
 

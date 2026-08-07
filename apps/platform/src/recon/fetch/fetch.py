@@ -25,7 +25,7 @@ from __future__ import annotations
 import contextlib
 import socket
 import time
-from typing import Iterator
+from collections.abc import Iterator
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -137,33 +137,36 @@ def fetch_url(
                 raise egress.EgressBlocked(
                     f"URL host parse mismatch: {httpx.URL(current).host} vs {target.host}"
                 )
-            with _pin_dns(target.host, target.ips):
-                # Browser-shaped headers (see _FETCH_HEADERS); identity encoding so
-                # a decoded-byte cap == received-byte cap.
-                with client.stream("GET", current, headers=_FETCH_HEADERS) as response:
-                    if response.is_redirect:
-                        location = response.headers.get("location")
-                        if not location:
-                            raise retry.FatalError("redirect without a Location header")
-                        current = urljoin(current, location)  # resolves relative / //host
-                        continue
-                    if not 200 <= response.status_code < 300:
-                        # 429/5xx are worth a retry; other statuses (4xx, non-redirect
-                        # 3xx) are deterministic and fail fast.
-                        message = f"target returned HTTP {response.status_code}"
-                        if retry.http_retryable(response.status_code):
-                            # Honor the target's own backoff ask (REQ-Q3) when present.
-                            retry_after = _parse_retry_after(response.headers.get("retry-after"))
-                            raise retry.RetryableError(message, retry_after=retry_after)
-                        raise retry.FatalError(message)
-                    body = bytearray()
-                    for chunk in response.iter_bytes():
-                        if time.monotonic() > deadline:
-                            raise retry.RetryableError("overall fetch deadline exceeded")
-                        body.extend(chunk)
-                        if len(body) > max_bytes:
-                            raise retry.FatalError(f"response exceeds {max_bytes} bytes")
-                    return bytes(body)
+            # Pin DNS on the validated host and stream within one scope (enter order
+            # = pin then stream; exit reverses). Browser-shaped headers (see
+            # _FETCH_HEADERS); identity encoding so a decoded-byte cap == received-byte cap.
+            with (
+                _pin_dns(target.host, target.ips),
+                client.stream("GET", current, headers=_FETCH_HEADERS) as response,
+            ):
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise retry.FatalError("redirect without a Location header")
+                    current = urljoin(current, location)  # resolves relative / //host
+                    continue
+                if not 200 <= response.status_code < 300:
+                    # 429/5xx are worth a retry; other statuses (4xx, non-redirect
+                    # 3xx) are deterministic and fail fast.
+                    message = f"target returned HTTP {response.status_code}"
+                    if retry.http_retryable(response.status_code):
+                        # Honor the target's own backoff ask (REQ-Q3) when present.
+                        retry_after = _parse_retry_after(response.headers.get("retry-after"))
+                        raise retry.RetryableError(message, retry_after=retry_after)
+                    raise retry.FatalError(message)
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    if time.monotonic() > deadline:
+                        raise retry.RetryableError("overall fetch deadline exceeded")
+                    body.extend(chunk)
+                    if len(body) > max_bytes:
+                        raise retry.FatalError(f"response exceeds {max_bytes} bytes")
+                return bytes(body)
     raise retry.FatalError(f"exceeded {max_redirects} redirects")
 
 

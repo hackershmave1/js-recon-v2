@@ -100,7 +100,7 @@ class Engagement(Base):
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
     updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
-    sessions: Mapped[list["EngagementSession"]] = relationship(back_populates="engagement")
+    sessions: Mapped[list[EngagementSession]] = relationship(back_populates="engagement")
 
 
 class EngagementSession(Base):
@@ -148,12 +148,12 @@ class EngagementSession(Base):
     # Soft-hide from the default Sessions list (R6 archive); recon data is retained.
     archived_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
-    engagement: Mapped["Engagement | None"] = relationship(back_populates="sessions")
+    engagement: Mapped[Engagement | None] = relationship(back_populates="sessions")
     # passive_deletes: the run.session_id FK is ON DELETE CASCADE (see Run below),
     # so let the DB cascade a session delete to its runs (and their children) rather
     # than SQLAlchemy nullifying run.session_id first — which the NOT NULL column
     # rejects, 500ing delete_session for any session that has runs.
-    runs: Mapped[list["Run"]] = relationship(back_populates="session", passive_deletes=True)
+    runs: Mapped[list[Run]] = relationship(back_populates="session", passive_deletes=True)
 
 
 class Run(Base):
@@ -214,7 +214,7 @@ class Run(Base):
     started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
-    session: Mapped["EngagementSession"] = relationship(back_populates="runs")
+    session: Mapped[EngagementSession] = relationship(back_populates="runs")
 
 
 class Job(Base):
@@ -312,7 +312,7 @@ class Finding(Base):
     first_stage: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
-    occurrences: Mapped[list["FindingOccurrence"]] = relationship(
+    occurrences: Mapped[list[FindingOccurrence]] = relationship(
         back_populates="finding", cascade="all, delete-orphan"
     )
 
@@ -357,7 +357,7 @@ class FindingOccurrence(Base):
     verified: Mapped[bool | None] = mapped_column(Boolean)
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
-    finding: Mapped["Finding"] = relationship(back_populates="occurrences")
+    finding: Mapped[Finding] = relationship(back_populates="occurrences")
 
 
 class RunAsset(Base):

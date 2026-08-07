@@ -88,11 +88,11 @@ def _match(
             rule.kind == "prefix"
             and rule.path_prefix
             and _is_segment_prefix(rule.path_prefix, path)
+        ) and (
+            best is None
+            or len(_segments(rule.path_prefix)) > len(_segments(best.path_prefix or ""))
         ):
-            if best is None or len(_segments(rule.path_prefix)) > len(
-                _segments(best.path_prefix or "")
-            ):
-                best = rule
+            best = rule
     return best
 
 

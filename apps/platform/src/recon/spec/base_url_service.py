@@ -53,15 +53,15 @@ def add_rule(
         if run is None:
             return None
         session_id = str(run.session_id)
-        values = dict(
-            tenant_id=tenant_id,
-            session_id=session_id,
-            kind=kind,
-            path_prefix=path_prefix,
-            finding_hashes=finding_hashes,
-            base_url=base_url,
-            actor=actor,
-        )
+        values = {
+            "tenant_id": tenant_id,
+            "session_id": session_id,
+            "kind": kind,
+            "path_prefix": path_prefix,
+            "finding_hashes": finding_hashes,
+            "base_url": base_url,
+            "actor": actor,
+        }
         if kind == "prefix":
             stmt = (
                 pg_insert(models.SessionBaseUrl)

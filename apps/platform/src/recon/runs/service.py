@@ -47,7 +47,7 @@ class RunView:
 
 
 def _utcnow() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 def _snapshot(run: Run) -> RunView:

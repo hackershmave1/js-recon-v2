@@ -95,9 +95,9 @@ def test_discover_run_rejects_unauthorized_session():
         patch("recon.discover.crawl.queries.latest_assets_event", return_value=None),
         patch("recon.discover.crawl._load_target", return_value=("acme.io", "sess-1", None)),
         patch("recon.discover.crawl.sessions_service.get_session", return_value=engagement),
+        pytest.raises(retry.FatalError),
     ):
-        with pytest.raises(retry.FatalError):
-            crawl.discover_run(MagicMock(), tenant_id="t", run_id="r", job_id="j")
+        crawl.discover_run(MagicMock(), tenant_id="t", run_id="r", job_id="j")
 
 
 def test_discover_run_skips_upload_run_with_a_base_url_target():
@@ -173,9 +173,9 @@ def test_discover_run_rejects_seed_that_fails_egress_guard():
                 "host acme.io resolves to a non-public address: 169.254.169.254"
             ),
         ),
+        pytest.raises(retry.FatalError),
     ):
-        with pytest.raises(retry.FatalError):
-            crawl.discover_run(MagicMock(), tenant_id="t", run_id="r", job_id="j")
+        crawl.discover_run(MagicMock(), tenant_id="t", run_id="r", job_id="j")
     run_crawl.assert_not_called()
 
 
