@@ -7,31 +7,32 @@ Effort: S (hours) · M (a day-ish) · L (multi-day).
 
 ## Correctness
 
-### D1 · Capture get-or-create race — silent duplicate sessions/runs [M] — needs a design decision
-`apps/platform/src/recon/api/capture_router.py` `_get_or_create_tenant` (:80),
-`_get_or_create_session` (:108), `_accumulating_run_id` (:142) are all
-SELECT-then-INSERT with no lock. **Corrected diagnosis (2026-08-07):** an earlier
-audit assumed an `IntegrityError` here, but `Tenant.name` and `session.name` carry
-**no unique constraint** (`db/models.py:64,123`), so two concurrent batches for the
-same `ext_session_id` (a retry overlapping the first request, or two extension
-instances) don't crash — they **silently create duplicate sessions/runs**, and
-`analyze/start` then analyzes only one, orphaning the other's captured (post-auth,
-un-recapturable) JS. The extension uploads batches sequentially, so the window is
-narrow, but the failure is silent data loss.
-Fix is a real choice (NOT the savepoint-self-heal the audit implied — there's
-nothing to conflict on):
-- **A (recommended):** add a dedicated `external_id` column + `UNIQUE(tenant_id,
-  external_id)` (migration 0011), key get-or-create on it, self-heal on conflict.
-  Doesn't overload the free-form user-facing `name`, which the platform intentionally
-  allows to repeat.
-- **B:** a Postgres advisory lock (`pg_advisory_xact_lock`) keyed on
-  (tenant, ext_session_id) serializing the get-or-create — migration-free, but must
-  span the currently-separate get-or-create transactions.
-- **C:** accept + document the narrow race; lightly guard the accumulating-run dedup.
-Whichever: needs a real two-writer concurrency test against live PG (the CI blind
-spot — the integration lane serves unique bytes so the collision can't form) and
-both §4 gates. `run_asset` seeding is already on-conflict-safe (`runs/assets.py`), so
-that facet is fine.
+### D1 · Capture get-or-create race — silent duplicate sessions/runs [M] — ✅ RESOLVED 2026-08-07
+Fixed via approach A (design: `apps/platform/docs/superpowers/specs/2026-08-07-capture-race-fix-design.md`).
+Added dedicated idempotency-key columns `session.external_id` + `run.capture_external_id`
+(migration 0011), each with a `UNIQUE(tenant_id, …)` index (NULLS DISTINCT — only
+capture rows bind); `capture_router` keys get-or-create on them and self-heals on
+`IntegrityError`. The open capture "round" is the run whose `capture_external_id` is
+set; `analyze/start` seals it by nulling the marker in the SAME transaction that
+inserts the Job (so a run can never be sealed-but-jobless, which would re-orphan JS).
+The singleton capture tenant uses a `pg_advisory_xact_lock` (its `name` is
+deliberately non-unique). Covered by a live-PG two-writer concurrency test
+(`capture_router_test.py`, verified red-without-index → green-with-index). Both §4
+gates passed (design: BUILD WITH CHANGES; code: SHIP).
+
+### D14 · Concurrent `analyze/start` can double-enqueue a walk [S] — pre-existing, low-impact
+`apps/platform/src/recon/api/capture_router.py` `analyze_start`: the `_run_has_job`
+idempotency gate (:421) and the seal+Job-insert transaction (:446) are separate, and
+`job` has no unique key on `(run_id, stage)` (`db/models.py`), so two simultaneous
+`analyze/start` calls for one session can both pass the gate and enqueue two
+DISCOVERING walks. Pre-existing (the old code had the same gate→enqueue TOCTOU) and
+self-limiting — the coordinator's guarded state transitions make the second walk a
+no-op (`runs/service.py:_apply_transition` → `TransitionConflict`, caught in
+`coordinator.advance`) — so it wastes work, not data. `analyze/start` is a single
+user click, so the window is tiny. Close later by gating the Job insert on a
+guarded UPDATE (rowcount) or a partial unique index on the QUEUED discover job.
+Surfaced by the D1 §4 code review; left out of that slice on purpose (no run
+state-machine changes).
 
 ## Enforcement / tooling (deferred from the CI-keystone slice)
 

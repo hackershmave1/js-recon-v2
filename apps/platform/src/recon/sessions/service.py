@@ -128,11 +128,18 @@ def create_session(
     authorized_by: str,
     engagement_id: str | None = None,
     target: str | None = None,
+    external_id: str | None = None,
 ) -> SessionView:
     """Create an engagement session. ``authorized_by`` is always required (the
     authorization ack). ``scope_hosts`` may be empty (an upload needs no scope);
     when it is and a ``target`` is given, the target's host seeds the scope (S3).
-    Invalid scope entries raise :class:`SessionInvalid` (mapped to a 400)."""
+    Invalid scope entries raise :class:`SessionInvalid` (mapped to a 400).
+
+    ``external_id`` is the capture-ingest idempotency key (DEBT D1): only the
+    capture path passes it, keying get-or-create on ``UNIQUE(tenant_id,
+    external_id)``; every other caller leaves it NULL (NULLS DISTINCT — no
+    collision). A concurrent duplicate raises ``IntegrityError`` here, which the
+    capture router self-heals by re-selecting."""
     if not authorized_by:
         raise AuthorizationRequired("an authorization acknowledgment is required")
     resolved_scope = _resolve_scope_hosts(scope_hosts, target)
@@ -146,6 +153,7 @@ def create_session(
         row = EngagementSession(
             tenant_id=tenant_id,
             name=name,
+            external_id=external_id,
             scope_hosts=resolved_scope,
             authorization_ack=True,
             authorized_by=authorized_by,

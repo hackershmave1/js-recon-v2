@@ -129,7 +129,13 @@ def create_run(
     session_id: str,
     target: str | None = None,
     input_ref: str | None = None,
+    capture_external_id: str | None = None,
 ) -> RunView:
+    """Create a QUEUED run. ``capture_external_id`` is the capture-ingest
+    open-accumulator marker (DEBT D1): only ``_accumulating_run_id`` passes it,
+    keying the open round on ``UNIQUE(tenant_id, capture_external_id)``; every other
+    run leaves it NULL (NULLS DISTINCT — no collision). A concurrent duplicate open
+    round raises ``IntegrityError`` here, self-healed by the capture router."""
     with tenant_session(tenant_id) as session:
         run = Run(
             tenant_id=tenant_id,
@@ -137,6 +143,7 @@ def create_run(
             state=RunState.QUEUED.value,
             target=target,
             input_ref=input_ref,
+            capture_external_id=capture_external_id,
         )
         session.add(run)
         session.flush()
