@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict
+from typing import Any, cast
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from recon.db import models
@@ -24,7 +25,7 @@ from recon.findings.base_url import validate_base_url
 from recon.spec.service import reclassify_run
 
 
-def _as_dict(row: models.SessionBaseUrl) -> dict:
+def _as_dict(row: models.SessionBaseUrl) -> dict[str, Any]:
     return {
         "id": str(row.id),
         "kind": row.kind,
@@ -44,7 +45,7 @@ def add_rule(
     path_prefix: str | None = None,
     finding_hashes: list[str] | None = None,
     actor: str | None = None,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Returns ``{"rule": <rule dict>, "summary": <asdict(SpecSummary) | None>}``,
     or ``None`` if `run_id` is invisible to `tenant_id` (RLS)."""
     validate_base_url(base_url)  # InvalidBaseUrl -> router 422
@@ -82,7 +83,7 @@ def add_rule(
     return {"rule": result, "summary": asdict(run_summary) if run_summary else None}
 
 
-def list_rules(tenant_id: str, run_id: str) -> list[dict] | None:
+def list_rules(tenant_id: str, run_id: str) -> list[dict[str, Any]] | None:
     with tenant_session(tenant_id) as session:
         run = session.get(models.Run, run_id)
         if run is None:
@@ -110,7 +111,7 @@ def delete_rule(tenant_id: str, run_id: str, rule_id: str) -> bool | None:
                 models.SessionBaseUrl.session_id == str(run.session_id),
             )
         )
-        deleted = result.rowcount > 0
+        deleted = cast(CursorResult[Any], result).rowcount > 0
     if deleted:
         reclassify_run(tenant_id, run_id)
     return deleted

@@ -9,10 +9,12 @@ deliberately distinct from a run that exists with zero findings (empty list).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Session, selectinload
 
 from recon.db.base import tenant_session
 from recon.db.models import (
@@ -79,7 +81,7 @@ class FindingView:
     value: str
     path: str
     severity: str | None
-    attributes: dict
+    attributes: dict[str, Any]
     first_stage: str | None
     occurrences: list[OccurrenceView]
     triage: TriageView | None = None
@@ -201,7 +203,7 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
         )
 
 
-def base_url_rules_in_session(session, session_id: str) -> list[BaseUrlRule]:
+def base_url_rules_in_session(session: Session, session_id: str) -> list[BaseUrlRule]:
     """Every manual base-URL rule for a session, as pure BaseUrlRule values.
     Takes an OPEN tenant session so a caller (e.g. _classify_session) can load
     rules inside its own transaction."""
@@ -228,7 +230,7 @@ def base_url_rules_in_session(session, session_id: str) -> list[BaseUrlRule]:
     ]
 
 
-def wrapper_rules_in_session(session, session_id: str) -> list[WrapperRule]:
+def wrapper_rules_in_session(session: Session, session_id: str) -> list[WrapperRule]:
     """Every taught wrapper callee for a session, as pure WrapperRule values. Takes
     an OPEN tenant session so a caller can load rules inside its own transaction
     (mirrors ``base_url_rules_in_session``)."""
@@ -250,7 +252,7 @@ def list_base_url_rules(tenant_id: str, run_id: str) -> list[BaseUrlRule]:
         return base_url_rules_in_session(session, str(run.session_id))
 
 
-def _latest_coverage(session, run_id: str, *, is_multi_asset: bool) -> CoverageView | None:
+def _latest_coverage(session: Session, run_id: str, *, is_multi_asset: bool) -> CoverageView | None:
     """The run's analyze coverage counters (REQ-C2).
 
     A multi-asset (crawl) run's assets each emit their OWN ``analyze.coverage``
@@ -279,7 +281,7 @@ def _latest_coverage(session, run_id: str, *, is_multi_asset: bool) -> CoverageV
     return _coverage_view_from_payload(payload)
 
 
-def _coverage_view_from_payload(payload: dict) -> CoverageView:
+def _coverage_view_from_payload(payload: dict[str, Any]) -> CoverageView:
     return CoverageView(
         attributed=int(payload.get("attributed", 0)),
         unattributed=int(payload.get("unattributed", 0)),
@@ -298,7 +300,7 @@ def _coverage_view_from_payload(payload: dict) -> CoverageView:
     )
 
 
-def _merge_coverage_payloads(payloads: list[dict]) -> dict:
+def _merge_coverage_payloads(payloads: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """Sum every asset's own coverage payload into one run-wide payload (Slice Y).
 
     Mirrors ``analyze._merge_coverage``'s semantics exactly: counts are additive;
@@ -311,7 +313,7 @@ def _merge_coverage_payloads(payloads: list[dict]) -> dict:
     with ``source_map_ref=None``), so any one value stands in — the first
     (highest-id) event's.
     """
-    files: list[dict] = []
+    files: list[dict[str, Any]] = []
     for payload in payloads:
         files.extend(payload.get("files", []))
     return {
@@ -330,7 +332,7 @@ def _merge_coverage_payloads(payloads: list[dict]) -> dict:
 
 
 def _run_spec_summary(
-    findings: list[Finding], spec_status_by_hash: dict[str, FindingSpecStatus]
+    findings: Sequence[Finding], spec_status_by_hash: dict[str, FindingSpecStatus]
 ) -> SpecSummary:
     """The design §5.4/§6.4 run-scoped summary — bucket-count the verdicts
     already stored for THIS run's own endpoint findings.
@@ -344,7 +346,7 @@ def _run_spec_summary(
     ``spec_status`` itself leaves as ``None`` on that finding.
     """
     classifications = (
-        Classification(row.status, row.reason, row.matched_operation)
+        Classification(row.status, row.reason or "", row.matched_operation)
         for finding in findings
         if finding.type == FindingType.ENDPOINT.value
         for row in [spec_status_by_hash.get(finding.finding_hash)]
