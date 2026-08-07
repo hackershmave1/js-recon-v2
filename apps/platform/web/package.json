@@ -23,7 +23,7 @@
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.1",
+    "@testing-library/user-event": "^14.6.3",
     "@types/js-beautify": "^1.14.3",
     "@types/node": "^24.13.2",
     "@types/prismjs": "^1.26.6",
