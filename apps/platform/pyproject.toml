@@ -9,7 +9,7 @@ description = "AppSec JavaScript API-recon platform — async recon pipeline (sl
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",
-    "uvicorn[standard]>=0.29",
+    "uvicorn[standard]>=0.52.1",
     # Required by FastAPI/Starlette to parse multipart/form-data (the JS upload path).
     "python-multipart>=0.0.9",
     "redis>=5.0",
