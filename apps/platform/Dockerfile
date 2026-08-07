@@ -2,7 +2,7 @@
 # binary release and no version tags, so it is pinned to a commit SHA (never
 # @latest) and built with Go. It is a pure-Go static binary, so it drops cleanly
 # into the slim runtime image below.
-FROM golang:1.23-bookworm AS sourcemapper-build
+FROM golang:1.24-bookworm AS sourcemapper-build
 RUN go install github.com/denandz/sourcemapper@442aed28d1841f32580dda91b4bea740c07bd2ad
 
 # Build katana (JS-asset discovery crawler). Pinned to a released tag, never
