@@ -49,9 +49,16 @@ intentional.)
 No mypy/pyright anywhere. Introduce incrementally: `--strict` on `recon.findings` +
 `recon.spec` first, widen module-by-module, then gate in CI.
 
-### D4 · TypeScript strict off [M]
-`apps/platform/web/tsconfig.app.json` lacks `"strict": true` — implicit `any` +
-null-unsafety pass the build. Enable + burn down the ~5 feature pages.
+### D4 · TypeScript strict off [S] — ✅ RESOLVED 2026-08-07
+Enabled `"strict": true` in both `apps/platform/web/tsconfig.app.json` and
+`tsconfig.node.json`. The "~5 feature pages to burn down" estimate was pessimistic —
+the code was already written null-safe, so a forced clean typecheck
+(`tsc -b --noEmit --force`) is **0 errors**; lint + build + 133 vitest tests stay
+green, and CI's `frontend` lane (`tsc -b --noEmit`) now enforces it. Both §4 gates
+passed (design: SHIP AS-IS; code: APPROVE). Deferred (a separate future slice, NOT
+this one): the beyond-umbrella flags `noUncheckedIndexedAccess` /
+`exactOptionalPropertyTypes` / `noImplicitReturns` add ~20 errors on current code, so
+enabling them means a real burn-down.
 
 ### D5 · Coverage ratchet [ongoing]
 Floor is `--cov-fail-under=55` (fast-lane coverage is ~58.6%). Ratchet the floor up
