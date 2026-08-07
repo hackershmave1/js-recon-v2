@@ -18,10 +18,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from botocore.exceptions import ClientError
 from redis import Redis
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from recon import storage
 from recon.db.base import tenant_session
@@ -215,6 +217,10 @@ def _analyze_assets(
             )
         try:
             with tenant_session(tenant_id) as session:  # per-asset commit (findings + status)
+                # An OK-fetched asset always has input_ref: runs/assets.set_fetch_ok writes
+                # input_ref + fetch_status=OK atomically, and the loop above only reaches OK
+                # assets — so None is unreachable here by invariant (assert, not guard).
+                assert asset.input_ref is not None
                 coverage, coverage_event = _analyze_blob(
                     session,
                     tenant_id=tenant_id,
@@ -274,7 +280,7 @@ class _EndpointExtraction:
 
 
 def _extract_endpoints(
-    session,
+    session: Session,
     *,
     tenant_id: str,
     run_id: str,
@@ -336,7 +342,7 @@ def _extract_endpoints(
 
 
 def _analyze_blob(
-    session,
+    session: Session,
     *,
     tenant_id: str,
     run_id: str,
@@ -507,7 +513,7 @@ def _resolve_source_map(
 
 
 def _record_endpoint(
-    session,
+    session: Session,
     tenant_id: str,
     run_id: str,
     path: str,
@@ -572,7 +578,7 @@ def _record_endpoint(
 
 
 def _record_secret(
-    session,
+    session: Session,
     tenant_id: str,
     run_id: str,
     path: str,
@@ -598,6 +604,8 @@ def _record_secret(
     # reveal 422, never wrong bytes. line/col stay the engine's (display only).
     key = (secret.rule_id, secret.snippet)
     located = kingfisher.locate_snippet(source, secret.snippet, search_from=cursors.get(key, 0))
+    offset_start: int | None
+    offset_end: int | None
     if located is not None:
         offset_start, offset_end = located
         cursors[key] = offset_end  # next identical sighting searches past this one
@@ -626,7 +634,17 @@ def _record_secret(
     )
 
 
-def _write(session, tenant_id, run_id, finding_type, value, path, *, occurrence, attributes) -> int:
+def _write(
+    session: Session,
+    tenant_id: str,
+    run_id: str,
+    finding_type: str,
+    value: str,
+    path: str,
+    *,
+    occurrence: store.Occurrence,
+    attributes: dict[str, Any],
+) -> int:
     result = store.record_finding(
         session,
         tenant_id=tenant_id,

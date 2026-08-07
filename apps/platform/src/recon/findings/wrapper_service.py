@@ -15,8 +15,9 @@ be a pure no-op.
 from __future__ import annotations
 
 import uuid
+from typing import Any, cast
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from recon.db import models
@@ -25,11 +26,13 @@ from recon.findings import queries, reextract
 from recon.findings.wrappers import validate_callee
 
 
-def _as_dict(row: models.SessionWrapper) -> dict:
+def _as_dict(row: models.SessionWrapper) -> dict[str, Any]:
     return {"id": str(row.id), "callee": row.callee, "actor": row.actor}
 
 
-def add_rule(tenant_id: str, run_id: str, *, callee: str, actor: str | None = None) -> dict | None:
+def add_rule(
+    tenant_id: str, run_id: str, *, callee: str, actor: str | None = None
+) -> dict[str, Any] | None:
     """Persist a wrapper callee (upsert on ``(session_id, callee)``) and re-extract
     the run. Returns ``{"rule": <dict>, "recovered": <int rows written>}``, or
     ``None`` if `run_id` is invisible to `tenant_id` (RLS). ``InvalidWrapperCallee``
@@ -56,7 +59,7 @@ def add_rule(tenant_id: str, run_id: str, *, callee: str, actor: str | None = No
     return {"rule": rule, "recovered": recovered or 0}
 
 
-def list_rules(tenant_id: str, run_id: str) -> list[dict] | None:
+def list_rules(tenant_id: str, run_id: str) -> list[dict[str, Any]] | None:
     with tenant_session(tenant_id) as session:
         run = session.get(models.Run, run_id)
         if run is None:
@@ -87,4 +90,4 @@ def delete_rule(tenant_id: str, run_id: str, rule_id: str) -> bool | None:
                 models.SessionWrapper.session_id == str(run.session_id),
             )
         )
-        return result.rowcount > 0
+        return cast(CursorResult[Any], result).rowcount > 0

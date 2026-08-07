@@ -101,7 +101,7 @@ def external_map_url(js: str) -> str | None:
     matches = _SOURCE_MAPPING_URL_RE.findall(js)
     if not matches:
         return None
-    url = matches[-1].strip()
+    url: str = matches[-1].strip()
     if not url or url.startswith("data:"):
         return None
     return url

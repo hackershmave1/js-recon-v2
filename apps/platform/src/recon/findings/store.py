@@ -10,6 +10,7 @@ commit of its own — the calling stage owns the transaction boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -75,7 +76,7 @@ def record_finding(
     path: str,
     occurrence: Occurrence,
     severity: str | None = None,
-    attributes: dict | None = None,
+    attributes: dict[str, Any] | None = None,
     first_stage: str | None = None,
 ) -> RecordResult:
     """Idempotently record one finding + one of its occurrences.

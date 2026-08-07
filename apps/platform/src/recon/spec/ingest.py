@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlsplit
 
 import yaml
@@ -68,7 +69,7 @@ class SpecError(ValueError):
     is untrusted input, same footing as target JS (gate B4)."""
 
 
-class _NoAliasSafeLoader(yaml.SafeLoader):
+class _NoAliasSafeLoader(yaml.SafeLoader):  # type: ignore[misc]
     """A `SafeLoader` that refuses YAML anchors and aliases outright.
 
     PyYAML's composer expands `&anchor`/`*alias` nodes before we ever see the
@@ -83,7 +84,7 @@ class _NoAliasSafeLoader(yaml.SafeLoader):
     composer catches both cases uniformly.
     """
 
-    def compose_node(self, parent, index):
+    def compose_node(self, parent: Any, index: Any) -> Any:
         event = self.peek_event()
         if getattr(event, "anchor", None) is not None:
             raise SpecError("YAML anchors/aliases are not allowed in a spec")
@@ -227,7 +228,7 @@ def _reject_external_refs(node: object) -> None:
             _reject_external_refs(item)
 
 
-def _detect_format(parsed: dict) -> str:
+def _detect_format(parsed: dict[str, Any]) -> str:
     if "openapi" in parsed:
         return "openapi-3"
     if parsed.get("swagger") == "2.0":
@@ -235,7 +236,7 @@ def _detect_format(parsed: dict) -> str:
     raise SpecError("unrecognized spec: no 'openapi' or 'swagger' key")
 
 
-def _server_bases(parsed: dict, fmt: str) -> list[str]:
+def _server_bases(parsed: dict[str, Any], fmt: str) -> list[str]:
     if fmt == "swagger-2":
         return [parsed.get("basePath") or ""]
 
@@ -274,7 +275,7 @@ def _resolve_server_url(server: object) -> str:
     return urlsplit(url).path
 
 
-def _documented_ops(parsed: dict, server_bases: list[str]) -> tuple[DocumentedOp, ...]:
+def _documented_ops(parsed: dict[str, Any], server_bases: list[str]) -> tuple[DocumentedOp, ...]:
     paths = parsed.get("paths") or {}
     documented: list[DocumentedOp] = []
     for path, path_item in paths.items():

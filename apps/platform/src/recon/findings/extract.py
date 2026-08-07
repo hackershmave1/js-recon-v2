@@ -24,7 +24,7 @@ positive since the receiver's type isn't tracked.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl
 
@@ -94,7 +94,7 @@ def extract(source: str | bytes, wrappers: Sequence[WrapperRule] = ()) -> Extrac
 # --- tree helpers ------------------------------------------------------------
 
 
-def _walk(node: Node):
+def _walk(node: Node) -> Iterator[Node]:
     stack = [node]
     while stack:
         current = stack.pop()
@@ -103,7 +103,7 @@ def _walk(node: Node):
 
 
 def _text(node: Node | None) -> str:
-    return node.text.decode("utf-8", "replace") if node is not None else ""
+    return (node.text or b"").decode("utf-8", "replace") if node is not None else ""
 
 
 def _string_value(node: Node | None) -> str | None:
@@ -470,9 +470,10 @@ def _handle_call(call: Node, result: Extraction, env: BaseEnv, callees: frozense
         prop = _text(fn.child_by_field_name("property"))
     elif fn.type == "subscript_expression":
         obj = _text(fn.child_by_field_name("object"))
-        prop = _string_value(fn.child_by_field_name("index"))
-        if prop is None:  # dynamic index -> can't attribute a method name
+        index = _string_value(fn.child_by_field_name("index"))
+        if index is None:  # dynamic index -> can't attribute a method name
             return
+        prop = index
     else:
         return
     _dispatch_member(call, obj, prop, result, env, callees)

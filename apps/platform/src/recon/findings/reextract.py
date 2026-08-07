@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from botocore.exceptions import ClientError
+from sqlalchemy.orm import Session
 
 from recon import storage
 from recon.db.base import tenant_session
@@ -90,7 +91,7 @@ def reextract_run(tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]) 
 
 
 def _reextract_blob(
-    session,
+    session: Session,
     *,
     tenant_id: str,
     run_id: str,
