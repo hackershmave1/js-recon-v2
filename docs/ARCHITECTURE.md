@@ -5,6 +5,12 @@ This repo (`js-recon-v2`) is **one product** — the recon **platform** — plus
 JavaScript; the platform does it from **static crawl/upload**, the extension adds **runtime,
 post-authentication capture** and hands what it grabs to the platform for the same analysis.
 
+> **This document is the *what*; the [`adr/`](adr/README.md) trail is the *why*.** The
+> load-bearing decisions behind the design below — the Redis Streams broker, DB-enforced
+> row-level security, the fail-closed SSRF egress guard, the static / no-active-traffic
+> stance, the v1 convergence, and more — are recorded as Architecture Decision Records
+> (MADR) with a pointer to the code that enforces each.
+
 ```
 apps/
 ├── platform/   The recon platform — the whole product. Upload/crawl a target's JS -> Vespasian
