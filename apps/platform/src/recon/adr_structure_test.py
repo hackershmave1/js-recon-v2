@@ -36,11 +36,20 @@ _TEMPLATE = "0000-adr-template.md"
 _INDEX = "README.md"
 
 
-def _repo_root() -> Path:
+def _repo_root() -> Path | None:
+    """Nearest ancestor containing ``.git``, else ``None``.
+
+    ``None`` means this isn't a git checkout — e.g. the module was packaged into
+    the built image, where the integration lane runs ``pytest`` with no repo tree
+    (``api``/``worker`` mount no source; build context is ``apps/platform`` only).
+    That case SKIPs (below) rather than failing: the ADR trail is a repo artifact
+    the image never ships. A real checkout still fails loudly when ``docs/adr/`` is
+    missing, so an accidental deletion is caught.
+    """
     for parent in Path(__file__).resolve().parents:
         if (parent / ".git").exists():
             return parent
-    raise AssertionError("repo root (.git) not found above this test")
+    return None
 
 
 def _parse_frontmatter(text: str) -> dict[str, str]:
@@ -58,12 +67,22 @@ def _parse_frontmatter(text: str) -> dict[str, str]:
     return fields
 
 
-ADR_DIR = _repo_root() / "docs" / "adr"
-# Decision records only: NNNN-*.md minus the 0000 template.
-ADR_FILES = sorted(
-    path
-    for path in ADR_DIR.glob("*.md")
-    if _FILENAME_RE.match(path.name) and path.name != _TEMPLATE
+_ROOT = _repo_root()
+pytestmark = pytest.mark.skipif(
+    _ROOT is None,
+    reason="not a git checkout (e.g. the built image) — the ADR trail is not present here",
+)
+
+ADR_DIR = (_ROOT / "docs" / "adr") if _ROOT is not None else Path("docs/adr")
+# Decision records only: NNNN-*.md minus the 0000 template. Empty when skipping.
+ADR_FILES = (
+    sorted(
+        path
+        for path in ADR_DIR.glob("*.md")
+        if _FILENAME_RE.match(path.name) and path.name != _TEMPLATE
+    )
+    if _ROOT is not None
+    else []
 )
 
 
