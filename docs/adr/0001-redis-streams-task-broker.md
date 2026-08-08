@@ -12,7 +12,7 @@ crawl/fetch/parse/LLM/probe work" (`apps/platform/src/recon/api/app.py:1-5`); al
 work runs in a separate **worker** process. The two need a durable broker with one queue
 per work class, bounded retry plus a dead-letter path, at-least-once delivery, and
 recovery of jobs abandoned by a crashed worker (REQ-Q1/Q2, REQ-R2/R3 —
-`archive/Javascript recon app redesign/Developer Requirements.dc.html:359-365`).
+`docs/REQUIREMENTS.md`).
 
 ## Decision Drivers
 
@@ -24,10 +24,10 @@ recovery of jobs abandoned by a crashed worker (REQ-Q1/Q2, REQ-R2/R3 —
 ## Considered Options
 
 * **Redis Streams** with consumer groups.
-* **RabbitMQ** (named as the alternative broker in the requirements component diagram,
-  `Developer Requirements.dc.html:456`).
+* **RabbitMQ** (named as the alternative broker in the requirements component diagram —
+  see the "Recommended stack candidates" table in `docs/REQUIREMENTS.md`).
 * **Celery / RQ** over Redis (the requirements name "Python / Celery" for the worker
-  pool, `:460`).
+  pool, same table).
 * A **Postgres-backed queue** (an append-only table) — a no-extra-broker alternative.
 
 ## Decision Outcome
@@ -62,8 +62,8 @@ covered by `queue/*_test.py`.
 ## More Information
 
 Recorded retroactively 2026-08-08 (DEBT D10). The in-repo requirements name Redis
-Streams / RabbitMQ for the broker (`Developer Requirements.dc.html:456`) and Python /
-Celery for the worker pool (`:460`) as a **candidate set**, not a recorded
-choose-and-reject; the head-to-head "why Redis Streams over RabbitMQ/Celery" was a
+Streams / RabbitMQ for the broker and Python / Celery for the worker pool
+(`docs/REQUIREMENTS.md`, "Recommended stack candidates") as a **candidate set**, not a
+recorded choose-and-reject; the head-to-head "why Redis Streams over RabbitMQ/Celery" was a
 design-time judgment at the Slice-1 foundation stage (off-repo session memory
 `slice1-foundation-choices`). See also `docs/ARCHITECTURE.md` ("Async spine").

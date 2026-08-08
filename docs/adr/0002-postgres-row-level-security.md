@@ -9,9 +9,8 @@ date: 2026-08-08
 
 The platform is multi-tenant: many security engagements share one database, and a bug
 must never let one tenant read another's runs, findings, or assets. Where should that
-isolation be enforced — in application query code, or in the database itself (REQ-S1,
-`Developer Requirements.dc.html:384`: "authorization enforced at the data layer, not just
-the API")?
+isolation be enforced — in application query code, or in the database itself (REQ-S1 —
+"authorization enforced at the data layer, not just the API"; see `docs/REQUIREMENTS.md`)?
 
 ## Considered Options
 

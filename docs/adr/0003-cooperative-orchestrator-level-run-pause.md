@@ -35,16 +35,16 @@ before the pause is observed — pause is best-effort by design, not a hard pree
   survives a worker restart and resumes deterministically from a stage boundary.
 * Good — a `ControlInterrupt` is explicitly *not* a failure: it is never retried or
   dead-lettered (`queue/retry.py:30-39`), so pausing does not burn the retry budget.
-* Bad — pause is not instantaneous; a short run can finish before it pauses (documented in
-  `apps/platform/docs/superpowers/specs/2026-07-30-ui-catch-up-design.md:144-145`).
+* Bad — pause is not instantaneous; a short run can finish before it pauses (pause is
+  best-effort by design, not a hard preempt).
 
 ### Confirmation
 
 Checkpoints: `worker/main.py:101-135,151-160` (docstring L1-8: "observes cancel/pause
 flags at safe checkpoints"). Flag + resume: `runs/service.py:184-210,242-264`. Flag read
 + interrupt: `runs/queries.py:31-52`; `ControlInterrupt` `queue/retry.py:30-39`. Resume
-re-enqueue: `runs/coordinator.py:237-241`. "Only crawls truly checkpoint":
-`.../specs/2026-07-30-ui-catch-up-design.md:144-145`.
+re-enqueue: `runs/coordinator.py:237-241`. "Only crawls truly checkpoint" — the crawl
+harness is the one stage with a mid-stage checkpoint (`discover/harness.py`).
 
 ## More Information
 

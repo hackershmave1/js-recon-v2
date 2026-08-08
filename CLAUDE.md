@@ -16,11 +16,13 @@ hosts only).
 ## Layout (monorepo)
 
 ```
+docs/                   ARCHITECTURE.md (the "what") + adr/ (MADR decision trail, the "why")
+                        + REQUIREMENTS.md (the 40 REQ-* IDs)
 apps/platform/          the product
   src/recon/            Python backend — FastAPI + Redis Streams queue + Postgres
                         (RLS, multi-tenant) + S3/MinIO blobs + a worker
   web/                  React/Vite SPA (the Recon Workspace)
-  docs/                 ARCHITECTURE.md + superpowers/specs (design specs per slice)
+  docs/                 req-d3-finding-hash-normalization.md (the finding-identity spec)
 apps/capture/
   chrome-extension/     MV3 extension: captures runtime (post-auth) JS -> the platform
 DEBT.md                 tracked tech debt (owners + effort) — read before "why isn't X done"

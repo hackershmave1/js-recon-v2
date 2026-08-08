@@ -2,8 +2,8 @@
 
 AppSec JavaScript API-recon platform. Statically reconstructs a backend API from
 a target's JavaScript, extracts findings, rebuilds an OpenAPI spec, and runs an
-evidence-grounded AI threat model. Built against `Javascript recon app
-redesign/Developer Requirements.dc.html` (the REQ-* IDs).
+evidence-grounded AI threat model. Built against the platform requirements
+(the `REQ-*` IDs in `docs/REQUIREMENTS.md`).
 
 ## Slice 1 — the async spine (this milestone)
 

@@ -10,8 +10,8 @@ date: 2026-08-08
 The one place the platform makes outbound requests is fetching a target's JavaScript
 (crawl seed + katana-discovered URLs + declared assets). That fetch is a classic SSRF
 sink: a malicious target could point it at `169.254.169.254`, an internal host, or use
-DNS rebinding. What may be fetched must be tightly and safely constrained (REQ-P2 / RT-02,
-`Developer Requirements.dc.html:382`).
+DNS rebinding. What may be fetched must be tightly and safely constrained (REQ-P2 / RT-02;
+see `docs/REQUIREMENTS.md`).
 
 ## Considered Options
 

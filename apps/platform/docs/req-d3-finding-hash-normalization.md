@@ -1,9 +1,8 @@
 # REQ-D3 — finding-hash normalization spec
 
-> First artifact of slice 2 ("one JS file → findings"). Load-bearing for REQ-A3
-> (exactly-once outbox), REQ-D3 (finding identity), REQ-D5 (partial-aware diff), and
-> REQ-C2 (honest coverage). Source of truth: `Javascript recon app redesign/Developer
-> Requirements.dc.html`.
+> The finding-hash identity spec. Load-bearing for REQ-A3 (exactly-once outbox),
+> REQ-D3 (finding identity), REQ-D5 (partial-aware diff), and REQ-C2 (honest
+> coverage). Requirements: `docs/REQUIREMENTS.md`.
 >
 > **Status:** design gate PASSED. This revision incorporates the adversarial design
 > review (2026-07-20): host removed from hashed identity (C1), occurrences added so
