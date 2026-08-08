@@ -145,9 +145,29 @@ which extends that output.
 42/75 backend test files need live PG/Redis/MinIO; the fast hermetic layer is the
 minority, so the heavy lane catches most real bugs. Grow the small-test layer.
 
-### D10 · No ADR trail [M]
-Architectural "why" (Redis Streams, RLS-in-DB, SIGSTOP-rejected, export-only GraphQL)
-lives in per-slice specs + off-repo memory. Add `docs/adr/` (MADR); backfill ~8.
+### D10 · No ADR trail [M] — ✅ RESOLVED 2026-08-08
+Added a MADR ADR trail at repo-root `docs/adr/` (beside `ARCHITECTURE.md` — the "what";
+the ADRs are the "why"): a trimmed template (`0000-adr-template.md`), a `README.md` index,
+and **8 backfilled records** — Redis Streams broker (at-least-once folded in), Postgres
+RLS, cooperative orchestrator-level pause (not OS signal-stop), content-addressed blobs,
+fail-closed SSRF egress guard, static/no-active-traffic stance, single-analysis-core v1
+convergence, and the hardened out-of-process engine harness. Each carries a MADR
+**Confirmation** section pointing at the enforcing code/tests (anti-drift anchor) and links
+its slice spec rather than copying it; status is per-decision-reality (all 8 shipped →
+`accepted`). **GraphQL export-only was deliberately NOT written as an accepted ADR** — 0
+hits in `apps/platform/src` (parked on `feat/enrichment`, D13); it is folded honestly as a
+corollary in ADR-0006 (outputs are static exports; GraphQL SDL is a deferred *export*
+format, never a served API). Three decisions whose rejected-alternative rationale is
+off-repo (the SIGSTOP rejection, Redis-vs-alternatives, the exact scope of "no active
+traffic") say so explicitly and cite the source. A hermetic structure test
+(`apps/platform/src/recon/adr_structure_test.py` — must live under `src/` to be collected
+by the gated lane) enforces filename shape, unique numbering, valid frontmatter, and
+bidirectional README↔file index integrity, resolving repo-root `docs/adr/` via a `.git`
+walk (no fixed depth, no `**` glob). Both §4 gates passed (design: both engineers
+BUILD-WITH-CHANGES, all must-fixes folded — spec
+`apps/platform/docs/superpowers/specs/2026-08-08-adr-trail-d10-design.md`; code review:
+CHANGES-REQUIRED → 1 must-fix [ADR-0007 overstated `apps/capture/` contents] + 5 citation
+nits, all fixed → SHIP).
 
 ### D11 · Files over the ~300-line cap [M] — ⏳ PARTIAL 2026-08-07 (extract.py split)
 `findings/extract.py` (639, 2.1x) split into a 3-module import DAG — `_jsast.py` (185,
