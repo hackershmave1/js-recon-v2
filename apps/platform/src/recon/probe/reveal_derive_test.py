@@ -64,7 +64,9 @@ def test_blob_client_error_denies_source_gone(monkeypatch):
 
 
 def test_correct_slice_reveals_the_plaintext(monkeypatch):
-    token = "sk_live_ABCDEF0123456789"
+    # A non-secret-shaped fixture: _derive slices/hashes bytes and is agnostic to the
+    # token's shape, so this stays out of the secret scanner without weakening the test.
+    token = "reveal-me-plaintext-value"
     blob = b"const key = '" + token.encode() + b"';"
     start = blob.index(token.encode())
     end = start + len(token)
