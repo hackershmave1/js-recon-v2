@@ -338,3 +338,91 @@ def test_servers_strips_userinfo_and_brackets_ipv6():
             "description": "Host observed; scheme/port inferred where not seen in a concrete URL.",
         }
     ]  # IPv6 brackets preserved
+
+
+from recon.probe.openapi import OPENAPI_EXPORT_CONTRACT_VERSION
+
+
+def test_export_contract_version_is_pinned():
+    # Drift alarm (D8b): the export CONTRACT version is a conscious literal. Bumping
+    # the code constant without updating this line fails the fast lane — which is the
+    # point: a shape change to the export must be a deliberate version bump, never silent.
+    # (D8a pins to the constant; D8b pins the literal for a stronger change-detector.)
+    assert OPENAPI_EXPORT_CONTRACT_VERSION == "1.0"
+
+
+def test_document_stamps_export_contract_version():
+    doc = build_openapi(
+        [_req(operation="GET /a", method="GET", path="/a")],
+        run_id="00000000-0000-0000-0000-000000000000",
+    )
+    validate(doc)  # a root x-recon-export extension must stay valid OpenAPI 3.0.3
+    assert doc["x-recon-export"] == {
+        "contract-version": OPENAPI_EXPORT_CONTRACT_VERSION,
+        "generator": "js-recon-v2 openapi export",
+    }
+    # info.version is the RECONSTRUCTED TARGET's version (unknown -> 0.0.0), NOT our
+    # export-contract version — the two must never be conflated.
+    assert doc["info"]["version"] == "0.0.0"
+
+
+def test_export_contract_shape_is_stable():
+    # Pin the consumer-facing shape (Burp / threat-model feed): a silent rename or drop
+    # of an x-recon-* contract field fails here, forcing a conscious contract-version bump.
+    req = _req(
+        operation="POST /users/${id}",
+        method="POST",
+        path="/users/${id}",
+        query_params=(QueryParam("q", None),),
+        body_params=("a",),
+        content_type="application/json",
+        hosts=("api.example.com",),
+    )
+    doc = build_openapi([req], run_id="00000000-0000-0000-0000-000000000000")
+    validate(doc)
+    assert {"openapi", "info", "paths", "x-recon-export"} <= set(doc)
+    op = doc["paths"]["/users/{id}"]["post"]
+    assert set(op["x-recon-confidence"]) == {
+        "path",
+        "methods",
+        "param-names",
+        "param-types",
+        "body",
+    }
+    # The value vocabulary is part of the contract too — a consumer switches on these,
+    # so a value rename must also trip the alarm, not just a key rename.
+    conf = op["x-recon-confidence"]
+    assert conf["path"] == "certain" and conf["methods"] == "observed-only"
+    assert conf["param-types"] == "inferred"
+    assert conf["param-names"] in {"observed", "synthesized"}
+    assert conf["body"] in {"absent", "inferred", "names-only"}
+
+
+def test_empty_document_still_stamps_contract_version():
+    # Even a zero-request run must self-describe its export-contract version.
+    doc = build_openapi([], run_id="00000000-0000-0000-0000-000000000000")
+    validate(doc)
+    assert doc["x-recon-export"]["contract-version"] == OPENAPI_EXPORT_CONTRACT_VERSION
+
+
+def test_export_contract_extension_names_are_stable():
+    # The version claims to version the SHAPE of the x-recon-* extensions, so a silent
+    # rename of ANY of them must trip the alarm — not just x-recon-confidence. Exercise
+    # a WebSocket, a non-standard verb, and a names-only body so all three conditional
+    # root/operation extensions are emitted.
+    ws = _req(
+        operation="WSS wss://h/live",
+        method="WSS",
+        path="wss://h/live",
+        probeable=False,
+        example_url="wss://h/live",
+    )
+    purge = _req(operation="PURGE /c", method="PURGE", path="/c", example_url="https://h/c")
+    body = _req(
+        operation="POST /b", method="POST", path="/b", body_params=("a",), content_type=None
+    )
+    doc = build_openapi([ws, purge, body], run_id="00000000-0000-0000-0000-000000000000")
+    validate(doc)
+    assert "x-recon-websocket-endpoints" in doc
+    assert "x-recon-nonstandard-operations" in doc
+    assert doc["paths"]["/b"]["post"]["x-recon-body-params"] == ["a"]

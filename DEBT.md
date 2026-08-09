@@ -123,7 +123,7 @@ Both §4 gates passed.
 
 ## Maintainability
 
-### D8 · Unversioned contracts [M] — D8a ✅ RESOLVED 2026-08-07; D8b open [S]
+### D8 · Unversioned contracts [M] — D8a ✅ RESOLVED 2026-08-07; D8b ✅ RESOLVED 2026-08-09
 Two wire contracts carried no version field and no consumer-contract test.
 
 **D8a (capture ingest — DONE):** `capture_router.py` now stamps a server-authored
@@ -135,11 +135,21 @@ depends on (health / save-files / analyze-start / progress envelopes + the
 silently in prod. Both §4 gates passed (design: BUILD WITH CHANGES; code: APPROVE
 WITH NITS).
 
-**D8b (OpenAPI export — OPEN):** the export serializer is `probe/openapi.py` (NOT
-`probe/reconstruct.py` as previously written here); it already emits `openapi: 3.0.3`
-with a colocated `openapi_test.py`, so the remaining work is a small explicit
-contract/version marker + a drift test. Must precede any D13 (enrichment) resume,
-which extends that output.
+**D8b (OpenAPI export — ✅ RESOLVED 2026-08-09):** `probe/openapi.py` `build_openapi` now
+stamps a root `x-recon-export: {contract-version, generator}` on every emitted document —
+an explicit version for the export FORMAT (the machine-readable shape of the `x-recon-*`
+extensions), distinct from `info.version` (`"0.0.0"` = the reconstructed target's unknown
+version). Kept IN the document (not an HTTP header) so the version travels with a saved
+`.json`/`.yaml` artifact, so `export_router.py` needs no change. A hermetic drift test
+(`openapi_test.py`) pins the version literal, the in-document stamp shape, and the full set
+of `x-recon-*` extension names + the `x-recon-confidence` key/value vocabulary, so a silent
+shape change fails the fast lane instead of breaking a consumer (Burp / the threat-model
+feed). Both §4 gates passed (design: BUILD AS-IS; code: SHIP-WITH-NITS — the 3 nits [kebab
+`contract-version` key, tightened comment scope, this ledger flip] all folded). A third
+response contract — the spec classify/diff envelope (`api/spec_router.py` `asdict(summary)`)
+— is also unversioned but is out of D8's stated two-contract scope; noted here as a future
+follow-up if it grows an external consumer. Still precedes any D13 (enrichment) resume,
+which extends this output.
 
 ### D9 · Test-pyramid inversion [L, ongoing]
 42/75 backend test files need live PG/Redis/MinIO; the fast hermetic layer is the
