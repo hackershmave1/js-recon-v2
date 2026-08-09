@@ -198,4 +198,24 @@ describe("RunProgress", () => {
     await waitFor(() => expect(screen.getByText(/4 assets · 1 fetched/)).toBeInTheDocument());
     expect(screen.getByText(/3 failed — target returned HTTP 403/)).toBeInTheDocument();
   });
+
+  it("refetches findings on a live terminal transition so results appear without a reload", async () => {
+    // The dashboard reads findings only from refresh(). The live SSE terminal
+    // transition previously updated the badge but never refetched, so the panel
+    // sat on the empty onOpen snapshot until a manual reload. It must refetch on
+    // the terminal transition instead.
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "analyzing", stage: "analyzing", done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getAssets").mockResolvedValue({ domain: null, status: "pending", assets: [] });
+    const getFindings = vi.spyOn(api, "getFindings")
+      .mockResolvedValueOnce({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] })   // onOpen: still empty
+      .mockResolvedValue({ run_id: "r", count: 3, coverage: null, spec: null, findings: [] });        // terminal: results
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onOpen?.();                                                             // initial refresh -> 0 findings
+      h.onEvent({ id: "1", event: "run.transition", data: '{"to":"done"}' });  // live terminal, stream then ends
+    });
+    const onFindings = vi.fn();
+    render(<TenantProvider><RunProgress runId="r" onFindings={onFindings} /></TenantProvider>);
+    await waitFor(() => expect(getFindings).toHaveBeenCalledTimes(2));                                   // open + terminal
+    await waitFor(() => expect(onFindings).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 })));
+  });
 });

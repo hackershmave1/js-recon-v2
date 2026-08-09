@@ -160,23 +160,27 @@ const HIGHLIGHT_MAX_CHARS = 200_000;
 // null when the view is pretty-printed, since the original line numbers no longer
 // map after reformatting. `focusLine` is the jumped-to line (highlighted + scrolled
 // into view); it still applies to pretty-printed text even though marks don't.
-function CodeViewer({ text, truncated, marks, focusLine }: {
-  text: string; truncated: boolean; marks: Map<number, string> | null; focusLine?: number | null;
+function CodeViewer({ text, truncated, marks, focusLine, canHighlight }: {
+  text: string; truncated: boolean; marks: Map<number, string> | null; focusLine?: number | null; canHighlight: boolean;
 }) {
   const lines = useMemo(() => text.split("\n"), [text]);
 
   // Lazily syntax-highlight into per-line spans. Plain text until ready and on
-  // failure (S3); skipped entirely for very large files (S2).
+  // failure (S3); skipped for very large files (S2). Eligibility (`canHighlight`)
+  // is gauged by the caller from the RAW source length, NOT `text.length`: pretty-
+  // printing only inflates whitespace (cheap tokens), so a file that highlights raw
+  // must still highlight after beautify — gating on the expanded length would
+  // wrongly drop highlighting for exactly the minified bundles that auto-format.
   const [highlighted, setHighlighted] = useState<HighlightedSpan[][] | null>(null);
   useEffect(() => {
     setHighlighted(null);
-    if (text.length > HIGHLIGHT_MAX_CHARS) return;
+    if (!canHighlight) return;
     let live = true;
     void highlightJsLines(text)
       .then((out) => { if (live) setHighlighted(out); })
       .catch(() => { /* fall back to plain text */ });
     return () => { live = false; };
-  }, [text]);
+  }, [text, canHighlight]);
 
   // Scroll the jumped-to line into view after it renders. Re-run when highlighting
   // resolves (it reflows the line). jsdom's scrollIntoView throws, so guard it.
@@ -380,6 +384,9 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
               truncated={content.truncated}
               marks={pretty ? null : marks}
               focusLine={focusLine}
+              // Highlight eligibility follows the RAW source size, so toggling
+              // pretty-print (which only inflates whitespace) can't trip the cap.
+              canHighlight={content.content.length <= HIGHLIGHT_MAX_CHARS}
             />
           )
         ) : null}

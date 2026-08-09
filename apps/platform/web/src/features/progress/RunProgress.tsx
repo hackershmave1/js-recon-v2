@@ -187,6 +187,14 @@ export function RunProgress(
                 if (ACTIVE_STAGES.has(to) && to !== wasState) {
                   setDone(0); setTotal(0); setPct(null); setEta(null);
                 }
+                // A live terminal transition ENDS the SSE stream (sseClient returns on
+                // the terminal fast-path before checkTerminal), so the only findings
+                // fetch so far is the onOpen one from when the run was still active and
+                // empty. Refetch here, or the dashboard shows DONE over stale (empty)
+                // findings/coverage/sources until a manual reload. Idempotent: the
+                // monotonic guard rejects a replayed terminal, so applyState is already
+                // false above and this never double-fires.
+                if (TERMINAL_STATES.has(to)) void refresh();
               }
             }
           } catch { /* non-JSON payload */ }
