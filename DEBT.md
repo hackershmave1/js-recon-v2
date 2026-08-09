@@ -82,8 +82,10 @@ this one): the beyond-umbrella flags `noUncheckedIndexedAccess` /
 enabling them means a real burn-down.
 
 ### D5 · Coverage ratchet [ongoing]
-Floor is `--cov-fail-under=55` (fast-lane coverage is ~58.6%). Ratchet the floor up
-as coverage grows; never lower it.
+Floor is `--cov-fail-under=58` (fast-lane coverage is ~59.5%, grown by the D8b export
+drift tests). **Ratcheted 55→58 on 2026-08-09** to lock in the gain. Ratchet the floor
+up as coverage grows; never lower it. (`.github/workflows/ci.yml` is the single source
+of the number; the CLAUDE.md mention trails it.)
 
 ## Supply chain / security (a security tool with an unscanned supply chain)
 
