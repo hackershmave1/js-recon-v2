@@ -76,6 +76,24 @@ def _pct(done: int, total: int) -> int:
     return int(round(100 * done / total)) if total > 0 else 0
 
 
+def _etag(
+    state: str,
+    stage: str | None,
+    done: int,
+    total: int,
+    hb_iso: str | None,
+    stalled: bool,
+    pause_requested: bool,
+    cancel_requested: bool,
+) -> str:
+    """Strong ETag over everything a polling client must observe (REQ-R4). The
+    control flags participate deliberately: a cooperative pause flips
+    ``pause_requested`` without moving ``state``, and an ``If-None-Match`` poll must
+    still see that change (else the UI's control gating goes stale after a reload)."""
+    raw = f"{state}:{stage}:{done}:{total}:{hb_iso}:{stalled}:{pause_requested}:{cancel_requested}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
 def get_status(tenant_id: str, run_id: str, *, now: dt.datetime | None = None) -> StatusView | None:
     now = now or dt.datetime.now(dt.UTC)
     threshold = get_settings().heartbeat_stall_threshold_seconds
@@ -97,10 +115,7 @@ def get_status(tenant_id: str, run_id: str, *, now: dt.datetime | None = None) -
         pause_requested = run.pause_requested
         cancel_requested = run.cancel_requested
     hb_iso = heartbeat.isoformat() if heartbeat else None
-    # The flags participate in the ETag: a cooperative pause flips pause_requested
-    # without moving `state`, and a polling client must still see that change.
-    raw = f"{state}:{stage}:{done}:{total}:{hb_iso}:{stalled}:{pause_requested}:{cancel_requested}"
-    etag = hashlib.sha256(raw.encode()).hexdigest()[:16]
+    etag = _etag(state, stage, done, total, hb_iso, stalled, pause_requested, cancel_requested)
     return StatusView(
         run_id=str(run_id),
         state=state,
