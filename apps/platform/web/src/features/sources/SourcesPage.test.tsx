@@ -2,12 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SourcesPage } from "./SourcesPage";
+import { highlightJsLines } from "./highlight";
 import * as api from "../../api/apiClient";
 import type { FindingsResponse, Finding, Occurrence, SourceFile, SourceJump } from "../../api/types";
 
 // Highlighting is lazy + async and splits a line into spans; mock it out so these
 // tests assert on plain text deterministically (highlight.ts has its own tests).
-vi.mock("./highlight", () => ({ highlightJsLines: () => Promise.reject(new Error("no highlight in test")) }));
+vi.mock("./highlight", () => ({ highlightJsLines: vi.fn(() => Promise.reject(new Error("no highlight in test"))) }));
 
 beforeEach(() => vi.restoreAllMocks());
 
@@ -157,4 +158,31 @@ describe("SourcesPage", () => {
     // focusLine applies its highlight class to the jumped-to line.
     await waitFor(() => expect(document.querySelector(".sv-line.focus")).not.toBeNull());
   });
+
+  it("keeps highlighting eligible in pretty mode by gauging the RAW source, not the expanded text", async () => {
+    // A minified one-liner UNDER the 200k highlight cap (so highlighting is
+    // eligible) that beautifies to WELL OVER 200k. The bug gated on the displayed
+    // (pretty-expanded) length, so it wrongly skipped highlighting in pretty mode
+    // only. The guard must follow the raw source length (identical in both modes).
+    const hl = vi.mocked(highlightJsLines);
+    hl.mockClear();
+    const raw = "function f(){" + "x=1;".repeat(23000) + "}"; // ~92k raw, one line -> minified
+    vi.spyOn(api, "getSources").mockResolvedValue({
+      run_id: "r", count: 1,
+      sources: [{ path: "https://acme.io/app.js", kind: "asset", fetch_status: "ok", asset_url: null }],
+    });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "https://acme.io/app.js", content: raw, truncated: false });
+    render(<SourcesPage data={null} tenantId="t" runId="r" jump={null} />);
+
+    const toggle = await screen.findByRole("button", { name: /pretty print/i });
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "true")); // auto-on (minified)
+    // Highlighting is attempted on the expanded (>200k) pretty text — proving the
+    // guard measured the raw length. Pre-fix that call was skipped and never fired.
+    // Generous timeout: beautifying ~90k + rendering the expanded bundle outlasts
+    // waitFor's 1s default.
+    await waitFor(
+      () => expect(hl.mock.calls.some((c) => (c[0] as string).length > 200_000)).toBe(true),
+      { timeout: 15_000 },
+    );
+  }, 20_000);
 });
