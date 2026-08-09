@@ -82,10 +82,10 @@ this one): the beyond-umbrella flags `noUncheckedIndexedAccess` /
 enabling them means a real burn-down.
 
 ### D5 · Coverage ratchet [ongoing]
-Floor is `--cov-fail-under=58` (fast-lane coverage is ~59.5%, grown by the D8b export
-drift tests). **Ratcheted 55→58 on 2026-08-09** to lock in the gain. Ratchet the floor
-up as coverage grows; never lower it. (`.github/workflows/ci.yml` is the single source
-of the number; the CLAUDE.md mention trails it.)
+Floor is `--cov-fail-under=60` (fast-lane coverage is ~61%, grown by the D9 slice-1
+hermetic tests). **Ratcheted 55→58, then 58→60 on 2026-08-09** to lock in the gains.
+Ratchet the floor up as coverage grows; never lower it. (`.github/workflows/ci.yml` is
+the single source of the number; the CLAUDE.md mention trails it.)
 
 ## Supply chain / security (a security tool with an unscanned supply chain)
 
@@ -156,6 +156,20 @@ which extends this output.
 ### D9 · Test-pyramid inversion [L, ongoing]
 42/75 backend test files need live PG/Redis/MinIO; the fast hermetic layer is the
 minority, so the heavy lane catches most real bugs. Grow the small-test layer.
+
+**Slice 1 (2026-08-09):** added hermetic tests for the decision kernels that were
+previously only exercised under live infra — `worker/main.py::process_message` (the
+full run-lifecycle routing matrix: gone/skipped/paused/cancel/pause/duplicate/
+mid-loop-checkpoint/ControlInterrupt/happy-path) + `_handle_failure` DLQ branch (30%→79%),
+`probe/reveal.py::_derive` + `_reveal_candidates` (the fail-closed `integrity` drift
+check + deterministic ordering; 41%→59%, faking only `storage.get_blob`), and
+`storage.py::object_key` (tenant-isolation key shape + content-addressing, no test
+existed). Fast-lane total 59%→61%; D5 floor ratcheted 58→60. **Slice 2 candidates**
+(design-gated, deferred): `runs/queries.py` ETag determinism behind a 3-line `_etag`
+extraction, `probe/sources.py::_as_content`. Out of scope (intrinsically integration —
+uncovered lines are DB/queue semantics where a hermetic test buys mock-fiction):
+`spec/service.py`, `spec/base_url_service.py`, `findings/wrapper_service.py`,
+`findings/reextract.py`, `runs/service.py`, `runs/coordinator.py`, `probe/triage.py`.
 
 ### D10 · No ADR trail [M] — ✅ RESOLVED 2026-08-08
 Added a MADR ADR trail at repo-root `docs/adr/` (beside `ARCHITECTURE.md` — the "what";

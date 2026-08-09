@@ -52,7 +52,7 @@ jobs:
       - name: Unit + engine contract tests (no infra) + coverage floor
         env:
           RECON_REQUIRE_ENGINES: "1"
-        run: uv run pytest -m "not integration" --cov=recon --cov-fail-under=58
+        run: uv run pytest -m "not integration" --cov=recon --cov-fail-under=60
 
   # Front-end lane: lints, tests, and builds the SPA on its own (no Python/Docker
   # needed), so a broken web build fails fast instead of only surfacing during the
