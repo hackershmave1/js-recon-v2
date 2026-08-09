@@ -26,10 +26,8 @@ paths = [
   '''(^|/)build/''',
   '''(^|/)\.claude/''',
   '''(^|/)\.superpowers/''',
-  '''(^|/)archive/''',
   # --- deliberate fake-secret fixtures (whole-tree / doc; entirely fake tokens) ---
   '''test-targets/recon-range/''',                                  # the vulnerable fixture target
-  '''docs/superpowers/plans/2026-08-05-recon-range\.md''',          # doc quoting those fixtures
 ]
 # For files that ALSO carry real product/test code, allowlist the EXACT fake token
 # (not the whole path) so a REAL secret added there later is still caught.

@@ -1,5 +1,5 @@
-/* Recon Workspace design system — tokens pulled from the design mockup
-   (Javascript recon app redesign/Recon Workspace.dc.html). The class contract
+/* Recon Workspace design system — tokens pulled from the original Recon
+   Workspace design mockup. The class contract
    here (.card / .muted / .sev-high / .chip[-*] + base button/input) is the one
    the existing feature components already use, so restyling in place re-skins
    the whole app without touching component markup. Shell/layout classes are

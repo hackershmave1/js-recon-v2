@@ -10,8 +10,8 @@ date: 2026-08-08
 This is a security-recon tool that reconstructs a target's API surface from its
 JavaScript. A core product/safety stance must be fixed: does the platform *itself* send
 active or exploit traffic at the target, or does it stay static and hand the operator a
-ready-to-fire artifact to run manually (REQ-P1/P2/P3,
-`Developer Requirements.dc.html:381-383`)?
+ready-to-fire artifact to run manually (REQ-P1/P2/P3; see
+`docs/REQUIREMENTS.md`)?
 
 ## Considered Options
 
@@ -38,16 +38,15 @@ false "clean".
 * Good — outputs are **static exports** the user drives: OpenAPI today
   (`api/export_router.py`, `probe/openapi.py`); a served/active API is explicitly *not*
   offered. GraphQL SDL / Swagger 2.0 / gRPC are deferred *export* formats, never a live
-  GraphQL endpoint (`.../specs/2026-07-28-openapi-export-design.md` §9).
+  GraphQL endpoint.
 * Neutral — static analysis cannot observe responses, so the OpenAPI spec asserts no auth
   and no response shapes ("Not observed — static analysis does not capture responses",
   `probe/openapi.py:93,166-169`).
 * Bad — this bounds recall: runtime-only behaviour is invisible to a static pass. Closing
   that gap via **runtime-evidence ingest** (e.g. Burp/HAR) would *deliberately relax* this
-  stance and is recorded as a conscious future decision, not a silent drift
-  (`.../specs/2026-07-28-openapi-export-design.md:249-252`). Note the capture extension
-  already supplies runtime-*captured JS* — still static analysis of that JS, which is
-  distinct from active traffic.
+  stance and would be a conscious future decision, not a silent drift. Note the capture
+  extension already supplies runtime-*captured JS* — still static analysis of that JS, which
+  is distinct from active traffic.
 
 ### Confirmation
 
@@ -59,6 +58,5 @@ strings `probe/openapi.py:3,93,166-169`. Manual-probe is user-initiated
 
 Recorded retroactively 2026-08-08 (DEBT D10). **Scope note:** "no active traffic" means no
 *automated active/exploit* traffic — the platform does fetch JS assets (SSRF-guarded,
-ADR-0005) and does ship a user-initiated manual-probe artifact. Re-asserted across slices
-(`.../specs/2026-07-29-req-c2-base-url-design.md:56,331`,
-`.../specs/2026-07-30-wrapper-teaching-design.md:255,286`). See `docs/ARCHITECTURE.md`.
+ADR-0005) and does ship a user-initiated manual-probe artifact. This stance is re-asserted
+across subsequent slices. See `docs/ARCHITECTURE.md`.

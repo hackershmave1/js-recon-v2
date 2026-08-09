@@ -16,11 +16,13 @@ hosts only).
 ## Layout (monorepo)
 
 ```
+docs/                   ARCHITECTURE.md (the "what") + adr/ (MADR decision trail, the "why")
+                        + REQUIREMENTS.md (the 40 REQ-* IDs)
 apps/platform/          the product
   src/recon/            Python backend — FastAPI + Redis Streams queue + Postgres
                         (RLS, multi-tenant) + S3/MinIO blobs + a worker
   web/                  React/Vite SPA (the Recon Workspace)
-  docs/                 ARCHITECTURE.md + superpowers/specs (design specs per slice)
+  docs/                 req-d3-finding-hash-normalization.md (the finding-identity spec)
 apps/capture/
   chrome-extension/     MV3 extension: captures runtime (post-auth) JS -> the platform
 DEBT.md                 tracked tech debt (owners + effort) — read before "why isn't X done"
@@ -48,7 +50,8 @@ Tests are **colocated** (`*_test.py` next to source; `*.test.tsx` for web).
 
 `main` is the trunk; land work via a PR per slice. A green build means all three
 lanes passed:
-- **host-tests**: `uv sync --frozen` (reproducible) → `ruff check src` (F + I) →
+- **host-tests**: `uv sync --frozen` (reproducible) → `ruff check src` + `ruff format
+  --check src` → `mypy src/recon/findings src/recon/spec` →
   `pytest -m "not integration" --cov=recon --cov-fail-under=55`, with
   `RECON_REQUIRE_ENGINES=1` (a missing engine is a hard failure, not a silent skip).
 - **frontend**: `npm ci` → `npm run lint` (oxlint + tsc) → vitest → build.
@@ -56,8 +59,9 @@ lanes passed:
   brings up the stores, runs the whole suite incl. real-engine + integration tests.
 
 Don't add a gate that isn't green on current code (a red trunk is worse than no
-gate). Ruff is scoped to `F,I` on purpose — E501/format and the broader UP/B/SIM
-rules are a tracked follow-up (DEBT.md), not a codebase-wide big-bang.
+gate). Ruff runs `F,I,UP,B,C4,SIM,PIE,RET` + `ruff format --check`, and mypy is
+`strict` on `recon.findings.*` + `recon.spec.*`; widening mypy module-by-module and
+ratcheting `--cov-fail-under` are the tracked follow-ups (DEBT.md), not a big-bang.
 
 ## Conventions
 

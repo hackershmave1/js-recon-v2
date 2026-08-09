@@ -3,9 +3,9 @@
 Short, durable records of the **why** behind this platform's load-bearing architectural
 choices — the companion to [`../ARCHITECTURE.md`](../ARCHITECTURE.md), which describes the
 **what**. Format is [MADR](https://adr.github.io/madr/), trimmed — see
-[`0000-adr-template.md`](0000-adr-template.md). Each record *links* to its detailed slice
-spec under `apps/platform/docs/superpowers/specs/` rather than copying it (one source of
-truth per fact).
+[`0000-adr-template.md`](0000-adr-template.md). Each record cites the code that enforces the
+decision and the requirement (`../REQUIREMENTS.md`) that drove it, rather than restating the
+design — one source of truth per fact.
 
 Most records here were **backfilled 2026-08-08** (DEBT D10) for decisions already shipped;
 each carries a "Recorded retroactively" note so its file date isn't mistaken for the
@@ -28,7 +28,8 @@ decision date.
 ## Adding an ADR
 
 1. Copy `0000-adr-template.md` to the next `NNNN-kebab-title.md` (four-digit, zero-padded).
-2. Fill it in; keep it to ~1 page; link the slice spec in *More Information*.
+2. Fill it in; keep it to ~1 page; cite the enforcing code in *Confirmation* and the
+   requirement (`../REQUIREMENTS.md`) in *More Information*.
 3. Add a row to the table above — the structure test
    (`apps/platform/src/recon/adr_structure_test.py`) fails the build if this index and the
    files ever drift apart.

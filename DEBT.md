@@ -8,7 +8,7 @@ Effort: S (hours) · M (a day-ish) · L (multi-day).
 ## Correctness
 
 ### D1 · Capture get-or-create race — silent duplicate sessions/runs [M] — ✅ RESOLVED 2026-08-07
-Fixed via approach A (design: `apps/platform/docs/superpowers/specs/2026-08-07-capture-race-fix-design.md`).
+Fixed via approach A.
 Added dedicated idempotency-key columns `session.external_id` + `run.capture_external_id`
 (migration 0011), each with a `UNIQUE(tenant_id, …)` index (NULLS DISTINCT — only
 capture rows bind); `capture_router` keys get-or-create on them and self-heals on
@@ -68,7 +68,7 @@ src/recon/spec` (hermetic) and fails loudly if the override ever stops matching 
 silent non-strict downgrade). Fast lane stays 421-green; ruff clean. Both §4 gates
 passed (design: Meta SHIP / Google BUILD-WITH-CHANGES — both deltas simplifications;
 code: SHIP WITH ONE NIT, nit addressed). **Widen next**, module-by-module; `db/models.py`
-(194) is the natural follow-up. Design: `docs/superpowers/specs/2026-08-07-mypy-d3-design.md`.
+(194) is the natural follow-up.
 
 ### D4 · TypeScript strict off [S] — ✅ RESOLVED 2026-08-07
 Enabled `"strict": true` in both `apps/platform/web/tsconfig.app.json` and
@@ -176,8 +176,7 @@ traffic") say so explicitly and cite the source. A hermetic structure test
 by the gated lane) enforces filename shape, unique numbering, valid frontmatter, and
 bidirectional README↔file index integrity, resolving repo-root `docs/adr/` via a `.git`
 walk (no fixed depth, no `**` glob). Both §4 gates passed (design: both engineers
-BUILD-WITH-CHANGES, all must-fixes folded — spec
-`apps/platform/docs/superpowers/specs/2026-08-08-adr-trail-d10-design.md`; code review:
+BUILD-WITH-CHANGES, all must-fixes folded; code review:
 CHANGES-REQUIRED → 1 must-fix [ADR-0007 overstated `apps/capture/` contents] + 5 citation
 nits, all fixed → SHIP).
 
@@ -232,6 +231,6 @@ just unclobbered storage). Frontend lane green (oxlint + tsc-strict + vitest 136
 
 ### D13 · Enrichment slice [M] — parked, design-gated
 `feat/enrichment` @ `58de1a9`: param risk-tags + header→securitySchemes + GraphQL
-export-only. Spec + §4 design gate done (BUILD WITH CHANGES, 5 must-fixes captured in
-`apps/platform/docs/superpowers/specs/2026-08-07-enrichment-design.md`). Resume after
+export-only. Spec + §4 design gate done (BUILD WITH CHANGES, 5 must-fixes captured in the
+enrichment design spec on the `feat/enrichment` branch). Resume after
 the hardening slice.

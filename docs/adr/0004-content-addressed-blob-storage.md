@@ -9,8 +9,7 @@ date: 2026-08-08
 
 Runs produce large/binary artifacts — raw JS bundles, source maps, recovered sources,
 reports. These must not sit in Postgres rows (bloat, slow queries, backup weight), and
-must stay tenant-isolated like everything else (REQ-D2,
-`Developer Requirements.dc.html:369`).
+must stay tenant-isolated like everything else (REQ-D2; see `docs/REQUIREMENTS.md`).
 
 ## Considered Options
 

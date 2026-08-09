@@ -1,6 +1,6 @@
 {
   "target": "recon-range",
-  "spec": "docs/superpowers/specs/2026-08-05-recon-range-design.md",
+  "spec": "test-targets/recon-range/DESIGN.md",
   "should_find": [
     { "id": "ep-profile", "src": "src/api/profile.js", "method": "GET", "operation": "/api/v1/profile", "value": "GET /api/v1/profile", "params": [] },
     { "id": "ep-user", "src": "src/api/profile.js", "method": "GET", "operation": "/api/v1/users/${userId}", "value": "GET /api/v1/users/${userId}", "params": [] },

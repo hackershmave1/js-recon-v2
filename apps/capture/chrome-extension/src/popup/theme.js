@@ -1,5 +1,5 @@
-// theme.js — exact design tokens lifted from the "RECON Capture" prototype
-// (Extension Popup.dc.html). Keep these hex values byte-for-byte with the design.
+// theme.js — exact design tokens lifted from the original "RECON Capture"
+// popup design mockup. Keep these hex values byte-for-byte with the design.
 
 export const C = {
   // surfaces
