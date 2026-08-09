@@ -164,9 +164,13 @@ mid-loop-checkpoint/ControlInterrupt/happy-path) + `_handle_failure` DLQ branch 
 `probe/reveal.py::_derive` + `_reveal_candidates` (the fail-closed `integrity` drift
 check + deterministic ordering; 41%→59%, faking only `storage.get_blob`), and
 `storage.py::object_key` (tenant-isolation key shape + content-addressing, no test
-existed). Fast-lane total 59%→61%; D5 floor ratcheted 58→60. **Slice 2 candidates**
-(design-gated, deferred): `runs/queries.py` ETag determinism behind a 3-line `_etag`
-extraction, `probe/sources.py::_as_content`. Out of scope (intrinsically integration —
+existed). Fast-lane total 59%→61%; D5 floor ratcheted 58→60. **Slice 2 (2026-08-09):**
+extracted a pure `_etag()` from `runs/queries.get_status` (byte-identical refactor) +
+hermetic tests pinning the REQ-R4 invariant (a pause/cancel *request* changes the ETag
+without moving `state`, so `If-None-Match` polling can't miss it), and
+`probe/sources._as_content` (the byte-slice-before-decode bounded-response invariant).
+Fast lane 61.09%→61.32% (floor stays 60 — too little headroom to ratchet). Out of scope
+(intrinsically integration —
 uncovered lines are DB/queue semantics where a hermetic test buys mock-fiction):
 `spec/service.py`, `spec/base_url_service.py`, `findings/wrapper_service.py`,
 `findings/reextract.py`, `runs/service.py`, `runs/coordinator.py`, `probe/triage.py`.
@@ -220,10 +224,17 @@ under D3's now-strict `no_implicit_reexport`). All three modules are mypy-strict
   overages, low priority (fetch is SSRF-fail-closed-critical — don't fragment).
 (The DEBT.md counts above were stale pre-split; actuals measured 2026-08-07.)
 
-### D12 · Stale branches [S]
-`spike/platform-ingest` (now == `main`), the `claude/*` worktree branches, and
-`claude/busy-boyd-e00cc4` (its AKIA fix is superseded on main) can be pruned +
-`git worktree prune`.
+### D12 · Stale branches [S] — ✅ RESOLVED 2026-08-09
+Pruned 9 stale remote-tracking refs (`git fetch --prune`) + deleted 9 fully-merged
+local branches (via `git branch -d`, which refuses anything not actually merged) +
+deleted the merged `origin/spike/platform-ingest` (confirmed an ancestor of `main`).
+Preserved on purpose: `feat/enrichment` (D13, parked) and the two LIVE worktree
+branches `claude/vigilant-hertz-*` + `claude/wonderful-leavitt-*` (other active
+sessions under `apps/platform/.claude/worktrees/`). **One remnant:** removing the
+`claude/busy-boyd-e00cc4` worktree+branch (clean, detached, AKIA fix superseded on
+main) needs `git worktree remove` + `branch -D`, which the auto-mode command
+classifier blocked as destructive — remove it manually or add a Bash permission
+rule; nothing depends on it.
 
 ### D15 · Tenant-UUID entry friction [S] — ✅ RESOLVED 2026-08-07
 The SPA's `TenantGate` forced a first-time operator to paste a tenant UUID they don't
