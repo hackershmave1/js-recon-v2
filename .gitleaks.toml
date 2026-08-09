@@ -7,9 +7,9 @@
 # which the working tree is the right surface.
 #
 # Allowlist is scoped deliberately: vendored/generated trees (never our source) and
-# the tool's own fake-secret fixtures/test corpus. The two files that ALSO carry
-# real product code use exact-token regexes, so a REAL secret added to them later is
-# still caught rather than blanket-suppressed.
+# the tool's own fake-secret fixtures/test corpus. The files that ALSO carry real
+# product or test code use exact-token regexes, so a REAL secret added to them later
+# is still caught rather than blanket-suppressed.
 title = "js-recon-v2"
 
 [extend]
@@ -33,7 +33,6 @@ paths = [
 # (not the whole path) so a REAL secret added there later is still caught.
 regexes = [
   '''AKIA2E4XZ7K9QW3RT8YV''',                            # findings/rules/aws_access_key_id.yml example
-  '''sk_live_1234567890abcdef1234567890abcdef''',        # apps/capture/tests/test_b004_smart_triggers.py fixture
   '''aZ9kQ2mB7xL4wP0rT6uY1eC5''',                        # apps/platform/src/recon/findings/normalize_test.py fixture
   '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0''',  # chrome-extension/tests/test_asset_classifier.mjs example JWT
 ]
