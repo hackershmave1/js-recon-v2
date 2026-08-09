@@ -227,6 +227,25 @@ WITH CHANGES — the scope caveat + this ledger entry, both addressed; code revi
 WITH NITS — the precedence test was strengthened to assert the *effective* tenant, not
 just unclobbered storage). Frontend lane green (oxlint + tsc-strict + vitest 136 + build).
 
+### D16 · Capture extension deferred items [S]
+Small deferred work in the MV3 capture extension (`apps/capture/chrome-extension/`), recorded here
+when the point-in-time `REFACTOR-NOTES.md` was folded into the extension README during the
+enterprise-hygiene cleanup (so the "later" doesn't become "never"):
+- **Live `tests/*.mjs` suites are ungated in CI** — `security.yml` runs only `npm audit` on the
+  extension, so a broken suite wouldn't fail the build. A `for t in tests/test_*.mjs; do node "$t";
+  done` step in the frontend lane would close it.
+- **`background.js` is well over 1,000 lines** (~3× the ~300 cap) — the message router +
+  `processFile` could extract further. Same class as D11; test-aware (the service worker is the
+  capture entry point), so a careful slice, low priority.
+- **Sourcemap reconstruction runs synchronously at upload** for map-bearing files — the uploaded map
+  content is ephemeral, so deferring it risks losing it. Turning off "capture source maps" is the
+  current escape hatch for maximum bulk-capture speed.
+- **Legacy removed-setting keys linger unread** in `chrome.storage.local` (`API Key`, `autoStart`,
+  `useLocalApi`, `exportIncludeContent`, `allowSourceMapFallback`, `authContextDomains`) — no
+  migration was written; harmless, cleanup only.
+- **(Optional, not a gap)** a workspace-SPA "Analyze" button — the popup already triggers analysis,
+  so this is a convenience feature, not missing behavior.
+
 ## Parked work
 
 ### D13 · Enrichment slice [M] — parked, design-gated

@@ -1,52 +1,42 @@
-# Agent Session Guide
+# apps/capture — agent guide
 
-This is the first file agents should read at the start of every session. It defines where project truth lives and prevents duplicate docs from competing with each other.
+This directory is a single **Chrome MV3 extension** ("JS Security Extractor Pro", under
+`chrome-extension/`). It captures runtime, post-authentication JavaScript and pushes it to the
+recon **platform** (`apps/platform/`) for analysis. It is a pure capture client — no backend, no
+database live here anymore (the standalone v1 backend/SPA were removed in the platform
+consolidation).
 
-## Session Start Checklist
+## Where truth lives
 
-1. Read this file.
-2. Check `git status --short` before editing; do not revert unrelated user changes.
-3. Read `TODO.md` for active/planned work only.
-4. Read `.planning/STATE.md` for the current project state and recent decisions.
-5. For architecture context, read `APPLICATION_OVERVIEW.md` first, then `.planning/codebase/*` only as needed.
-6. For implementation work, update `IMPLEMENTATION_DETAILS.md` before code changes when the task requires design-first planning.
-7. Archive completed work in `COMPLETED_TASKS.md` and remove it from `TODO.md` in the same change.
+| Need | Read |
+|------|------|
+| What this extension is + how to run it | [`README.md`](README.md) |
+| System architecture + the ingest contract | repo-root [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md) |
+| Why the v1 backend/UI were dropped, and other decisions | repo-root `docs/adr/` |
+| Repo engineering standards | repo-root [`CLAUDE.md`](../../CLAUDE.md) |
 
-## Documentation Authority Map
+## Build & test
 
-| Need | Authoritative file | Notes |
-|------|--------------------|-------|
-| Start a session | `AGENTS.md` | This file. Keep it short and current. |
-| Active work queue | `TODO.md` | Only `OPEN`, `CLAIMED`, `IN_PROGRESS`, `IN_REVIEW`, and blocked active work belongs here. |
-| Completed work history | `COMPLETED_TASKS.md` | Archive only. Do not use as current setup guidance. |
-| Current project state | `.planning/STATE.md` | Snapshot of current status, decisions, and recent cleanup outcomes. |
-| User/product quickstart | `README.md` | Human-facing setup and workflow. |
-| Backend quickstart | `api/README.md` | API-specific setup/config. |
-| Architecture overview | `APPLICATION_OVERVIEW.md` | High-level system behavior and API/data-flow overview. |
-| Maintainer codebase map | `.planning/codebase/*` | Detailed maps for structure, stack, integrations, testing, conventions, and concerns. |
-| Implementation design log | `IMPLEMENTATION_DETAILS.md` | Planning and test records for implementation tasks. |
-| Future feature RFCs/specs | `MAPPER_WORKSPACE_RFC.md`, `docs/superpowers/specs/*` | Design references, not session-start guidance. |
+```bash
+cd chrome-extension
+npm ci && npm run build              # bundles src/popup/** via esbuild (build.mjs)
+for t in tests/test_*.mjs; do node "$t"; done   # run the Node test suites (no npm test target)
+```
 
-## Current Runtime Truth
+`background.js`, `content-script.js`, and `modules/*` load unbundled; only `src/popup/**` is built.
 
-- Supported Compose services: `postgres` and `api`.
-- Celery/Redis worker services are not part of the active runtime.
-- API startup runs Alembic from the repository root with `python -m alembic upgrade head`.
-- The secure jsluice wrapper is canonical.
-- `native_sourcemap_processor.py` is canonical; `sourcemap_processor.py` is a compatibility alias.
-- Startup recovers orphaned `queued`, `running`, and `cancelling` job rows into terminal states.
+## Load-bearing invariants (don't weaken)
 
-## Work Rules
+The MV3 durability model (see `README.md`) exists because the service worker is torn down
+aggressively. Preserve these when editing `background.js` / `modules/*`:
 
-- Match existing style; avoid opportunistic rewrites.
-- Do not guess ambiguous behavior. Ask for clarification or document the uncertainty.
-- Explain risky refactors before doing them.
-- Prefer small, verifiable changes over broad rewrites.
-- Use `wishandwash.co.il` for new live/manual/integration validation involving capture, ingestion, sourcemaps, or analysis-on-upload.
-- Do not use `example.com` or legacy HoneyBook targets for new validation notes; historical archive entries may still contain them.
+- persist state **before** the network attempt; the IndexedDB outbox and dedup set must survive a
+  respawn (keyed `sessionId:contentHash`);
+- keep uploads idempotent — the backend dedupes on `(session_id, content_hash)`;
+- keep the per-file cap aligned with the backend (10 MB) and register MV3 listeners synchronously.
 
-## Cleanup Policy
+## Conventions
 
-- Keep docs if they are authoritative, actively maintained, or useful design references.
-- Delete generated reports, one-off phase notes, and stale debug scripts after their useful content is incorporated into authoritative docs.
-- If a document is retained as archive/history, label it clearly and avoid treating it as current setup or runtime guidance.
+Match the existing style; prefer small, verifiable changes over broad rewrites. The popup is Preact
++ esbuild. Settings are intentionally minimal (Connection / Capture Rules / Noise Denylist) — the
+workspace URL is the single source of truth for uploads, health, and analyze.
