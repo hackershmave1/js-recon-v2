@@ -19,6 +19,14 @@ from openapi_spec_validator import validate
 
 from recon.probe.reconstruct import ReconstructedRequest
 
+# Version of the recon OpenAPI-EXPORT contract — the machine-readable shape of the
+# ``x-recon-*`` extensions this serializer emits. This is NOT the reconstructed
+# target's version (``info.version`` stays "0.0.0" = unknown from static analysis).
+# Bump when the export shape changes in a way a consumer (Burp, a saved artifact, the
+# threat-model feed) could notice; the drift test in ``openapi_test.py`` forces that
+# bump to be a conscious edit (D8b — mirrors D8a's capture-ingest contract version).
+OPENAPI_EXPORT_CONTRACT_VERSION = "1.0"
+
 # Path tokens ``normalize.py`` emits for value-templated segments, mapped to an
 # inferred OpenAPI schema. Every OTHER interpolation is handled generically.
 _RECOGNIZED: dict[str, dict] = {
@@ -286,6 +294,10 @@ def build_openapi(requests: list[ReconstructedRequest], *, run_id: str) -> dict:
             "description": _INFO_DESCRIPTION,
         },
         "paths": paths,
+        "x-recon-export": {
+            "contract-version": OPENAPI_EXPORT_CONTRACT_VERSION,
+            "generator": "js-recon-v2 openapi export",
+        },
     }
     servers = _servers(requests)
     if servers:
