@@ -93,6 +93,18 @@ class Settings(BaseSettings):
     crawl_heartbeat_interval_seconds: float = 10.0
     crawl_kill_grace_seconds: float = 15.0
 
+    # Runtime-capture stage (REQ-P2 / SSRF): a CDP-driven headless Chromium that
+    # captures EXECUTED scripts (Debugger.scriptParsed) — reaching runtime-injected,
+    # inline, and eval'd JS the static fetch cannot see. DEFAULT-OFF kill switch:
+    # capture drives a real browser that loads arbitrary subresources with no per-hop
+    # IP pin — the same residual as the opt-in headless crawl (see recon.capture
+    # docstring) — so it must be explicitly enabled. Reuses crawl_* duration /
+    # heartbeat / kill_grace / max_output_bytes; per-script byte cap reuses max_fetch_bytes.
+    enable_capture_mode: bool = False  # env: RECON_ENABLE_CAPTURE_MODE
+    capture_nav_timeout_seconds: float = 30.0  # max wait for the initial navigation/load
+    capture_idle_settle_seconds: float = 2.0  # quiet window (no new scripts) => capture done
+    capture_max_scripts: int = 2000  # cap stored scripts per run (bounds worker + blob load)
+
     # Object storage — blobs are referenced by key, never stored in a row (REQ-D2).
     s3_endpoint_url: str | None = None
     s3_access_key: str | None = None

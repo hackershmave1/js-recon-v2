@@ -207,6 +207,10 @@ class Run(Base):
     # paths from it (analyze stage). Added in migration 0003.
     source_map_ref: Mapped[str | None] = mapped_column(Text)
     target: Mapped[str | None] = mapped_column(Text)
+    # Runtime-capture selector: NULL/"static" = the katana static crawl; "capture"
+    # routes DISCOVER to the in-process CDP browser capture (executed-script capture).
+    # Additive + nullable — existing rows read as static. Added in migration 0012.
+    crawl_mode: Mapped[str | None] = mapped_column(Text)
     # Capture-ingest open-accumulator marker (see __table_args__). Added in 0011.
     capture_external_id: Mapped[str | None] = mapped_column(Text)
     error: Mapped[dict | None] = mapped_column(JSONB)

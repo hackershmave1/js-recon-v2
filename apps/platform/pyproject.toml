@@ -29,6 +29,12 @@ dependencies = [
     "kingfisher-bin==1.106.0",
     # HTTP client for the fetch stage (pulling target assets through the egress guard).
     "httpx>=0.27",
+    # Sync CDP (Chrome DevTools Protocol) client for the runtime-capture stage: the
+    # worker drives the baked-in headless Chromium over websockets.sync.client, which
+    # matches the blocking single-thread worker (no asyncio bridge). Already resolved
+    # transitively via uvicorn; pinned explicit so the capture driver's import is a
+    # declared dependency, not a transitive accident.
+    "websockets>=13",
     # OpenAPI 3.x / Swagger 2.0 schema validation for the untrusted spec-ingest
     # path (recon.spec.ingest, gate B4). Ceiling-pinned: pre-1.0 software whose
     # `validate()` entrypoint and exception surface we've verified at 0.9 — a

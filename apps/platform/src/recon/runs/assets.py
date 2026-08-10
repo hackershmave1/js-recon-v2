@@ -48,6 +48,35 @@ def seed_pending(session: Session, *, tenant_id: str, run_id: str, urls: list[st
     )
 
 
+def seed_captured(session: Session, *, tenant_id: str, run_id: str, rows: list[dict]) -> None:
+    """Seed already-fetched (captured) assets in ONE statement — ``url`` + ``input_ref``
+    + ``fetch_status=ok`` — for the runtime-capture stage, which holds every byte in
+    hand (unlike the static crawl, whose fetch stage fills ``input_ref`` later).
+
+    ``rows`` items are ``{"url", "input_ref"}``. Skips any row whose ``(run_id, url)``
+    already exists (``on_conflict_do_nothing``), so a redelivery that re-runs capture
+    never duplicates — the caller commits these together with the ``discover.assets``
+    event in one transaction (atomic manifest)."""
+    if not rows:
+        return
+    session.execute(
+        pg_insert(models.RunAsset)
+        .values(
+            [
+                {
+                    "tenant_id": str(tenant_id),
+                    "run_id": str(run_id),
+                    "url": r["url"],
+                    "input_ref": r["input_ref"],
+                    "fetch_status": AssetStatus.OK.value,
+                }
+                for r in rows
+            ]
+        )
+        .on_conflict_do_nothing(index_elements=["run_id", "url"])
+    )
+
+
 def list_for_run(tenant_id: str, run_id: str) -> list[AssetRow]:
     with tenant_session(tenant_id) as session:
         rows = session.scalars(
