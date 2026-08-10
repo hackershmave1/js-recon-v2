@@ -1,12 +1,6 @@
+import { useNavigate, useParams } from "react-router";
 import type { FindingsResponse, Finding } from "../../api/types";
 import "./overview.css";
-
-// The workspace lays each panel out as a <section id>; the Overview metric cards
-// are shortcuts that scroll to the matching detail section. Called only from a
-// click handler, never at render, so jsdom (no scrollIntoView) is never exercised.
-function goToSection(sectionId: string) {
-  document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
-}
 
 const DASH = "—"; // shown when the underlying metric isn't available yet
 
@@ -25,6 +19,10 @@ function priorityRank(f: Finding): number {
 }
 
 export function OverviewPanel({ data }: { data: FindingsResponse }) {
+  const navigate = useNavigate();
+  const { id } = useParams();
+  // Each metric card / "View all" is a shortcut to the matching run subpage route.
+  const go = (section: string) => navigate(`/runs/${id}/${section}`);
   const c = data.coverage;
   const attributedTotal = c ? c.attributed + c.unattributed : 0;
   const attributionPct = attributedTotal > 0 ? Math.round((c!.attributed / attributedTotal) * 100) : null;
@@ -53,7 +51,7 @@ export function OverviewPanel({ data }: { data: FindingsResponse }) {
     <div className="ov">
       <div className="ov-metrics">
         {metrics.map((m) => (
-          <button key={m.key} type="button" className="ov-card" onClick={() => goToSection(m.section)}>
+          <button key={m.key} type="button" className="ov-card" onClick={() => go(m.section)}>
             <span className="ov-metric-label">{m.label}</span>
             <span className="ov-metric-value">{m.value}</span>
             <span className="ov-metric-sub">{m.sub}</span>
@@ -64,7 +62,7 @@ export function OverviewPanel({ data }: { data: FindingsResponse }) {
       <div className="ov-panel">
         <div className="ov-panel-head">
           <span className="ov-panel-title">Top findings</span>
-          <button type="button" className="ov-link" onClick={() => goToSection("findings")}>View all</button>
+          <button type="button" className="ov-link" onClick={() => go("findings")}>View all</button>
         </div>
         {top.length === 0 ? (
           <p className="muted ov-empty">No findings yet.</p>

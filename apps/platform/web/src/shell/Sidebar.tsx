@@ -1,11 +1,11 @@
-import { useNavigate } from "react-router";
+import { NavLink, useNavigate } from "react-router";
 import { Icon } from "./icons";
 import { EngagementSwitcher } from "../features/sessions/EngagementSwitcher";
 
-// Left-nav sections. ANALYZE items view a run's data, so they navigate (scroll to the
-// matching <section id> in app.tsx) only when a run is open; on the Sessions route they
-// render inert. "Sessions" is a real cross-run route (its own GET /sessions page);
-// "Threat Model" stays SOON (Slice 4) with no backend/page yet.
+// Left-nav sections. ANALYZE items view a run's data, so each is a real route under
+// /runs/:id (Overview is the index route, the rest are child segments); on the
+// Sessions route they render inert. "Sessions" is a real cross-run route (its own
+// GET /sessions page); "Threat Model" stays SOON (Slice 4) with no backend/page yet.
 export type NavItem = { id: string; label: string; icon: string; soon?: boolean };
 export const NAV_ITEMS: NavItem[] = [
   { id: "overview", label: "Overview", icon: "grid" },
@@ -15,12 +15,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "sources", label: "Sources", icon: "folder" },
 ];
 
-export function Sidebar({ mode, runId, active, onNavigate }: {
-  mode: "run" | "sessions";
-  runId?: string;
-  active: string;
-  onNavigate: (id: string) => void;
-}) {
+export function Sidebar({ mode, runId }: { mode: "run" | "sessions"; runId?: string }) {
   const navigate = useNavigate();
   const inRun = mode === "run";
   return (
@@ -55,20 +50,21 @@ export function Sidebar({ mode, runId, active, onNavigate }: {
               </div>
             );
           }
+          // Overview is the index route (/runs/:id); the rest are child segments.
+          const seg = item.id === "overview" ? "" : item.id;
           return (
-            <button
+            <NavLink
               key={item.id}
-              type="button"
-              className={"shell-nav-item" + (active === item.id ? " is-active" : "")}
-              aria-current={active === item.id ? "page" : undefined}
-              onClick={() => onNavigate(item.id)}
+              to={`/runs/${runId}${seg ? `/${seg}` : ""}`}
+              end={item.id === "overview"}
+              className={({ isActive }) => "shell-nav-item" + (isActive ? " is-active" : "")}
             >
               <span className="shell-nav-ico"><Icon name={item.icon} /></span>
               <span className="shell-nav-txt">{item.label}</span>
-            </button>
+            </NavLink>
           );
         })}
-        {/* Sessions is a real cross-run route, not a scroll target within a run. */}
+        {/* Sessions is a real cross-run route, not a view within a run. */}
         <button
           type="button"
           className={"shell-nav-item" + (mode === "sessions" ? " is-active" : "")}

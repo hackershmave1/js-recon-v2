@@ -1,7 +1,6 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getSources, getSourceContent, ApiError } from "../../api/apiClient";
 import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump } from "../../api/types";
-import { ShellNavContext } from "../../shell/Shell";
 import { highlightJsLines, type HighlightedSpan } from "./highlight";
 import "./sources.css";
 
@@ -231,7 +230,6 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
   const [contentState, setContentState] = useState<"idle" | "loading" | "error">("idle");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [focusLine, setFocusLine] = useState<number | null>(null);
-  const shellNavigate = useContext(ShellNavContext);
   const toggleDir = useCallback((key: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -251,9 +249,8 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
     if (!j || !files) return;
     pendingJump.current = null;
     setSelPath(resolveJumpPath(j, files));
-    shellNavigate("sources");
     setFocusLine(j.line);
-  }, [jump, files, shellNavigate]);
+  }, [jump, files]);
 
   useEffect(() => {
     // Clear the previous run's tree/selection so a run switch never shows stale
@@ -315,6 +312,10 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
     return m;
   }, [selected, data]);
 
+  // Memoized: the run stream now re-renders this page on every SSE event, and
+  // rebuilding the whole tree each tick would jank a large file list.
+  const tree = useMemo(() => buildTree(files ?? []), [files]);
+
   // Pretty-print: auto-on for minified content, off for already-readable source.
   // Resets per file; the beautified text is computed lazily (js-beautify) once.
   const [pretty, setPretty] = useState(false);
@@ -336,7 +337,6 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
     return <div className="sv-empty"><div className="sv-empty-title">No source captured</div><div>This run has no stored JavaScript to display yet.</div></div>;
   }
 
-  const tree = buildTree(files);
   const findingCount = selected ? (badges.get(selected.path) ?? 0) : 0;
   const baseName = selected ? segmentsOf(selected.path).slice(-1)[0] : "source.js";
 

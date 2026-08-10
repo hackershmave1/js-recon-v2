@@ -1,37 +1,47 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { useEffect } from "react";
 import { createMemoryRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { TenantProvider } from "./tenant/TenantContext";
-import { Home, RunWorkspace } from "./app";
+import { Home, RunWorkspace, OverviewRoute, SourcesRoute, FindingsRoute, ApiSpecRoute, ProbeRoute } from "./app";
 import * as api from "./api/apiClient";
-import type { FindingsResponse } from "./api/types";
+import * as sse from "./api/sseClient";
 
-// Mock RunProgress: no streaming/fetching. Feed findings up via an effect (NOT during
-// render) so RunWorkspace's onFindings->FindingsPage wiring is exercised without a
-// setState-in-render warning. NOTE: define the fixture INLINE here — a top-level const
-// would be in the TDZ when this hoisted factory runs.
-vi.mock("./features/progress/RunProgress", () => ({
-  RunProgress: ({ onFindings, onState }: { runId: string; onFindings: (f: FindingsResponse) => void; onState?: (s: string) => void }) => {
-    useEffect(() => {
-      onFindings({
-        run_id: "r1", count: 1, coverage: null, spec: null,
-        findings: [{ finding_hash: "h1", type: "endpoint", value: "/api/x", path: null, severity: "info", attributes: {}, first_stage: "analyze", revealable: false, triage: null, spec_status: null, occurrences: [] }],
-      });
-      onState?.("done");
-    }, [onFindings, onState]);
-    return <div>PROGRESS</div>;
+// A terminal run carrying one endpoint finding. The RunDataProvider fetches this on
+// the SSE onOpen exactly as in the app; each page then reads it from context. Mocking
+// the api/sse layer (not RunProgress) exercises the real routing + data wiring.
+const DONE_STATUS = { run_id: "r1", state: "done", stage: null, done: 1, total: 1, pct: 100, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false };
+const FINDINGS = {
+  run_id: "r1", count: 1, coverage: null, spec: null,
+  findings: [{ finding_hash: "h1", type: "endpoint", value: "/api/x", path: null, severity: null, attributes: {}, first_stage: "analyze", revealable: false, triage: null, spec_status: null, occurrences: [] }],
+};
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+  localStorage.setItem("recon.tenantId", "123e4567-e89b-12d3-a456-426614174000");
+  vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => { h.onOpen?.(); });
+  vi.spyOn(api, "getStatus").mockResolvedValue(DONE_STATUS);
+  vi.spyOn(api, "getFindings").mockResolvedValue(FINDINGS);
+  vi.spyOn(api, "getAssets").mockResolvedValue({ domain: null, status: "pending", assets: [] });
+  vi.spyOn(api, "getRequests").mockResolvedValue({ run_id: "r1", count: 0, requests: [] });
+  vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r1", count: 0, sources: [] });
+});
+
+const ROUTES = [
+  { path: "/", Component: Home },
+  {
+    path: "/runs/:id", Component: RunWorkspace, children: [
+      { index: true, Component: OverviewRoute },
+      { path: "sources", Component: SourcesRoute },
+      { path: "findings", Component: FindingsRoute },
+      { path: "api-spec", Component: ApiSpecRoute },
+      { path: "probe", Component: ProbeRoute },
+    ],
   },
-}));
-
-beforeEach(() => localStorage.setItem("recon.tenantId", "123e4567-e89b-12d3-a456-426614174000"));
+];
 
 function renderAt(path: string) {
-  const router = createMemoryRouter(
-    [{ path: "/", Component: Home }, { path: "/runs/:id", Component: RunWorkspace }],
-    { initialEntries: [path] },
-  );
+  const router = createMemoryRouter(ROUTES, { initialEntries: [path] });
   render(<TenantProvider><RouterProvider router={router} /></TenantProvider>);
 }
 
@@ -41,21 +51,25 @@ describe("app routes", () => {
     expect(screen.getByText(/new recon run/i)).toBeInTheDocument();
   });
 
-  it("renders RunWorkspace at /runs/:id and surfaces findings via onFindings", async () => {
+  it("renders the run overview (metrics + live pipeline) at the index route", async () => {
     renderAt("/runs/r1");
-    expect(screen.getByText("PROGRESS")).toBeInTheDocument();
-    expect(await screen.findByRole("heading", { name: "Findings" })).toBeInTheDocument(); // FindingsPage rendered
-    expect(screen.getAllByText("endpoint").length).toBeGreaterThan(0);      // finding surfaced (facet + row)
+    expect(await screen.findByText("DONE")).toBeInTheDocument();     // RunProgress pipeline card
+    expect(screen.getByText("Endpoints")).toBeInTheDocument();       // OverviewPanel metric tile
   });
 
-  it("shows the Export spec button once the run is terminal", async () => {
-    renderAt("/runs/r1");
+  it("renders findings on the findings page", async () => {
+    renderAt("/runs/r1/findings");
+    expect(await screen.findByRole("heading", { name: "Findings" })).toBeInTheDocument(); // FindingsPage rendered
+    expect(screen.getAllByText("endpoint").length).toBeGreaterThan(0);                    // finding surfaced (facet + row)
+  });
+
+  it("shows the Export spec button on the api-spec page once terminal", async () => {
+    renderAt("/runs/r1/api-spec");
     expect(await screen.findByRole("button", { name: /export spec/i })).toBeInTheDocument();
   });
 
-  it("shows the manual-probe panel once the run is terminal", async () => {
-    vi.spyOn(api, "getRequests").mockResolvedValue({ run_id: "r1", count: 0, requests: [] });
-    renderAt("/runs/r1");
+  it("shows the manual-probe panel on the probe page once terminal", async () => {
+    renderAt("/runs/r1/probe");
     expect(await screen.findByText(/no probeable requests/i)).toBeInTheDocument();
   });
 });
