@@ -77,12 +77,16 @@ It drives the headless Chromium already baked into the worker image over raw CDP
 `Debugger.getScriptSource`, fanned out across the whole target tree (the page, dedicated/shared
 workers, and service workers) via a browser-level `Target.setAutoAttach{flatten}` waterfall. This
 recovers inline, runtime-injected, and `eval`'d JS — and worker / service-worker code — that crosses
-no network response and so is invisible to the static fetch path. Captured scripts are written as the
-same capture asset contract the extension produces (`run_asset` `input` blobs pre-marked `fetch_ok` +
-a `discover.assets` event), so FETCH no-ops and ANALYZE is unchanged. It is **default-off** behind
-`RECON_ENABLE_CAPTURE_MODE` and is a deliberate, gated relaxation of the static / no-active-traffic
-stance (ADR 0006): it runs only against an in-scope, `authorization_ack`-ed target, with a pre-launch
-egress-scope validation and a per-script in-scope re-check. See
+no network response and so is invisible to the static fetch path. A capture run also **drives the
+page** — autoscroll, click-all, and same-origin route-enum — so lazily-loaded / route-split /
+click-gated chunks execute and are captured (each source is fetched on-parse, so repeated navigations
+don't strand earlier routes). Captured scripts are written as the same capture asset contract the
+extension produces (`run_asset` `input` blobs pre-marked `fetch_ok` + a `discover.assets` event), so
+FETCH no-ops and ANALYZE is unchanged. It is **default-off** behind `RECON_ENABLE_CAPTURE_MODE` and
+relaxes the *static-only fetch* posture (not ADR 0006's no-automated-*exploit* stance — it sends no
+exploit traffic): it runs only against an in-scope, `authorization_ack`-ed target, with a pre-launch
+egress-scope validation and a per-script in-scope re-check. Driving interaction widens the egress
+footprint, so request-layer egress interception is a tracked follow-up (the egress-proxy slice). See
 [ADR 0009](adr/0009-runtime-cdp-js-capture.md).
 
 ## The capture extension (the surviving v1 client)

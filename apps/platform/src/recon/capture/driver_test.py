@@ -255,3 +255,127 @@ def test_on_progress_raise_aborts_and_propagates():
 
     with pytest.raises(RuntimeError, match="cancelled"):
         _run(_FakeWS(graph=_TREE, scripts=_TREE_SCRIPTS), on_progress=boom)
+
+
+class _InteractionWS:
+    """Interaction scenario: browser -> tab -> page; the page parses SEED on the initial
+    navigation. Route-enum finds one route; navigating it DESTROYS the seed page's
+    context (a late ``getScriptSource`` for SEED then errors) and parses ROUTE. Autoscroll
+    and click-all are no-ops here (no lazy content, no clickables) so the test isolates
+    route-enum + eager fetch. Both SEED and ROUTE survive ONLY because each source is
+    fetched the instant it parses — a collect-then-fetch pass would lose SEED."""
+
+    def __init__(self):
+        self._out: list[dict] = []
+        self._live = {"seed": "SEED", "route": "ROUTE"}  # scriptId -> currently-fetchable source
+        self._navigated_once = False
+        self.evals: list[str] = []
+
+    def _emit(self, frame):
+        self._out.append(frame)
+
+    def _attach(self, sid, ttype):
+        self._emit(
+            {
+                "method": "Target.attachedToTarget",
+                "params": {
+                    "sessionId": sid,
+                    "targetInfo": {"type": ttype, "url": ""},
+                    "waitingForDebugger": False,
+                },
+            }
+        )
+
+    def _parse(self, script_id, url):
+        self._emit(
+            {
+                "method": "Debugger.scriptParsed",
+                "sessionId": "page",
+                "params": {"scriptId": script_id, "url": url, "sourceMapURL": ""},
+            }
+        )
+
+    def send(self, raw):
+        msg = json.loads(raw)
+        method = msg.get("method")
+        sid = msg.get("sessionId")
+        params = msg.get("params") or {}
+        mid = msg.get("id")
+        if method == "Target.setAutoAttach":
+            if sid is None:
+                self._attach("tab", "tab")
+            elif sid == "tab":
+                self._attach("page", "page")
+        elif method == "Page.navigate":
+            self._emit({"id": mid, "result": {"frameId": "f"}})
+            if not self._navigated_once:
+                self._navigated_once = True
+                self._parse("seed", "https://acme.io/app.js")
+            else:  # route navigation destroys the seed context, then parses the route
+                self._live.pop("seed", None)
+                self._parse("route", "https://acme.io/r1.js")
+        elif method == "Runtime.evaluate":
+            expr = params.get("expression", "")
+            self.evals.append(expr)
+            if "u.hash" in expr:  # _ROUTES_JS
+                value = {"value": ["https://acme.io/r1"]}
+            elif "setAttribute('data-recon-idx'" in expr:  # _SNAPSHOT_JS
+                value = {"value": 0}
+            else:  # autoscroll / clicks: no value -> caller stops
+                value = {}
+            self._emit({"id": mid, "result": {"result": value}})
+        elif method == "Debugger.getScriptSource":
+            src = self._live.get(params["scriptId"])
+            if src is None:
+                self._emit({"id": mid, "error": {"message": "no script for id"}})
+            else:
+                self._emit({"id": mid, "result": {"scriptSource": src}})
+        # Debugger.enable / Page.enable / Runtime.runIfWaitingForDebugger: no reply needed
+
+    def recv(self, timeout=None):
+        if self._out:
+            return json.dumps(self._out.pop(0))
+        time.sleep(0.002)
+        raise TimeoutError
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _run_interactive(ws):
+    with (
+        patch("recon.capture.driver.subprocess.Popen", return_value=_FakeProc()),
+        patch("recon.capture.driver._read_devtools_port", return_value=9999),
+        patch("recon.capture.driver._browser_ws_url", return_value="ws://127.0.0.1:9999/browser"),
+        patch("recon.capture.driver.connect", return_value=ws),
+        patch("recon.capture.driver.shutil.rmtree"),
+        patch("recon.capture.driver._MIN_DRIVE_SECONDS", 0.05),
+    ):
+        return driver.capture_scripts(
+            "https://acme.io/",
+            chrome_path="/usr/bin/chromium",
+            nav_timeout_s=0.6,
+            idle_settle_s=0.02,
+            session_budget_s=3.0,
+            heartbeat_interval_s=0.01,
+            max_scripts=100,
+            max_script_bytes=1 << 20,
+            interact=True,
+            max_scroll_steps=3,
+            max_clicks=5,
+            max_routes=5,
+        )
+
+
+def test_interaction_route_enum_captures_each_route_with_eager_fetch():
+    # Route-enum navigates the page a second time, destroying the seed context. Both
+    # SEED (fetched on parse, before the navigation) and ROUTE are captured — the
+    # eager fetch-on-parse guarantee (must-fix: a deferred final fetch would lose SEED).
+    ws = _InteractionWS()
+    result = _run_interactive(ws)
+    assert {s.source.decode() for s in result.scripts} == {"SEED", "ROUTE"}
+    assert result.nav_error is None
+    assert ws._navigated_once  # the route navigation actually happened

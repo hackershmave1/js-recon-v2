@@ -104,6 +104,14 @@ class Settings(BaseSettings):
     capture_nav_timeout_seconds: float = 30.0  # max wait for the initial navigation/load
     capture_idle_settle_seconds: float = 2.0  # quiet window (no new scripts) => capture done
     capture_max_scripts: int = 2000  # cap stored scripts per run (bounds worker + blob load)
+    # Interaction driver (slice 3): after the initial load settles, drive the page —
+    # autoscroll to idle, click every interactive element, and walk same-origin routes —
+    # so lazily-loaded / route-split / click-gated chunks execute and get captured. All
+    # bounded; capture_interact is the kill switch (off = passive slice-2 behavior).
+    capture_interact: bool = True  # env: RECON_CAPTURE_INTERACT
+    capture_max_scroll_steps: int = 12
+    capture_max_clicks: int = 40
+    capture_max_routes: int = 15
 
     # Object storage — blobs are referenced by key, never stored in a row (REQ-D2).
     s3_endpoint_url: str | None = None

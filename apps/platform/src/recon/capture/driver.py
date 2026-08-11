@@ -18,24 +18,39 @@ enabling first is what guarantees we see the target's very first ``scriptParsed`
 (one global id counter; responses matched by bare id because Chrome may omit
 ``sessionId`` on a reply).
 
+Slice 3 adds an INTERACTION driver (``recon.capture.interaction``): once the initial
+load settles, it autoscrolls, clicks every interactive element, and walks same-origin
+routes so lazily-loaded / route-split / click-gated chunks execute and get captured
+by the same ``scriptParsed`` loop. Because interaction navigates the page multiple
+times and a navigation destroys the prior document's V8 context (making
+``getScriptSource`` for its scripts fail), the driver fetches each source EAGERLY —
+the instant a script parses — via one unified event pump: a ``scriptParsed`` both
+records metadata AND issues its ``getScriptSource`` immediately, and the reply is
+matched later by bare id. That single loop routes attaches, parses, source replies,
+navigation acks, and detaches without ever DROPPING an interleaved event (a
+collect-then-fetch pass would strand every route but the last, and a naive
+per-command wait would drop the parses it is meant to capture).
+
 SSRF NOTE (load-bearing): the browser resolves the navigated host and loads its
-subresources itself, with NO per-hop IP pin and NO per-hop scope re-validation —
-the SAME residual as the opt-in headless katana crawl (see ``recon.discover.crawl``
-module docstring), and a widening vs the default static crawl. Workers / service
-workers add no new egress surface — they are more of the same origin's execution
-under the same gate. Capture is therefore DEFAULT-OFF (``RECON_ENABLE_CAPTURE_MODE``);
-the stage re-validates each captured script's URL against scope before storing;
-OS/network egress isolation is the deferred egress-proxy slice.
+subresources itself, with NO per-hop IP pin and NO per-hop scope re-validation — the
+SAME residual as the opt-in headless katana crawl (see ``recon.discover.crawl``
+module docstring). Capture is DEFAULT-OFF (``RECON_ENABLE_CAPTURE_MODE``); route-enum
+navigates same-origin only and click-all does not follow off-origin links, and the
+stage re-validates each captured script's URL against scope before storing. Enforcing
+scope at the request layer (blocking off-scope egress before it is sent) and OS-level
+egress isolation are the deferred egress-proxy work — accepted as a residual for the
+local, single-operator use this runs in today.
 
 Process discipline mirrors ``recon.discover.harness``: Chromium runs in its own
 process group and a wall-clock deadline ``killpg`` s the whole tree (reaping the
 renderer / worker / zygote children a plain child-kill would orphan, regardless of
-which CDP target we attached to). Every wait loop — port discovery, ws discovery,
-tree collection, per-source fetch — routes through a single throttled ``_Beater`` so
-``on_progress`` fires at most once per ``heartbeat_interval_s`` NO MATTER which phase
-blocks: the worker renews its job lease (no peer reclaim → no double browser launch)
-and observes pause/cancel even during a slow cold start. Host-lane unit tests mock the
-websocket + ``Popen``; the real-browser path runs in the integration lane.
+which CDP target we attached to). Every wait loop — port discovery, ws discovery, the
+event pump, per-source fetch, and every interaction action — routes through a single
+throttled ``_Beater`` so ``on_progress`` fires at most once per ``heartbeat_interval_s``
+NO MATTER which phase blocks: the worker renews its job lease (no peer reclaim → no
+double browser launch) and observes pause/cancel even during a slow cold start or a
+long interaction pass. Host-lane unit tests mock the websocket + ``Popen``; the
+real-browser path runs in the integration lane.
 """
 
 from __future__ import annotations
@@ -57,7 +72,7 @@ from pathlib import Path
 from websockets.exceptions import ConnectionClosed, WebSocketException
 from websockets.sync.client import connect
 
-from recon.capture import cdp
+from recon.capture import cdp, interaction
 from recon.capture.cdp import CaptureError, CdpSession
 from recon.observability import get_logger
 
@@ -66,14 +81,10 @@ log = get_logger("recon.capture.driver")
 # Windows/test hosts lack SIGKILL; the Linux container (where capture runs) has it.
 _KILL_SIGNAL = getattr(signal, "SIGKILL", signal.SIGTERM)
 _RECV_TICK_SECONDS = 0.25  # recv poll granularity; bounds progress/interrupt latency
-# Minimum drive time before "settled" can fire, so the multi-round-trip browser→tab→
-# page→worker attach/navigate handshake is never mistaken for a quiet page. A module
-# constant so host tests can shrink it (the real handshake needs the full second).
+# Minimum drive time before the INITIAL "settled" can fire, so the multi-round-trip
+# browser→tab→page→worker attach/navigate handshake is never mistaken for a quiet page.
+# A module constant so host tests can shrink it (the real handshake needs the full second).
 _MIN_DRIVE_SECONDS = 1.0
-# Per-getScriptSource cap, min'd with the global deadline: a worker/SW that detaches
-# mid-fetch may send NO reply at all, and without this bound one dead fetch would burn
-# the entire remaining session budget and starve every later script.
-_SCRIPT_FETCH_TIMEOUT_SECONDS = 8.0
 
 __all__ = ["CaptureError", "CapturedScript", "CaptureResult", "capture_scripts"]
 
@@ -99,10 +110,10 @@ class CapturedScript:
 
 @dataclass(frozen=True)
 class CaptureResult:
-    """The capture outcome. ``nav_error`` is the ``Page.navigate`` failure text
-    (DNS/TLS/``ERR_*``), or a sentinel when no page target ever attached — the stage
-    records the run as ``blocked`` (→ PARTIAL) rather than a false ``ok``/DONE with
-    zero scripts."""
+    """The capture outcome. ``nav_error`` is the initial ``Page.navigate`` failure
+    text (DNS/TLS/``ERR_*``), or a sentinel when no page target ever attached — the
+    stage records the run as ``blocked`` (→ PARTIAL) rather than a false ``ok``/DONE
+    with zero scripts. A FAILED route-enum navigation is never fatal (best-effort)."""
 
     scripts: list[CapturedScript]
     nav_error: str | None
@@ -159,11 +170,18 @@ def capture_scripts(
     heartbeat_interval_s: float,
     max_scripts: int,
     max_script_bytes: int,
+    interact: bool = False,
+    max_scroll_steps: int = 0,
+    max_clicks: int = 0,
+    max_routes: int = 0,
     on_progress: Callable[[int], None] = lambda _n: None,
 ) -> CaptureResult:
-    """Launch headless Chromium, navigate to ``target_url``, and return the executed
-    scripts across the whole target tree (deduped by content SHA-256) plus any
-    navigation error.
+    """Launch headless Chromium, navigate to ``target_url``, optionally drive
+    interaction, and return the executed scripts across the whole target tree (deduped
+    by content SHA-256) plus any initial-navigation error.
+
+    ``interact`` (+ the ``max_*`` bounds) enables the interaction driver. It defaults
+    OFF so an un-driven call behaves exactly like slice 2 (passive capture).
 
     ``on_progress(n_scripts)`` is invoked before launch, at most once per
     ``heartbeat_interval_s`` throughout (via ``_Beater``), and at end; it may raise
@@ -172,6 +190,18 @@ def capture_scripts(
     deadline = time.perf_counter() + session_budget_s
     beater = _Beater(on_progress, heartbeat_interval_s)
     beater.force(0)  # early interrupt check + first beat, before paying the launch cost
+    cfg = (
+        interaction.InteractConfig(
+            enabled=True,
+            max_scroll_steps=max_scroll_steps,
+            max_clicks=max_clicks,
+            max_routes=max_routes,
+            idle_settle_s=idle_settle_s,
+            nav_timeout_s=nav_timeout_s,
+        )
+        if interact
+        else None
+    )
     user_data_dir = tempfile.mkdtemp(prefix="recon-capture-")
     try:
         proc = subprocess.Popen(
@@ -196,6 +226,7 @@ def capture_scripts(
             idle_settle_s=idle_settle_s,
             max_scripts=max_scripts,
             max_script_bytes=max_script_bytes,
+            cfg=cfg,
             beater=beater,
         )
     finally:
@@ -251,6 +282,7 @@ def _drive(
     idle_settle_s: float,
     max_scripts: int,
     max_script_bytes: int,
+    cfg: interaction.InteractConfig | None,
     beater: _Beater,
 ) -> CaptureResult:
     # max_size=None: getScriptSource for a large bundle exceeds the 1 MiB default and
@@ -263,199 +295,233 @@ def _drive(
         # (matches the docstring), rather than leaking a raw OSError/handshake error.
         raise CaptureError(f"could not open the CDP websocket: {exc}") from exc
     with conn as ws:
-        state = CdpSession(ws)
-        meta, nav_error, detached = _collect_parsed(
-            state,
+        ctx = _Ctx(
+            CdpSession(ws),
             target_url=target_url,
             deadline=deadline,
-            nav_timeout_s=nav_timeout_s,
             idle_settle_s=idle_settle_s,
+            min_drive_s=_MIN_DRIVE_SECONDS,
             max_scripts=max_scripts,
-            beater=beater,
-        )
-        scripts = _fetch_sources(
-            state,
-            meta,
-            deadline=deadline,
             max_script_bytes=max_script_bytes,
-            detached=detached,
             beater=beater,
         )
-        return CaptureResult(scripts=scripts, nav_error=nav_error)
-
-
-def _collect_parsed(
-    state: CdpSession,
-    *,
-    target_url: str,
-    deadline: float,
-    nav_timeout_s: float,
-    idle_settle_s: float,
-    max_scripts: int,
-    beater: _Beater,
-) -> tuple[dict[tuple[str | None, str], dict], str | None, set[str]]:
-    """Auto-attach the whole target tree, navigate the page, and collect every
-    ``Debugger.scriptParsed`` (keyed by ``(sessionId, scriptId)``) until the tree
-    settles (no new script for ``idle_settle_s``), the per-navigation cap
-    ``nav_timeout_s`` elapses, the deadline passes, or ``max_scripts`` is reached.
-
-    Returns the parsed-script metadata, any navigation error, and the set of sessions
-    that detached mid-collection (their pending sources are skipped in the fetch pass)."""
-    meta: dict[tuple[str | None, str], dict] = {}
-    types: dict[str, str] = {}
-    detached: set[str] = set()
-    nav_error: str | None = None
-    navigated = False
-    nav_id: int | None = None
-    page_session: str | None = None
-
-    # Kick off the tree: auto-attach at the browser level with the ROOT filter (allows
-    # `tab` + workers/SWs, excludes `page`; the waterfall reaches the page through its
-    # tab — see cdp.ROOT_AUTO_ATTACH_PARAMS for why two filters are required).
-    state.send("Target.setAutoAttach", cdp.ROOT_AUTO_ATTACH_PARAMS)
-
-    loop_start = time.perf_counter()
-    last_event = loop_start
-    while True:
-        now = time.perf_counter()
-        beater.maybe(len(meta))
-        if now > deadline or (now - loop_start) > nav_timeout_s:
-            break
-        # Settle only AFTER navigation and only once scripts have arrived, so the
-        # multi-round-trip attach/navigate handshake never counts as "quiet".
+        # Kick off the tree: auto-attach at the browser level with the ROOT filter
+        # (allows `tab` + workers/SWs, excludes `page`; the waterfall reaches the page
+        # through its tab — see cdp.ROOT_AUTO_ATTACH_PARAMS for why two filters).
+        ctx.loop_start = time.perf_counter()
+        ctx.last_event = ctx.loop_start
+        ctx.state.send("Target.setAutoAttach", cdp.ROOT_AUTO_ATTACH_PARAMS)
+        # Initial load: pump until the tree settles (bounded by nav_timeout for the
+        # first navigation), holding off "settled" until the handshake has had a beat.
+        ctx.pump(
+            settle=True,
+            phase_deadline=min(deadline, time.perf_counter() + nav_timeout_s),
+            require_min_drive=True,
+        )
+        if not ctx.navigated and ctx.nav_error is None:
+            # No page target ever attached (e.g. a filter/target-topology regression):
+            # surface it as blocked rather than a silent "ok" with zero scripts.
+            ctx.nav_error = "capture never attached to a page target"
         if (
-            navigated
-            and meta
-            and (now - last_event) > idle_settle_s
-            and (now - loop_start) > _MIN_DRIVE_SECONDS
+            cfg is not None
+            and cfg.enabled
+            and ctx.navigated
+            and ctx.nav_error is None
+            and ctx.page_session is not None
         ):
-            break
-        try:
-            msg = state.recv(_RECV_TICK_SECONDS)
-        except ConnectionClosed:
-            break  # browser went away — return what parsed so far
-        if msg is None:
-            continue
+            interaction.run(ctx, cfg)
+            # Flush any source replies still in flight from the last interaction action
+            # (settle already requires an empty in-flight set, but the final action may
+            # leave one outstanding).
+            ctx.pump(
+                settle=True, phase_deadline=min(deadline, time.perf_counter() + idle_settle_s * 2)
+            )
+        return CaptureResult(scripts=ctx.out, nav_error=ctx.nav_error)
 
+
+class _Ctx:
+    """Mutable capture state + the single event pump, threaded through the initial
+    collect and the interaction driver.
+
+    Fetch-on-parse: a ``Debugger.scriptParsed`` records ``(sessionId, scriptId)`` meta
+    AND immediately issues ``Debugger.getScriptSource``; the reply (matched by BARE id,
+    since Chrome may omit ``sessionId`` — Puppeteer #14975) appends the deduped source.
+    Fetching eagerly is what lets route-enum navigate the page repeatedly without
+    stranding earlier routes' scripts (a navigation destroys their V8 context)."""
+
+    def __init__(
+        self,
+        state: CdpSession,
+        *,
+        target_url: str,
+        deadline: float,
+        idle_settle_s: float,
+        min_drive_s: float,
+        max_scripts: int,
+        max_script_bytes: int,
+        beater: _Beater,
+    ) -> None:
+        self.state = state
+        self.target_url = target_url
+        self.deadline = deadline
+        self.idle_settle_s = idle_settle_s
+        self.min_drive_s = min_drive_s
+        self.max_scripts = max_scripts
+        self.max_script_bytes = max_script_bytes
+        self.beater = beater
+        self.types: dict[str | None, str] = {}
+        self.detached: set[str] = set()
+        self.pending_fetch: dict[int, dict] = {}  # getScriptSource request id -> parsed meta
+        self.parsed_keys: set[tuple[str | None, str]] = set()  # (sessionId, scriptId) seen
+        self.out: list[CapturedScript] = []
+        self.seen_sha: set[str] = set()
+        self.nav_error: str | None = None
+        self.navigated = False
+        self.nav_id: int | None = None  # the INITIAL Page.navigate id (route navs are not fatal)
+        self.page_session: str | None = None
+        self.loop_start = 0.0
+        self.last_event = 0.0
+
+    def pump(
+        self,
+        *,
+        want_id: int | None = None,
+        settle: bool = False,
+        phase_deadline: float,
+        require_min_drive: bool = False,
+    ) -> dict | None:
+        """The one event loop. Routes attaches / parses (+ eager source fetch) / source
+        replies / nav acks / detaches, beating every iteration. Returns the reply frame
+        when ``want_id`` is given and arrives; otherwise ``None`` on settle / deadline /
+        a closed socket / an initial-nav error."""
+        min_until = (self.loop_start + self.min_drive_s) if require_min_drive else None
+        while True:
+            now = time.perf_counter()
+            self.beater.maybe(len(self.out))  # may raise (pause/cancel) — propagated
+            if now > self.deadline or now > phase_deadline or self.nav_error is not None:
+                return None
+            if settle and self._settled(now, min_until):
+                return None
+            try:
+                msg = self.state.recv(_RECV_TICK_SECONDS)
+            except ConnectionClosed:
+                return None  # browser went away — return what parsed so far
+            if msg is None:
+                continue
+            reply_id = self._route(msg)
+            if want_id is not None and reply_id == want_id:
+                return msg
+
+    def _settled(self, now: float, min_until: float | None) -> bool:
+        # Settle only after navigation, once scripts have arrived, and once every
+        # in-flight source fetch has resolved — else we would stop with un-fetched
+        # scripts. ``min_until`` holds off the initial settle through the handshake.
+        return (
+            self.navigated
+            and bool(self.parsed_keys)
+            and not self.pending_fetch
+            and (now - self.last_event) > self.idle_settle_s
+            and (min_until is None or now > min_until)
+        )
+
+    def _route(self, msg: dict) -> int | None:
         method = msg.get("method")
         if method == "Target.attachedToTarget":
-            nav_id, page_session, navigated = _on_attached(
-                state,
-                msg["params"],
-                target_url=target_url,
-                types=types,
-                navigated=navigated,
-                nav_id=nav_id,
-                page_session=page_session,
-            )
-            last_event = time.perf_counter()
-        elif method == "Debugger.scriptParsed":
-            params = msg["params"]
-            sid = msg.get("sessionId")
-            meta[(sid, params["scriptId"])] = {
-                "url": params.get("url", "") or "",
-                "sourceMapURL": params.get("sourceMapURL") or None,
-                "target_type": types.get(sid, "page"),
-            }
-            last_event = time.perf_counter()
-            if len(meta) >= max_scripts:
-                break
-        elif method == "Target.detachedFromTarget":
+            self._on_attached(msg["params"])
+            self.last_event = time.perf_counter()
+            return None
+        if method == "Debugger.scriptParsed":
+            self._on_parsed(msg)
+            return None
+        if method == "Target.detachedFromTarget":
             sid = msg["params"].get("sessionId")
             if sid:
-                detached.add(sid)
-        elif nav_id is not None and msg.get("id") == nav_id:
-            # The Page.navigate ack — a hard navigation failure (DNS/TLS/ERR_*) sets
-            # errorText (or returns a protocol error), which the stage maps to a
-            # "blocked" run instead of a false "ok". Matched by bare id.
-            if "error" in msg:
-                nav_error = str(msg["error"].get("message", "navigate error"))
-            elif (msg.get("result") or {}).get("errorText"):
-                nav_error = str(msg["result"]["errorText"])
-            if nav_error:
-                break
+                self.detached.add(sid)
+                # Drop any in-flight source fetches for the gone session — a detach may
+                # not draw an error reply, and a stranded pending entry would keep
+                # `_settled` False forever (every settle would then run to its full
+                # timeout instead of the quiet window).
+                self.pending_fetch = {
+                    rid: m for rid, m in self.pending_fetch.items() if m["session"] != sid
+                }
+            return None
+        reply_id = msg.get("id")
+        if reply_id is None:
+            return None  # some other event we don't act on
+        if reply_id in self.pending_fetch:
+            self._on_source(reply_id, msg)
+            return None  # source replies are internal, never awaited by an action
+        if self.nav_id is not None and reply_id == self.nav_id:
+            self._on_nav_ack(msg)
+        return reply_id  # a command ack (initial nav, route nav, or an eval) — deliver it
 
-    if not navigated and nav_error is None:
-        # No page target ever attached (e.g. a filter/target-topology regression):
-        # surface it as blocked rather than a silent "ok" with zero scripts.
-        nav_error = "capture never attached to a page target"
-    return meta, nav_error, detached
+    def _on_attached(self, params: dict) -> None:
+        """Record a target's type, waterfall auto-attach onto it, enable Debugger (if
+        debuggable), navigate the first page, and release it if paused — enabling
+        BEFORE releasing so the first ``scriptParsed`` is never missed. Runs for EVERY
+        attach, including workers/SWs spawned mid-interaction by a click or a route."""
+        session_id = params["sessionId"]
+        info = params.get("targetInfo", {})
+        ttype = info.get("type", "")
+        self.types[session_id] = ttype
+        # Waterfall: setAutoAttach is per-session, so re-arm it (CHILD filter, which
+        # allows `page`) on every child to reach the page under its `tab` parent and
+        # any nested workers.
+        self.state.send("Target.setAutoAttach", cdp.CHILD_AUTO_ATTACH_PARAMS, session_id=session_id)
+        if ttype in cdp.DEBUGGABLE_TYPES:
+            self.state.send("Debugger.enable", session_id=session_id)
+        if ttype == "page" and not self.navigated:
+            self.state.send("Page.enable", session_id=session_id)
+            self.nav_id = self.state.send(
+                "Page.navigate", {"url": self.target_url}, session_id=session_id
+            )
+            self.page_session = session_id
+            self.navigated = True
+        if params.get("waitingForDebugger"):
+            # Release AFTER enable — a released target can parse+GC before Debugger is on.
+            self.state.send("Runtime.runIfWaitingForDebugger", session_id=session_id)
 
-
-def _on_attached(
-    state: CdpSession,
-    params: dict,
-    *,
-    target_url: str,
-    types: dict[str, str],
-    navigated: bool,
-    nav_id: int | None,
-    page_session: str | None,
-) -> tuple[int | None, str | None, bool]:
-    """Handle one ``Target.attachedToTarget``: record its type, waterfall auto-attach
-    onto it, enable Debugger (if debuggable), navigate the first page, and release it
-    if it started paused — enabling BEFORE releasing so the first ``scriptParsed`` is
-    never missed. Returns the (possibly updated) nav_id / page_session / navigated."""
-    session_id = params["sessionId"]
-    info = params.get("targetInfo", {})
-    ttype = info.get("type", "")
-    types[session_id] = ttype
-
-    # Waterfall: setAutoAttach is per-session, so re-arm it (with the CHILD filter,
-    # which allows `page`) on every child to reach the page under its `tab` parent and
-    # any nested workers.
-    state.send("Target.setAutoAttach", cdp.CHILD_AUTO_ATTACH_PARAMS, session_id=session_id)
-    if ttype in cdp.DEBUGGABLE_TYPES:
-        state.send("Debugger.enable", session_id=session_id)
-    if ttype == "page" and not navigated:
-        state.send("Page.enable", session_id=session_id)
-        nav_id = state.send("Page.navigate", {"url": target_url}, session_id=session_id)
-        page_session = session_id
-        navigated = True
-    if params.get("waitingForDebugger"):
-        # Release AFTER enable — a released target can parse+GC before Debugger is on.
-        state.send("Runtime.runIfWaitingForDebugger", session_id=session_id)
-    return nav_id, page_session, navigated
-
-
-def _fetch_sources(
-    state: CdpSession,
-    meta: dict[tuple[str | None, str], dict],
-    *,
-    deadline: float,
-    max_script_bytes: int,
-    detached: set[str],
-    beater: _Beater,
-) -> list[CapturedScript]:
-    """Pull each parsed script's source from the session that parsed it and dedupe by
-    content SHA-256. Scripts from a session that already detached are skipped (their
-    source is gone)."""
-    out: list[CapturedScript] = []
-    seen: set[str] = set()
-    for (session_id, script_id), info in meta.items():
-        beater.maybe(len(out))
-        if time.perf_counter() > deadline:
-            break
-        if session_id in detached:
-            continue
-        result = _get_script_source(
-            state, session_id, script_id, deadline=deadline, beater=beater, n_done=len(out)
+    def _on_parsed(self, msg: dict) -> None:
+        if len(self.parsed_keys) >= self.max_scripts:
+            return  # cap reached — ignore further parses (interaction stops cleanly too)
+        params = msg["params"]
+        sid = msg.get("sessionId")
+        key = (sid, params["scriptId"])
+        if key in self.parsed_keys:
+            return
+        self.parsed_keys.add(key)
+        self.last_event = time.perf_counter()
+        if sid in self.detached:
+            return  # the parsing session is gone — its source can't be fetched
+        # Eager fetch: ask for the source NOW, before a later navigation destroys the
+        # context. The reply is matched by bare id in _route.
+        request_id = self.state.send(
+            "Debugger.getScriptSource", {"scriptId": params["scriptId"]}, session_id=sid
         )
-        if result is None:
-            continue
-        source = result.get("scriptSource")
+        self.pending_fetch[request_id] = {
+            "session": sid,
+            "url": params.get("url", "") or "",
+            "sourceMapURL": params.get("sourceMapURL") or None,
+            "target_type": self.types.get(sid, "page"),
+        }
+
+    def _on_source(self, request_id: int, msg: dict) -> None:
+        info = self.pending_fetch.pop(request_id)
+        if "error" in msg:
+            return
+        source = (msg.get("result") or {}).get("scriptSource")
         if not source:
-            continue
+            return
         raw = source.encode("utf-8")
-        if len(raw) > max_script_bytes:
+        if len(raw) > self.max_script_bytes:
             # Truncate on a codepoint boundary so a >cap script never stores invalid
             # trailing UTF-8 (the sha — and thus the blob key — is of the stored bytes).
-            raw = raw[:max_script_bytes].decode("utf-8", "ignore").encode("utf-8")
+            raw = raw[: self.max_script_bytes].decode("utf-8", "ignore").encode("utf-8")
         digest = hashlib.sha256(raw).hexdigest()
-        if digest in seen:
-            continue
-        seen.add(digest)
-        out.append(
+        if digest in self.seen_sha:
+            return
+        self.seen_sha.add(digest)
+        self.out.append(
             CapturedScript(
                 url=info["url"],
                 source=raw,
@@ -464,39 +530,63 @@ def _fetch_sources(
                 target_type=info["target_type"],
             )
         )
-    beater.force(len(out))
-    return out
+        self.last_event = time.perf_counter()
 
+    def _on_nav_ack(self, msg: dict) -> None:
+        # Only the INITIAL navigation sets nav_error (→ the run is "blocked"). A hard
+        # failure returns errorText (or a protocol error). Route-enum navigations use
+        # their own ids and are best-effort — a failed route is skipped, not fatal.
+        if "error" in msg:
+            self.nav_error = str(msg["error"].get("message", "navigate error"))
+        elif (msg.get("result") or {}).get("errorText"):
+            self.nav_error = str(msg["result"]["errorText"])
 
-def _get_script_source(
-    state: CdpSession,
-    session_id: str | None,
-    script_id: str,
-    *,
-    deadline: float,
-    beater: _Beater,
-    n_done: int = 0,
-) -> dict | None:
-    """Send getScriptSource to the parsing session and read until its matching
-    response (dropping any interleaved events), heartbeating throughout. Bounded by a
-    per-call timeout min'd with the global deadline so a detached/silent session can't
-    burn the whole budget. Matched by BARE id — Chrome may omit sessionId on the reply
-    (see cdp module docstring). ``n_done`` (captured-so-far) is reported to the beat so
-    progress doesn't flicker to 0 during a fetch. Returns the ``result`` dict, or
-    ``None`` on error/timeout."""
-    want = state.send("Debugger.getScriptSource", {"scriptId": script_id}, session_id=session_id)
-    call_deadline = min(deadline, time.perf_counter() + _SCRIPT_FETCH_TIMEOUT_SECONDS)
-    while time.perf_counter() < call_deadline:
-        beater.maybe(n_done)
-        try:
-            msg = state.recv(0.5)
-        except ConnectionClosed:
+    # ---- interaction-facing helpers (used by recon.capture.interaction) ----
+
+    def evaluate(self, expression: str, *, timeout_s: float) -> dict | None:
+        """Run one ``Runtime.evaluate`` in the page session and return its RemoteObject
+        result (``{"type","value",...}``), or ``None`` on protocol error / timeout /
+        a destroyed context. Bounded per-call so an eval on a navigating page can't
+        wedge the loop; the pump keeps beating and capturing parses meanwhile."""
+        if self.page_session is None or self.page_session in self.detached:
             return None
-        if msg is None:
-            continue
-        if msg.get("id") == want:
-            return None if "error" in msg else msg.get("result")
-    return None
+        request_id = self.state.send(
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True, "awaitPromise": False},
+            session_id=self.page_session,
+        )
+        reply = self.pump(
+            want_id=request_id,
+            phase_deadline=min(self.deadline, time.perf_counter() + timeout_s),
+        )
+        if reply is None or "error" in reply:
+            return None
+        return (reply.get("result") or {}).get("result") or {}
+
+    def navigate_page(self, url: str, *, timeout_s: float) -> None:
+        """Navigate the page session to ``url`` (route-enum). Best-effort: a failed
+        navigation is not fatal (unlike the initial one)."""
+        if self.page_session is None or self.page_session in self.detached:
+            return
+        request_id = self.state.send("Page.navigate", {"url": url}, session_id=self.page_session)
+        self.pump(
+            want_id=request_id, phase_deadline=min(self.deadline, time.perf_counter() + timeout_s)
+        )
+
+    def settle(self, *, budget_s: float) -> None:
+        """Pump events until the page goes quiet again, after an interaction action.
+        Resets the quiet-window baseline first, so a settle from the PREVIOUS action
+        can't fire this one instantly (and every in-flight source fetch drains)."""
+        self.last_event = time.perf_counter()
+        self.pump(settle=True, phase_deadline=min(self.deadline, time.perf_counter() + budget_s))
+
+    def past_deadline(self) -> bool:
+        return time.perf_counter() > self.deadline
+
+    def at_cap(self) -> bool:
+        # Once max_scripts parses have been seen, _on_parsed drops further ones, so any
+        # more interaction only spends budget. Interaction checks this to stop cleanly.
+        return len(self.parsed_keys) >= self.max_scripts
 
 
 def _kill_group(proc: subprocess.Popen) -> None:

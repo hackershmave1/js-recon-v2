@@ -113,6 +113,10 @@ def capture_run(
             heartbeat_interval_s=settings.crawl_heartbeat_interval_seconds,
             max_scripts=settings.capture_max_scripts,
             max_script_bytes=settings.max_fetch_bytes,
+            interact=settings.capture_interact,
+            max_scroll_steps=settings.capture_max_scroll_steps,
+            max_clicks=settings.capture_max_clicks,
+            max_routes=settings.capture_max_routes,
             on_progress=on_progress,
         )
     except driver.CaptureError as exc:
