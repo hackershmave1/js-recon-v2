@@ -70,6 +70,21 @@ the recovered list is derived from persisted `occurrence.source_path` (no subpro
 Sourcemapper binary reruns on demand only for the one file being viewed) — with lazy syntax
 highlighting, and a finding occurrence links straight to its line in the recovered original.
 
+**Runtime JS capture (server-side, default-off).** A run can set `crawl_mode="capture"` to route the
+DISCOVER stage away from katana and into an in-process CDP capture stage (`recon/capture/`) instead.
+It drives the headless Chromium already baked into the worker image over raw CDP
+(`websockets.sync`) and records every script V8 actually parses — `Debugger.scriptParsed` +
+`Debugger.getScriptSource`, fanned out across the whole target tree (the page, dedicated/shared
+workers, and service workers) via a browser-level `Target.setAutoAttach{flatten}` waterfall. This
+recovers inline, runtime-injected, and `eval`'d JS — and worker / service-worker code — that crosses
+no network response and so is invisible to the static fetch path. Captured scripts are written as the
+same capture asset contract the extension produces (`run_asset` `input` blobs pre-marked `fetch_ok` +
+a `discover.assets` event), so FETCH no-ops and ANALYZE is unchanged. It is **default-off** behind
+`RECON_ENABLE_CAPTURE_MODE` and is a deliberate, gated relaxation of the static / no-active-traffic
+stance (ADR 0006): it runs only against an in-scope, `authorization_ack`-ed target, with a pre-launch
+egress-scope validation and a per-script in-scope re-check. See
+[ADR 0009](adr/0009-runtime-cdp-js-capture.md).
+
 ## The capture extension (the surviving v1 client)
 
 The MV3 Chrome extension (`apps/capture/chrome-extension/`) is the **only** capability carried
@@ -145,6 +160,15 @@ extension unpacked:
 # RECON_ENABLE_CAPTURE_INGEST=true in the api/worker env, then:
 # chrome://extensions -> Developer mode -> Load unpacked -> apps/capture/chrome-extension
 # the extension's default backend is already http://localhost:8000
+```
+
+To run a **server-side capture** run instead of a static crawl, enable the capture flag on the API +
+worker and start the run in capture mode:
+
+```bash
+# RECON_ENABLE_CAPTURE_MODE=true in the api/worker env (add RECON_ALLOW_LOCAL_EGRESS=true for a local
+# target), then start a run with crawl_mode="capture" — the New Recon "Runtime capture" toggle in the
+# workspace, or capture:true on POST /runs. The API rejects capture:true while the flag is off.
 ```
 
 Per-app detail lives under each app (`apps/platform/README.md`; the extension's own docs under
