@@ -41,6 +41,10 @@ _SSE_BLOCK_MS = 1000
 class StartRunBody(BaseModel):
     session_id: str
     target: str | None = None
+    # Runtime-capture opt-in: when true, DISCOVER drives a headless Chromium (CDP)
+    # to capture EXECUTED scripts instead of the static katana crawl. Requires a
+    # target (the URL to open) and RECON_ENABLE_CAPTURE_MODE. See recon.capture.
+    capture: bool = False
 
 
 @router.post("/runs", status_code=202)
@@ -67,8 +71,21 @@ def start_run(
             status_code=400,
             detail=f"crawl target {body.target!r} is not in the session scope",
         )
+    if body.capture:
+        # Kill-switch + precondition: capture drives a real browser (SSRF residual),
+        # so it must be explicitly enabled and needs a URL to open.
+        if not get_settings().enable_capture_mode:
+            raise HTTPException(status_code=400, detail="runtime capture mode is disabled")
+        if not body.target:
+            raise HTTPException(
+                status_code=400, detail="runtime capture requires a target URL to open"
+            )
     view = coordinator.start_run(
-        redis, tenant_id=tenant_id, session_id=body.session_id, target=body.target
+        redis,
+        tenant_id=tenant_id,
+        session_id=body.session_id,
+        target=body.target,
+        crawl_mode="capture" if body.capture else None,
     )
     return {"run_id": view.id, "state": view.state}
 

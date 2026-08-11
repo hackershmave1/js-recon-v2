@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 from redis import Redis
 
 from recon import storage
+from recon.capture import stage as capture_stage
 from recon.config import get_settings
 from recon.db.base import tenant_session
 from recon.db.models import Run
@@ -37,13 +38,28 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
     if queries.latest_assets_event(tenant_id, run_id) is not None:
         return  # already discovered (stage retry / redelivery)
 
-    target, session_id, input_ref = _load_target(tenant_id, run_id)
+    target, session_id, input_ref, crawl_mode = _load_target(tenant_id, run_id)
     # An upload run carries a `target` only as a base-URL hint (REQ-C2), never as a
     # crawl seed — analyze reads the uploaded blob, so we must not crawl it.
     if input_ref is not None:
         return
     if not target:
         return  # a target-less crawl run — nothing to discover
+
+    # Runtime-capture mode drives a headless browser over the target and captures
+    # EXECUTED JS as the same fetched-asset contract this stage otherwise builds from
+    # katana. It branches BEFORE the bare-domain gate below because capture opens a
+    # specific page (a full-path URL is navigated as-is), not just a domain root.
+    if crawl_mode == "capture":
+        capture_stage.capture_run(
+            redis,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            job_id=job_id,
+            target=target,
+            session_id=session_id,
+        )
+        return
 
     if not _is_bare_domain(target):
         return  # a single asset URL, not a domain crawl — legacy path handles it
@@ -128,12 +144,14 @@ def _revalidate(urls: list[str], scope_hosts: list[str], *, allow_local: bool = 
     return kept
 
 
-def _load_target(tenant_id: str, run_id: str) -> tuple[str | None, str | None, str | None]:
+def _load_target(
+    tenant_id: str, run_id: str
+) -> tuple[str | None, str | None, str | None, str | None]:
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
         if run is None:
-            return None, None, None
-        return run.target, str(run.session_id), run.input_ref
+            return None, None, None, None
+        return run.target, str(run.session_id), run.input_ref, run.crawl_mode
 
 
 def _is_bare_domain(target: str) -> bool:

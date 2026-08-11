@@ -1235,6 +1235,7 @@ dependencies = [
     { name = "tree-sitter" },
     { name = "tree-sitter-javascript" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -1270,6 +1271,7 @@ requires-dist = [
     { name = "tree-sitter", specifier = ">=0.23" },
     { name = "tree-sitter-javascript", specifier = ">=0.23" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
+    { name = "websockets", specifier = ">=13" },
 ]
 provides-extras = ["dev"]
 

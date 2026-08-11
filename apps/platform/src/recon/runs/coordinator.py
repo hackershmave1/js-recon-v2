@@ -100,14 +100,19 @@ def start_run(
     session_id: str,
     target: str | None = None,
     input_ref: str | None = None,
+    crawl_mode: str | None = None,
 ) -> RunView:
-    """Create a run (returns immediately) and enqueue its first stage."""
+    """Create a run (returns immediately) and enqueue its first stage.
+
+    ``crawl_mode="capture"`` routes the DISCOVER stage to the CDP browser-capture
+    path; default/NULL keeps the static katana crawl."""
     view = service.create_run(
         redis,
         tenant_id=tenant_id,
         session_id=session_id,
         target=target,
         input_ref=input_ref,
+        crawl_mode=crawl_mode,
     )
     enqueue_stage(redis, tenant_id=tenant_id, run_id=view.id, stage=RunStage.DISCOVERING)
     return view

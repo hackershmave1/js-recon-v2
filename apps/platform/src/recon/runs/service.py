@@ -126,8 +126,10 @@ def create_run(
     target: str | None = None,
     input_ref: str | None = None,
     capture_external_id: str | None = None,
+    crawl_mode: str | None = None,
 ) -> RunView:
-    """Create a QUEUED run. ``capture_external_id`` is the capture-ingest
+    """Create a QUEUED run. ``crawl_mode="capture"`` routes DISCOVER to the CDP
+    browser-capture stage (default/NULL = the static katana crawl). ``capture_external_id`` is the capture-ingest
     open-accumulator marker (DEBT D1): only ``_accumulating_run_id`` passes it,
     keying the open round on ``UNIQUE(tenant_id, capture_external_id)``; every other
     run leaves it NULL (NULLS DISTINCT — no collision). A concurrent duplicate open
@@ -140,6 +142,7 @@ def create_run(
             target=target,
             input_ref=input_ref,
             capture_external_id=capture_external_id,
+            crawl_mode=crawl_mode,
         )
         session.add(run)
         session.flush()
