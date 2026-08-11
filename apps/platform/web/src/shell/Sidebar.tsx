@@ -1,6 +1,31 @@
 import { NavLink, useNavigate } from "react-router";
 import { Icon } from "./icons";
 import { EngagementSwitcher } from "../features/sessions/EngagementSwitcher";
+import { useRunDataOptional } from "../features/progress/runData";
+
+// The crawl target as a bare host for display ("http://recon-range.test/" ->
+// "recon-range.test"); a bare host or unparseable value is shown as-is, null stays null.
+function hostOf(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try { return new URL(raw).host || raw; } catch { return raw; }
+}
+
+// The persistent "what am I looking at" card: the run's crawl target (read from the
+// assets manifest the run stream already holds) above the run id. Only mounted in run
+// mode, so the optional hook is non-null here; an upload run has no crawl domain and
+// falls back to the generic label.
+function CurrentRunCard({ runId }: { runId?: string }) {
+  const domain = hostOf(useRunDataOptional()?.assets?.domain);
+  return (
+    <div className="shell-eng-card">
+      <span className="shell-eng-mark"><Icon name="folder" size={15} /></span>
+      <span className="shell-eng-body">
+        <span className="shell-eng-name" title={domain ?? undefined}>{domain ?? "Current run"}</span>
+        <span className="shell-eng-id" title={runId}>{runId ? runId.slice(0, 8) : "—"}</span>
+      </span>
+    </div>
+  );
+}
 
 // Left-nav sections. ANALYZE items view a run's data, so each is a real route under
 // /runs/:id (Overview is the index route, the rest are child segments); on the
@@ -80,13 +105,7 @@ export function Sidebar({ mode, runId }: { mode: "run" | "sessions"; runId?: str
       <div className="shell-eng">
         <div className="shell-nav-label">ENGAGEMENT</div>
         {inRun ? (
-          <div className="shell-eng-card">
-            <span className="shell-eng-mark"><Icon name="folder" size={15} /></span>
-            <span className="shell-eng-body">
-              <span className="shell-eng-name">Current run</span>
-              <span className="shell-eng-id" title={runId}>{runId ? runId.slice(0, 8) : "—"}</span>
-            </span>
-          </div>
+          <CurrentRunCard runId={runId} />
         ) : (
           <EngagementSwitcher />
         )}

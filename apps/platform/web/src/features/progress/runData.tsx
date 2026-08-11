@@ -68,6 +68,13 @@ export function useRunData(): RunData {
   return ctx;
 }
 
+// Like useRunData but returns null outside a provider, so shell chrome (the sidebar's
+// current-run card) can read the run stream in run mode and render nothing in sessions
+// mode — where the same Shell renders with no provider around it.
+export function useRunDataOptional(): RunData | null {
+  return useContext(RunDataContext);
+}
+
 function useRunStream(runId: string): RunData {
   const { tenantId } = useTenant();
   const [events, setEvents] = useState<SseEvent[]>([]);

@@ -57,6 +57,12 @@ describe("app routes", () => {
     expect(screen.getByText("Endpoints")).toBeInTheDocument();       // OverviewPanel metric tile
   });
 
+  it("surfaces the run's crawl target host in the sidebar", async () => {
+    vi.spyOn(api, "getAssets").mockResolvedValue({ domain: "http://recon-range.test/", status: "ok", assets: [] });
+    renderAt("/runs/r1");
+    expect(await screen.findByText("recon-range.test")).toBeInTheDocument(); // Sidebar current-run card, host of the manifest domain
+  });
+
   it("renders findings on the findings page", async () => {
     renderAt("/runs/r1/findings");
     expect(await screen.findByRole("heading", { name: "Findings" })).toBeInTheDocument(); // FindingsPage rendered
