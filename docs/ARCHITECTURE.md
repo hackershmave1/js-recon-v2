@@ -82,7 +82,11 @@ page** — autoscroll, click-all, and same-origin route-enum — so lazily-loade
 click-gated chunks execute and are captured (each source is fetched on-parse, so repeated navigations
 don't strand earlier routes). Captured scripts are written as the same capture asset contract the
 extension produces (`run_asset` `input` blobs pre-marked `fetch_ok` + a `discover.assets` event), so
-FETCH no-ops and ANALYZE is unchanged. It is **default-off** behind `RECON_ENABLE_CAPTURE_MODE` and
+FETCH no-ops and ANALYZE is unchanged. Each script's external source map — the `sourceMapURL` V8
+reports on parse — is fetched through the same egress guard the static crawl uses and linked on its
+asset, so a captured minified bundle recovers its real source paths in ANALYZE (inline `data:` maps
+are already recovered from the source itself). It is **default-off** behind `RECON_ENABLE_CAPTURE_MODE`
+and
 relaxes the *static-only fetch* posture (not ADR 0006's no-automated-*exploit* stance — it sends no
 exploit traffic): it runs only against an in-scope, `authorization_ack`-ed target, with a pre-launch
 egress-scope validation and a per-script in-scope re-check. Driving interaction widens the egress
