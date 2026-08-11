@@ -15,6 +15,7 @@ export function NewRunPanel() {
   const [authorizedBy, setAuthorizedBy] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [domain, setDomain] = useState("");
+  const [capture, setCapture] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,7 +56,12 @@ export function NewRunPanel() {
         ...(engagementId ? { engagement_id: engagementId } : {}),
       });
       if (mode === "crawl") {
-        const run = await startRun(tenantId, { session_id: session.session_id, target: domain.trim() });
+        // Only send `capture` when opted in — the backend defaults it off and the
+        // NewRunPanel tests assert the lean body for a normal crawl.
+        const run = await startRun(tenantId, {
+          session_id: session.session_id, target: domain.trim(),
+          ...(capture ? { capture: true } : {}),
+        });
         navigate(`/runs/${run.run_id}`);
         return;
       }
@@ -95,8 +101,17 @@ export function NewRunPanel() {
           <input id="file" type="file" accept=".js,.mjs,text/javascript"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></div>
       ) : (
-        <div className="nr-field"><label htmlFor="domain">Domain</label>
-          <input id="domain" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="acme.io" /></div>
+        <>
+          <div className="nr-field"><label htmlFor="domain">Domain</label>
+            <input id="domain" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="acme.io" /></div>
+          <label className="nr-capture">
+            <input type="checkbox" checked={capture} onChange={(e) => setCapture(e.target.checked)} />
+            <span className="nr-capture-text">
+              <span className="nr-capture-title">Runtime capture <span className="nr-beta">beta</span></span>
+              <span className="muted nr-capture-hint">Execute the page in a headless browser to capture runtime JS — workers, injected, and eval&apos;d code the static crawl can&apos;t see. Must be enabled server-side.</span>
+            </span>
+          </label>
+        </>
       )}
 
       <div className="nr-field">

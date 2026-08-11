@@ -24,6 +24,7 @@ decision date.
 | [0006](0006-static-analysis-no-active-traffic.md) | Static analysis, no automated active/exploit traffic | accepted |
 | [0007](0007-single-analysis-core-v1-convergence.md) | Single analysis core (v1 convergence, no dual-core union) | accepted |
 | [0008](0008-hardened-out-of-process-engine-harness.md) | One hardened harness for out-of-process engines | accepted |
+| [0009](0009-runtime-cdp-js-capture.md) | Runtime JS capture via in-process CDP (whole target tree) | accepted |
 
 ## Adding an ADR
 

@@ -79,6 +79,18 @@ describe("NewRunPanel", () => {
     expect(navigate).toHaveBeenCalledWith("/runs/run-42");
   });
 
+  it("crawl with runtime capture checked sends capture:true", async () => {
+    vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: ["acme.io"], authorization_ack: true });
+    vi.spyOn(api, "startRun").mockResolvedValue({ run_id: "run-cap", state: "queued" });
+    renderPanel();
+    await userEvent.click(screen.getByRole("radio", { name: /crawl/i }));
+    await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
+    await userEvent.type(screen.getByLabelText("Domain"), "acme.io");
+    await userEvent.click(screen.getByRole("checkbox", { name: /runtime capture/i }));
+    await userEvent.click(screen.getByRole("button", { name: /crawl/i }));
+    expect(api.startRun).toHaveBeenCalledWith(TENANT, { session_id: "s1", target: "acme.io", capture: true });
+  });
+
   it("adds a scope host on Enter without submitting the form", async () => {
     renderPanel();
     await userEvent.click(screen.getByRole("radio", { name: /crawl/i }));
