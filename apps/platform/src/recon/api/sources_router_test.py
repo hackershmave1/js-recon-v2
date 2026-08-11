@@ -8,6 +8,7 @@ from recon import storage
 from recon.api.app import create_app
 from recon.db import models
 from recon.db.base import tenant_session
+from recon.findings import deobfuscate
 from recon.probe import sources
 from recon.runs import assets
 from recon.sessions import service as sessions_service
@@ -76,7 +77,9 @@ def test_serves_the_legacy_bundle_content(client, authorized_session):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["content"] == src
+    # A raw no-map bundle is now served beautified on demand (recon.findings.deobfuscate),
+    # matching analyze's beautified endpoint units so finding marks align.
+    assert body["content"] == deobfuscate.beautify(src)
     assert body["truncated"] is False
 
 
@@ -116,7 +119,8 @@ def test_crawl_serves_fetched_asset_but_404s_a_pending_one(client, authorized_se
         f"/runs/{run_id}/sources/content", params={"path": ok}, headers=_headers(tenant)
     )
     assert got.status_code == 200
-    assert got.json()["content"] == body
+    # A raw asset bundle is served beautified on demand (see the legacy-bundle test).
+    assert got.json()["content"] == deobfuscate.beautify(body)
     # a discovered-but-not-fetched asset has no bytes -> 404, not a 500
     miss = client.get(
         f"/runs/{run_id}/sources/content", params={"path": pending}, headers=_headers(tenant)
@@ -138,8 +142,9 @@ def test_same_url_in_two_runs_serves_each_runs_own_bytes(client, authorized_sess
     got_b = client.get(
         f"/runs/{run_b}/sources/content", params={"path": url}, headers=_headers(tenant)
     )
-    assert got_a.json()["content"] == "AAA = 1\n"
-    assert got_b.json()["content"] == "BBB = 2\n"
+    # Each run serves its OWN bytes (run-scoping guard); served beautified on demand.
+    assert got_a.json()["content"] == deobfuscate.beautify("AAA = 1\n")
+    assert got_b.json()["content"] == deobfuscate.beautify("BBB = 2\n")
 
 
 def test_another_tenant_cannot_see_a_runs_sources(client, authorized_session):

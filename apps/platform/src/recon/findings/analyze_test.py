@@ -317,6 +317,100 @@ def test_capture_asset_bad_map_falls_back_and_asset_still_ok(
     assert row.analyze_status == AssetStatus.OK.value  # asset kept, not failed
 
 
+def _endpoint_occurrences(tenant, run_id):
+    with tenant_session(tenant) as session:
+        return list(
+            session.execute(
+                select(models.FindingOccurrence)
+                .join(models.Finding, models.FindingOccurrence.finding)
+                .where(models.Finding.run_id == run_id, models.Finding.type == "endpoint")
+            ).scalars()
+        )
+
+
+def test_no_map_bundle_beautified_gives_distinct_finding_lines(redis, authorized_session):
+    # A minified no-map bundle is ~one line, so without beautify every endpoint
+    # collapses to line 1 and cannot be located. Beautifying BEFORE extraction
+    # (recon.findings.deobfuscate) puts each statement on its own line, so the three
+    # endpoints get DISTINCT occurrence lines — the net-new value of Phase 1.
+    from sqlalchemy import update
+
+    from recon import storage
+    from recon.db.base import tenant_session
+    from recon.findings import analyze
+    from recon.runs import service
+
+    tenant, session_id = authorized_session
+    minified = (
+        b'const alpha=fetch("/api/alpha");'
+        b'const bravo=fetch("/api/bravo");'
+        b'const charlie=fetch("/api/charlie");'
+    )
+    assert len(minified.splitlines()) == 1  # genuinely one line before beautify
+
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
+    input_key = storage.put_blob(tenant, view.id, "input", minified)
+    with tenant_session(tenant) as session:
+        session.execute(
+            update(models.Run).where(models.Run.id == view.id).values(input_ref=input_key)
+        )
+
+    coverage = analyze.analyze_run(redis, tenant_id=tenant, run_id=view.id)
+    assert coverage.source_map == "none"  # the no-map branch we beautify
+
+    occurrences = _endpoint_occurrences(tenant, view.id)
+    lines = [o.line for o in occurrences]
+    assert len(occurrences) == 3
+    assert len(set(lines)) == 3  # distinct lines, not all collapsed to line 1
+    assert set(lines) != {1}
+
+
+def test_secret_offset_stays_in_raw_space_on_beautified_no_map_bundle(
+    redis, authorized_session, engines_required
+):
+    # T3 fence: even though the SAME bundle is beautified for endpoint extraction,
+    # the secret is scanned on the RAW bytes and its occurrence offset must slice the
+    # RAW decoded source back to the token (reveal would not 409). Guards that
+    # beautified text never reaches the secret path in _analyze_blob.
+    from sqlalchemy import update
+
+    from recon import storage
+    from recon.db.base import tenant_session
+    from recon.findings import analyze, kingfisher
+    from recon.runs import service
+
+    tenant, session_id = authorized_session
+    # Split literals so no secret-shaped token is committed; kingfisher reassembles.
+    token = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEF0123"
+    # Minified one-liner with endpoints (so beautify actually runs) AND a secret.
+    raw = f'const k="{token}";const a=fetch("/api/a");const b=fetch("/api/b");'.encode()
+    if kingfisher.scan(raw).status == "unavailable":
+        if engines_required:
+            pytest.fail("kingfisher binary required (RECON_REQUIRE_ENGINES) but unavailable")
+        pytest.skip("kingfisher binary not available")
+
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
+    input_key = storage.put_blob(tenant, view.id, "input", raw)
+    with tenant_session(tenant) as session:
+        session.execute(
+            update(models.Run).where(models.Run.id == view.id).values(input_ref=input_key)
+        )
+
+    analyze.analyze_run(redis, tenant_id=tenant, run_id=view.id)
+
+    with tenant_session(tenant) as session:
+        secret = session.execute(
+            select(models.FindingOccurrence)
+            .join(models.Finding, models.FindingOccurrence.finding)
+            .where(models.Finding.run_id == view.id, models.Finding.type == "secret")
+        ).scalar_one()
+    assert secret.offset_start is not None and secret.offset_end is not None
+    # The stored offsets bound the token in the RAW byte space (== raw.decode(...)
+    # re-encoded), NOT the beautified text — that is exactly what reveal.py slices.
+    sliced = raw[secret.offset_start : secret.offset_end]
+    assert sliced.decode("utf-8") == token
+
+
 def test_legacy_uploaded_bad_map_still_raises(redis, authorized_session, monkeypatch):
     # Guards the refactor that added source_map_origin: a legacy explicit run-level
     # upload stays STRICT — an unparseable map surfaces (raises), not a silent
