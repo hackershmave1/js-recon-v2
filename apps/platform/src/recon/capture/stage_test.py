@@ -26,10 +26,14 @@ def _settings(enabled=True):
     )
 
 
-def _script(url: str, src: str) -> CapturedScript:
+def _script(url: str, src: str, target_type: str = "page") -> CapturedScript:
     raw = src.encode()
     return CapturedScript(
-        url=url, source=raw, source_map_url=None, sha256=hashlib.sha256(raw).hexdigest()
+        url=url,
+        source=raw,
+        source_map_url=None,
+        sha256=hashlib.sha256(raw).hexdigest(),
+        target_type=target_type,
     )
 
 

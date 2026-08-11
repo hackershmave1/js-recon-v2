@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 from redis import Redis
@@ -45,6 +46,10 @@ from recon.runs import queries as run_queries
 from recon.sessions import service as sessions_service
 
 log = get_logger("recon.capture")
+
+# Renew the job lease every N seeded blobs (see _asset_rows). Small enough that N
+# put_blob round-trips can't approach the 30s stall threshold on real S3 latency.
+_SEED_HEARTBEAT_EVERY = 25
 
 
 def capture_run(
@@ -121,7 +126,12 @@ def capture_run(
         scope_hosts=engagement.scope_hosts,
         allow_local=settings.allow_local_egress,
     )
-    seed_rows = _asset_rows(kept, tenant_id=tenant_id, run_id=run_id)
+    # Seeding stores one blob PER script (page + the whole worker/SW tree), so pass
+    # the SAME heartbeat: N put_blob round-trips between the driver's last beat and the
+    # manifest commit could otherwise lapse the job lease and let a peer double-launch
+    # the browser (the very invariant the driver's beater protects) — and it keeps
+    # pause/cancel responsive during seeding.
+    seed_rows = _asset_rows(kept, tenant_id=tenant_id, run_id=run_id, heartbeat=on_progress)
 
     # A hard navigation failure (bot-wall / TLS / ERR_*) is recorded as "blocked"
     # (→ PARTIAL in coordinator finalize), NOT a false "ok"/DONE with zero scripts —
@@ -151,6 +161,9 @@ def capture_run(
         count=len(seed_rows),
         status=status,
         nav_error=result.nav_error,
+        # Provenance: which execution contexts the scripts came from (page vs the
+        # worker / service-worker tree, C7/C8) — the point of slice 2.
+        by_target_type=dict(Counter(s.target_type for s in kept)),
     )
 
 
@@ -186,14 +199,25 @@ def _in_scope(
     return kept
 
 
-def _asset_rows(scripts: list[driver.CapturedScript], *, tenant_id: str, run_id: str) -> list[dict]:
+def _asset_rows(
+    scripts: list[driver.CapturedScript],
+    *,
+    tenant_id: str,
+    run_id: str,
+    heartbeat: Callable[[int], None] | None = None,
+) -> list[dict]:
     """Map captured scripts to unique, content-stable ``run_asset`` rows.
 
     An external ``<script src>`` seen once keeps its real URL. Scripts that share a
     URL (multiple inline blocks report the document URL) or have none (anonymous
     ``eval``/injected code) get a content-addressed URL derived from the source
     SHA-256 — unique (the driver already deduped identical content) and STABLE across
-    a re-capture, so redelivery never produces ordinal-dependent duplicates."""
+    a re-capture, so redelivery never produces ordinal-dependent duplicates.
+
+    ``heartbeat(n_done)`` (if given) is called every ``_SEED_HEARTBEAT_EVERY`` blobs so
+    the job lease is renewed and pause/cancel observed across a large seeding pass; it
+    may raise (cancel) — the blobs already stored are idempotent and nothing is
+    committed until the caller's manifest transaction."""
     counts = Counter(s.url for s in scripts if s.url)
     rows: list[dict] = []
     for script in scripts:
@@ -205,4 +229,6 @@ def _asset_rows(scripts: list[driver.CapturedScript], *, tenant_id: str, run_id:
             url = f"vm://{script.sha256}"
         input_ref = storage.put_blob(tenant_id, run_id, "input", script.source)
         rows.append({"url": url, "input_ref": input_ref})
+        if heartbeat is not None and len(rows) % _SEED_HEARTBEAT_EVERY == 0:
+            heartbeat(len(rows))
     return rows
