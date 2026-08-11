@@ -28,16 +28,16 @@ from __future__ import annotations
 import json
 from collections import Counter
 from collections.abc import Callable
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from redis import Redis
 
 from recon import storage
 from recon.capture import driver
-from recon.config import get_settings
+from recon.config import Settings, get_settings
 from recon.db.base import tenant_session
 from recon.events.log import publish, record_event
-from recon.fetch import egress
+from recon.fetch import egress, fetch
 from recon.observability import get_logger
 from recon.progress import heartbeat as progress
 from recon.queue import retry
@@ -137,6 +137,24 @@ def capture_run(
     # pause/cancel responsive during seeding.
     seed_rows = _asset_rows(kept, tenant_id=tenant_id, run_id=run_id, heartbeat=on_progress)
 
+    # Recover each captured script's EXTERNAL source map (parity with the static crawl's
+    # CE2 fetch): guarded, DNS-pinned, soft-miss. Runs AFTER the pure blob-seeding pass
+    # and BEFORE the atomic manifest — no DB session is open across the .map GETs. Gated
+    # by the same kill-switch as the crawl; inline data: maps are left to analyze's
+    # source-comment fallback, so only external refs are fetched here.
+    maps_fetched = maps_missed = 0
+    if settings.crawl_fetch_source_maps:
+        maps_fetched, maps_missed = _augment_with_source_maps(
+            kept,
+            seed_rows,
+            document_url=seed,
+            scope_hosts=engagement.scope_hosts,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            settings=settings,
+            on_progress=on_progress,
+        )
+
     # A hard navigation failure (bot-wall / TLS / ERR_*) is recorded as "blocked"
     # (→ PARTIAL in coordinator finalize), NOT a false "ok"/DONE with zero scripts —
     # capture mode exists to defeat such walls, so it must not silently hide them.
@@ -168,6 +186,10 @@ def capture_run(
         # Provenance: which execution contexts the scripts came from (page vs the
         # worker / service-worker tree, C7/C8) — the point of slice 2.
         by_target_type=dict(Counter(s.target_type for s in kept)),
+        # Source-map recovery: how many external .map files were fetched vs soft-missed
+        # (blocked/oversized/malformed) — so the new egress is diagnosable (CLAUDE.md §5).
+        source_maps_fetched=maps_fetched,
+        source_maps_missed=maps_missed,
     )
 
 
@@ -232,7 +254,105 @@ def _asset_rows(
         else:
             url = f"vm://{script.sha256}"
         input_ref = storage.put_blob(tenant_id, run_id, "input", script.source)
-        rows.append({"url": url, "input_ref": input_ref})
+        # source_map_ref defaults None on EVERY row (uniform bulk-insert columns);
+        # _augment_with_source_maps overwrites it for scripts with an external map.
+        rows.append({"url": url, "input_ref": input_ref, "source_map_ref": None})
         if heartbeat is not None and len(rows) % _SEED_HEARTBEAT_EVERY == 0:
             heartbeat(len(rows))
     return rows
+
+
+def _augment_with_source_maps(
+    scripts: list[driver.CapturedScript],
+    rows: list[dict],
+    *,
+    document_url: str,
+    scope_hosts: list[str],
+    tenant_id: str,
+    run_id: str,
+    settings: Settings,
+    on_progress: Callable[[int], None],
+) -> tuple[int, int]:
+    """Fetch each captured script's EXTERNAL source map and link it on the matching row.
+
+    ``scripts`` and ``rows`` are 1:1 and same-order (``_asset_rows`` maps every script to
+    a row), so they zip. Only an external ``sourceMapURL`` is fetched: a script with no
+    map, or an inline ``data:`` map, is skipped — analyze already recovers an inline map
+    from the source's own ``//# sourceMappingURL=`` comment, so re-fetching it would be
+    redundant. Returns ``(fetched, soft_missed)`` for the ``capture.done`` log.
+
+    The membership check (``not url``/``startswith("data:")``) can't raise; the raise-prone
+    URL resolution + GET lives inside the per-script soft-miss boundary
+    (``_fetch_captured_source_map``), so a single crafted ``sourceMapURL`` can never abort
+    the whole seeding pass."""
+    fetched = missed = 0
+    for script, row in zip(scripts, rows, strict=True):  # _asset_rows is 1:1 with scripts
+        source_map_url = script.source_map_url
+        if not source_map_url or source_map_url.startswith("data:"):
+            continue
+        # Resolve against the script's REAL url (or the document url for an anonymous /
+        # eval'd script) — never the row's rewritten vm://<sha> placeholder.
+        base = script.url or document_url
+        ref = _fetch_captured_source_map(
+            script,
+            base=base,
+            scope_hosts=scope_hosts,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            settings=settings,
+            on_progress=on_progress,
+        )
+        if ref is not None:
+            row["source_map_ref"] = ref
+            fetched += 1
+        else:
+            missed += 1
+    return fetched, missed
+
+
+def _fetch_captured_source_map(
+    script: driver.CapturedScript,
+    *,
+    base: str,
+    scope_hosts: list[str],
+    tenant_id: str,
+    run_id: str,
+    settings: Settings,
+    on_progress: Callable[[int], None],
+) -> str | None:
+    """Guarded-fetch one captured script's external ``.map`` and store it, returning the
+    blob key (or ``None`` on any soft miss). Uses the CDP-reported ``sourceMapURL``
+    (authoritative — it also covers a ``SourceMap:`` response header and survives the
+    driver's oversize-source truncation) rather than re-deriving it from a source comment.
+
+    ``on_progress`` (a job-lease beat folded with the REQ-A4 pause/cancel check) fires
+    BEFORE the outbound GET, so a cancel during seeding is observed per-map (not once per
+    25 rows) and can propagate; it is deliberately OUTSIDE the try, so a genuine cancel is
+    never swallowed as a soft miss. Everything after — the raise-prone ``urljoin`` and the
+    ``fetch_url`` GET — is a NON-RAISING soft miss (a crafted/blocked/oversized/malformed
+    map leaves ``source_map_ref`` null and analyze falls back to the minified bundle; the
+    script's own blob is already stored and unaffected). No per-host politeness slot is
+    taken: the browser already drove far more traffic at this host during capture, and the
+    bounded, sequential ``.map`` GETs don't warrant the crawl's anti-hammer accounting —
+    the load-bearing lease/cancel invariant is preserved by the pre-GET beat. Mirrors
+    ``fetch._fetch_and_store_source_map`` (REQ-CE2) through the same ``fetch_url`` guard."""
+    on_progress(0)
+    try:
+        map_url = urljoin(base, script.source_map_url or "")
+        map_bytes = fetch.fetch_url(
+            map_url,
+            scope_hosts,
+            timeout_s=settings.fetch_timeout_seconds,
+            max_bytes=settings.max_fetch_bytes,
+            allow_local=settings.allow_local_egress,
+        )
+        return storage.put_blob(tenant_id, run_id, "source_map", map_bytes)
+    except Exception as exc:  # noqa: BLE001 — soft miss; a bad map must never fail capture
+        log.info(
+            "capture.source_map_skipped",
+            run_id=run_id,
+            url=script.url or "",
+            source_map_url=script.source_map_url,
+            error=str(exc),
+        )
+        return None
