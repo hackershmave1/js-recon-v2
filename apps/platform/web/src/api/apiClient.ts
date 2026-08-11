@@ -90,7 +90,9 @@ export function uploadRun(tenantId: string, form: FormData): Promise<RunRef> {
 }
 
 export function startRun(
-  tenantId: string, body: { session_id: string; target: string },
+  // `capture` opts the run into the runtime CDP capture stage (executed JS: workers,
+  // injected, eval'd). Omitted unless true; the server 400s if capture mode is off.
+  tenantId: string, body: { session_id: string; target: string; capture?: boolean },
 ): Promise<RunRef> {
   return request("/runs", json("POST", body), tenantId);
 }
