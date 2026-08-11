@@ -25,17 +25,21 @@ def _settings(enabled=True):
         crawl_duration_seconds=5.0,
         crawl_kill_grace_seconds=1.0,
         crawl_heartbeat_interval_seconds=0.1,
+        crawl_fetch_source_maps=True,
+        fetch_timeout_seconds=20.0,
         max_fetch_bytes=10 * 1024 * 1024,
         allow_local_egress=False,
     )
 
 
-def _script(url: str, src: str, target_type: str = "page") -> CapturedScript:
+def _script(
+    url: str, src: str, target_type: str = "page", source_map_url: str | None = None
+) -> CapturedScript:
     raw = src.encode()
     return CapturedScript(
         url=url,
         source=raw,
-        source_map_url=None,
+        source_map_url=source_map_url,
         sha256=hashlib.sha256(raw).hexdigest(),
         target_type=target_type,
     )
@@ -45,11 +49,22 @@ def _blob(_tenant, _run, _kind, content):
     return f"blob/{hashlib.sha256(content).hexdigest()[:12]}"
 
 
-def _run_capture(scripts, engagement, *, enabled=True, validate=None, nav_error=None):
+def _run_capture(
+    scripts,
+    engagement,
+    *,
+    enabled=True,
+    validate=None,
+    nav_error=None,
+    map_fetch=None,
+    fetch_maps=True,
+):
     recorded = {}
     seeded = {}
+    settings = _settings(enabled)
+    settings.crawl_fetch_source_maps = fetch_maps
     with (
-        patch("recon.capture.stage.get_settings", return_value=_settings(enabled)),
+        patch("recon.capture.stage.get_settings", return_value=settings),
         patch("recon.capture.stage.sessions_service.get_session", return_value=engagement),
         patch(
             "recon.capture.stage.egress.validate_target",
@@ -67,6 +82,14 @@ def _run_capture(scripts, engagement, *, enabled=True, validate=None, nav_error=
             return_value=CaptureResult(scripts=scripts, nav_error=nav_error),
         ),
         patch("recon.capture.stage.storage.put_blob", side_effect=_blob),
+        # The guarded .map GET + the on_progress folds (cancel-check + lease beat) are
+        # stubbed so the seeding pass runs without real egress or a real DB/redis.
+        patch(
+            "recon.capture.stage.fetch.fetch_url",
+            side_effect=map_fetch or (lambda *a, **k: b'{"version":3,"sources":[]}'),
+        ),
+        patch("recon.capture.stage.run_queries.raise_if_control_requested"),
+        patch("recon.capture.stage.progress.beat"),
         patch("recon.capture.stage.tenant_session"),
         patch(
             "recon.capture.stage.assets.seed_captured",
@@ -191,3 +214,133 @@ def test_capture_propagates_control_interrupt_via_on_progress():
             target="acme.io",
             session_id="sess-1",
         )
+
+
+def test_capture_fetches_external_source_map_and_links_ref():
+    # An external sourceMapURL is resolved against the script's real URL, guarded-fetched,
+    # and linked on the matching seeded row (so ANALYZE recovers real source paths).
+    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
+    fetch_url = MagicMock(return_value=b'{"version":3,"sources":["app/src/api.js"]}')
+    scripts = [_script("https://acme.io/app.js", "APP", source_map_url="app.js.map")]
+    _recorded, seeded, _publish = _run_capture(scripts, engagement, map_fetch=fetch_url)
+
+    assert fetch_url.call_args.args[0] == "https://acme.io/app.js.map"  # relative -> resolved
+    assert fetch_url.call_args.args[1] == ["acme.io"]  # scope_hosts handed to the guard
+    assert seeded["rows"][0]["source_map_ref"]  # a stored blob key, not None
+
+
+def test_capture_inline_data_map_is_not_fetched():
+    # An inline data: map is recovered downstream by analyze from the source's own
+    # //# sourceMappingURL= comment — the capture stage must NOT re-fetch it.
+    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
+    fetch_url = MagicMock()
+    scripts = [
+        _script("https://acme.io/app.js", "APP", source_map_url="data:application/json;base64,e30=")
+    ]
+    _recorded, seeded, _publish = _run_capture(scripts, engagement, map_fetch=fetch_url)
+
+    fetch_url.assert_not_called()
+    assert seeded["rows"][0]["source_map_ref"] is None
+
+
+def test_capture_source_map_soft_miss_keeps_asset():
+    # A blocked/oversized/malformed .map is a soft miss: source_map_ref stays null, the
+    # script's own row is still seeded ok, and the whole capture run does NOT fail.
+    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
+
+    def blocked(*_a, **_k):
+        raise RuntimeError("egress blocked / oversized")
+
+    scripts = [_script("https://acme.io/app.js", "APP", source_map_url="app.js.map")]
+    recorded, seeded, publish = _run_capture(scripts, engagement, map_fetch=blocked)
+
+    assert seeded["rows"][0]["source_map_ref"] is None
+    assert seeded["rows"][0]["input_ref"]  # the captured script blob is untouched
+    assert recorded["payload"]["count"] == 1
+    assert recorded["payload"]["status"] == "ok"
+    publish.assert_called_once()
+
+
+def test_capture_malformed_source_map_url_does_not_abort_run():
+    # THE critical soft-miss boundary (adversarial gate must-fix #1): a crafted
+    # sourceMapURL that makes urljoin RAISE (invalid IPv6 literal) must not abort the
+    # seeding pass — it soft-misses that one script and the others still seed.
+    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
+    fetch_url = MagicMock(return_value=b"{}")
+    scripts = [
+        _script("https://acme.io/bad.js", "BAD", source_map_url="//[::"),
+        _script("https://acme.io/good.js", "GOOD", source_map_url="good.js.map"),
+    ]
+    _recorded, seeded, _publish = _run_capture(scripts, engagement, map_fetch=fetch_url)
+
+    by_url = {r["url"]: r for r in seeded["rows"]}
+    assert by_url["https://acme.io/bad.js"]["source_map_ref"] is None  # raise -> soft miss
+    assert by_url["https://acme.io/good.js"]["source_map_ref"]  # the pass continued
+
+
+def test_capture_source_maps_disabled_skips_fetch():
+    # The crawl_fetch_source_maps kill-switch governs capture too: no .map GET at all.
+    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
+    fetch_url = MagicMock()
+    scripts = [_script("https://acme.io/app.js", "APP", source_map_url="app.js.map")]
+    _recorded, seeded, _publish = _run_capture(
+        scripts, engagement, map_fetch=fetch_url, fetch_maps=False
+    )
+
+    fetch_url.assert_not_called()
+    assert seeded["rows"][0]["source_map_ref"] is None
+
+
+def test_capture_anonymous_script_map_resolves_against_document():
+    # An anonymous/eval'd script (row url vm://<sha>) with a RELATIVE external map must
+    # resolve against the document URL, never the vm:// placeholder.
+    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
+    fetch_url = MagicMock(return_value=b"{}")
+    scripts = [_script("", "ANON_EVAL", source_map_url="vm.js.map")]
+    _recorded, seeded, _publish = _run_capture(scripts, engagement, map_fetch=fetch_url)
+
+    assert fetch_url.call_args.args[0] == "https://acme.io/vm.js.map"  # vs the seed document
+    assert seeded["rows"][0]["url"].startswith("vm://")  # row url stays content-addressed
+    assert seeded["rows"][0]["source_map_ref"]
+
+
+def test_capture_source_map_cancel_propagates_before_get():
+    # A cancel observed during the source-map pass propagates out of capture_run (the
+    # on_progress beat is OUTSIDE the soft-miss try, so a genuine cancel is never
+    # swallowed) and no .map GET is issued.
+    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
+    fetch_url = MagicMock()
+    scripts = [_script("https://acme.io/app.js", "APP", source_map_url="app.js.map")]
+
+    with (
+        patch("recon.capture.stage.get_settings", return_value=_settings(True)),
+        patch("recon.capture.stage.sessions_service.get_session", return_value=engagement),
+        patch("recon.capture.stage.egress.validate_target", return_value=SimpleNamespace()),
+        patch("recon.capture.stage.egress.host_of", return_value="acme.io"),
+        patch(
+            "recon.capture.stage.egress.host_in_scope",
+            side_effect=lambda h, hosts, **k: any(h == x for x in hosts),
+        ),
+        patch(
+            "recon.capture.stage.driver.capture_scripts",
+            return_value=CaptureResult(scripts=scripts, nav_error=None),
+        ),
+        patch("recon.capture.stage.storage.put_blob", side_effect=_blob),
+        patch("recon.capture.stage.fetch.fetch_url", side_effect=fetch_url),
+        patch(
+            "recon.capture.stage.run_queries.raise_if_control_requested",
+            side_effect=retry.ControlInterrupt("cancel"),
+        ),
+        patch("recon.capture.stage.progress.beat"),
+        patch("recon.capture.stage.tenant_session"),
+        pytest.raises(retry.ControlInterrupt),
+    ):
+        stage.capture_run(
+            MagicMock(),
+            tenant_id="t",
+            run_id="r",
+            job_id="j",
+            target="acme.io",
+            session_id="sess-1",
+        )
+    fetch_url.assert_not_called()

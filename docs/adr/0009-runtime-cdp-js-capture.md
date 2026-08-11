@@ -85,12 +85,18 @@ matching) and `ROOT_AUTO_ATTACH_PARAMS` / `CHILD_AUTO_ATTACH_PARAMS` (the two fi
 per-fetch/per-eval timeout, `killpg`, and the `_Ctx` event pump that fetches each source
 on-parse. `recon/capture/interaction.py` — the autoscroll / click-all / same-origin route-enum
 actions driven through that pump. `recon/capture/stage.py` — `authorization_ack` gate + pre-launch
-`egress.validate_target` + per-script `_in_scope` + atomic manifest + heartbeat-during-seeding.
+`egress.validate_target` + per-script `_in_scope` + atomic manifest + heartbeat-during-seeding +
+external source-map recovery (`_augment_with_source_maps` / `_fetch_captured_source_map`: the
+`scriptParsed` `sourceMapURL` → guarded `fetch_url` GET → `run_asset.source_map_ref`, a soft miss
+that never fails the run, gated by `crawl_fetch_source_maps`).
 Default-off `config.py` `enable_capture_mode` (+ `capture_interact` and the `capture_max_*` bounds)
 + the API gate in `api/runs_router.py`. Tests: `recon/capture/*_test.py` (host lane — incl.
 `interaction_test.py` orchestration + a `driver_test.py` eager-fetch-survives-navigation guard) and
 `driver_integration_test.py` (real Chromium — C1/C2/C16 page + C7 worker + C8 service worker in one
 launch, and a driven capture reaching scroll / route / click-gated chunks a passive capture misses).
+Source-map recovery: `stage_test.py` (host lane — external `.map` linked, inline `data:` skipped,
+crafted `sourceMapURL` soft-misses without aborting the run, cancel-not-swallowed) +
+`runs/assets_integration_test.py` (the `seed_captured` INSERT persists `source_map_ref`).
 
 ## More Information
 
@@ -100,4 +106,7 @@ interaction driver) on `feat/capture-interaction-driver`. Relates to ADR 0005 (S
 reused), ADR 0006 (static analysis, no automated *exploit* traffic — capture relaxes the
 *static-only fetch* posture, not that exploit stance), ADR 0008 (process-group kill of
 headless-browser children). Follow-ups: request-layer egress interception (the egress-proxy
-slice), source-map recovery, and a managed vehicle for 403-walled targets.
+slice) and a managed vehicle for 403-walled targets. Source-map recovery for captured bundles has
+shipped — external `.map` files are fetched through the egress guard and linked on the asset, and
+inline `data:` maps already recover from the source itself; the no-map deobfuscation fallback
+remains absent (no deobfuscator exists in the backend).

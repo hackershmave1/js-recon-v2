@@ -50,13 +50,18 @@ def seed_pending(session: Session, *, tenant_id: str, run_id: str, urls: list[st
 
 def seed_captured(session: Session, *, tenant_id: str, run_id: str, rows: list[dict]) -> None:
     """Seed already-fetched (captured) assets in ONE statement — ``url`` + ``input_ref``
-    + ``fetch_status=ok`` — for the runtime-capture stage, which holds every byte in
-    hand (unlike the static crawl, whose fetch stage fills ``input_ref`` later).
+    + optional ``source_map_ref`` + ``fetch_status=ok`` — for the runtime-capture stage,
+    which holds every byte in hand (unlike the static crawl, whose fetch stage fills
+    ``input_ref`` later).
 
-    ``rows`` items are ``{"url", "input_ref"}``. Skips any row whose ``(run_id, url)``
-    already exists (``on_conflict_do_nothing``), so a redelivery that re-runs capture
-    never duplicates — the caller commits these together with the ``discover.assets``
-    event in one transaction (atomic manifest)."""
+    ``rows`` items are ``{"url", "input_ref"[, "source_map_ref"]}``. A recovered external
+    source map (parity with the static crawl's CE2 fetch) is linked here at INSERT time
+    rather than by a later UPDATE; ``source_map_ref`` is read via ``.get`` so EVERY value
+    dict carries the column and the bulk insert stays uniform even when only some rows
+    have a map. Skips any row whose ``(run_id, url)`` already exists
+    (``on_conflict_do_nothing``), so a redelivery that re-runs capture never duplicates —
+    the caller commits these together with the ``discover.assets`` event in one
+    transaction (atomic manifest)."""
     if not rows:
         return
     session.execute(
@@ -68,6 +73,7 @@ def seed_captured(session: Session, *, tenant_id: str, run_id: str, rows: list[d
                     "run_id": str(run_id),
                     "url": r["url"],
                     "input_ref": r["input_ref"],
+                    "source_map_ref": r.get("source_map_ref"),
                     "fetch_status": AssetStatus.OK.value,
                 }
                 for r in rows
