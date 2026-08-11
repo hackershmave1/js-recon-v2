@@ -16,7 +16,7 @@ from sqlalchemy import update
 from recon import storage
 from recon.db import models
 from recon.db.base import tenant_session
-from recon.findings import analyze, engines, sourcemapper
+from recon.findings import analyze, deobfuscate, engines, sourcemapper
 from recon.probe import sources
 from recon.runs import service
 
@@ -88,3 +88,76 @@ def test_unknown_recovered_path_is_none(redis, authorized_session, monkeypatch):
     run_id = _seed_run_with_recovered_source(redis, tenant, session_id, monkeypatch)
     # A path the map doesn't recover is simply not found.
     assert sources.get_source_content(tenant, run_id, "app/src/nope.js") is None
+
+
+def _seed_no_map_bundle(redis, tenant, session_id, minified: bytes) -> str:
+    """A legacy run with a minified bundle and NO source map."""
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
+    input_key = storage.put_blob(tenant, view.id, "input", minified)
+    with tenant_session(tenant) as session:
+        session.execute(
+            update(models.Run).where(models.Run.id == view.id).values(input_ref=input_key)
+        )
+    return view.id
+
+
+def test_no_map_bundle_served_beautified_multiline(redis, authorized_session):
+    # A raw no-map bundle is beautified ON DEMAND so it renders multi-line with the
+    # finding marks aligned to analyze's beautified endpoint lines.
+    tenant, session_id = authorized_session
+    minified = b'const a=fetch("/api/a");const b=fetch("/api/b");const c=fetch("/api/c");'
+    assert len(minified.splitlines()) == 1
+    run_id = _seed_no_map_bundle(redis, tenant, session_id, minified)
+
+    content = sources.get_source_content(tenant, run_id, "input.js")
+    assert content is not None
+    assert len(content.content.splitlines()) > 1  # beautified, not the raw one-liner
+    assert 'fetch("/api/a")' in content.content
+
+
+def test_recovered_source_served_verbatim_not_beautified(redis, authorized_session, monkeypatch):
+    # Recovered originals (kind="source") come straight from the source map via
+    # _recovered_content -> _as_content and must NEVER be beautified — only the raw
+    # no-map bundle is. A MINIFIED recovered source makes "verbatim" (one line)
+    # visibly distinct from "beautified" (multi-line).
+    tenant, session_id = authorized_session
+    minified_original = b'const a=fetch("/api/a");const b=fetch("/api/b");'
+
+    def fake_recover(map_bytes, **_kwargs):
+        return sourcemapper.RecoveredSources(
+            files=[sourcemapper.RecoveredFile("app/src/api.js", minified_original)],
+            status="ok",
+            origin="uploaded",
+        )
+
+    monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
+    input_key = storage.put_blob(tenant, view.id, "input", b'fetch("/bundle/only");')
+    map_key = storage.put_blob(tenant, view.id, "source_map", b'{"version":3}')
+    with tenant_session(tenant) as session:
+        session.execute(
+            update(models.Run)
+            .where(models.Run.id == view.id)
+            .values(input_ref=input_key, source_map_ref=map_key)
+        )
+    analyze.analyze_run(redis, tenant_id=tenant, run_id=view.id)
+
+    content = sources.get_source_content(tenant, view.id, "app/src/api.js")
+    assert content is not None
+    assert content.content == minified_original.decode("utf-8")  # verbatim
+    assert len(content.content.splitlines()) == 1  # NOT beautified
+
+
+def test_no_map_bundle_soft_off_serves_raw(redis, authorized_session, monkeypatch):
+    # When beautify soft-fails (over cap / pathological), Sources serves the raw
+    # bundle unchanged — the same fail-soft contract analyze uses.
+    tenant, session_id = authorized_session
+    minified = b'const a=fetch("/api/a");const b=fetch("/api/b");'
+    run_id = _seed_no_map_bundle(redis, tenant, session_id, minified)
+
+    monkeypatch.setattr(deobfuscate, "beautify", lambda _source: None)
+
+    content = sources.get_source_content(tenant, run_id, "input.js")
+    assert content is not None
+    assert content.content == minified.decode("utf-8")  # raw, unchanged
+    assert len(content.content.splitlines()) == 1

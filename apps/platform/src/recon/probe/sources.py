@@ -21,7 +21,10 @@ consistent with ``/requests`` and ``/export``, which already expose
 reconstructed detail without a per-item audit: the source is the analyst's own
 captured artifact from an authorized target.
 
-Out of scope here: deobfuscation (no deobfuscator exists in the backend)."""
+A raw no-map bundle is beautified ON DEMAND (recon.findings.deobfuscate — the same
+deterministic beautify analyze runs before endpoint extraction) so it renders as
+readable, multi-line text with the finding marks aligned; source-map-recovered
+originals are served verbatim (never re-beautified)."""
 
 from __future__ import annotations
 
@@ -33,7 +36,7 @@ from sqlalchemy import select
 from recon import storage
 from recon.db import models
 from recon.db.base import tenant_session
-from recon.findings import engines, sourcemapper
+from recon.findings import deobfuscate, engines, sourcemapper
 from recon.runs import assets as run_assets
 
 # Bound the served text so one request can't stream an arbitrarily large decoded
@@ -158,7 +161,14 @@ def get_source_content(
             raw = storage.get_blob(key)
         except ClientError:
             return None  # key vanished from the object store — treat as not found
-        return _as_content(path, raw)
+        # A raw bundle (upload/asset) with no source-map recovery is beautified on
+        # demand so the served text matches analyze's beautified endpoint units and
+        # the finding marks align — the SAME deterministic deobfuscate.beautify, so no
+        # persisted blob. Over-cap/unavailable -> raw served (fail-soft). Recovered
+        # originals go through _recovered_content -> _as_content and stay verbatim.
+        text = raw.decode("utf-8", "replace")
+        beautified = deobfuscate.beautify(text)
+        return _content_from_text(path, beautified if beautified is not None else text)
     # Not a stored asset/upload blob: try a source-map-recovered original.
     return _recovered_content(tenant_id, run_id, path, asset_url)
 
@@ -168,6 +178,16 @@ def _as_content(path: str, raw: bytes) -> SourceContent:
     # Slice the raw BYTES before decoding so the decoded string is bounded too.
     content = raw[:_MAX_CONTENT_BYTES].decode("utf-8", "replace")
     return SourceContent(path=path, content=content, truncated=truncated)
+
+
+def _content_from_text(path: str, text: str) -> SourceContent:
+    """A decoded (possibly beautified) source string as bounded content. Mirrors
+    ``_as_content`` but for text already decoded (the on-demand beautify path)."""
+    encoded = text.encode("utf-8")
+    truncated = len(encoded) > _MAX_CONTENT_BYTES
+    if truncated:
+        text = encoded[:_MAX_CONTENT_BYTES].decode("utf-8", "replace")
+    return SourceContent(path=path, content=text, truncated=truncated)
 
 
 def _resolve_key(tenant_id: str, run_id: str, path: str) -> str | None:

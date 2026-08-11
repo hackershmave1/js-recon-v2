@@ -30,7 +30,7 @@ from recon.db.base import tenant_session
 from recon.db.models import Run
 from recon.domain import AssetStatus, FindingType
 from recon.events.log import RecordedEvent, publish, record_event
-from recon.findings import engines, kingfisher, normalize, queries, sourcemapper, store
+from recon.findings import deobfuscate, engines, kingfisher, normalize, queries, sourcemapper, store
 from recon.findings.extract import RawEndpoint, extract
 from recon.findings.kingfisher import RawSecret
 from recon.findings.wrappers import WrapperRule
@@ -468,6 +468,17 @@ def _merge_coverage(a: Coverage, b: Coverage) -> Coverage:
     )
 
 
+def _bundle_unit(source: str) -> list[tuple[str, str]]:
+    """The whole bundle as one endpoint-analysis unit under ``input.js``, beautified
+    (deterministic, cap-guarded) when there is no per-file source-map recovery so
+    endpoint findings get distinct line numbers; ``recon.probe.sources`` serves the
+    same beautify so marks align. Falls back to the raw bundle when beautify is
+    over-cap/unavailable. Secrets are unaffected — they scan the raw bytes in
+    ``_analyze_blob`` (``recon.probe.reveal`` slices raw offsets)."""
+    beautified = deobfuscate.beautify(source)
+    return [(_SOURCE_NAME, beautified if beautified is not None else source)]
+
+
 def _analysis_units(
     source_map_ref: str | None, source: str, source_map_origin: str = "uploaded"
 ) -> tuple[list[tuple[str, str]], str, int]:
@@ -476,7 +487,7 @@ def _analysis_units(
     units, the source-map status, and the count of recovered files."""
     map_bytes, origin = _resolve_source_map(source_map_ref, source, source_map_origin)
     if not map_bytes:
-        return [(_SOURCE_NAME, source)], "none", 0
+        return _bundle_unit(source), "none", 0
 
     try:
         recovered = sourcemapper.recover_sources(map_bytes, origin=origin)
@@ -487,12 +498,12 @@ def _analysis_units(
         # record the honest "<origin>-error" status. A legacy "uploaded" map is a
         # deliberate user upload, so its failure still surfaces (re-raise).
         if origin in ("inline", "capture"):
-            return [(_SOURCE_NAME, source)], f"{origin}-error", 0
+            return _bundle_unit(source), f"{origin}-error", 0
         raise
     if recovered.status != "ok":  # binary unavailable -> fall back to the bundle
-        return [(_SOURCE_NAME, source)], recovered.status, 0
+        return _bundle_unit(source), recovered.status, 0
     if not recovered.files:  # map present but nothing recovered (e.g. no sourcesContent)
-        return [(_SOURCE_NAME, source)], origin, 0
+        return _bundle_unit(source), origin, 0
 
     units = [(f.path, f.content.decode("utf-8", "replace")) for f in recovered.files]
     return units, origin, len(recovered.files)
