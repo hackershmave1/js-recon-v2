@@ -27,6 +27,7 @@ session-wide verdict map down to that run's hashes after the upsert.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 from sqlalchemy import func, select
@@ -41,6 +42,19 @@ from recon.events.log import record_event
 from recon.findings import base_url, normalize, queries
 from recon.spec.classify import Classification, SpecSummary, classify_operation, summarize
 from recon.spec.ingest import DocumentedOp, IngestedSpec, ingest_spec
+
+_LEADING_VAR = re.compile(r"^\$\{[^}]*\}$")  # a clean leading template var: ${baseDomainName}
+
+
+def _strip_leading_base_var(path: str) -> str:
+    """Drop a leading clean ``${var}`` segment — a base a capture occurrence has proven
+    resolved — while KEEPING every other segment, so ``${slug}``/``{id}`` param positions
+    survive and ``classify.compare_key`` still wildcards them (no false shadow on a string
+    path param). ``/${base}/users/${slug}`` -> ``/users/${slug}``; ``/getJobId`` unchanged."""
+    segments = [s for s in path.split("/") if s]
+    if segments and _LEADING_VAR.match(segments[0]):
+        segments = segments[1:]
+    return "/" + "/".join(segments)
 
 
 def attach_and_classify(tenant_id: str, run_id: str, raw_spec: bytes) -> SpecSummary | None:
@@ -221,14 +235,42 @@ def _classify_session(
         ).all()
     }
 
+    # REQ-C3: a capture occurrence proves the host/base for its op. For those findings,
+    # strip a leading clean ${var} base from the STATIC templated path (keeping ${slug}/{id}
+    # params) so a formerly-"partial" op reaches documented/shadow — WITHOUT feeding the
+    # concrete runtime path, which would drop param templating and false-shadow a string
+    # path param. The occurrence's host already gates the op absolute. Additive: a finding
+    # with no capture occurrence keeps the templated-path re-base below.
+    capture_resolved = {
+        finding_hash
+        for (finding_hash,) in session.execute(
+            select(models.Finding.finding_hash)
+            .distinct()
+            .join(
+                models.FindingOccurrence, models.FindingOccurrence.finding_id == models.Finding.id
+            )
+            .join(models.Run, models.Run.id == models.Finding.run_id)
+            .where(
+                models.Run.session_id == session_id,
+                models.Finding.type == FindingType.ENDPOINT.value,
+                models.FindingOccurrence.engine == "capture",
+            )
+        ).all()
+    }
+
     verdicts: dict[str, Classification] = {}
     for row_tenant_id, finding_hash, value in rows:
         operation = normalize.operation_of_endpoint_value(value)
         method, _sep, path = operation.partition(" ")
-        resolved = base_url.resolve_operation(
-            method, path or "/", (finding_hash,), operation in host_bearing_operations, rules
-        )
-        classification = classify_operation(f"{method} {resolved.path}", documented)
+        if finding_hash in capture_resolved:
+            # Base proven by capture: drop a leading ${var}, keep param positions intact.
+            classified_operation = f"{method} {_strip_leading_base_var(path or '/')}"
+        else:
+            resolved = base_url.resolve_operation(
+                method, path or "/", (finding_hash,), operation in host_bearing_operations, rules
+            )
+            classified_operation = f"{method} {resolved.path}"
+        classification = classify_operation(classified_operation, documented)
         verdicts[finding_hash] = classification
 
         insert_stmt = pg_insert(models.FindingSpecStatus).values(

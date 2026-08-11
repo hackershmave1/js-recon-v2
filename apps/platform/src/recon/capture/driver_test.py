@@ -32,10 +32,12 @@ class _FakeWS:
     emitted WITHOUT a ``sessionId`` — mirroring real Chrome — so the driver's bare-id
     matching is exercised."""
 
-    def __init__(self, *, graph, scripts, nav_error=None):
+    def __init__(self, *, graph, scripts, nav_error=None, requests=None):
         self._graph = graph
         self._scripts = scripts
         self._nav_error = nav_error
+        # requests: session -> list of Network.requestWillBeSent `params` dicts
+        self._requests = requests or {}
         self._sources = {s["scriptId"]: s["source"] for specs in scripts.values() for s in specs}
         self._out: list[dict] = []
         self.enabled: set = set()
@@ -91,6 +93,8 @@ class _FakeWS:
                     },
                 }
             )
+        for p in self._requests.get(sid, []):  # REQ-C3: XHR/fetch the context issues
+            self._out.append({"method": "Network.requestWillBeSent", "sessionId": sid, "params": p})
 
     def recv(self, timeout=None):
         if self._out:
@@ -105,7 +109,7 @@ class _FakeWS:
         return False
 
 
-def _run(ws, on_progress=lambda _n: None):
+def _run(ws, on_progress=lambda _n: None, max_requests=0):
     with (
         patch("recon.capture.driver.subprocess.Popen", return_value=_FakeProc()),
         patch("recon.capture.driver._read_devtools_port", return_value=9999),
@@ -125,6 +129,7 @@ def _run(ws, on_progress=lambda _n: None):
             heartbeat_interval_s=0.01,
             max_scripts=100,
             max_script_bytes=1 << 20,
+            max_requests=max_requests,
             on_progress=on_progress,
         )
 
@@ -255,6 +260,78 @@ def test_on_progress_raise_aborts_and_propagates():
 
     with pytest.raises(RuntimeError, match="cancelled"):
         _run(_FakeWS(graph=_TREE, scripts=_TREE_SCRIPTS), on_progress=boom)
+
+
+# REQ-C3: the page issues XHR/fetch requests whose URLs resolve the runtime host of the
+# statically-extracted endpoints. A `Script` load and a `data:` URL must be ignored; a
+# duplicate (same method + path) and the query string must be dropped.
+_TREE_REQUESTS = {
+    "page": [
+        {
+            "type": "XHR",
+            "request": {"url": "https://api.acme.io/get-job-types?token=SECRET", "method": "GET"},
+        },
+        {
+            "type": "XHR",
+            "request": {"url": "https://api.acme.io/get-job-types?token=OTHER", "method": "GET"},
+        },
+        {"type": "Fetch", "request": {"url": "https://api.acme.io/getJobId", "method": "POST"}},
+        {"type": "Script", "request": {"url": "https://api.acme.io/vendor.js", "method": "GET"}},
+        {"type": "XHR", "request": {"url": "data:application/json,{}", "method": "GET"}},
+    ]
+}
+
+
+def test_records_observed_xhr_fetch_requests_deduped_and_path_only():
+    # Only XHR/Fetch http(s) requests are recorded, deduped on (method, path-only url)
+    # with the query string dropped (no token custody) — while scripts capture unchanged.
+    ws = _FakeWS(graph=_TREE, scripts=_TREE_SCRIPTS, requests=_TREE_REQUESTS)
+    result = _run(ws, max_requests=100)
+    assert {s.source.decode() for s in result.scripts} == {
+        "EXTERNAL",
+        "INLINE",
+        "EVAL_C16",
+        "SW_BODY",
+        "WORKER_BODY",
+    }
+    assert result.requests == [
+        {"method": "GET", "url": "https://api.acme.io/get-job-types"},
+        {"method": "POST", "url": "https://api.acme.io/getJobId"},
+    ]
+
+
+def test_request_recording_is_off_when_max_requests_zero():
+    # Default max_requests=0 records nothing — non-capture callers pay no cost and the
+    # field stays empty.
+    ws = _FakeWS(graph=_TREE, scripts=_TREE_SCRIPTS, requests=_TREE_REQUESTS)
+    assert _run(ws).requests == []
+
+
+def test_malformed_request_frame_never_aborts_capture():
+    # A frame missing `request`/`type` must be skipped, not raise — one bad event must
+    # never abort the capture (which would lose every script).
+    reqs = {
+        "page": [
+            {"type": "XHR"},  # no request
+            {},  # no type
+            {"type": "XHR", "request": None},  # null request
+            {"type": "XHR", "request": {"url": "https://api.acme.io/ok", "method": "GET"}},
+        ]
+    }
+    result = _run(_FakeWS(graph=_TREE, scripts=_TREE_SCRIPTS, requests=reqs), max_requests=100)
+    assert result.requests == [{"method": "GET", "url": "https://api.acme.io/ok"}]
+    assert len(result.scripts) == 5  # every tree script survived the bad frames
+
+
+def test_request_cap_is_enforced():
+    reqs = {
+        "page": [
+            {"type": "XHR", "request": {"url": f"https://api.acme.io/e{i}", "method": "GET"}}
+            for i in range(10)
+        ]
+    }
+    result = _run(_FakeWS(graph=_TREE, scripts=_TREE_SCRIPTS, requests=reqs), max_requests=3)
+    assert len(result.requests) == 3
 
 
 class _InteractionWS:

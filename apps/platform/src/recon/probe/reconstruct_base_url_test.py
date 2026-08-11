@@ -15,10 +15,10 @@ def _view(finding_hash, type_, value, attributes=None, occurrences=()):
     )
 
 
-def _occ(host=None, raw_url=None):
+def _occ(host=None, raw_url=None, engine="vespasian"):
     from types import SimpleNamespace
 
-    return SimpleNamespace(host=host, raw_url=raw_url)
+    return SimpleNamespace(host=host, raw_url=raw_url, engine=engine)
 
 
 def _prefix(prefix, base):
@@ -143,3 +143,29 @@ def test_mixed_relative_absolute_group_is_not_rebased():
     assert req.path == "/address/search"  # not re-based (group has an absolute member)
     assert req.hosts == ("acme.io",)
     assert set(req.endpoint_hashes) == {"hA", "hB"}
+
+
+def test_capture_occurrence_url_is_preferred_as_example():
+    # REQ-C3: a runtime-observed (capture) occurrence carries the real URL the browser
+    # issued; it wins the example URL over the templated static raw_url, and its host
+    # makes the op host-bearing (so a manual prefix rule no longer re-bases it — capture
+    # beats the manual guess, the same "observed absolute wins" invariant).
+    findings = [
+        _view(
+            "h",
+            "endpoint",
+            "GET /${baseDomainName}/get-job-types",
+            {"method": "GET", "kind": "fetch"},
+            [
+                _occ(raw_url="${baseDomainName}/get-job-types"),  # static templated
+                _occ(
+                    host="api.acme.io",
+                    raw_url="https://api.acme.io/get-job-types",
+                    engine="capture",
+                ),
+            ],
+        ),
+    ]
+    (req,) = build_requests(findings, [_prefix("/${baseDomainName}", "https://guess.example.com")])
+    assert req.example_url == "https://api.acme.io/get-job-types"  # real URL, not templated
+    assert req.hosts == ("api.acme.io",)  # capture host wins; manual rule did not apply

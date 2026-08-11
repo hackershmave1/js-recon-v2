@@ -118,6 +118,7 @@ def capture_run(
             heartbeat_interval_s=settings.crawl_heartbeat_interval_seconds,
             max_scripts=settings.capture_max_scripts,
             max_script_bytes=cap,
+            max_requests=settings.capture_max_requests,
             interact=settings.capture_interact,
             max_scroll_steps=settings.capture_max_scroll_steps,
             max_clicks=settings.capture_max_clicks,
@@ -129,9 +130,20 @@ def capture_run(
         # (the attempt cap still lands a persistently-broken browser in the DLQ).
         raise retry.RetryableError(f"capture browser failed: {exc}") from exc
 
+    target_host = egress.host_of(seed)
     kept = _in_scope(
         result.scripts,
-        target_host=egress.host_of(seed),
+        target_host=target_host,
+        scope_hosts=engagement.scope_hosts,
+        allow_local=settings.allow_local_egress,
+    )
+    # REQ-C3: keep the observed XHR/fetch request URLs whose host is in scope (the SAME
+    # name-only predicate as the script filter), for the correlate stage to resolve
+    # endpoint hosts. These only LABEL statically-found endpoints — nothing is ever
+    # fetched from them, so scope is never DERIVED from them (REQ-P2).
+    kept_requests = _requests_in_scope(
+        result.requests,
+        target_host=target_host,
         scope_hosts=engagement.scope_hosts,
         allow_local=settings.allow_local_egress,
     )
@@ -171,6 +183,11 @@ def capture_run(
         "assets": [{"url": r["url"], "source": "capture"} for r in seed_rows],
     }
     assets_ref = storage.put_blob(tenant_id, run_id, "assets", json.dumps(manifest).encode("utf-8"))
+    # REQ-C3: persist the in-scope observed request URLs for the correlate stage — a blob
+    # (not rows), parity with assets_ref, referenced from the same discover.assets event.
+    requests_ref = storage.put_blob(
+        tenant_id, run_id, "capture-requests", json.dumps(kept_requests).encode("utf-8")
+    )
     # Atomic manifest: seed every fetched row + record the discover.assets event in
     # ONE transaction, then publish after commit (REQ-R2 commit-then-publish).
     with tenant_session(tenant_id) as session:
@@ -180,13 +197,19 @@ def capture_run(
             tenant_id=tenant_id,
             run_id=run_id,
             event_type="discover.assets",
-            payload={"count": len(seed_rows), "assets_ref": assets_ref, "status": status},
+            payload={
+                "count": len(seed_rows),
+                "assets_ref": assets_ref,
+                "requests_ref": requests_ref,
+                "status": status,
+            },
         )
     publish(redis, event)
     log.info(
         "capture.done",
         run_id=run_id,
         count=len(seed_rows),
+        observed_requests=len(kept_requests),
         status=status,
         nav_error=result.nav_error,
         # Provenance: which execution contexts the scripts came from (page vs the
@@ -228,6 +251,26 @@ def _in_scope(
             or egress.host_in_scope(host, scope_hosts, allow_local=allow_local)
         ):
             kept.append(script)
+    return kept
+
+
+def _requests_in_scope(
+    requests: list[dict],
+    *,
+    target_host: str,
+    scope_hosts: list[str],
+    allow_local: bool,
+) -> list[dict]:
+    """Keep observed requests served by an in-scope host — the SAME name-only predicate
+    as the script filter (a subdomain of a scoped host is in scope, so a
+    ``dashboard.x.com`` target scoped ``x.com`` keeps its ``api.x.com`` calls). A request
+    URL is always absolute (the driver normalized it to ``scheme://host/path``), so unlike
+    a script there is no anonymous/host-less case."""
+    kept: list[dict] = []
+    for req in requests:
+        host = (urlsplit(req["url"]).hostname or "").lower()
+        if host == target_host or egress.host_in_scope(host, scope_hosts, allow_local=allow_local):
+            kept.append(req)
     return kept
 
 

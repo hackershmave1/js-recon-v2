@@ -1,6 +1,6 @@
 # Requirements
 
-The canonical, traceable requirement set the platform is built against — **40 `REQ-*`
+The canonical, traceable requirement set the platform is built against — **41 `REQ-*`
 IDs**, each with a subsystem and a **MUST / SHOULD** priority. These IDs are the grounding
 the [Architecture Decision Records](adr/README.md) cite (e.g. ADR-0001 → REQ-Q1/Q2/R2/R3,
 ADR-0005 → REQ-P2): an ADR names the requirement that drove the decision, and this file is
@@ -25,6 +25,7 @@ Bracketed `[RT-nn]` tags mark points hardened during the design's red-team pass.
 |---|---|---|
 | REQ-C1 | SHOULD | Archive collection (Wayback/gau) is scoped to the locked engagement hosts; archive-only hosts discovered off-scope are listed but never live-fetched or probed without extending the scope lock. [RT-14] |
 | REQ-C2 | SHOULD | Extraction surfaces a per-file un-attributed-call coverage counter (honesty is a MUST); completeness is explicitly NOT guaranteed. Custom wrappers are taught by mapping a call shape; cross-file base URLs are resolved via a manual set-base-URL that re-resolves dependents. [RT-10] |
+| REQ-C3 | SHOULD | When a reconstructed route's host or base URL is an unresolved runtime value (e.g. a minified `apiHost` binding), a capture run MAY recover the concrete host by correlating the browser's actually-issued request URLs (observed via CDP `Network.requestWillBeSent` during capture) against the static request template on shared constant segments; the observed URL is recorded as ground-truth runtime evidence on the finding, and its host populates the REQ-C2 base-URL host-gate so reconstruct/spec surface the real URL. Runtime-observed URLs are a data-recovery output for labeling reconstructed routes only — they never derive or widen egress scope (REQ-P2 holds), and completeness is not guaranteed (a route the interaction driver never triggers stays unresolved). |
 
 ## Queues & concurrency
 

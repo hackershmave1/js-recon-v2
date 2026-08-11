@@ -1,4 +1,5 @@
 import hashlib
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlsplit
@@ -18,6 +19,7 @@ def _settings(enabled=True):
         capture_nav_timeout_seconds=1.0,
         capture_idle_settle_seconds=0.1,
         capture_max_scripts=100,
+        capture_max_requests=1000,
         capture_interact=True,
         capture_max_scroll_steps=12,
         capture_max_clicks=40,
@@ -59,11 +61,19 @@ def _run_capture(
     nav_error=None,
     map_fetch=None,
     fetch_maps=True,
+    requests=None,
+    blobs=None,
 ):
     recorded = {}
     seeded = {}
     settings = _settings(enabled)
     settings.crawl_fetch_source_maps = fetch_maps
+
+    def _cap_blob(_tenant, _run, kind, content):
+        if blobs is not None:
+            blobs.setdefault(kind, []).append(content)
+        return _blob(_tenant, _run, kind, content)
+
     with (
         patch("recon.capture.stage.get_settings", return_value=settings),
         patch("recon.capture.stage.sessions_service.get_session", return_value=engagement),
@@ -80,9 +90,11 @@ def _run_capture(
         ),
         patch(
             "recon.capture.stage.driver.capture_scripts",
-            return_value=CaptureResult(scripts=scripts, nav_error=nav_error),
+            return_value=CaptureResult(
+                scripts=scripts, nav_error=nav_error, requests=requests or []
+            ),
         ),
-        patch("recon.capture.stage.storage.put_blob", side_effect=_blob),
+        patch("recon.capture.stage.storage.put_blob", side_effect=_cap_blob),
         # The guarded .map GET + the on_progress folds (cancel-check + lease beat) are
         # stubbed so the seeding pass runs without real egress or a real DB/redis.
         patch(
@@ -131,6 +143,28 @@ def test_capture_seeds_fetched_rows_and_drops_out_of_scope():
     assert recorded["payload"]["status"] == "ok"
     assert recorded["event_type"] == "discover.assets"
     publish.assert_called_once()
+
+
+def test_capture_persists_in_scope_observed_requests():
+    # REQ-C3: observed XHR/fetch URLs are filtered to in-scope hosts (a subdomain of a
+    # scoped host is in scope) and stored as a blob referenced from the discover.assets
+    # event, for the correlate stage. A third-party request is dropped like a script.
+    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
+    scripts = [_script("https://acme.io/app.js", "APP")]
+    requests = [
+        {"method": "GET", "url": "https://api.acme.io/get-job-types"},  # subdomain -> in scope
+        {"method": "POST", "url": "https://acme.io/getJobId"},  # target host
+        {"method": "GET", "url": "https://evil.cdn/track"},  # out of scope -> dropped
+    ]
+    blobs: dict = {}
+    recorded, _seeded, _publish = _run_capture(scripts, engagement, requests=requests, blobs=blobs)
+
+    assert recorded["payload"]["requests_ref"]  # referenced from the discover.assets event
+    stored = json.loads(blobs["capture-requests"][0])
+    assert stored == [
+        {"method": "GET", "url": "https://api.acme.io/get-job-types"},
+        {"method": "POST", "url": "https://acme.io/getJobId"},
+    ]
 
 
 def test_capture_rejects_unauthorized_session():
