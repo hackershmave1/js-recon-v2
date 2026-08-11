@@ -56,6 +56,49 @@ def test_sessions_json_fetch_still_reaches_the_api(tmp_path, monkeypatch):
     assert r.headers["content-type"].startswith("application/json")
 
 
+def test_browser_navigation_to_colliding_run_subpage_gets_index_html(tmp_path, monkeypatch):
+    client = _client_with_dist(tmp_path, monkeypatch)
+    # The run subpages /runs/{id}/sources and /runs/{id}/findings collide with the
+    # data endpoints of the same path; a browser navigation (refresh/deep-link) to
+    # the client route must still get the SPA shell, not the JSON payload.
+    for path in ("/runs/2b1c/sources", "/runs/2b1c/findings"):
+        r = client.get(path, headers={"accept": "text/html"})
+        assert r.status_code == 200, path
+        assert "<div id=root>" in r.text
+        assert r.headers["cache-control"] == "no-store"
+
+
+def test_run_subpage_json_fetch_still_reaches_the_api(tmp_path, monkeypatch):
+    client = _client_with_dist(tmp_path, monkeypatch)
+    # The app's own fetch (application/json) to the data endpoint must NOT be shadowed
+    # by the SPA guard — it reaches the API route, which rejects the missing tenant
+    # header (401), rather than being answered with the SPA shell.
+    r = client.get("/runs/2b1c/sources", headers={"accept": "application/json"})
+    assert r.status_code == 401
+    assert r.headers["content-type"].startswith("application/json")
+
+
+def test_deeper_api_path_under_run_subpage_is_not_shadowed(tmp_path, monkeypatch):
+    client = _client_with_dist(tmp_path, monkeypatch)
+    # A three-segment API path (e.g. /runs/{id}/sources/content) is NOT a run subpage,
+    # so even a browser (text/html) request must reach the API and get a JSON error —
+    # never the SPA shell. Proves the guard is scoped to exactly /runs/{id}/{view}.
+    r = client.get("/runs/2b1c/sources/content", headers={"accept": "text/html"})
+    assert r.headers["content-type"].startswith("application/json")
+    assert "<div id=root>" not in r.text
+
+
+def test_sse_events_stream_is_never_served_the_spa_shell(tmp_path, monkeypatch):
+    client = _client_with_dist(tmp_path, monkeypatch)
+    # /runs/{id}/events is two segments (matches the run-subpage shape) but is the live
+    # SSE stream, not a client route. The text/html discriminator must keep it reaching
+    # the API (the app consumes it with Accept: text/event-stream) — never the SPA
+    # shell, or every live update would silently break.
+    r = client.get("/runs/2b1c/events", headers={"accept": "text/event-stream"})
+    assert "<div id=root>" not in r.text
+    assert r.headers["content-type"].startswith("application/json")
+
+
 def test_assets_are_served(tmp_path, monkeypatch):
     client = _client_with_dist(tmp_path, monkeypatch)
     assert client.get("/assets/app.js").status_code == 200

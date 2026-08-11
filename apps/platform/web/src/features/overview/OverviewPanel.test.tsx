@@ -1,7 +1,19 @@
 import { describe, it, expect } from "vitest";
 import { render, screen, within } from "@testing-library/react";
+import { createMemoryRouter } from "react-router";
+import { RouterProvider } from "react-router/dom";
 import { OverviewPanel } from "./OverviewPanel";
 import type { FindingsResponse, Finding, Occurrence } from "../../api/types";
+
+// The tiles navigate via react-router now, so the panel must render inside a router
+// (with a :id param) for useNavigate/useParams to resolve.
+function renderPanel(data: FindingsResponse) {
+  const router = createMemoryRouter(
+    [{ path: "/runs/:id", element: <OverviewPanel data={data} /> }],
+    { initialEntries: ["/runs/r1"] },
+  );
+  render(<RouterProvider router={router} />);
+}
 
 const occ = (over: Partial<Occurrence> = {}): Occurrence => ({
   host: null, raw_url: null, source_path: null, line: null, col: null,
@@ -36,7 +48,7 @@ describe("OverviewPanel", () => {
         finding({ finding_hash: "e2", type: "endpoint", value: "/api/health" }),
       ],
     };
-    render(<OverviewPanel data={data} />);
+    renderPanel(data);
 
     expect(within(card("Files")).getByText("2")).toBeInTheDocument();        // files.length
     expect(within(card("Endpoints")).getByText("2")).toBeInTheDocument();    // e1 + e2
@@ -53,7 +65,7 @@ describe("OverviewPanel", () => {
           spec_status: { status: "shadow", reason: null, matched_operation: null } }),
       ],
     };
-    render(<OverviewPanel data={data} />);
+    renderPanel(data);
     const rows = screen.getAllByRole("listitem");
     expect(within(rows[0]).getByText("/api/admin")).toBeInTheDocument();
     expect(within(rows[0]).getByText("shadow")).toBeInTheDocument();
@@ -65,7 +77,7 @@ describe("OverviewPanel", () => {
       run_id: "r", count: 1, coverage: null, spec: null,
       findings: [finding({ type: "endpoint", value: "/x" })],
     };
-    render(<OverviewPanel data={data} />);
+    renderPanel(data);
     expect(within(card("Files")).getByText("—")).toBeInTheDocument();
     expect(within(card("Attribution")).getByText("—")).toBeInTheDocument();
     expect(within(card("Endpoints")).getByText("1")).toBeInTheDocument();

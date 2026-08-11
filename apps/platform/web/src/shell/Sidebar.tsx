@@ -1,26 +1,47 @@
-import { useNavigate } from "react-router";
+import { NavLink, useNavigate } from "react-router";
 import { Icon } from "./icons";
 import { EngagementSwitcher } from "../features/sessions/EngagementSwitcher";
+import { useRunDataOptional } from "../features/progress/runData";
 
-// Left-nav sections. ANALYZE items view a run's data, so they navigate (scroll to the
-// matching <section id> in app.tsx) only when a run is open; on the Sessions route they
-// render inert. "Sessions" is a real cross-run route (its own GET /sessions page);
-// "Threat Model" stays SOON (Slice 4) with no backend/page yet.
+// The crawl target as a bare host for display ("http://recon-range.test/" ->
+// "recon-range.test"); a bare host or unparseable value is shown as-is, null stays null.
+function hostOf(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try { return new URL(raw).host || raw; } catch { return raw; }
+}
+
+// The persistent "what am I looking at" card: the run's crawl target (read from the
+// assets manifest the run stream already holds) above the run id. Only mounted in run
+// mode, so the optional hook is non-null here; an upload run has no crawl domain and
+// falls back to the generic label.
+function CurrentRunCard({ runId }: { runId?: string }) {
+  const domain = hostOf(useRunDataOptional()?.assets?.domain);
+  return (
+    <div className="shell-eng-card">
+      <span className="shell-eng-mark"><Icon name="folder" size={15} /></span>
+      <span className="shell-eng-body">
+        <span className="shell-eng-name" title={domain ?? undefined}>{domain ?? "Current run"}</span>
+        <span className="shell-eng-id" title={runId}>{runId ? runId.slice(0, 8) : "—"}</span>
+      </span>
+    </div>
+  );
+}
+
+// Left-nav sections. ANALYZE items view a run's data, so each is a real route under
+// /runs/:id (Overview is the index route, the rest are child segments); on the
+// Sessions route they render inert. "Sessions" is a real cross-run route (its own
+// GET /sessions page); "Threat Model" stays SOON (Slice 4) with no backend/page yet.
 export type NavItem = { id: string; label: string; icon: string; soon?: boolean };
 export const NAV_ITEMS: NavItem[] = [
   { id: "overview", label: "Overview", icon: "grid" },
   { id: "findings", label: "Findings", icon: "alert" },
   { id: "api-spec", label: "API Spec", icon: "code" },
+  { id: "probe", label: "Probe", icon: "target" },
   { id: "threat-model", label: "Threat Model", icon: "shield", soon: true },
   { id: "sources", label: "Sources", icon: "folder" },
 ];
 
-export function Sidebar({ mode, runId, active, onNavigate }: {
-  mode: "run" | "sessions";
-  runId?: string;
-  active: string;
-  onNavigate: (id: string) => void;
-}) {
+export function Sidebar({ mode, runId }: { mode: "run" | "sessions"; runId?: string }) {
   const navigate = useNavigate();
   const inRun = mode === "run";
   return (
@@ -55,20 +76,21 @@ export function Sidebar({ mode, runId, active, onNavigate }: {
               </div>
             );
           }
+          // Overview is the index route (/runs/:id); the rest are child segments.
+          const seg = item.id === "overview" ? "" : item.id;
           return (
-            <button
+            <NavLink
               key={item.id}
-              type="button"
-              className={"shell-nav-item" + (active === item.id ? " is-active" : "")}
-              aria-current={active === item.id ? "page" : undefined}
-              onClick={() => onNavigate(item.id)}
+              to={`/runs/${runId}${seg ? `/${seg}` : ""}`}
+              end={item.id === "overview"}
+              className={({ isActive }) => "shell-nav-item" + (isActive ? " is-active" : "")}
             >
               <span className="shell-nav-ico"><Icon name={item.icon} /></span>
               <span className="shell-nav-txt">{item.label}</span>
-            </button>
+            </NavLink>
           );
         })}
-        {/* Sessions is a real cross-run route, not a scroll target within a run. */}
+        {/* Sessions is a real cross-run route, not a view within a run. */}
         <button
           type="button"
           className={"shell-nav-item" + (mode === "sessions" ? " is-active" : "")}
@@ -83,13 +105,7 @@ export function Sidebar({ mode, runId, active, onNavigate }: {
       <div className="shell-eng">
         <div className="shell-nav-label">ENGAGEMENT</div>
         {inRun ? (
-          <div className="shell-eng-card">
-            <span className="shell-eng-mark"><Icon name="folder" size={15} /></span>
-            <span className="shell-eng-body">
-              <span className="shell-eng-name">Current run</span>
-              <span className="shell-eng-id" title={runId}>{runId ? runId.slice(0, 8) : "—"}</span>
-            </span>
-          </div>
+          <CurrentRunCard runId={runId} />
         ) : (
           <EngagementSwitcher />
         )}

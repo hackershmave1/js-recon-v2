@@ -6,6 +6,7 @@ Redis and return. Heavy work happens in the worker process.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -84,14 +85,17 @@ def _mount_spa(app: FastAPI, settings) -> None:
     app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
     index = dist / "index.html"
 
-    # A few client-side routes share a path with an API GET of the same name (the
-    # Sessions page vs `GET /sessions`). The catch-all below can't cover those — the
-    # API route matches first — so a full-page load or refresh of /sessions would hit
-    # the JSON API instead of the SPA. This guard runs before routing and serves the
-    # shell for a browser *navigation* (Accept: text/html), while the app's own fetch
-    # (Accept: application/json) still reaches the API. Non-colliding routes like
-    # /runs/:id keep relying on the catch-all fallback.
+    # A few client-side routes share a path with an API GET of the same name, so the
+    # catch-all below can't cover them — the API route matches first, and a full-page
+    # load or refresh would hit the JSON API instead of the SPA. Two shapes collide:
+    # the Sessions page (vs `GET /sessions`) and every run subpage /runs/{id}/{view}
+    # (vs data endpoints like `GET /runs/{id}/sources` or `/runs/{id}/findings`).
     spa_routes = {"/sessions"}
+    # Exactly two path segments after /runs — /runs/{id}/{view} — matches the run
+    # subpages (sources, findings, api-spec, probe) but NOT deeper API paths like
+    # /runs/{id}/sources/content or /runs/{id}/findings/{hash}/triage, which keep
+    # reaching the API.
+    run_subpage = re.compile(r"^/runs/[^/]+/[^/]+$")
     # The shell is served `no-store` so the browser never reuses this text/html
     # response for a later SAME-URL fetch. Without it, the SPA's first
     # `fetch('/sessions')` (Accept: application/json) right after a full-page
@@ -100,12 +104,17 @@ def _mount_spa(app: FastAPI, settings) -> None:
     # cacheable; only the shell is no-store.
     shell_headers = {"Cache-Control": "no-store"}
 
+    # This guard runs before routing and serves the shell for a browser *navigation*
+    # (Accept: text/html) to those colliding routes, while the app's own fetch
+    # (Accept: application/json) still reaches the API. Non-colliding routes like
+    # /runs/:id keep relying on the catch-all fallback below.
     @app.middleware("http")
     async def spa_navigation(request: Request, call_next):
+        path = request.url.path
         if (
             request.method == "GET"
-            and request.url.path in spa_routes
             and "text/html" in request.headers.get("accept", "")
+            and (path in spa_routes or run_subpage.match(path) is not None)
         ):
             return FileResponse(index, headers=shell_headers)
         return await call_next(request)
