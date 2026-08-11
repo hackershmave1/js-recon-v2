@@ -11,6 +11,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "overview", label: "Overview", icon: "grid" },
   { id: "findings", label: "Findings", icon: "alert" },
   { id: "api-spec", label: "API Spec", icon: "code" },
+  { id: "probe", label: "Probe", icon: "target" },
   { id: "threat-model", label: "Threat Model", icon: "shield", soon: true },
   { id: "sources", label: "Sources", icon: "folder" },
 ];
