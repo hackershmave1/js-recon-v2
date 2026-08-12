@@ -127,6 +127,7 @@ def create_run(
     input_ref: str | None = None,
     capture_external_id: str | None = None,
     crawl_mode: str | None = None,
+    max_fetch_bytes: int | None = None,
 ) -> RunView:
     """Create a QUEUED run. ``crawl_mode="capture"`` routes DISCOVER to the CDP
     browser-capture stage (default/NULL = the static katana crawl). ``capture_external_id`` is the capture-ingest
@@ -143,6 +144,7 @@ def create_run(
             input_ref=input_ref,
             capture_external_id=capture_external_id,
             crawl_mode=crawl_mode,
+            max_fetch_bytes=max_fetch_bytes,
         )
         session.add(run)
         session.flush()

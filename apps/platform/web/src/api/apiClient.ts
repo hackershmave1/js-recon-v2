@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, Engagement, EngagementsListResponse, FindingsResponse, RequestsResponse, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SpecSummary, Triage, WrapperRule, WrapperRuleResult,
+  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, Engagement, EngagementsListResponse, FindingsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SpecSummary, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -95,6 +95,24 @@ export function startRun(
   tenantId: string, body: { session_id: string; target: string; capture?: boolean },
 ): Promise<RunRef> {
   return request("/runs", json("POST", body), tenantId);
+}
+
+// The source run's editable config, for the edit-&-re-run prefill (GET /runs/{id}/config).
+export function getRunConfig(tenantId: string, runId: string): Promise<RunConfig> {
+  return request(`/runs/${encodeURIComponent(runId)}/config`, {}, tenantId);
+}
+
+// Edit a specific run's config and launch a NEW run inheriting it (POST /runs/{id}/rerun).
+// Only send fields the operator changed from the prefill; unsent fields inherit. A scope
+// change forks a fresh session and REQUIRES `authorized_by` (re-attest the widened scope).
+export function editAndRerun(
+  tenantId: string, runId: string,
+  body: {
+    target?: string; capture?: boolean; scope_hosts?: string[];
+    authorized_by?: string; max_fetch_bytes?: number;
+  },
+): Promise<RunRef> {
+  return request(`/runs/${encodeURIComponent(runId)}/rerun`, json("POST", body), tenantId);
 }
 
 export function getAssets(tenantId: string, runId: string): Promise<AssetsManifest> {

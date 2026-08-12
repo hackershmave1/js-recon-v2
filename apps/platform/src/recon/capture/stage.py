@@ -34,7 +34,7 @@ from redis import Redis
 
 from recon import storage
 from recon.capture import driver
-from recon.config import Settings, get_settings
+from recon.config import Settings, clamp_fetch_bytes, get_settings
 from recon.db.base import tenant_session
 from recon.events.log import publish, record_event
 from recon.fetch import egress, fetch
@@ -60,6 +60,7 @@ def capture_run(
     job_id: str,
     target: str,
     session_id: str,
+    max_fetch_bytes: int | None = None,
 ) -> None:
     """Capture the run's target with a headless-Chromium CDP session and seed its
     executed scripts as fetched assets. Called from ``discover_run`` when
@@ -103,6 +104,10 @@ def capture_run(
             emit_event=False,
         )
 
+    # Per-run fetch-cap override (edit-&-re-run) passed down from discover_run (which
+    # already loaded the run), clamped to the ceiling; bounds each captured script's
+    # stored size just as it bounds a static fetch (REQ-Q5).
+    cap = clamp_fetch_bytes(max_fetch_bytes, settings)
     try:
         result = driver.capture_scripts(
             seed,
@@ -112,7 +117,7 @@ def capture_run(
             session_budget_s=settings.crawl_duration_seconds + settings.crawl_kill_grace_seconds,
             heartbeat_interval_s=settings.crawl_heartbeat_interval_seconds,
             max_scripts=settings.capture_max_scripts,
-            max_script_bytes=settings.max_fetch_bytes,
+            max_script_bytes=cap,
             interact=settings.capture_interact,
             max_scroll_steps=settings.capture_max_scroll_steps,
             max_clicks=settings.capture_max_clicks,
@@ -152,6 +157,7 @@ def capture_run(
             tenant_id=tenant_id,
             run_id=run_id,
             settings=settings,
+            max_bytes=cap,
             on_progress=on_progress,
         )
 
@@ -271,6 +277,7 @@ def _augment_with_source_maps(
     tenant_id: str,
     run_id: str,
     settings: Settings,
+    max_bytes: int,
     on_progress: Callable[[int], None],
 ) -> tuple[int, int]:
     """Fetch each captured script's EXTERNAL source map and link it on the matching row.
@@ -300,6 +307,7 @@ def _augment_with_source_maps(
             tenant_id=tenant_id,
             run_id=run_id,
             settings=settings,
+            max_bytes=max_bytes,
             on_progress=on_progress,
         )
         if ref is not None:
@@ -318,6 +326,7 @@ def _fetch_captured_source_map(
     tenant_id: str,
     run_id: str,
     settings: Settings,
+    max_bytes: int,
     on_progress: Callable[[int], None],
 ) -> str | None:
     """Guarded-fetch one captured script's external ``.map`` and store it, returning the
@@ -343,7 +352,7 @@ def _fetch_captured_source_map(
             map_url,
             scope_hosts,
             timeout_s=settings.fetch_timeout_seconds,
-            max_bytes=settings.max_fetch_bytes,
+            max_bytes=max_bytes,
             allow_local=settings.allow_local_egress,
         )
         return storage.put_blob(tenant_id, run_id, "source_map", map_bytes)

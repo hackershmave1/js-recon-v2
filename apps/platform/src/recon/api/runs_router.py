@@ -19,7 +19,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from redis import Redis
 
 from recon.api.deps import get_redis, get_tenant_id
@@ -45,6 +45,20 @@ class StartRunBody(BaseModel):
     # to capture EXECUTED scripts instead of the static katana crawl. Requires a
     # target (the URL to open) and RECON_ENABLE_CAPTURE_MODE. See recon.capture.
     capture: bool = False
+
+
+class RerunBody(BaseModel):
+    """Edit-&-re-run overrides. Every field is OPTIONAL: a field absent from
+    ``model_fields_set`` is INHERITED from the source run; a present field overrides it.
+    ``capture`` resolves to crawl_mode. ``authorized_by`` is required only when the edit
+    changes scope (the coordinator forks a session that re-attests it, MF1).
+    ``max_fetch_bytes`` is floored > 0 — a non-positive cap would fail open (REQ-Q5)."""
+
+    target: str | None = None
+    capture: bool | None = None
+    scope_hosts: list[str] | None = None
+    authorized_by: str | None = None
+    max_fetch_bytes: int | None = Field(default=None, gt=0)
 
 
 @router.post("/runs", status_code=202)
@@ -142,6 +156,79 @@ def start_run_from_upload(
         target=target,
     )
     return {"run_id": view.id, "state": view.state}
+
+
+@router.post("/runs/{run_id}/rerun", status_code=202)
+def edit_and_rerun_run(
+    run_id: str,
+    body: RerunBody,
+    tenant_id: str = Depends(get_tenant_id),
+    redis: Redis = Depends(get_redis),
+) -> dict:
+    """Edit a SPECIFIC run's config and launch a NEW run inheriting it (never mutates
+    the source — runs are immutable). Only fields the client actually sent override the
+    source; the rest are inherited. A scope change forks a fresh session and REQUIRES a
+    new ``authorized_by`` (the operator re-attests the possibly-widened scope, MF1)."""
+    fields = body.model_fields_set
+    ceiling = get_settings().max_fetch_bytes_ceiling
+    if body.max_fetch_bytes is not None and body.max_fetch_bytes > ceiling:
+        # Reject above the ceiling with a clean 422 rather than persist a value that is
+        # clamped at read time anyway AND can overflow the column (a huge MiB entry).
+        raise HTTPException(
+            status_code=422, detail=f"fetch cap may not exceed {ceiling // (1024 * 1024)} MiB"
+        )
+    edits: dict[str, object] = {}
+    if "target" in fields:
+        edits["target"] = body.target
+    if "capture" in fields:
+        edits["capture"] = body.capture
+    if "scope_hosts" in fields:
+        edits["scope_hosts"] = body.scope_hosts
+    if "max_fetch_bytes" in fields:
+        edits["max_fetch_bytes"] = body.max_fetch_bytes
+    try:
+        view = coordinator.edit_and_rerun(
+            redis,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            authorized_by=body.authorized_by,
+            **edits,
+        )
+    except service.RunNotFound as exc:
+        raise HTTPException(status_code=404, detail="run not found") from exc
+    except sessions_service.AuthorizationRequired as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="a fresh authorization acknowledgment is required to change scope",
+        ) from exc
+    except sessions_service.SessionInvalid as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except coordinator.CaptureModeUnavailable as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except coordinator.NoRunToRerun as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"run_id": view.id, "state": view.state}
+
+
+@router.get("/runs/{run_id}/config")
+def get_run_config(
+    run_id: str,
+    tenant_id: str = Depends(get_tenant_id),
+) -> dict:
+    """The source run's editable config, for the edit-&-re-run prefill. RLS-confined —
+    a run not visible to the tenant is a 404 (MF2/MF4). ``is_upload`` lets the UI keep
+    the target editable but disable the capture toggle + fetch cap for an upload (MF7)."""
+    cfg = queries.get_run_config(tenant_id, run_id)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return {
+        "run_id": cfg.run_id,
+        "target": cfg.target,
+        "crawl_mode": cfg.crawl_mode,
+        "scope_hosts": cfg.scope_hosts,
+        "max_fetch_bytes": cfg.max_fetch_bytes,
+        "is_upload": cfg.is_upload,
+    }
 
 
 def _read_capped(upload: UploadFile, cap: int) -> bytes:

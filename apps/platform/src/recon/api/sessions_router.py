@@ -119,6 +119,10 @@ def rerun_session(
         view = coordinator.rerun(redis, tenant_id=tenant_id, session_id=session_id)
     except coordinator.NoRunToRerun as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except coordinator.CaptureModeUnavailable as exc:
+        # A capture session re-run when the kill-switch is now off: a clean 400, not a
+        # silent static downgrade (the old crawl_mode-drop bug) or a worker DLQ.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"run_id": view.id, "state": view.state}
 
 

@@ -38,7 +38,7 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
     if queries.latest_assets_event(tenant_id, run_id) is not None:
         return  # already discovered (stage retry / redelivery)
 
-    target, session_id, input_ref, crawl_mode = _load_target(tenant_id, run_id)
+    target, session_id, input_ref, crawl_mode, max_fetch_bytes = _load_target(tenant_id, run_id)
     # An upload run carries a `target` only as a base-URL hint (REQ-C2), never as a
     # crawl seed — analyze reads the uploaded blob, so we must not crawl it.
     if input_ref is not None:
@@ -58,6 +58,7 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
             job_id=job_id,
             target=target,
             session_id=session_id,
+            max_fetch_bytes=max_fetch_bytes,
         )
         return
 
@@ -146,12 +147,18 @@ def _revalidate(urls: list[str], scope_hosts: list[str], *, allow_local: bool = 
 
 def _load_target(
     tenant_id: str, run_id: str
-) -> tuple[str | None, str | None, str | None, str | None]:
+) -> tuple[str | None, str | None, str | None, str | None, int | None]:
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
         if run is None:
-            return None, None, None, None
-        return run.target, str(run.session_id), run.input_ref, run.crawl_mode
+            return None, None, None, None, None
+        return (
+            run.target,
+            str(run.session_id),
+            run.input_ref,
+            run.crawl_mode,
+            run.max_fetch_bytes,
+        )
 
 
 def _is_bare_domain(target: str) -> bool:

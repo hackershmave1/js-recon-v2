@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     # Largest JS upload the API will store per run. Bounds worker memory (REQ-Q5),
     # since the analyze stage reads the whole blob into memory. This is an
     # application cap, not an ingress body limit — see runs_router upload NOTE.
+    # NOTE: once a run can override its fetch cap (edit-&-re-run), analyze memory is
+    # bounded by max(max_upload_bytes, max_fetch_bytes_ceiling) — keep both in view.
     max_upload_bytes: int = 10 * 1024 * 1024  # 10 MiB
 
     # Out-of-process engines (e.g. Kingfisher). `kingfisher_bin` is the CLI name
@@ -49,7 +51,16 @@ class Settings(BaseSettings):
     # blocking fetch does not heartbeat, so a longer fetch than the stall window
     # would let a peer worker reclaim the job and fetch twice.
     fetch_timeout_seconds: float = 20.0
+    # Default per-fetch decoded-byte cap. Bounds worker memory (REQ-Q5 — analyze reads
+    # the whole blob). A run MAY raise this via run.max_fetch_bytes (edit-&-re-run), but
+    # only UP TO max_fetch_bytes_ceiling; clamp_fetch_bytes() enforces min(override-or-
+    # default, ceiling) and fails closed on a non-positive override.
     max_fetch_bytes: int = 10 * 1024 * 1024  # 10 MiB — matches the upload cap
+    # Hard ceiling on a per-run max_fetch_bytes override — the REAL analyze-memory bound.
+    # Defaulted to the engine output cap (engine_max_output_bytes, 32 MiB): fetching more
+    # than an engine can process buys nothing, and it is the size the analyze path is sized
+    # to survive. Raise deliberately, with worker RAM in mind. Env RECON_MAX_FETCH_BYTES_CEILING.
+    max_fetch_bytes_ceiling: int = 32 * 1024 * 1024  # 32 MiB == engine_max_output_bytes
 
     # SSRF guard override — DEFAULT OFF (REQ-CE3). When true, the egress guard also
     # permits loopback + private-range targets and single-label hosts (localhost) so
@@ -142,3 +153,18 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def clamp_fetch_bytes(run_cap: int | None, settings: Settings) -> int:
+    """Effective per-fetch byte cap for a run: the run's override when it is a
+    positive int, else the global default — then hard-clamped to the ceiling.
+
+    Fails CLOSED (REQ-Q5): a None / 0 / negative override falls back to the global
+    default (a negative is truthy in Python, so ``run_cap or default`` alone would
+    leak a negative straight through as an effectively-unbounded cap), and the
+    ceiling bounds analyze memory no matter how ``run.max_fetch_bytes`` was set
+    (edit-&-re-run, a future endpoint, or a direct DB write) — mirroring the egress
+    guard's "fail-closed regardless of how scope_hosts was populated" posture.
+    """
+    base = run_cap if (run_cap is not None and run_cap > 0) else settings.max_fetch_bytes
+    return min(base, settings.max_fetch_bytes_ceiling)

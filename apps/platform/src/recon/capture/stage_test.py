@@ -28,6 +28,7 @@ def _settings(enabled=True):
         crawl_fetch_source_maps=True,
         fetch_timeout_seconds=20.0,
         max_fetch_bytes=10 * 1024 * 1024,
+        max_fetch_bytes_ceiling=32 * 1024 * 1024,
         allow_local_egress=False,
     )
 

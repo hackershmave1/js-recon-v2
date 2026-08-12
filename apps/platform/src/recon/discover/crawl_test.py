@@ -40,7 +40,10 @@ def _patches(katana_urls, validated, engagement, existing=None):
         # Mock the DB seam so these stay pure units (record_event is patched too).
         patch("recon.discover.crawl.tenant_session"),
         patch("recon.discover.crawl.queries.latest_assets_event", return_value=existing),
-        patch("recon.discover.crawl._load_target", return_value=("acme.io", "sess-1", None, None)),
+        patch(
+            "recon.discover.crawl._load_target",
+            return_value=("acme.io", "sess-1", None, None, None),
+        ),
         patch("recon.discover.crawl.sessions_service.get_session", return_value=engagement),
         patch(
             "recon.discover.crawl.harness.run_crawl",
@@ -93,7 +96,10 @@ def test_discover_run_rejects_unauthorized_session():
     engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=False)
     with (
         patch("recon.discover.crawl.queries.latest_assets_event", return_value=None),
-        patch("recon.discover.crawl._load_target", return_value=("acme.io", "sess-1", None, None)),
+        patch(
+            "recon.discover.crawl._load_target",
+            return_value=("acme.io", "sess-1", None, None, None),
+        ),
         patch("recon.discover.crawl.sessions_service.get_session", return_value=engagement),
         pytest.raises(retry.FatalError),
     ):
@@ -107,7 +113,7 @@ def test_discover_run_skips_upload_run_with_a_base_url_target():
         patch("recon.discover.crawl.queries.latest_assets_event", return_value=None),
         patch(
             "recon.discover.crawl._load_target",
-            return_value=("acme.io", "sess-1", "t/r/input/deadbeef", None),
+            return_value=("acme.io", "sess-1", "t/r/input/deadbeef", None, None),
         ),
         patch("recon.discover.crawl.sessions_service.get_session") as get_session,
         patch("recon.discover.crawl.egress.validate_target") as validate_target,
@@ -125,7 +131,7 @@ def test_discover_run_skips_target_with_path():
         patch("recon.discover.crawl.queries.latest_assets_event", return_value=None),
         patch(
             "recon.discover.crawl._load_target",
-            return_value=("https://acme.io/app.js", "sess-1", None, None),
+            return_value=("https://acme.io/app.js", "sess-1", None, None, None),
         ),
         patch("recon.discover.crawl.sessions_service.get_session"),
         patch("recon.discover.crawl.harness.run_crawl") as run_crawl,
@@ -164,7 +170,7 @@ def test_discover_run_routes_capture_mode_to_capture_run():
         patch("recon.discover.crawl.queries.latest_assets_event", return_value=None),
         patch(
             "recon.discover.crawl._load_target",
-            return_value=("https://acme.io/app", "sess-1", None, "capture"),
+            return_value=("https://acme.io/app", "sess-1", None, "capture", None),
         ),
         patch("recon.discover.crawl.capture_stage.capture_run") as capture_run,
         patch("recon.discover.crawl.harness.run_crawl") as run_crawl,
@@ -181,7 +187,10 @@ def test_discover_run_rejects_seed_that_fails_egress_guard():
     engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
     with (
         patch("recon.discover.crawl.queries.latest_assets_event", return_value=None),
-        patch("recon.discover.crawl._load_target", return_value=("acme.io", "sess-1", None, None)),
+        patch(
+            "recon.discover.crawl._load_target",
+            return_value=("acme.io", "sess-1", None, None, None),
+        ),
         patch("recon.discover.crawl.sessions_service.get_session", return_value=engagement),
         patch("recon.discover.crawl.harness.run_crawl") as run_crawl,
         patch(
@@ -206,7 +215,10 @@ def test_discover_run_builds_a_schemed_seed_url_for_the_guard(monkeypatch):
     with (
         patch("recon.discover.crawl.tenant_session"),
         patch("recon.discover.crawl.queries.latest_assets_event", return_value=None),
-        patch("recon.discover.crawl._load_target", return_value=("acme.io", "sess-1", None, None)),
+        patch(
+            "recon.discover.crawl._load_target",
+            return_value=("acme.io", "sess-1", None, None, None),
+        ),
         patch("recon.discover.crawl.sessions_service.get_session", return_value=engagement),
         patch(
             "recon.discover.crawl.harness.run_crawl",
