@@ -70,6 +70,22 @@
 .rp-fetch { margin-top:10px; font-size:11.5px; color:var(--muted); }
 .rp-fetch-fail { color:var(--warn); }
 
+/* Slice 2: live "receiving from extension" banner — shown while a capture run is
+   still QUEUED (accumulating batches), updated live from capture.received SSE events. */
+.rp-capture {
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:12px;
+  font-size:12px; color:var(--accent);
+  background:var(--accent-soft); border:1px solid var(--accent-line);
+  padding:8px 12px; border-radius:8px;
+}
+.rp-capture-dot {
+  width:8px; height:8px; border-radius:var(--r-pill); background:var(--accent);
+  animation:rp-blink 1.4s ease-in-out infinite; flex:none;
+}
+.rp-capture-count { color:var(--text-2); font-weight:500; }
+.rp-capture-count::before, .rp-capture-host::before { content:"·"; margin-right:8px; color:var(--faint); }
+.rp-capture-host { color:var(--muted); font-family:var(--font-mono); }
+
 /* activity log drawer */
 .rp-log { margin-top:14px; border-top:1px solid var(--border); padding-top:10px; }
 .rp-log-summary { cursor:pointer; list-style:none; display:flex; align-items:center; gap:8px; font-size:12px; color:var(--dim); user-select:none; }
@@ -86,6 +102,7 @@
 @keyframes rp-slide { 0%{transform:translateX(-110%);} 100%{transform:translateX(320%);} }
 
 @media (prefers-reduced-motion: reduce) {
-  .rp-state::before, .rp-step.is-active .rp-step-dot, .rp-bar-fill.is-indeterminate { animation:none; }
+  .rp-state::before, .rp-step.is-active .rp-step-dot, .rp-bar-fill.is-indeterminate,
+  .rp-capture-dot { animation:none; }
   .rp-bar-fill.is-indeterminate { width:100%; opacity:.5; }
 }

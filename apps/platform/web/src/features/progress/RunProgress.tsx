@@ -37,7 +37,7 @@ function summarizeFetch(m: AssetsManifest | null): FetchSummary | null {
 export function RunProgress() {
   const {
     runId, state, stage, pct, done, total, eta, error, assets, events,
-    pauseRequested, cancelRequested, handleControlResult,
+    pauseRequested, cancelRequested, captureStatus, handleControlResult,
   } = useRunData();
   const fetchSummary = summarizeFetch(assets);
   const [showRerun, setShowRerun] = useState(false);
@@ -71,6 +71,23 @@ export function RunProgress() {
           )}
         </div>
       </div>
+
+      {/* A capture run sits QUEUED while /save-files accumulates batches; show the live
+          "receiving" banner during that window — gated on the CONFIRMED "queued" snapshot
+          (not the pre-snapshot "…") so reloading an already-advanced run can't flash it.
+          It clears once the run advances (analyze/start → the worker's discovering
+          transition). Only lights up for captures re-homed into the operator tenant
+          (paired) — the per-run SSE stream is tenant-gated. */}
+      {captureStatus && state === "queued" && (
+        <p className="rp-capture" role="status" aria-live="polite">
+          <span className="rp-capture-dot" aria-hidden="true" />
+          <span className="rp-capture-text">Receiving from extension</span>
+          <span className="rp-capture-count">
+            {captureStatus.total} file{captureStatus.total === 1 ? "" : "s"}
+          </span>
+          {captureStatus.lastHost && <span className="rp-capture-host">{captureStatus.lastHost}</span>}
+        </p>
+      )}
 
       {state !== "…" && (
         <RunPipeline state={state} stage={stage} pct={pct} done={done} total={total} etaSeconds={eta} />
