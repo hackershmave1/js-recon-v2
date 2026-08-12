@@ -15,7 +15,7 @@ const NOISE = new Set(['lib', 'cms', 'tracker']);
 const FALLBACK_SETTINGS = {
   includeSubdomains: true, muteNoise: true, outOfScopeMode: 'tag', maxAssetMb: 8,
   denyDefaultProfile: true, performAnalysisOnUpload: false, captureAuthContext: true,
-  workspaceUrl: '', domainScopes: [], useDomainScope: false, captureEverything: false,
+  workspaceUrl: '', pairingToken: '', domainScopes: [], useDomainScope: false, captureEverything: false,
   denyRules: [
     { tag: 'CMS', pattern: '/wp-content/plugins/*' },
     { tag: 'CMS', pattern: '/wp-includes/*' },
@@ -357,6 +357,12 @@ export function App() {
     wsUrl: settings.workspaceUrl || '',
     setWsUrl: (v) => patchSettings({ workspaceUrl: v }),
     testConnection,
+    // Operator pairing: the token routes captures into the operator's own tenant. `paired`
+    // is the last save-files ack (via the uploader stats) so the UI can confirm a token
+    // worked instead of failing silently on a typo/expiry; undefined until the first upload.
+    pairingToken: settings.pairingToken || '',
+    setPairingToken: (v) => patchSettings({ pairingToken: v }),
+    paired: status?.uploader?.paired,
     defScope: (settings.domainScopes || []).join(', '),
     setDefScope,
     includeSubdomains: settings.includeSubdomains !== false,

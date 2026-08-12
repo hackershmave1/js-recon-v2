@@ -37,6 +37,25 @@ function Label({ children, mb = 5 }) {
   return <label style={{ display: 'block', fontSize: '10px', color: C.dim, marginBottom: `${mb}px` }}>{children}</label>;
 }
 
+// Pairing feedback: a bad/expired token fails CLOSED to the shared tenant, which is
+// otherwise silent (the workspace live-indicator only shows when already paired). Reflect
+// the last save-files `paired` ack so a typo is visible. `paired` is undefined until the
+// first upload under the current token.
+function PairedHint({ token, paired }) {
+  const has = !!(token || '').trim();
+  let color = C.faint;
+  let text = 'No token · captures go to the shared tenant';
+  if (has && paired === true) { color = C.lime; text = 'Paired · captures route to your tenant'; }
+  else if (has && paired === false) { color = C.pink; text = 'Token not accepted · using shared tenant'; }
+  else if (has) { text = 'Token set · verifies on next capture'; }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '8px', fontSize: '10.5px', color }}>
+      <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: color, flex: '0 0 auto' }} />
+      {text}
+    </div>
+  );
+}
+
 const CONN = {
   ok: { label: 'Connected', color: C.lime, pulse: true },
   testing: { label: 'Testing…', color: C.amber, pulse: false },
@@ -85,6 +104,12 @@ export function SettingsView({ vm }) {
             </span>
             {vm.connState === 'testing' ? 'Testing…' : 'Test connection'}
           </button>
+          <div style={{ borderTop: `1px solid ${C.line}`, margin: '14px 0 12px' }} />
+          <Label>Pairing token <span style={{ color: C.faint }}>(routes captures to your tenant)</span></Label>
+          <input value={vm.pairingToken} onInput={(e) => vm.setPairingToken(e.target.value)}
+                 placeholder="paste code from your workspace" spellcheck={false} autocomplete="off"
+                 style={inputStyle} />
+          <PairedHint token={vm.pairingToken} paired={vm.paired} />
         </Card>
 
         {/* CAPTURE RULES */}
