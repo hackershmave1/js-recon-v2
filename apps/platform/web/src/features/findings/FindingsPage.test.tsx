@@ -72,4 +72,39 @@ describe("FindingsPage", () => {
     view();
     expect(screen.getByText(/API spec/i)).toBeInTheDocument(); // SpecUpload mounted in the tuning block
   });
+
+  // Slice 4: cross-run sightings badge + the ungrouped tri-state hint.
+  const withFindings = (findings: Finding[]) =>
+    render(
+      <TenantProvider>
+        <FindingsPage data={{ ...data, findings }} runId="r" onJumpToSource={() => {}} />
+      </TenantProvider>,
+    );
+
+  it("renders a sightings badge with per-origin counts, dropping zero buckets", () => {
+    withFindings([
+      f({ finding_hash: "x", value: "GET /shared", sightings: { capture: 2, platform: 1 } }),
+      f({ finding_hash: "y", value: "GET /caponly", sightings: { capture: 3, platform: 0 } }),
+    ]);
+    expect(screen.getByText("also seen: 2 capture · 1 platform")).toBeInTheDocument();
+    expect(screen.getByText("also seen: 3 capture")).toBeInTheDocument();
+  });
+
+  it("shows no sightings badge for a finding unique to the run (all-zero)", () => {
+    withFindings([f({ finding_hash: "x", value: "GET /solo", sightings: { capture: 0, platform: 0 } })]);
+    expect(screen.queryByText(/also seen/)).toBeNull();
+  });
+
+  it("shows the ungrouped hint when every finding's sightings is null (no engagement)", () => {
+    withFindings([
+      f({ finding_hash: "x", value: "GET /a", sightings: null }),
+      f({ finding_hash: "y", value: "GET /b", sightings: null }),
+    ]);
+    expect(screen.getByText(/group its session under an engagement/i)).toBeInTheDocument();
+  });
+
+  it("hides the ungrouped hint once the run is grouped (sightings present)", () => {
+    withFindings([f({ finding_hash: "x", value: "GET /a", sightings: { capture: 0, platform: 0 } })]);
+    expect(screen.queryByText(/group its session under an engagement/i)).toBeNull();
+  });
 });

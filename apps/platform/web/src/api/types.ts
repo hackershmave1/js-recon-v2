@@ -33,10 +33,17 @@ export interface SpecStatus {
   reason: string | null;
   matched_operation: string | null;
 }
+// Slice 4: cross-run "sightings" of a finding within its engagement -- counts of
+// OTHER runs sharing this finding_hash, by origin (capture = browser extension,
+// platform = crawl/upload). Finding.sightings === null means "ungrouped" (the run's
+// session has no engagement, so no cross-run collapse) -- distinct from {0,0}
+// (grouped, but unique to this run). Optional: absent on pre-slice-4 fixtures.
+export interface Sightings { capture: number; platform: number; }
 export interface Finding {
   finding_hash: string; type: string; value: string | null; path: string | null;
   severity: string | null; attributes: Record<string, unknown>; first_stage: string | null;
-  revealable: boolean; triage: Triage | null; spec_status: SpecStatus | null; occurrences: Occurrence[];
+  revealable: boolean; triage: Triage | null; spec_status: SpecStatus | null;
+  sightings?: Sightings | null; occurrences: Occurrence[];
 }
 export interface Coverage {
   attributed: number; unattributed: number; secrets: number; secrets_engine: string | null;
