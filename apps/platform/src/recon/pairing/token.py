@@ -49,10 +49,13 @@ def mint(tenant_id: str, *, key: str, ttl_seconds: int, now: float | None = None
 def verify(token: str, *, key: str, now: float | None = None) -> str | None:
     """Return the granted tenant id for a valid, unexpired token, else ``None``.
 
-    Fails closed on an empty token/key, a wrong shape, a bad signature, a malformed
-    payload, or expiry. Never raises on attacker-controlled input.
+    Fails closed on an empty/non-ASCII token, an empty key, a wrong shape, a bad
+    signature, a malformed payload, or expiry. Never raises on attacker input.
     """
-    if not token or not key:
+    if not token or not key or not token.isascii():
+        # A real token is base64url (ASCII). A non-ASCII token can't be valid, and the
+        # ASCII-only HMAC compare below would RAISE on one (Starlette decodes the
+        # Authorization header as latin-1, so bytes 0x80-0xFF arrive as non-ASCII str).
         return None
     parts = token.split(".")
     if len(parts) != 2:

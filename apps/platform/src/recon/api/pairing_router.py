@@ -38,5 +38,6 @@ def mint_pairing(tenant_id: str = Depends(get_tenant_id)) -> dict:
         if session.scalar(select(Tenant.id).where(Tenant.id == tenant_id)) is None:
             raise HTTPException(status_code=404, detail="unknown tenant")
     ttl = settings.pairing_ttl_seconds
-    token = pairing_token.mint(tenant_id, key=settings.pairing_key, ttl_seconds=ttl)
-    return {"token": token, "ttlSeconds": ttl, "expiresAt": int(time.time()) + ttl}
+    now = time.time()  # one clock read for both the token's exp and the advertised expiresAt
+    token = pairing_token.mint(tenant_id, key=settings.pairing_key, ttl_seconds=ttl, now=now)
+    return {"token": token, "ttlSeconds": ttl, "expiresAt": int(now) + ttl}

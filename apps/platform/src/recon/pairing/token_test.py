@@ -42,7 +42,12 @@ def test_verify_rejects_a_tampered_signature() -> None:
     assert pairing_token.verify(f"{payload_b64}.{forged_sig}", key=_KEY, now=1000.0) is None
 
 
-@pytest.mark.parametrize("bad", ["", "notatoken", "a.b.c", "onlyonepart", ".", "a."])
+@pytest.mark.parametrize(
+    "bad",
+    # incl. non-ASCII (café./.☺): Starlette decodes the Authorization header latin-1, so
+    # 0x80-0xFF reach verify — these must return None, not raise (the ASCII HMAC compare).
+    ["", "notatoken", "a.b.c", "onlyonepart", ".", "a.", "café.sig", "a.☺"],
+)
 def test_verify_fails_closed_on_garbage(bad: str) -> None:
     assert pairing_token.verify(bad, key=_KEY, now=1000.0) is None
 
