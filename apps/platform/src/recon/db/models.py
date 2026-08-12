@@ -211,6 +211,10 @@ class Run(Base):
     # routes DISCOVER to the in-process CDP browser capture (executed-script capture).
     # Additive + nullable — existing rows read as static. Added in migration 0012.
     crawl_mode: Mapped[str | None] = mapped_column(Text)
+    # Optional per-run override of the default max_fetch_bytes cap (edit-&-re-run),
+    # clamped to max_fetch_bytes_ceiling by config.clamp_fetch_bytes() at read time.
+    # NULL = use the global default. Bounds analyze memory (REQ-Q5). Migration 0013.
+    max_fetch_bytes: Mapped[int | None] = mapped_column(Integer)
     # Capture-ingest open-accumulator marker (see __table_args__). Added in 0011.
     capture_external_id: Mapped[str | None] = mapped_column(Text)
     error: Mapped[dict | None] = mapped_column(JSONB)

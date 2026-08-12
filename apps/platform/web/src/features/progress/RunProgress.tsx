@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { TERMINAL_STATES, type AssetsManifest } from "../../api/types";
 import { useRunData } from "./runData";
 import { RunControls } from "./RunControls";
 import { RunPipeline } from "./RunPipeline";
+import { EditRerunPanel } from "../newRun/EditRerunPanel";
 
 interface FetchSummary { total: number; fetched: number; failed: number; pending: number; reason: string | null; }
 
@@ -38,8 +40,10 @@ export function RunProgress() {
     pauseRequested, cancelRequested, handleControlResult,
   } = useRunData();
   const fetchSummary = summarizeFetch(assets);
+  const [showRerun, setShowRerun] = useState(false);
 
   return (
+    <>
     <div className="card">
       <div className="rp-head">
         <h2 className="rp-title">Run <span className="rp-id" title={runId}>{runId.slice(0, 8)}</span></h2>
@@ -59,6 +63,11 @@ export function RunProgress() {
               cancelRequested={cancelRequested}
               onControlResult={handleControlResult}
             />
+          )}
+          {TERMINAL_STATES.has(state) && (
+            <button type="button" className="rp-rerun" onClick={() => setShowRerun((s) => !s)}>
+              {showRerun ? "Close" : "Edit & re-run"}
+            </button>
           )}
         </div>
       </div>
@@ -92,5 +101,7 @@ export function RunProgress() {
         </details>
       )}
     </div>
+    {showRerun && <EditRerunPanel runId={runId} onCancel={() => setShowRerun(false)} />}
+    </>
   );
 }

@@ -33,7 +33,7 @@ from redis import Redis
 from sqlalchemy import update
 
 from recon import storage
-from recon.config import Settings, get_settings
+from recon.config import Settings, clamp_fetch_bytes, get_settings
 from recon.db.base import tenant_session
 from recon.db.models import Run
 from recon.domain import AssetStatus
@@ -193,6 +193,7 @@ def fetch_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None =
         target = run.target if run is not None else None
         input_ref = run.input_ref if run is not None else None
         session_id = str(run.session_id) if run is not None else None
+        max_fetch = run.max_fetch_bytes if run is not None else None
     # Nothing to do if already fetched (idempotent), or the target isn't a
     # fetchable http(s) URL — `target` may be a bare scope label (e.g. "acme.io"),
     # which is not something to fetch.
@@ -223,7 +224,7 @@ def fetch_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None =
             target,
             engagement.scope_hosts,
             timeout_s=settings.fetch_timeout_seconds,
-            max_bytes=settings.max_fetch_bytes,
+            max_bytes=clamp_fetch_bytes(max_fetch, settings),
             allow_local=settings.allow_local_egress,
         )
     except egress.EgressBlocked as exc:
@@ -324,8 +325,9 @@ def _fetch_assets(
     "overall fetch deadline exceeded") would go unheartbeated long enough for a
     peer worker to reclaim the stream message and double-fetch the remaining
     assets — exactly what the politeness gate exists to prevent."""
-    engagement = _authorized_engagement(tenant_id, run_id)
+    engagement, run_cap = _authorized_engagement(tenant_id, run_id)
     settings = get_settings()
+    cap = clamp_fetch_bytes(run_cap, settings)
     total = len(rows)
     terminal = (AssetStatus.OK.value, AssetStatus.FAILED.value)
     for i, asset in enumerate(rows, 1):
@@ -347,7 +349,7 @@ def _fetch_assets(
                 asset.url,
                 engagement.scope_hosts,
                 timeout_s=settings.fetch_timeout_seconds,
-                max_bytes=settings.max_fetch_bytes,
+                max_bytes=cap,
                 allow_local=settings.allow_local_egress,
             )
         except (egress.EgressBlocked, retry.FatalError, retry.RetryableError) as exc:
@@ -383,6 +385,7 @@ def _fetch_assets(
                 done=i,
                 total=total,
                 settings=settings,
+                max_bytes=cap,
             )
             if settings.crawl_fetch_source_maps
             else None
@@ -412,6 +415,7 @@ def _fetch_and_store_source_map(
     done: int,
     total: int,
     settings: Settings,
+    max_bytes: int,
 ) -> str | None:
     """Best-effort: if ``js`` references an external ``//# sourceMappingURL=``, fetch
     that ``.map`` THROUGH THE EGRESS GUARD and store it, returning the blob key (or
@@ -443,7 +447,7 @@ def _fetch_and_store_source_map(
             map_url,
             scope_hosts,
             timeout_s=settings.fetch_timeout_seconds,
-            max_bytes=settings.max_fetch_bytes,
+            max_bytes=max_bytes,
             allow_local=settings.allow_local_egress,
         )
         return storage.put_blob(tenant_id, run_id, "source_map", map_bytes)
@@ -452,11 +456,16 @@ def _fetch_and_store_source_map(
         return None
 
 
-def _authorized_engagement(tenant_id: str, run_id: str) -> sessions_service.SessionView:
+def _authorized_engagement(
+    tenant_id: str, run_id: str
+) -> tuple[sessions_service.SessionView, int | None]:
+    """The run's authorized engagement (REQ-P3) AND its per-run fetch-cap override
+    (``run.max_fetch_bytes``; None = the global default), read in one pass."""
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
         session_id = str(run.session_id) if run is not None else None
+        run_cap = run.max_fetch_bytes if run is not None else None
     engagement = sessions_service.get_session(tenant_id, session_id)
     if engagement is None or not engagement.authorization_ack:
         raise retry.FatalError("session is not authorized for egress")
-    return engagement
+    return engagement, run_cap

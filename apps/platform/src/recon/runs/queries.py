@@ -14,7 +14,7 @@ from sqlalchemy import desc, select
 
 from recon.config import get_settings
 from recon.db.base import tenant_session
-from recon.db.models import Job, Run
+from recon.db.models import EngagementSession, Job, Run
 from recon.domain import ACTIVE_STATES, RunState
 from recon.progress.heartbeat import is_stalled
 from recon.queue import retry
@@ -130,3 +130,51 @@ def get_status(tenant_id: str, run_id: str, *, now: dt.datetime | None = None) -
         cancel_requested=cancel_requested,
         etag=etag,
     )
+
+
+@dataclass(frozen=True)
+class RunConfigView:
+    """A run's editable config plus its session's scope/engagement — the source for
+    the edit-&-re-run prefill (MF2) and the run-keyed clone. Read under RLS: a None
+    result is the tenant-visibility gate that closes the cross-tenant IDOR (MF4)."""
+
+    run_id: str
+    session_id: str
+    target: str | None
+    crawl_mode: str | None
+    input_ref: str | None
+    source_map_ref: str | None
+    max_fetch_bytes: int | None
+    scope_hosts: list[str]
+    engagement_id: str | None
+    session_name: str | None
+
+    @property
+    def is_upload(self) -> bool:
+        """An upload run carries stored bytes; a crawl run does not. Uploads disable
+        the capture/cap edits and re-run by copying the blob, not re-fetching (MF7)."""
+        return self.input_ref is not None
+
+
+def get_run_config(tenant_id: str, run_id: str) -> RunConfigView | None:
+    """The run's full editable config + its session's scope/engagement/name, for the
+    edit-&-re-run prefill and clone. RLS-confined — None when the run is not visible
+    to the tenant (the HTTP layer maps that to 404), the source-run visibility gate
+    that closes the cross-tenant IDOR (MF4)."""
+    with tenant_session(tenant_id) as session:
+        run = session.get(Run, run_id)
+        if run is None:
+            return None
+        sess = session.get(EngagementSession, str(run.session_id))
+        return RunConfigView(
+            run_id=str(run.id),
+            session_id=str(run.session_id),
+            target=run.target,
+            crawl_mode=run.crawl_mode,
+            input_ref=run.input_ref,
+            source_map_ref=run.source_map_ref,
+            max_fetch_bytes=run.max_fetch_bytes,
+            scope_hosts=list(sess.scope_hosts) if sess else [],
+            engagement_id=str(sess.engagement_id) if sess and sess.engagement_id else None,
+            session_name=sess.name if sess else None,
+        )

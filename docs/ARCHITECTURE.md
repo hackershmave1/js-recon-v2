@@ -37,6 +37,30 @@ backoff-retry and a per-queue dead-letter stream (`queue/streams.py`). A run is 
 machine (`queued→discovering→fetching→ingesting→analyzing→correlating→done`, plus `paused`/
 `cancelled`) advanced by the worker at cancel/pause-checkpointed stages (`worker/main.py`).
 
+**Immutable runs + edit-&-re-run.** A run is an immutable snapshot of its config, so re-running
+never mutates it: `POST /runs/{id}/rerun` clones a specific run's config into a *new* run and
+applies the operator's edits, leaving the source untouched (`runs/coordinator.py::edit_and_rerun`).
+The editable fields are target, crawl mode (the capture toggle), scope hosts, and the per-run fetch
+cap; any field the caller omits is inherited from the source, so the UI prefills from
+`GET /runs/{id}/config` (RLS-confined — a run the tenant can't see is a 404, which is also the
+cross-tenant IDOR gate). A re-run reuses the source's session **unless** the scope value actually
+changed or the edited target falls outside it, in which case it forks a fresh session that requires
+a new `authorized_by`: a widened scope is re-attested by the operator, never carried over from the
+source's ack (REQ-P2/P3). An upload source instead re-analyzes a fresh copy of the stored bytes (its
+target is only a REQ-C2 base-URL hint). The legacy `POST /sessions/{id}/rerun` (whole-session
+re-run) now delegates through the same clone path, so a capture re-run keeps its `crawl_mode`
+instead of silently reverting to a static crawl.
+
+**Per-run fetch cap.** Each run carries an optional `max_fetch_bytes` (migration `0013`);
+`config.clamp_fetch_bytes` resolves the effective per-asset cap and fails *closed* — a `None`, `0`,
+or negative override falls back to the global default (10 MiB), and the result is hard-clamped to
+`max_fetch_bytes_ceiling` (32 MiB, the engine output cap and the real analyze-memory bound). The cap
+threads through every fetch site (the static crawl's asset and source-map fetches, plus the capture
+stage's per-script cap), and an override above the ceiling is rejected with a 422 rather than
+persisted. This is the principled knob for an oversized bundle: re-run with a larger cap (up to
+32 MiB) instead of silently truncating — a bundle past 32 MiB needs an ops ceiling-plus-engine
+raise, not just the per-run override.
+
 **Data + isolation.** State lives in **Postgres**, isolated per tenant by **row-level security**
 enforced in the database, not just the API: every tenant-scoped table has an RLS policy keyed on
 `current_setting('app.current_tenant')`, and the only supported access path is `tenant_session()`,
