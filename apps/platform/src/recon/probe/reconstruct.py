@@ -99,6 +99,23 @@ def _merge(a: ReconstructedRequest, b: ReconstructedRequest) -> ReconstructedReq
     )
 
 
+def _pick_example_url(endpoint_findings: list[queries.FindingView]) -> str | None:
+    """A concrete example URL for the operation, preferring a runtime-observed (capture)
+    occurrence — the real URL the browser issued (REQ-C3 ground truth) — over a templated
+    static ``raw_url``. Deterministic: findings scanned in sorted-by-hash order. Uses
+    ``getattr`` for ``engine`` so a caller passing a lighter occurrence view still works."""
+    occurrences = [
+        occurrence
+        for finding in sorted(endpoint_findings, key=lambda f: f.finding_hash)
+        for occurrence in finding.occurrences
+        if occurrence.raw_url
+    ]
+    capture = next(
+        (o.raw_url for o in occurrences if getattr(o, "engine", None) == "capture"), None
+    )
+    return capture or next((o.raw_url for o in occurrences), None)
+
+
 def build_requests(
     findings: list[queries.FindingView],
     rules: list[base_url.BaseUrlRule] = (),
@@ -138,16 +155,9 @@ def build_requests(
                 }
             )
         )
-        # Select example_url deterministically: iterate findings in sorted-by-hash order
-        example_url = next(
-            (
-                occurrence.raw_url
-                for finding in sorted(endpoint_findings, key=lambda f: f.finding_hash)
-                for occurrence in finding.occurrences
-                if occurrence.raw_url
-            ),
-            None,
-        )
+        # Prefer a runtime-observed (capture) occurrence's URL over a templated static
+        # raw_url (REQ-C3); deterministic sorted-by-hash order preserved for the rest.
+        example_url = _pick_example_url(endpoint_findings)
         example_query = dict(parse_qsl(urlsplit(example_url).query)) if example_url else {}
 
         query_params: dict[str, QueryParam] = {}

@@ -115,6 +115,7 @@ class Settings(BaseSettings):
     capture_nav_timeout_seconds: float = 30.0  # max wait for the initial navigation/load
     capture_idle_settle_seconds: float = 2.0  # quiet window (no new scripts) => capture done
     capture_max_scripts: int = 2000  # cap stored scripts per run (bounds worker + blob load)
+    capture_max_requests: int = 1000  # REQ-C3: cap recorded XHR/fetch request URLs per run
     # Interaction driver (slice 3): after the initial load settles, drive the page —
     # autoscroll to idle, click every interactive element, and walk same-origin routes —
     # so lazily-loaded / route-split / click-gated chunks execute and get captured. All

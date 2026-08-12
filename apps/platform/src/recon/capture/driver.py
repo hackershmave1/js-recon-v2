@@ -66,8 +66,9 @@ import tempfile
 import time
 import urllib.request
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from websockets.exceptions import ConnectionClosed, WebSocketException
 from websockets.sync.client import connect
@@ -86,7 +87,25 @@ _RECV_TICK_SECONDS = 0.25  # recv poll granularity; bounds progress/interrupt la
 # A module constant so host tests can shrink it (the real handshake needs the full second).
 _MIN_DRIVE_SECONDS = 1.0
 
+# Resource types whose request URL is an API call worth recording for REQ-C3 host
+# resolution — XHR + fetch() cover axios / jQuery / fetch (the shapes the static
+# extractor traces); Document / Script / Image / Font etc. are page/asset loads.
+_REQUEST_TYPES = frozenset({"XHR", "Fetch"})
+
 __all__ = ["CaptureError", "CapturedScript", "CaptureResult", "capture_scripts"]
+
+
+def _normalize_request_url(url: str) -> str | None:
+    """``scheme://netloc/path`` for an http(s) URL, else ``None``. Drops the query +
+    fragment so tokens/PII in the query string are never custodied (REQ-S2/S4) — the
+    path is all correlation needs — and keeps the port for host-gate accuracy."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}{parts.path or '/'}"
 
 
 @dataclass(frozen=True)
@@ -117,6 +136,10 @@ class CaptureResult:
 
     scripts: list[CapturedScript]
     nav_error: str | None
+    # REQ-C3: the deduped {method, url} of the XHR/fetch requests the page tree issued
+    # (url = scheme://host/path, query dropped), for runtime host resolution. Defaulted
+    # so slice-2 fakes constructing CaptureResult(scripts=, nav_error=) stay valid.
+    requests: list[dict] = field(default_factory=list)
 
 
 class _Beater:
@@ -170,6 +193,7 @@ def capture_scripts(
     heartbeat_interval_s: float,
     max_scripts: int,
     max_script_bytes: int,
+    max_requests: int = 0,
     interact: bool = False,
     max_scroll_steps: int = 0,
     max_clicks: int = 0,
@@ -226,6 +250,7 @@ def capture_scripts(
             idle_settle_s=idle_settle_s,
             max_scripts=max_scripts,
             max_script_bytes=max_script_bytes,
+            max_requests=max_requests,
             cfg=cfg,
             beater=beater,
         )
@@ -282,6 +307,7 @@ def _drive(
     idle_settle_s: float,
     max_scripts: int,
     max_script_bytes: int,
+    max_requests: int,
     cfg: interaction.InteractConfig | None,
     beater: _Beater,
 ) -> CaptureResult:
@@ -303,6 +329,7 @@ def _drive(
             min_drive_s=_MIN_DRIVE_SECONDS,
             max_scripts=max_scripts,
             max_script_bytes=max_script_bytes,
+            max_requests=max_requests,
             beater=beater,
         )
         # Kick off the tree: auto-attach at the browser level with the ROOT filter
@@ -336,7 +363,7 @@ def _drive(
             ctx.pump(
                 settle=True, phase_deadline=min(deadline, time.perf_counter() + idle_settle_s * 2)
             )
-        return CaptureResult(scripts=ctx.out, nav_error=ctx.nav_error)
+        return CaptureResult(scripts=ctx.out, nav_error=ctx.nav_error, requests=ctx.requests)
 
 
 class _Ctx:
@@ -359,6 +386,7 @@ class _Ctx:
         min_drive_s: float,
         max_scripts: int,
         max_script_bytes: int,
+        max_requests: int,
         beater: _Beater,
     ) -> None:
         self.state = state
@@ -368,6 +396,7 @@ class _Ctx:
         self.min_drive_s = min_drive_s
         self.max_scripts = max_scripts
         self.max_script_bytes = max_script_bytes
+        self.max_requests = max_requests
         self.beater = beater
         self.types: dict[str | None, str] = {}
         self.detached: set[str] = set()
@@ -375,6 +404,8 @@ class _Ctx:
         self.parsed_keys: set[tuple[str | None, str]] = set()  # (sessionId, scriptId) seen
         self.out: list[CapturedScript] = []
         self.seen_sha: set[str] = set()
+        self.requests: list[dict] = []  # REQ-C3: deduped {method, url} observed requests
+        self.seen_requests: set[tuple[str, str]] = set()
         self.nav_error: str | None = None
         self.navigated = False
         self.nav_id: int | None = None  # the INITIAL Page.navigate id (route navs are not fatal)
@@ -433,6 +464,9 @@ class _Ctx:
         if method == "Debugger.scriptParsed":
             self._on_parsed(msg)
             return None
+        if method == "Network.requestWillBeSent":
+            self._on_request(msg)
+            return None
         if method == "Target.detachedFromTarget":
             sid = msg["params"].get("sessionId")
             if sid:
@@ -470,6 +504,10 @@ class _Ctx:
         self.state.send("Target.setAutoAttach", cdp.CHILD_AUTO_ATTACH_PARAMS, session_id=session_id)
         if ttype in cdp.DEBUGGABLE_TYPES:
             self.state.send("Debugger.enable", session_id=session_id)
+            # REQ-C3: also record the request URLs this context issues. Per-session like
+            # Debugger, enabled BEFORE the release below, and fire-and-forget (a target
+            # that rejects it just drops the error reply — never fatal).
+            self.state.send("Network.enable", session_id=session_id)
         if ttype == "page" and not self.navigated:
             self.state.send("Page.enable", session_id=session_id)
             self.nav_id = self.state.send(
@@ -531,6 +569,29 @@ class _Ctx:
             )
         )
         self.last_event = time.perf_counter()
+
+    def _on_request(self, msg: dict) -> None:
+        """Record the method + URL of one XHR/fetch request the page tree issued, for
+        REQ-C3 host resolution. TOTAL by construction — a malformed frame is skipped,
+        never raised, so one bad event can't abort the capture (which would lose every
+        script). Does NOT bump ``last_event`` or touch ``pending_fetch``: request
+        traffic must neither defer the quiet-window settle nor gate it."""
+        params = msg.get("params") or {}
+        if params.get("type") not in _REQUEST_TYPES:
+            return  # only XHR/fetch — not Document/Script/Image/Font page loads
+        request = params.get("request") or {}
+        url = request.get("url") or ""
+        method = request.get("method") or ""
+        if not url or not method:
+            return
+        normalized = _normalize_request_url(url)
+        if normalized is None:
+            return  # non-http(s) (data:/blob:/ws:) or unparseable
+        key = (method, normalized)
+        if key in self.seen_requests or len(self.seen_requests) >= self.max_requests:
+            return
+        self.seen_requests.add(key)
+        self.requests.append({"method": method, "url": normalized})
 
     def _on_nav_ack(self, msg: dict) -> None:
         # Only the INITIAL navigation sets nav_error (→ the run is "blocked"). A hard

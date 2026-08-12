@@ -100,13 +100,34 @@ crafted `sourceMapURL` soft-misses without aborting the run, cancel-not-swallowe
 
 ## More Information
 
-Requirements: REQ-P2 (executed-script capture), REQ-P3 (authorization before active work).
+Requirements: REQ-P2 (executed-script capture), REQ-P3 (authorization before active work),
+REQ-C3 (runtime host resolution).
 Shipped as slice 1 (PR #35) and slice 2 (PR #36), **merged to `main` 2026-08-11**; slice 3 (the
 interaction driver) on `feat/capture-interaction-driver`. Relates to ADR 0005 (SSRF egress guard,
 reused), ADR 0006 (static analysis, no automated *exploit* traffic — capture relaxes the
 *static-only fetch* posture, not that exploit stance), ADR 0008 (process-group kill of
 headless-browser children). Follow-ups: request-layer egress interception (the egress-proxy
-slice) and a managed vehicle for 403-walled targets. Source-map recovery for captured bundles has
+slice), a managed vehicle for 403-walled targets, and runtime request capture for host/base-URL
+resolution (shipped; elaborated below). Source-map recovery for captured bundles has
 shipped — external `.map` files are fetched through the egress guard and linked on the asset, and
-inline `data:` maps already recover from the source itself; the no-map deobfuscation fallback
-remains absent (no deobfuscator exists in the backend).
+inline `data:` maps already recover from the source itself; a no-map bundle is now beautified before
+endpoint extraction (`recon/findings/deobfuscate.py` — Phase 1: `jsbeautifier`, fail-soft, 1 MiB cap)
+so findings get real line numbers, while deeper per-module unpacking (webcrack, Phase 2) remains a
+follow-up.
+
+**Runtime request capture for host/base-URL resolution (REQ-C3, shipped).** Capture read only the
+Debugger domain; the Network domain — set aside as a *completeness* layer (it sees bytes, not eval'd
+code) — is now also subscribed per session (`Network.requestWillBeSent`) to record the browser's
+actually-issued XHR/fetch URLs (path-only so query-string tokens are never custodied, in-scope, deduped,
+capped). A real CORRELATE stage (`recon/correlate/`) matches each observed URL to the host-less static
+endpoint findings on their shared constant path segments and attaches the observed URL as a
+capture-provenanced `FindingOccurrence` — so a route whose host was an unresolved runtime value (e.g. a
+minified `d.A.apiHost`) surfaces its concrete URL in reconstruct/spec/export, and the REQ-C2 host-gate
+treats the op as observed-absolute. It is ground-truth evidence, not a re-based guess: recorded for
+labeling only, it never derives or widens egress scope (REQ-P2's "scope is never derived from observed
+URLs" holds), never churns `finding_hash` (host/raw_url are off the hashed identity), and is default-off
+(`RECON_ENABLE_CAPTURE_MODE`). Confirmation: `recon/capture/driver.py` (`_on_request` + per-session
+`Network.enable`), `recon/capture/stage.py` (`_requests_in_scope` + the `requests_ref` blob on the
+`discover.assets` event), `recon/correlate/{match,stage}.py` (the constant-segment matcher + the
+CORRELATE-stage writer), `recon/probe/reconstruct.py` (`_pick_example_url` prefers the capture URL),
+`recon/spec/service.py` (classify strips a leading `${var}` once its base is capture-resolved).

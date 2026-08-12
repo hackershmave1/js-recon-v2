@@ -14,6 +14,7 @@ import time
 from redis import Redis
 
 from recon.config import get_settings
+from recon.correlate import stage as correlate
 from recon.discover import crawl
 from recon.domain import JobState, QueueName, RunStage, RunState
 from recon.fetch import fetch
@@ -72,14 +73,16 @@ def _enter_stage(redis: Redis, tenant_id: str, run_id: str, stage: RunStage, sta
 def _run_stage_work(
     redis: Redis, stage: RunStage, *, tenant_id: str, run_id: str, job_id: str
 ) -> None:
-    """Dispatch a stage to its real engine. Stubbed stages (INGEST/CORRELATE) are
-    no-ops here; a bare-domain FETCH/ANALYZE also no-op (Slice X)."""
+    """Dispatch a stage to its real engine. INGEST is a no-op here; CORRELATE no-ops for a
+    non-capture run (REQ-C3); a bare-domain FETCH/ANALYZE also no-op (Slice X)."""
     if stage == RunStage.DISCOVERING:
         crawl.discover_run(redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id)
     elif stage == RunStage.FETCHING:
         fetch.fetch_run(redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id)
     elif stage == RunStage.ANALYZING:
         analyze.analyze_run(redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id)
+    elif stage == RunStage.CORRELATING:
+        correlate.correlate_run(redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id)
 
 
 def process_message(redis: Redis, queue: QueueName, msg_id: str, message: dict) -> str:

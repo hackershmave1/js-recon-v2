@@ -228,3 +228,42 @@ def test_selection_rule_on_relative_hash_overridden_when_op_seen_absolute(author
     from recon.probe.reconstruct import reconstruct_run
 
     assert not any(r.operation.startswith("GET /location") for r in reconstruct_run(tenant, run_id))
+
+
+def test_capture_resolved_string_param_stays_documented_not_false_shadow(authorized_session):
+    # REQ-C3 (§4 code-review must-fix #1): a capture occurrence proves the base, so classify
+    # strips the leading ${var} but KEEPS ${slug} templated -> a documented string-param
+    # endpoint stays documented, never false-shadowed by the concrete runtime value
+    # (/users/alice). Feeding the concrete path (the bug) would flip this to shadow.
+    tenant, session_id = authorized_session
+    value = "GET /${apiBase}/users/${slug}"
+    with tenant_session(tenant) as session:
+        run = models.Run(tenant_id=tenant, session_id=session_id, state="done")
+        session.add(run)
+        session.flush()
+        run_id = str(run.id)
+        for occurrence in (
+            store.Occurrence(host=None, raw_url="${apiBase}/users/${slug}", engine="vespasian"),
+            store.Occurrence(
+                host="api.acme.io", raw_url="https://api.acme.io/users/alice", engine="capture"
+            ),
+        ):
+            store.record_finding(
+                session,
+                tenant_id=tenant,
+                run_id=run_id,
+                finding_type=FindingType.ENDPOINT,
+                value=value,
+                path="app.js",
+                occurrence=occurrence,
+                attributes={"method": "GET", "kind": "fetch"},
+                first_stage="analyzing",
+            )
+    spec = (
+        b'{"openapi":"3.0.3","info":{"title":"t","version":"0"},'
+        b'"paths":{"/users/{id}":{"get":{'
+        b'"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],'
+        b'"responses":{"default":{"description":"x"}}}}}}'
+    )
+    service.attach_and_classify(tenant, run_id, spec)
+    assert _status(tenant, session_id, value=value) == "documented"
