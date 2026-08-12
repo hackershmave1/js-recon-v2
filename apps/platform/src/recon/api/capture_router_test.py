@@ -96,6 +96,65 @@ def test_health(make_capture_client):
     assert r.status_code == 200 and r.json()["status"] == "ok"
 
 
+# --------------------------------------------------------------------------- #
+# Origin-lock: state-changing ingest POSTs reject a web-page Origin (anti-CSRF).
+# The guard logic is unit-tested hermetically in capture_origin_lock_test.py;
+# these prove it is actually wired into each real endpoint (and the kill-switch).
+# --------------------------------------------------------------------------- #
+
+
+def test_origin_lock_rejects_web_origin_on_save_files(make_capture_client):
+    r = make_capture_client().post(
+        "/api/save-files",
+        json={"metadata": {}, "files": []},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert r.status_code == 403
+
+
+def test_origin_lock_rejects_web_origin_on_analyze_start(make_capture_client):
+    r = make_capture_client().post(
+        "/api/sessions/whatever/analyze/start",
+        headers={"Origin": "https://evil.example"},
+    )
+    assert r.status_code == 403  # rejected before the unknown-session 404
+
+
+def test_origin_lock_rejects_web_origin_on_create_project(make_capture_client):
+    r = make_capture_client().post(
+        "/api/projects",
+        json={"name": "x"},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert r.status_code == 403
+
+
+def test_origin_lock_allows_extension_origin(make_capture_client):
+    # chrome-extension:// is not http(s) → passes the guard; an empty batch then
+    # returns 200 (the extension's real Origin, and the happy path).
+    r = make_capture_client().post(
+        "/api/save-files",
+        json={"metadata": {}, "files": []},
+        headers={"Origin": "chrome-extension://abcdefghijklmnopabcdefghijklmnop"},
+    )
+    assert r.status_code == 200
+
+
+def test_origin_lock_allows_when_no_origin(make_capture_client):
+    r = make_capture_client().post("/api/save-files", json={"metadata": {}, "files": []})
+    assert r.status_code == 200
+
+
+def test_origin_lock_kill_switch_allows_web_origin(make_capture_client):
+    client = make_capture_client(RECON_CAPTURE_INGEST_ORIGIN_LOCK="false")
+    r = client.post(
+        "/api/save-files",
+        json={"metadata": {}, "files": []},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert r.status_code == 200
+
+
 def test_save_files_accumulates_one_queued_run(make_capture_client):
     client = make_capture_client()
     sid = f"sess-{uuid.uuid4().hex[:8]}"

@@ -139,6 +139,12 @@ class Settings(BaseSettings):
     # spike toggle. See api/app.py + api/capture_router.py.
     enable_capture_ingest: bool = True
     capture_tenant_name: str = "capture-spike"
+    # The ingest is unauthenticated (fixed capture tenant), so its state-changing
+    # POSTs are Origin-locked: a request carrying a web-page Origin (http/https) is
+    # rejected, closing the cross-site write vector (a browser attaches Origin to
+    # cross-origin POSTs and JS cannot forge it). The extension sends
+    # chrome-extension://<id> or no Origin. Kill-switch for non-browser ingest clients.
+    capture_ingest_origin_lock: bool = True  # env: RECON_CAPTURE_INGEST_ORIGIN_LOCK
 
     # Realtime / durability (REQ-R2, REQ-R3).
     heartbeat_interval_seconds: float = 5.0

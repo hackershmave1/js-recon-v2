@@ -52,8 +52,11 @@ def create_app() -> FastAPI:
     # Flag-gated (Phase 1, extension->platform convergence): mount the extension's
     # save-files ingest + analyze/start onto the platform. Blob storage is the
     # normal S3/MinIO path (REQ-D2) — the worker reads back what the API wrote, so
-    # a shared object store is required (the spike's local-disk swap is gone). Off
-    # by default → zero impact on the normal stack. See api/capture_router.py.
+    # a shared object store is required (the spike's local-disk swap is gone).
+    # DEFAULT-ON (enable_capture_ingest=True, config.py): a first-class capability
+    # post-cutover. The ingest is unauthenticated (fixed capture tenant), so its
+    # state-changing POSTs are Origin-locked against cross-site writes
+    # (capture_router._enforce_origin_lock). See api/capture_router.py.
     if settings.enable_capture_ingest:
         from recon.api import capture_router
 

@@ -35,7 +35,7 @@ import uuid
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 from redis import Redis
 from sqlalchemy import exists, select, text, update
@@ -81,6 +81,48 @@ def capture_health() -> dict:
     ingest ``contractVersion`` so a client can detect wire-shape drift; the current
     extension ignores the body, so adding the field is backward-compatible."""
     return {"status": "ok", "mode": "platform", "contractVersion": CAPTURE_CONTRACT_VERSION}
+
+
+# --------------------------------------------------------------------------- #
+# Origin-lock: the ingest is unauthenticated (a fixed capture tenant), so a page
+# the operator visits could otherwise fetch() a CORS-simple text/plain POST of
+# attacker-chosen "captured" JS into it (a cross-site WRITE primitive). A browser
+# attaches an Origin header to every cross-origin POST and JS can neither forge nor
+# suppress it (Origin is a forbidden header), so a web page cannot produce a
+# no-Origin cross-site write. Rejecting a present http(s) Origin therefore closes
+# the web vector; the extension's MV3 worker sends chrome-extension://<id> or no
+# Origin, and curl/native clients send none — all allowed. This is independent of
+# (and lands before) the pairing-token capability.
+# --------------------------------------------------------------------------- #
+
+
+def _enforce_origin_lock(origin: str | None, *, enabled: bool) -> None:
+    """Reject a state-changing ingest POST that carries a web-page Origin (403).
+
+    NOTE: browsers also send Origin on SAME-origin non-GET requests. The platform
+    SPA does not call these ingest routes today (it uses the operator-tenant routers),
+    so locking them breaks no current caller. If the SPA ever must call one, special-
+    case the platform's own origin here rather than dropping the lock.
+
+    NOTE(DEBT): an opaque/``null`` Origin (a sandboxed iframe / ``data:`` document) has
+    no http(s) scheme, so it is currently ALLOWED — a deliberate residual, because the
+    MV3 worker may itself emit a ``null`` Origin and we won't risk rejecting real
+    capture. Its severity is TIME-BOUNDED: until the pairing-token slice lands,
+    ``capture-spike`` is where the operator's real captures go, so a ``null``-Origin
+    write still retains this vuln's blast radius (fake findings + DoS) via a
+    ``null``-Origin vehicle. The pairing slice closes it — real captures move to a
+    token-gated operator tenant, leaving ``capture-spike`` a throwaway fallback.
+    Tracked in DEBT.md; revisit rejecting ``null`` once the extension worker's actual
+    Origin is confirmed in a live browser.
+    """
+    if not enabled:
+        return
+    # Via FastAPI, `origin` is a str (header present) or None (absent). A direct
+    # in-process call (the concurrency tests invoke the handler without FastAPI
+    # resolving the Header default) leaves the Header sentinel object — treat any
+    # non-str as "no Origin" so the guard never crashes on it.
+    if isinstance(origin, str) and urlsplit(origin).scheme in ("http", "https"):
+        raise HTTPException(status_code=403, detail="cross-site origin not allowed")
 
 
 # --------------------------------------------------------------------------- #
@@ -301,8 +343,11 @@ def _seed_fetched_assets(
 
 
 @router.post("/save-files")
-def save_files(payload: SaveFilesIn) -> dict:
+def save_files(
+    payload: SaveFilesIn, origin: str | None = Header(default=None, alias="Origin")
+) -> dict:
     settings = get_settings()
+    _enforce_origin_lock(origin, enabled=settings.capture_ingest_origin_lock)
     redis = get_redis()
     meta = payload.metadata or {}
     ext_session_id = meta.get("sessionId") or (
@@ -442,9 +487,12 @@ def _manifest_domain(rows: list, fallback: str) -> str:
 
 
 @router.post("/sessions/{ext_session_id}/analyze/start")
-def analyze_start(ext_session_id: str) -> dict:
+def analyze_start(
+    ext_session_id: str, origin: str | None = Header(default=None, alias="Origin")
+) -> dict:
     redis = get_redis()
     settings = get_settings()
+    _enforce_origin_lock(origin, enabled=settings.capture_ingest_origin_lock)
     tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
     session_id = _find_session_by_external_id(tenant_id, ext_session_id)
     if session_id is None:
@@ -636,8 +684,11 @@ def list_projects() -> list[dict]:
 
 
 @router.post("/projects")
-def create_project(payload: dict[str, Any]) -> dict:
+def create_project(
+    payload: dict[str, Any], origin: str | None = Header(default=None, alias="Origin")
+) -> dict:
     settings = get_settings()
+    _enforce_origin_lock(origin, enabled=settings.capture_ingest_origin_lock)
     tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
     name = str(payload.get("name") or "").strip()
     if not name:
