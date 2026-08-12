@@ -31,6 +31,14 @@ export class BatchUploader {
       lastError: null,
       lastUploadAt: null
     };
+    // Operator-pairing Bearer token (from settings, pushed by background via setAuthToken).
+    // null => today's unauthenticated ingest: the backend routes to the shared capture
+    // tenant. A valid token routes save-files into the operator's own tenant.
+    this.authToken = null;
+    // Whether the LAST save-files ack reported the ingest as PAIRED (operator tenant).
+    // null until the first upload under the current token; surfaced via getStats so the
+    // popup can show a paired ✓/✗ instead of failing silently on a bad/expired token.
+    this.lastPaired = null;
   }
 
   // Outbox key includes the session id so the SAME content captured under two
@@ -225,13 +233,18 @@ export class BatchUploader {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.uploadTimeoutMs);
+    // A valid pairing token routes this batch into the operator's tenant; without one the
+    // backend falls back to the shared capture tenant (no header => today's behavior).
+    // Snapshot the token AT SEND: if it changes mid-flight (setAuthToken resets lastPaired),
+    // this ack's `paired` must not be recorded against the new token (see below).
+    const tokenAtSend = this.authToken;
+    const headers = { 'Content-Type': 'application/json' };
+    if (tokenAtSend) headers.Authorization = `Bearer ${tokenAtSend}`;
     let response;
     try {
       response = await fetch(this.apiEndpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify(payload),
         signal: controller.signal
       });
@@ -258,11 +271,37 @@ export class BatchUploader {
       throw error;
     }
 
-    return await response.json();
+    const body = await response.json();
+    // Record whether this ack routed to the operator tenant (save-files returns `paired`)
+    // so the popup can reflect pairing state instead of failing silently on a bad token —
+    // but ONLY if the token is unchanged since send, so a late ack from a prior token can't
+    // stamp a stale ✓/✗ onto a just-pasted one (setAuthToken already reset it to null).
+    if (this.authToken === tokenAtSend && body && typeof body.paired === 'boolean') {
+      this.lastPaired = body.paired;
+    }
+    return body;
   }
 
   setEndpoint(url) {
     this.apiEndpoint = this.normalizeEndpoint(url);
+  }
+
+  // The operator-pairing Bearer token. Normalize by keeping ONLY printable ASCII
+  // (0x21–0x7e): a pairing token is unpadded base64url ("<payload>.<sig>"), all printable
+  // ASCII, whereas whitespace or a control char (NUL/LF/CR) in a header value makes fetch()
+  // throw on an invalid header — which upload() would treat as a transient network error
+  // and retry forever (a silent upload outage); a wrapped paste is the realistic source of
+  // an interior newline. Stripping non-printable-ASCII removes exactly the dangerous bytes
+  // and can never corrupt a real token. Keep this class IDENTICAL to
+  // workspace-client.authHeaders (no drift). Empty => null (no header => the backend's
+  // shared-tenant fallback, i.e. today's behavior).
+  setAuthToken(token) {
+    const cleaned = String(token || '').replace(/[^!-~]+/g, '');
+    const next = cleaned || null;
+    // A token change re-arms pairing verification so getStats can't report a stale
+    // paired verdict from the previous token.
+    if (next !== this.authToken) this.lastPaired = null;
+    this.authToken = next;
   }
 
   setPerformAnalysisOnUpload(enabled) {
@@ -322,7 +361,8 @@ export class BatchUploader {
       ...this.stats,
       pendingQueueLength: this.pendingQueue.length,
       endpoint: this.apiEndpoint,
-      isUploading: this.isUploading
+      isUploading: this.isUploading,
+      paired: this.lastPaired
     };
   }
 }

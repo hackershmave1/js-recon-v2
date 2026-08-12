@@ -25,6 +25,19 @@ export class WorkspaceClient {
     return base.replace(/\/+$/, '');
   }
 
+  // Authorization header for the operator-pairing token, if one is configured. Read live
+  // from settings (same source as workspaceUrl). Normalize by keeping only printable ASCII
+  // (0x21–0x7e) — the same throw-safe normalization as the uploader's setAuthToken (a
+  // newline/control char in a header value makes fetch throw); keep the two IDENTICAL.
+  // Returned as a spreadable object so a missing token adds nothing (=> the backend's
+  // shared-tenant fallback). Deliberately NOT applied to testConnection: /api/health is
+  // tenant-agnostic, so it needs no token.
+  authHeaders() {
+    const s = this.getSettings() || {};
+    const token = String(s.pairingToken || '').replace(/[^!-~]+/g, '');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+
   async testConnection() {
     const target = this.resolveApiBase() + '/api/health';
     const controller = new AbortController();
@@ -64,7 +77,7 @@ export class WorkspaceClient {
     try {
       const resp = await fetch(target, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
         body: JSON.stringify({ options: {} }),
         signal: controller.signal
       });
@@ -86,7 +99,7 @@ export class WorkspaceClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
-      const resp = await fetch(target, { method: 'GET', signal: controller.signal });
+      const resp = await fetch(target, { method: 'GET', headers: { ...this.authHeaders() }, signal: controller.signal });
       clearTimeout(timer);
       if (!resp.ok) {
         return { success: false, status: resp.status };
@@ -105,7 +118,7 @@ export class WorkspaceClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
-      const resp = await fetch(target, { method: 'GET', signal: controller.signal });
+      const resp = await fetch(target, { method: 'GET', headers: { ...this.authHeaders() }, signal: controller.signal });
       clearTimeout(timer);
       if (!resp.ok) return { success: false, status: resp.status, error: `HTTP ${resp.status}` };
       const projects = await resp.json();
@@ -124,7 +137,7 @@ export class WorkspaceClient {
     try {
       const resp = await fetch(target, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
         body: JSON.stringify(project || {}),
         signal: controller.signal
       });
