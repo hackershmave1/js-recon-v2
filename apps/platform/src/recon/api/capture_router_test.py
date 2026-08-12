@@ -28,6 +28,7 @@ from recon.db.base import admin_session, tenant_session
 from recon.db.models import EngagementSession, Job, Run, Tenant
 from recon.discover import queries as discover_queries
 from recon.domain import RunState
+from recon.events import stream
 from recon.fetch import egress, fetch
 from recon.findings import analyze as analyze_mod
 from recon.findings import queries as findings_queries
@@ -233,6 +234,67 @@ def test_bearer_rehomes_all_endpoints_not_just_save_files(make_capture_client):
     )
     assert client.get(f"/api/sessions/{sid}/analyze/progress", headers=auth).status_code == 200
     assert client.get(f"/api/sessions/{sid}/analyze/progress").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Slice 2: save-files emits a live capture.received event onto the run's SSE
+# stream so the run workspace can show captures arriving. The payload carries the
+# run's AUTHORITATIVE cumulative asset count (not a per-batch delta), so the
+# SSE-replayed reducer is last-writes-win and never double-counts on reconnect.
+# emit() commits the durable run_event row BEFORE the Redis XADD, so asserting the
+# event is on the stream transitively proves the durable half succeeded too.
+# --------------------------------------------------------------------------- #
+
+
+def _capture_events(redis, run_id: str) -> list[dict]:
+    return [
+        e["payload"] for e in stream.replay(redis, run_id, None) if e["type"] == "capture.received"
+    ]
+
+
+def test_save_files_emits_capture_received_with_cumulative_total(make_capture_client, redis):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    b1 = _save(client, sid, [_file("https://acme.io/a.js", "a();", sid)])
+    b2 = _save(client, sid, [_file("https://acme.io/b.js", "b();", sid)])  # accumulates
+    assert b1["runId"] == b2["runId"]
+    events = _capture_events(redis, b1["runId"])
+    assert len(events) == 2  # one per batch
+    # total is CUMULATIVE (authoritative), stored is this-batch; the reducer shows total.
+    assert events[0]["stored"] == 1 and events[0]["total"] == 1
+    assert events[1]["stored"] == 1 and events[1]["total"] == 2
+    assert events[1]["last_host"] == "acme.io"
+    assert isinstance(events[1]["ts"], int)
+
+
+def test_no_capture_received_event_when_nothing_stored(make_capture_client, redis):
+    # A batch where every file is invalid stores nothing: the run/session still exist
+    # (the ingest is lenient) but no capture arrived, so no chip event fires.
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    body = _save(client, sid, [{"url": "https://acme.io/x.js"}])  # missing content -> failed
+    assert body["stored"] == 0
+    assert _capture_events(redis, body["runId"]) == []
+
+
+def test_capture_received_is_visible_to_paired_operator_tenant(make_capture_client, redis):
+    # The slice's point: a PAIRED capture publishes capture.received onto a run the
+    # OPERATOR tenant can stream (the exact get_status gate the SSE endpoint uses),
+    # while the shared capture tenant cannot see it (RLS) — proving re-homing.
+    client = make_capture_client(RECON_PAIRING_KEY=_PAIRING_KEY)
+    op_tenant = _make_operator_tenant()
+    token = pairing_token.mint(op_tenant, key=_PAIRING_KEY, ttl_seconds=3600)
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    r = client.post(
+        "/api/save-files", json=_one_file_batch(sid), headers={"Authorization": f"Bearer {token}"}
+    )
+    assert r.status_code == 200 and r.json()["paired"] is True
+    run_id = r.json()["runId"]
+    events = _capture_events(redis, run_id)
+    assert len(events) == 1 and events[0]["total"] == 1 and events[0]["last_host"] == "acme.io"
+    # Visible to the operator (SSE would stream it); invisible to capture-spike.
+    assert run_queries.get_status(op_tenant, run_id) is not None
+    assert run_queries.get_status(_tenant_id(client.capture_tenant_name), run_id) is None
 
 
 def test_save_files_accumulates_one_queued_run(make_capture_client):
