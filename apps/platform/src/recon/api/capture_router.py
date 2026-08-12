@@ -104,12 +104,16 @@ def _enforce_origin_lock(origin: str | None, *, enabled: bool) -> None:
     so locking them breaks no current caller. If the SPA ever must call one, special-
     case the platform's own origin here rather than dropping the lock.
 
-    NOTE: an opaque/``null`` Origin (sandboxed iframe) has no http(s) scheme and is
-    therefore allowed — a residual we accept, not a hole into operator data: a
-    token-less write only ever reaches the throwaway fallback ``capture-spike``
-    tenant; the pairing token (a later slice) is what gates writes into a real
-    operator tenant. We allow it rather than risk rejecting the extension worker's
-    own Origin.
+    NOTE(DEBT): an opaque/``null`` Origin (a sandboxed iframe / ``data:`` document) has
+    no http(s) scheme, so it is currently ALLOWED — a deliberate residual, because the
+    MV3 worker may itself emit a ``null`` Origin and we won't risk rejecting real
+    capture. Its severity is TIME-BOUNDED: until the pairing-token slice lands,
+    ``capture-spike`` is where the operator's real captures go, so a ``null``-Origin
+    write still retains this vuln's blast radius (fake findings + DoS) via a
+    ``null``-Origin vehicle. The pairing slice closes it — real captures move to a
+    token-gated operator tenant, leaving ``capture-spike`` a throwaway fallback.
+    Tracked in DEBT.md; revisit rejecting ``null`` once the extension worker's actual
+    Origin is confirmed in a live browser.
     """
     if not enabled:
         return

@@ -50,6 +50,15 @@ def test_kill_switch_disables_the_lock() -> None:
     _enforce_origin_lock("https://evil.example", enabled=False)
 
 
+def test_null_origin_is_deliberately_allowed() -> None:
+    # DELIBERATE, security-relevant decision (see _enforce_origin_lock NOTE + DEBT.md
+    # D17): an opaque `Origin: null` is allowed today because the MV3 worker may emit
+    # it, and until the pairing slice lands its residual is bounded by capture-spike.
+    # Do not flip without confirming the extension worker's real Origin live and
+    # updating the note — this test fails loudly if someone silently changes it.
+    _enforce_origin_lock("null", enabled=True)  # no raise
+
+
 def test_non_string_origin_is_treated_as_absent() -> None:
     # A direct in-process call to a handler (e.g. the concurrency tests) leaves
     # FastAPI's Header sentinel — a non-str — as the arg. The guard must treat it as

@@ -123,6 +123,18 @@ gap the integration-lane AKIA test catches). The image now matches CI's
 `uv sync --frozen`; verified by a full image build. Web was already `npm ci`-pinned.
 Both §4 gates passed.
 
+### D17 · Capture Origin-lock allows a `null` Origin [S] — closes with the pairing slice
+The capture-ingest Origin-lock (`capture_router.py` `_enforce_origin_lock`) rejects a
+web-page `http(s)` Origin but ALLOWS an opaque `Origin: null` (a sandboxed iframe /
+`data:` document), because the MV3 worker may itself emit `null` and we won't risk
+dropping real capture. Severity is time-bounded: until the pairing-token slice lands,
+`capture-spike` holds the operator's real captures, so a `null`-Origin write retains
+the CSRF write blast radius (fake findings + storage/worker DoS). The pairing slice
+closes it (real captures move to a token-gated operator tenant; `capture-spike` becomes
+a throwaway fallback). Optionally also reject `Origin: null` once the extension worker's
+real Origin is confirmed live. The decision is pinned by `capture_origin_lock_test.py`
+so it can't be flipped silently.
+
 ## Maintainability
 
 ### D8 · Unversioned contracts [M] — D8a ✅ RESOLVED 2026-08-07; D8b ✅ RESOLVED 2026-08-09
