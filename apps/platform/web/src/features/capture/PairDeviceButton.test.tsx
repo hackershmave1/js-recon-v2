@@ -27,10 +27,16 @@ describe("PairDeviceModal", () => {
     expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
   });
 
-  it("shows an 'unknown tenant' message on 404", async () => {
+  it("shows an 'unknown tenant' message on a 404 whose detail names the tenant", async () => {
     vi.spyOn(api, "mintPairingToken").mockRejectedValue(new api.ApiError(404, "unknown tenant"));
     render(<PairDeviceModal tenantId={TENANT} onClose={vi.fn()} />);
     expect(await screen.findByRole("alert")).toHaveTextContent(/isn't recognized|bootstrap/i);
+  });
+
+  it("shows a generic 'not available' message on a route-unmounted 404 (ingest disabled)", async () => {
+    vi.spyOn(api, "mintPairingToken").mockRejectedValue(new api.ApiError(404, "Not Found"));
+    render(<PairDeviceModal tenantId={TENANT} onClose={vi.fn()} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/isn't available/i);
   });
 
   it("shows a reach-failure message when the mint rejects with a raw network error", async () => {

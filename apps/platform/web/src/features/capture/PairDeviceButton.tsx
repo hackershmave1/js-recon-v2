@@ -12,7 +12,14 @@ import "./pairDevice.css";
 function mintErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 503) return "Pairing isn't enabled on this server — set RECON_PAIRING_KEY to turn it on.";
-    if (err.status === 404) return "This tenant isn't recognized by the server. Bootstrap it, or switch to a known tenant.";
+    if (err.status === 404) {
+      // The mint 404s with detail "unknown tenant" for a shape-valid id that has no row.
+      // But /pairing is only mounted when capture ingest is on; with it off the route is
+      // unmounted and 404s with a generic detail — don't misattribute that to a missing tenant.
+      return /tenant/i.test(err.message)
+        ? "This tenant isn't recognized by the server. Bootstrap it, or switch to a known tenant."
+        : "Pairing isn't available on this server.";
+    }
     return err.message;
   }
   // A network failure rejects with a raw TypeError (not an ApiError), so it lands here.
