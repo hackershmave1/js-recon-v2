@@ -131,9 +131,10 @@ spine as a native crawl. Its default backend is `http://localhost:8000` (`module
 
 The extension talks to the platform over a small `/api` ingest surface (distinct from the
 platform's native `/sessions` + `/runs` routes). It is **flag-gated**: `capture_router.py` is
-mounted only when `RECON_ENABLE_CAPTURE_INGEST` is enabled (config default off — `config.py`
-`enable_capture_ingest`; the mount is conditional at `api/app.py`), so a normal recon deployment is
-unaffected. A deployment that serves the extension turns the flag on.
+mounted only when `RECON_ENABLE_CAPTURE_INGEST` is enabled (`config.py` `enable_capture_ingest`,
+**default on**; the mount is conditional at `api/app.py`). Because that makes the ingest an
+always-on *unauthenticated* write surface, two guards (below) make it safe and route each capture
+to the right tenant.
 
 | route | purpose |
 |---|---|
@@ -148,6 +149,30 @@ so the extension's whole-batch retries never duplicate a run or an asset. Per-fi
 extension sends are stored per asset (`run_asset.source_map_ref`, migration `0010`) and recovered
 with the tolerant `source_map_origin="capture"`, so a malformed map falls back to bundle analysis
 instead of dropping the asset's findings.
+
+## Routing captures to the operator (the capture <-> app link)
+
+The ingest is unauthenticated (the extension has no platform login). A stacked slice series makes
+that always-on surface safe and routes each capture to the *right* tenant:
+
+- **Origin-lock (anti-CSRF).** A state-changing ingest POST carrying an `http(s)` `Origin` is
+  rejected `403` (`_enforce_origin_lock`); default-on kill-switch `capture_ingest_origin_lock`. The
+  MV3 worker's `null` Origin is allowed.
+- **Stateless pairing -> operator tenant.** The operator mints a short-lived HMAC token
+  (`recon/pairing/token.py`, signed with `RECON_PAIRING_KEY`, 12 h TTL) via `POST /pairing`; the
+  extension sends it as `Authorization: Bearer` on **all** tenant-resolving ingest calls. A valid
+  Bearer routes the capture into the operator's own tenant; no/invalid Bearer falls back to a fixed
+  `capture-spike` tenant (fail-closed, never a hard drop). `save-files` returns a `paired` flag the
+  popup surfaces.
+- **Live indicator.** `save-files` best-effort emits `capture.received` on the run's SSE stream, so
+  the operator's run workspace shows a live "receiving from extension" chip.
+
+**Cross-run sightings (read model).** The same JS reached by both a platform crawl and a paired
+capture yields duplicate findings across two runs (REQ-D5 keeps findings per-run). `list_findings`
+collapses this at read time: each finding carries **sightings** — counts of *other runs in the same
+engagement* sharing its `finding_hash`, split by origin (`capture` = extension session, `platform` =
+crawl/upload), or `null` when the run's session has no engagement (surfaced in the workspace as a
+per-finding badge or a "group under an engagement" hint).
 
 ## Convergence history (v1 retired)
 
