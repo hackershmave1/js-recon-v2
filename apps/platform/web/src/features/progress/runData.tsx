@@ -37,6 +37,16 @@ function isStaleSnapshot(snapState: string, current: string): boolean {
   return rc !== undefined && rs !== undefined && rs < rc;
 }
 
+// Slice 2: the live "receiving from extension" indicator's state. Set from a
+// capture.received SSE event's ABSOLUTE cumulative fields (never accumulated), so a
+// stream replay on reconnect can't double-count. `total` is the run's cumulative
+// captured-asset count; `lastHost` is where the latest batch of JS came from.
+export interface CaptureStatus {
+  total: number;
+  lastHost: string | null;
+  ts: number;
+}
+
 // The whole run's live state, produced once at the run-workspace layout and shared
 // with every page (overview pipeline, sources/findings badges, api-spec) via context
 // so navigating between pages never tears down the SSE stream or refetches findings.
@@ -55,6 +65,7 @@ export interface RunData {
   loaded: boolean;
   pauseRequested: boolean;
   cancelRequested: boolean;
+  captureStatus: CaptureStatus | null;
   handleControlResult: (res: RunControlResult) => void;
 }
 
@@ -93,6 +104,7 @@ function useRunStream(runId: string): RunData {
   const [loaded, setLoaded] = useState(false);
   const [pauseRequested, setPauseRequested] = useState(false);
   const [cancelRequested, setCancelRequested] = useState(false);
+  const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null);
   // stateRef mirrors `state` at accept-time so the guard compares against the
   // running value even within a synchronous burst of replayed SSE events (where
   // `state` hasn't re-rendered yet). liveProgressRef flips once job.progress has
@@ -163,6 +175,20 @@ function useRunStream(runId: string): RunData {
         // state, so gating updates without waiting for a poll or a reconnect.
         if (e.event === "run.pause_requested") setPauseRequested(true);
         else if (e.event === "run.cancel_requested") setCancelRequested(true);
+        else if (e.event === "capture.received") {
+          // Live "receiving from extension" signal (slice 2). Read the event's ABSOLUTE
+          // cumulative fields — never accumulate a delta — because the SSE stream replays
+          // on reconnect and summing would double-count. Keep the max so a rare out-of-
+          // order batch (a late XADD carrying a pre-commit count) can't visibly regress
+          // the total; captured assets are insert-only, so the true total is monotonic.
+          try {
+            const p = JSON.parse(e.data) as { total?: number; last_host?: string | null; ts?: number };
+            const t = typeof p.total === "number" ? p.total : 0;
+            const host = typeof p.last_host === "string" ? p.last_host : null;
+            const ts = typeof p.ts === "number" ? p.ts : 0;
+            setCaptureStatus((prev) => (t >= (prev?.total ?? -1) ? { total: t, lastHost: host, ts } : prev));
+          } catch { /* non-JSON payload */ }
+        }
         else if (e.event === "job.progress") {
           // Live per-stage progress. Once it arrives the stream owns the numbers,
           // so a late getStatus snapshot must not re-zero them (see refresh()).
@@ -232,7 +258,7 @@ function useRunStream(runId: string): RunData {
 
   return {
     runId, state, stage, pct, done, total, eta, error, assets, events, findings, loaded,
-    pauseRequested, cancelRequested, handleControlResult,
+    pauseRequested, cancelRequested, captureStatus, handleControlResult,
   };
 }
 

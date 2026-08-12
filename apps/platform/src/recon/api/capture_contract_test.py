@@ -55,7 +55,10 @@ def test_save_files_response_envelope(capture_client):
         patch.object(capture_router, "_get_or_create_session", return_value="sess-1"),
         patch.object(capture_router, "_accumulating_run_id", return_value="run-1"),
         patch.object(capture_router.storage, "put_blob", return_value="blob-key"),
-        patch.object(capture_router, "_seed_fetched_assets", return_value=None),
+        patch.object(capture_router, "_seed_fetched_assets", return_value=1),
+        patch.object(
+            capture_router, "emit", return_value=None
+        ),  # slice-2 side-channel: keep hermetic
     ):
         res = capture_client.post(
             "/api/save-files",
@@ -77,6 +80,32 @@ def test_save_files_response_envelope(capture_client):
     file_result = body["files"][0]
     assert {"url", "contentHash", "runId", "stored"} <= set(file_result)
     assert file_result["stored"] is True
+
+
+def test_save_files_survives_emit_failure(capture_client):
+    # The slice-2 capture.received event is a BEST-EFFORT side-channel: if emit raises
+    # (event bus down, or a malformed url in host parsing), the already-durable batch
+    # must still ack 200 — never a 5xx the extension would retry forever, nor a 4xx that
+    # drops un-recapturable JS.
+    with (
+        patch.object(capture_router, "_get_or_create_tenant", return_value=TENANT),
+        patch.object(capture_router, "get_redis", return_value=object()),
+        patch.object(capture_router, "_get_or_create_session", return_value="sess-1"),
+        patch.object(capture_router, "_accumulating_run_id", return_value="run-1"),
+        patch.object(capture_router.storage, "put_blob", return_value="blob-key"),
+        patch.object(capture_router, "_seed_fetched_assets", return_value=1),
+        patch.object(capture_router, "emit", side_effect=RuntimeError("event bus down")),
+    ):
+        res = capture_client.post(
+            "/api/save-files",
+            json={
+                "metadata": {"sessionId": "ext-1"},
+                "files": [{"url": "https://acme.io/a.js", "content": "x=1", "contentHash": "h1"}],
+            },
+        )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["success"] is True and body["stored"] == 1
 
 
 def test_save_files_without_session_returns_empty_envelope(capture_client):

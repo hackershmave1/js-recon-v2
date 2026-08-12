@@ -48,7 +48,7 @@ from recon.db.base import admin_session, tenant_session
 from recon.db.models import EngagementSession, Job, Run, RunAsset, Tenant
 from recon.domain import TERMINAL_STATES, AssetStatus, RunStage, RunState
 from recon.engagements import service as engagements_service
-from recon.events.log import publish, record_event
+from recon.events.log import emit, publish, record_event
 from recon.observability import get_logger
 from recon.pairing import token as pairing_token
 from recon.runs import assets, coordinator
@@ -342,14 +342,19 @@ def _seed_fetched_assets(
     run_id: str,
     keys_by_url: dict[str, str],
     map_keys_by_url: dict[str, str] | None = None,
-) -> None:
+) -> int:
     """Seed this batch's urls as ``run_asset`` rows and mark each ``fetch_ok`` with
     its uploaded blob key — in ONE transaction, so a row is never left committed as
     PENDING-without-``input_ref`` (which the FETCHING stage would try to egress).
     Idempotent: ``seed_pending`` skips an existing ``(run_id, url)``; a url already
     ``fetch_ok`` is left as-is (first-wins — a retry or a later same-url batch never
     clobbers the original blob). A captured source map is linked in the SAME
-    first-wins branch, so it is likewise set once and never clobbered."""
+    first-wins branch, so it is likewise set once and never clobbered.
+
+    Returns the run's cumulative distinct-asset count after this batch (``len(by_url)``),
+    reusing the rows already materialized here (no extra query) — the ABSOLUTE value the
+    slice-2 ``capture.received`` indicator reports (eventually-consistent under concurrent
+    same-session batches; the UI reducer keeps the max)."""
     map_keys_by_url = map_keys_by_url or {}
     with tenant_session(tenant_id) as session:
         assets.seed_pending(session, tenant_id=tenant_id, run_id=run_id, urls=list(keys_by_url))
@@ -369,6 +374,7 @@ def _seed_fetched_assets(
                 map_key = map_keys_by_url.get(url)
                 if map_key:
                     assets.set_source_map_ref(session, str(row.id), map_key)
+        return len(by_url)
 
 
 @router.post("/save-files")
@@ -468,7 +474,37 @@ def save_files(
         )
 
     if keys_by_url:
-        _seed_fetched_assets(tenant_id, run_id, keys_by_url, map_keys_by_url)
+        total = _seed_fetched_assets(tenant_id, run_id, keys_by_url, map_keys_by_url)
+        # Slice 2 — tell the run workspace captures are arriving, LIVE. The batch is
+        # already durably stored+committed above, so this capture.received event is a
+        # BEST-EFFORT side-channel: an event-bus hiccup (or a malformed url below) must
+        # never turn a durable capture into a 5xx (the extension would retry forever, or
+        # DROP the JS on a 4xx). It carries the run's cumulative asset count as an ABSOLUTE
+        # value, not a per-batch delta, so the SSE-replayed reducer stays last-writes-win
+        # and never double-counts on reconnect (under concurrent same-session batches the
+        # count is eventually-consistent, not instantaneous — the reducer keeps the max,
+        # and captured assets are insert-only). Visible only once captures are re-homed into
+        # the operator tenant (paired): the per-run SSE stream is tenant-gated, so on
+        # capture-spike nobody is subscribed. The chip may briefly linger after analyze/start
+        # until the worker advances the run off QUEUED — benign, the run is already sealed.
+        try:
+            # urlsplit(...).hostname raises on a malformed url (e.g. an unterminated IPv6
+            # bracket); keep it INSIDE the guard so a durably-stored batch never 5xxs.
+            last_host = urlsplit(next(reversed(keys_by_url))).hostname
+            emit(
+                redis,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                event_type="capture.received",
+                payload={
+                    "stored": stored,
+                    "total": total,
+                    "last_host": last_host,
+                    "ts": int(time.time()),
+                },
+            )
+        except Exception as exc:  # never fail a durable batch on an observability emit
+            log.warning("capture.received.emit_failed", run_id=run_id, error=str(exc))
 
     log.info(
         "capture.save_files",

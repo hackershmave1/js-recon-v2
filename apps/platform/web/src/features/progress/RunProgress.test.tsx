@@ -227,4 +227,45 @@ describe("RunProgress", () => {
     await waitFor(() => expect(getFindings).toHaveBeenCalledTimes(2));                     // open + terminal
     await waitFor(() => expect(screen.getByTestId("count")).toHaveTextContent("3"));       // lifted findings updated
   });
+
+  // Slice 2: the live "receiving from extension" chip, driven by capture.received SSE
+  // events while a capture run is still QUEUED (accumulating uploaded batches).
+  it("shows a live 'receiving from extension' chip from capture.received while queued", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "queued", stage: null, done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onOpen?.();
+      h.onEvent({ id: "1", event: "capture.received", data: '{"stored":1,"total":1,"last_host":"app.acme.io","ts":1000}' });
+      h.onEvent({ id: "2", event: "capture.received", data: '{"stored":2,"total":3,"last_host":"app.acme.io","ts":1001}' });
+    });
+    renderRun(<RunProgress />);
+    await waitFor(() => expect(screen.getByText("Receiving from extension")).toBeInTheDocument());
+    expect(screen.getByText("3 files")).toBeInTheDocument();   // cumulative total (last wins), not a per-batch sum
+    expect(screen.getByText("app.acme.io")).toBeInTheDocument();
+  });
+
+  it("keeps the max capture total so an out-of-order capture.received can't regress it (F1)", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "queued", stage: null, done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onOpen?.();  // resolve state -> "queued" so the (queued-gated) chip renders
+      h.onEvent({ id: "1", event: "capture.received", data: '{"total":5,"last_host":"a.io","ts":2}' });
+      h.onEvent({ id: "2", event: "capture.received", data: '{"total":3,"last_host":"a.io","ts":1}' });  // stale / out-of-order
+    });
+    renderRun(<RunProgress />);
+    await waitFor(() => expect(screen.getByText("5 files")).toBeInTheDocument());
+    expect(screen.queryByText("3 files")).not.toBeInTheDocument();
+  });
+
+  it("hides the receiving chip once the run advances past queued (F2)", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "queued", stage: null, done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onEvent({ id: "1", event: "capture.received", data: '{"total":2,"last_host":"a.io","ts":1}' });
+      h.onEvent({ id: "2", event: "run.transition", data: '{"to":"discovering"}' });
+    });
+    renderRun(<RunProgress />);
+    await waitFor(() => expect(screen.getByText("discovering")).toBeInTheDocument());
+    expect(screen.queryByText("Receiving from extension")).not.toBeInTheDocument();
+  });
 });
