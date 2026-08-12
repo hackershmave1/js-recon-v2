@@ -72,6 +72,10 @@ def test_upload_starts_run_and_findings_are_retrievable(client, redis, authorize
     # The finding carries its occurrence(s) so a normalization merge is visible (REQ-C2).
     assert endpoint["occurrences"][0]["raw_url"] == "/api/users/42"
 
+    # Slice 4: every finding carries the cross-run `sightings` key; this session has
+    # no engagement, so it serializes as null ("ungrouped"), not a counts object.
+    assert endpoint["sightings"] is None
+
     # REQ-C2: coverage counters are surfaced on the findings response (honestly, and
     # per file) — not left buried on the analyze.coverage event.
     coverage = body["coverage"]

@@ -34,6 +34,17 @@ function matchesQuery(f: Finding, q: string): boolean {
   return hay.includes(q.toLowerCase());
 }
 
+// Slice 4: a compact "also seen: N capture · M platform" label for a finding's
+// cross-run sightings, or null when there's nothing to show (all-zero, ungrouped,
+// or the field is absent). Zero buckets are dropped so a capture-only dup reads clean.
+function sightingsLabel(s: Finding["sightings"]): string | null {
+  if (!s) return null;
+  const parts: string[] = [];
+  if (s.capture > 0) parts.push(`${s.capture} capture`);
+  if (s.platform > 0) parts.push(`${s.platform} platform`);
+  return parts.length ? `also seen: ${parts.join(" · ")}` : null;
+}
+
 export function FindingsPage({ data, runId, onJumpToSource }: {
   data: FindingsResponse; runId: string; onJumpToSource: (j: SourceJump) => void;
 }) {
@@ -59,6 +70,12 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
   }), [data.findings, sel, query]);
 
   const anyFilter = query !== "" || Object.values(sel).some((s) => s.size > 0);
+
+  // Slice 4 (Option A): when the run's session has no engagement, the backend sends
+  // sightings === null on every finding (never a counts object). Surface that as a
+  // hint instead of silently showing no badges, so an ungrouped run doesn't read as
+  // "no duplicates". `=== null` (not falsy) keeps a pre-slice-4 `undefined` silent.
+  const ungrouped = data.findings.length > 0 && data.findings.every((f) => f.sightings === null);
 
   function toggle(key: string, value: string) {
     setSel((prev) => {
@@ -99,6 +116,12 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
             <input value={query} onChange={(e) => setQuery(e.target.value)}
               placeholder="Search value, path, host…" aria-label="Search findings" />
           </div>
+          {ungrouped && (
+            <div className="fp-sightings-hint">
+              Cross-run sightings are off for this run. Group its session under an engagement
+              to see which findings your extension captures and platform crawls share.
+            </div>
+          )}
           {visible.length === 0 ? (
             <div className="fp-empty">No findings match.</div>
           ) : (
@@ -107,6 +130,7 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                 const cls = f.spec_status?.status ?? "unclassified";
                 const host = f.occurrences.find((o) => o.host)?.host;
                 const triage = f.triage?.status ?? "untriaged";
+                const sight = sightingsLabel(f.sightings);
                 return (
                   <li key={f.finding_hash}>
                     <button type="button"
@@ -117,6 +141,10 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                       <span className="fp-val">{f.value ?? f.path ?? "(unnamed)"}</span>
                       {host && <span className="fp-host">{host}</span>}
                       <span className="chip">{triage}</span>
+                      {sight && (
+                        <span className="chip chip-sightings"
+                          title="Same finding in other runs of this engagement">{sight}</span>
+                      )}
                     </button>
                   </li>
                 );

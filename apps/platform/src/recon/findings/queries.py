@@ -13,11 +13,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from recon.db.base import tenant_session
 from recon.db.models import (
+    EngagementSession,
     Finding,
     FindingOccurrence,
     FindingSpecStatus,
@@ -75,6 +76,20 @@ class SpecStatusView:
 
 
 @dataclass(frozen=True)
+class SightingSummary:
+    """Slice 4: cross-run "sightings" of one finding — how many OTHER runs in the
+    same engagement carry the same ``finding_hash``, split by origin. ``capture`` =
+    a browser-extension capture session (``external_id`` set) whose run is not an
+    upload; ``platform`` = a crawl or an uploaded bundle. A ``FindingView.sightings``
+    of ``None`` means the run's session has no engagement (ungrouped), so no
+    cross-run collapse was attempted -- distinct from ``capture == platform == 0``
+    (grouped, but this finding is unique to the run)."""
+
+    capture: int
+    platform: int
+
+
+@dataclass(frozen=True)
 class FindingView:
     finding_hash: str
     type: str
@@ -87,6 +102,9 @@ class FindingView:
     triage: TriageView | None = None
     revealable: bool = False
     spec_status: SpecStatusView | None = None
+    # Slice 4: cross-run collapse. `None` == ungrouped (the run's session has no
+    # engagement); a summary (possibly all-zero) == grouped and computed.
+    sightings: SightingSummary | None = None
 
 
 @dataclass(frozen=True)
@@ -156,6 +174,21 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
                 select(FindingSpecStatus).where(FindingSpecStatus.session_id == str(run.session_id))
             ).all()
         }
+        # Slice 4: cross-run "sightings" — other runs in THIS engagement sharing each
+        # finding_hash. Engagement-scoped (finding_hash carries no app identity, so a
+        # tenant-wide match would false-link unrelated targets); skipped entirely when
+        # the session has no engagement (ungrouped) so we never emit `= NULL`, and the
+        # `None` propagates to every FindingView as the "ungrouped" tri-state.
+        engagement_id = session.scalar(
+            select(EngagementSession.engagement_id).where(
+                EngagementSession.id == str(run.session_id)
+            )
+        )
+        sightings_by_hash = (
+            _cross_run_sightings(session, str(engagement_id), str(run_id))
+            if engagement_id is not None
+            else None
+        )
         findings = session.scalars(
             select(Finding)
             .where(Finding.run_id == str(run_id))
@@ -193,6 +226,13 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
                     run.input_ref,
                     asset_refs,
                     spec_status_by_hash.get(finding.finding_hash),
+                    sightings=(
+                        None
+                        if sightings_by_hash is None
+                        else sightings_by_hash.get(
+                            finding.finding_hash, SightingSummary(capture=0, platform=0)
+                        )
+                    ),
                 )
                 for finding in findings
             ],
@@ -201,6 +241,45 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
                 _run_spec_summary(findings, spec_status_by_hash) if has_session_spec else None
             ),
         )
+
+
+def _cross_run_sightings(
+    session: Session, engagement_id: str, run_id: str
+) -> dict[str, SightingSummary]:
+    """Per ``finding_hash``, the count of OTHER runs (excluding ``run_id``) in this
+    engagement that carry it, bucketed by origin. One grouped query; RLS confines it
+    to the tenant and the engagement filter keeps an unrelated target that collides
+    on ``finding_hash`` from cross-linking (the hash carries no app identity)."""
+    # origin == `capture` only for an extension-capture accumulator: a capture SESSION
+    # (external_id set) whose RUN is not an upload. The `run.input_ref IS NULL` guard
+    # excludes an /runs/upload run dropped into a capture session (external_id set,
+    # input_ref set) -- that is a `platform` upload, not an extension capture. A crawl
+    # run leaves input_ref NULL but its session's external_id is NULL, so it stays
+    # `platform` via the else branch.
+    origin = case(
+        (
+            and_(EngagementSession.external_id.is_not(None), Run.input_ref.is_(None)),
+            "capture",
+        ),
+        else_="platform",
+    ).label("origin")
+    rows = session.execute(
+        select(Finding.finding_hash, origin, func.count().label("n"))
+        .join(Run, Run.id == Finding.run_id)
+        .join(EngagementSession, EngagementSession.id == Run.session_id)
+        .where(
+            EngagementSession.engagement_id == engagement_id,
+            Finding.run_id != run_id,
+        )
+        .group_by(Finding.finding_hash, origin)
+    ).all()
+    buckets: dict[str, dict[str, int]] = {}
+    for finding_hash, origin_label, count in rows:
+        buckets.setdefault(finding_hash, {"capture": 0, "platform": 0})[origin_label] = count
+    return {
+        finding_hash: SightingSummary(capture=b["capture"], platform=b["platform"])
+        for finding_hash, b in buckets.items()
+    }
 
 
 def base_url_rules_in_session(session: Session, session_id: str) -> list[BaseUrlRule]:
@@ -361,6 +440,7 @@ def _finding_view(
     run_input_ref: str | None = None,
     asset_refs: dict[str, _AssetRef] | None = None,
     spec_status_row: FindingSpecStatus | None = None,
+    sightings: SightingSummary | None = None,
 ) -> FindingView:
     # REQ-S2: a secret's raw evidence is never served; the value comes only from the
     # audited reveal endpoint. Endpoint/param evidence (a code snippet) is kept.
@@ -412,6 +492,7 @@ def _finding_view(
         triage=_triage_view(triage_row),
         revealable=revealable,
         spec_status=_spec_status_view(spec_status_row),
+        sightings=sightings,
     )
 
 

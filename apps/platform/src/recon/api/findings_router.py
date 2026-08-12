@@ -63,6 +63,16 @@ def get_run_findings(
                         "matched_operation": finding.spec_status.matched_operation,
                     }
                 ),
+                # Slice 4: cross-run sightings. null == "ungrouped" (the run's session
+                # has no engagement); an object (counts may be 0) == grouped + computed.
+                "sightings": (
+                    None
+                    if finding.sightings is None
+                    else {
+                        "capture": finding.sightings.capture,
+                        "platform": finding.sightings.platform,
+                    }
+                ),
                 "occurrences": [
                     {
                         "host": occurrence.host,
