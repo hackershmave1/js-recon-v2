@@ -50,6 +50,7 @@ from recon.domain import TERMINAL_STATES, AssetStatus, RunStage, RunState
 from recon.engagements import service as engagements_service
 from recon.events.log import publish, record_event
 from recon.observability import get_logger
+from recon.pairing import token as pairing_token
 from recon.runs import assets, coordinator
 from recon.runs import service as runs_service
 from recon.sessions import service as sessions_service
@@ -156,6 +157,34 @@ def _get_or_create_tenant(name: str) -> str:
         session.add(tenant)
         session.flush()
         return str(tenant.id)
+
+
+def _bearer_token(authorization: str | None) -> str | None:
+    """The token from an ``Authorization: Bearer <token>`` header, else ``None``. Tolerates
+    a non-str (a direct in-process call leaves FastAPI's Header sentinel, not a header)."""
+    if not isinstance(authorization, str):
+        return None
+    scheme, _, value = authorization.partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    return value.strip() or None
+
+
+def _resolve_ingest_tenant(authorization: str | None) -> tuple[str, bool]:
+    """Resolve which tenant an ingest request writes into, and whether it is PAIRED.
+
+    A valid Bearer pairing token resolves the operator tenant it names — the tenant is
+    derived ONLY from the server-signed token, never from any client value. Anything else
+    (no token, or an invalid/expired/tampered one) falls back to the shared capture tenant.
+    Fails CLOSED: a bad token never errors open into an operator tenant, and the extension
+    keeps capturing (into the shared tenant) rather than dropping JS on a typo."""
+    settings = get_settings()
+    token = _bearer_token(authorization)
+    if token:
+        tenant_id = pairing_token.verify(token, key=settings.pairing_key)
+        if tenant_id is not None:
+            return tenant_id, True
+    return _get_or_create_tenant(settings.capture_tenant_name), False
 
 
 def _find_session_by_external_id(tenant_id: str, ext_session_id: str) -> str | None:
@@ -344,7 +373,9 @@ def _seed_fetched_assets(
 
 @router.post("/save-files")
 def save_files(
-    payload: SaveFilesIn, origin: str | None = Header(default=None, alias="Origin")
+    payload: SaveFilesIn,
+    origin: str | None = Header(default=None, alias="Origin"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> dict:
     settings = get_settings()
     _enforce_origin_lock(origin, enabled=settings.capture_ingest_origin_lock)
@@ -353,10 +384,12 @@ def save_files(
     ext_session_id = meta.get("sessionId") or (
         payload.files[0].get("sessionId") if payload.files else None
     )
-    tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
+    # The Bearer pairing token (if any) selects the operator tenant; else capture-spike.
+    tenant_id, paired = _resolve_ingest_tenant(authorization)
     if not ext_session_id:
         return {
             "success": True,
+            "paired": paired,
             "sessionId": None,
             "runId": None,
             "stored": 0,
@@ -448,6 +481,7 @@ def save_files(
     )
     return {
         "success": True,
+        "paired": paired,
         "sessionId": session_id,
         "runId": run_id,
         "stored": stored,
@@ -488,12 +522,14 @@ def _manifest_domain(rows: list, fallback: str) -> str:
 
 @router.post("/sessions/{ext_session_id}/analyze/start")
 def analyze_start(
-    ext_session_id: str, origin: str | None = Header(default=None, alias="Origin")
+    ext_session_id: str,
+    origin: str | None = Header(default=None, alias="Origin"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> dict:
     redis = get_redis()
     settings = get_settings()
     _enforce_origin_lock(origin, enabled=settings.capture_ingest_origin_lock)
-    tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
+    tenant_id, _ = _resolve_ingest_tenant(authorization)
     session_id = _find_session_by_external_id(tenant_id, ext_session_id)
     if session_id is None:
         raise HTTPException(status_code=404, detail="unknown capture session")
@@ -621,9 +657,11 @@ def _idle_job() -> dict:
 
 
 @router.get("/sessions/{ext_session_id}/analyze/progress")
-def analyze_progress(ext_session_id: str) -> dict:
-    settings = get_settings()
-    tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
+def analyze_progress(
+    ext_session_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> dict:
+    tenant_id, _ = _resolve_ingest_tenant(authorization)
     session_id = _find_session_by_external_id(tenant_id, ext_session_id)
     if session_id is None:
         raise HTTPException(status_code=404, detail="unknown capture session")
@@ -677,19 +715,22 @@ def _engagement_to_project(view: engagements_service.EngagementView) -> dict:
 
 
 @router.get("/projects")
-def list_projects() -> list[dict]:
-    settings = get_settings()
-    tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
+def list_projects(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> list[dict]:
+    tenant_id, _ = _resolve_ingest_tenant(authorization)
     return [_engagement_to_project(v) for v in engagements_service.list_engagements(tenant_id)]
 
 
 @router.post("/projects")
 def create_project(
-    payload: dict[str, Any], origin: str | None = Header(default=None, alias="Origin")
+    payload: dict[str, Any],
+    origin: str | None = Header(default=None, alias="Origin"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> dict:
     settings = get_settings()
     _enforce_origin_lock(origin, enabled=settings.capture_ingest_origin_lock)
-    tenant_id = _get_or_create_tenant(settings.capture_tenant_name)
+    tenant_id, _ = _resolve_ingest_tenant(authorization)
     name = str(payload.get("name") or "").strip()
     if not name:
         # create is user-initiated (not the JS-loss ingest path); a string detail

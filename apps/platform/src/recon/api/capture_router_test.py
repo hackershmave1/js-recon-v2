@@ -31,6 +31,7 @@ from recon.domain import RunState
 from recon.fetch import egress, fetch
 from recon.findings import analyze as analyze_mod
 from recon.findings import queries as findings_queries
+from recon.pairing import token as pairing_token
 from recon.queue import retry
 from recon.runs import assets as run_assets
 from recon.runs import queries as run_queries
@@ -153,6 +154,85 @@ def test_origin_lock_kill_switch_allows_web_origin(make_capture_client):
         headers={"Origin": "https://evil.example"},
     )
     assert r.status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# Pairing: a valid Bearer token re-homes ingest into the operator tenant; an
+# absent/invalid token falls back (paired flag) to the shared capture tenant.
+# --------------------------------------------------------------------------- #
+
+_PAIRING_KEY = "test-pairing-key"
+
+
+def _make_operator_tenant() -> str:
+    with admin_session() as session:
+        tenant = Tenant(name=f"op-{uuid.uuid4().hex[:8]}")
+        session.add(tenant)
+        session.flush()
+        return str(tenant.id)
+
+
+def _one_file_batch(sid: str) -> dict:
+    return {
+        "metadata": {"sessionId": sid, "disableAnalysis": True},
+        "files": [_file("https://acme.io/a.js", "fetch('/x');", sid)],
+    }
+
+
+def test_save_files_with_valid_bearer_lands_in_operator_tenant(make_capture_client):
+    client = make_capture_client(RECON_PAIRING_KEY=_PAIRING_KEY)
+    op_tenant = _make_operator_tenant()
+    token = pairing_token.mint(op_tenant, key=_PAIRING_KEY, ttl_seconds=3600)
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    r = client.post(
+        "/api/save-files", json=_one_file_batch(sid), headers={"Authorization": f"Bearer {token}"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["paired"] is True
+    # Session created under the OPERATOR tenant, never the shared capture-spike tenant.
+    assert capture_router._find_session_by_external_id(op_tenant, sid) is not None
+    spike = _tenant_id(client.capture_tenant_name)
+    assert capture_router._find_session_by_external_id(spike, sid) is None
+
+
+def test_save_files_without_bearer_is_unpaired_and_shared(make_capture_client):
+    client = make_capture_client(RECON_PAIRING_KEY=_PAIRING_KEY)
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    r = client.post("/api/save-files", json=_one_file_batch(sid))
+    assert r.status_code == 200
+    assert r.json()["paired"] is False
+    spike = _tenant_id(client.capture_tenant_name)
+    assert capture_router._find_session_by_external_id(spike, sid) is not None
+
+
+def test_save_files_with_invalid_bearer_falls_back_closed(make_capture_client):
+    client = make_capture_client(RECON_PAIRING_KEY=_PAIRING_KEY)
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    r = client.post(
+        "/api/save-files",
+        json=_one_file_batch(sid),
+        headers={"Authorization": "Bearer garbage.token"},
+    )
+    assert r.status_code == 200
+    assert r.json()["paired"] is False
+    spike = _tenant_id(client.capture_tenant_name)
+    assert capture_router._find_session_by_external_id(spike, sid) is not None
+
+
+def test_bearer_rehomes_all_endpoints_not_just_save_files(make_capture_client):
+    # The §4 must-fix: progress must resolve the SAME tenant as save-files, or a paired
+    # popup 404s. Save under the operator tenant with the token, then progress WITH the
+    # token finds the session (200), WITHOUT it (capture-spike) does not (404).
+    client = make_capture_client(RECON_PAIRING_KEY=_PAIRING_KEY)
+    op_tenant = _make_operator_tenant()
+    token = pairing_token.mint(op_tenant, key=_PAIRING_KEY, ttl_seconds=3600)
+    auth = {"Authorization": f"Bearer {token}"}
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    assert (
+        client.post("/api/save-files", json=_one_file_batch(sid), headers=auth).status_code == 200
+    )
+    assert client.get(f"/api/sessions/{sid}/analyze/progress", headers=auth).status_code == 200
+    assert client.get(f"/api/sessions/{sid}/analyze/progress").status_code == 404
 
 
 def test_save_files_accumulates_one_queued_run(make_capture_client):
