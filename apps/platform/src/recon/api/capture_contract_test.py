@@ -66,8 +66,9 @@ def test_save_files_response_envelope(capture_client):
         )
     assert res.status_code == 200
     body = res.json()
-    assert set(body) == {"success", "sessionId", "runId", "stored", "failed", "files"}
+    assert set(body) == {"success", "paired", "sessionId", "runId", "stored", "failed", "files"}
     assert body["success"] is True
+    assert body["paired"] is False  # additive pairing field; no Bearer sent -> unpaired
     assert body["sessionId"] == "sess-1"
     assert body["runId"] == "run-1"
     assert body["stored"] == 1
@@ -87,6 +88,7 @@ def test_save_files_without_session_returns_empty_envelope(capture_client):
     assert res.status_code == 200
     assert res.json() == {
         "success": True,
+        "paired": False,
         "sessionId": None,
         "runId": None,
         "stored": 0,

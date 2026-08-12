@@ -145,6 +145,12 @@ class Settings(BaseSettings):
     # cross-origin POSTs and JS cannot forge it). The extension sends
     # chrome-extension://<id> or no Origin. Kill-switch for non-browser ingest clients.
     capture_ingest_origin_lock: bool = True  # env: RECON_CAPTURE_INGEST_ORIGIN_LOCK
+    # Stateless pairing token (capture link): a signed HMAC token routes the extension's
+    # captures into an operator tenant instead of the shared capture tenant. Empty key =>
+    # pairing disabled (mint returns 503). Rotating the key is the "revoke all" control
+    # (stateless — there is no per-token revoke). See recon/pairing + api/pairing_router.
+    pairing_key: str = ""  # env: RECON_PAIRING_KEY (secret)
+    pairing_ttl_seconds: int = 12 * 3600  # minted-token lifetime; re-mint when it expires
 
     # Realtime / durability (REQ-R2, REQ-R3).
     heartbeat_interval_seconds: float = 5.0

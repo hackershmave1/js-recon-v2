@@ -58,9 +58,10 @@ def create_app() -> FastAPI:
     # state-changing POSTs are Origin-locked against cross-site writes
     # (capture_router._enforce_origin_lock). See api/capture_router.py.
     if settings.enable_capture_ingest:
-        from recon.api import capture_router
+        from recon.api import capture_router, pairing_router
 
         app.include_router(capture_router.router)
+        app.include_router(pairing_router.router)
         log.info("api.capture_ingest_enabled")
 
     @app.get("/healthz", tags=["ops"])
