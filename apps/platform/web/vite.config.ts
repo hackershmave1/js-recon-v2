@@ -11,6 +11,7 @@ export default defineConfig({
       "/runs": "http://localhost:8000",
       "/sessions": "http://localhost:8000",
       "/engagements": "http://localhost:8000",
+      "/pairing": "http://localhost:8000",
       "/healthz": "http://localhost:8000",
     },
   },
