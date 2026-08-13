@@ -47,6 +47,12 @@ dependencies = [
     # `SafeLoader`/`Composer.compose_node` directly to reject anchors/aliases —
     # a direct `import yaml`, not just a transitive pull via the validator.
     "pyyaml>=6.0",
+    # GraphQL document parsing (enrichment C, export-only): parse GraphQL operation
+    # documents embedded in a bundle (gql`...`, graphql(`...`), {query:`...`}) so the
+    # OpenAPI export can annotate them. Parsing only — no network, no schema
+    # (precedent: openapi-spec-validator). Ceiling-pinned below the next major since
+    # the parse()/GraphQLSyntaxError/AST-node surface we use is the stable 3.x API.
+    "graphql-core>=3.2,<4",
 ]
 
 [project.optional-dependencies]

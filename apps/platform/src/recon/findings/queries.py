@@ -9,6 +9,7 @@ deliberately distinct from a run that exists with zero findings (empty list).
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -16,6 +17,7 @@ from typing import Any
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session, selectinload
 
+from recon import storage
 from recon.db.base import tenant_session
 from recon.db.models import (
     EngagementSession,
@@ -329,6 +331,49 @@ def list_base_url_rules(tenant_id: str, run_id: str) -> list[BaseUrlRule]:
         if run is None:
             return []
         return base_url_rules_in_session(session, str(run.session_id))
+
+
+def graphql_operations(tenant_id: str, run_id: str) -> list[dict[str, Any]]:
+    """Every GraphQL operation recorded for the run, unioned across its assets (enrichment C).
+
+    A crawl run analyzes once PER asset, each emitting its OWN ``analyze.graphql`` event that
+    indexes its OWN content-addressed ``graphql`` blob (ops are stored in the blob, not inline
+    in the event — REQ-D2 keeps artifacts out of Postgres). The run-wide set is therefore the
+    UNION of every event's blob, deduped: reading only the latest event would drop all but the
+    last asset's ops (design-gate M4). Deterministic order; ``[]`` when the run has no GraphQL
+    (or is invisible to the tenant — RLS simply yields no events).
+    """
+    with tenant_session(tenant_id) as session:
+        payloads = session.scalars(
+            select(RunEvent.payload)
+            .where(RunEvent.run_id == str(run_id), RunEvent.type == "analyze.graphql")
+            .order_by(RunEvent.id)
+        ).all()
+    seen: set[tuple[str, str | None, tuple[str, ...], str]] = set()
+    operations: list[dict[str, Any]] = []
+    for payload in payloads:
+        ref = payload.get("graphql_ref")
+        if not ref:
+            continue
+        for entry in json.loads(storage.get_blob(ref).decode("utf-8")):
+            identity = (
+                entry["op_type"],
+                entry.get("name"),
+                tuple(entry.get("fields", [])),
+                entry["source_path"],
+            )
+            if identity not in seen:
+                seen.add(identity)
+                operations.append(entry)
+    return sorted(
+        operations,
+        key=lambda op: (
+            op["op_type"],
+            op.get("name") or "",
+            tuple(op["fields"]),
+            op["source_path"],
+        ),
+    )
 
 
 def _latest_coverage(session: Session, run_id: str, *, is_multi_asset: bool) -> CoverageView | None:

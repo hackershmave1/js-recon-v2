@@ -48,6 +48,47 @@ def _seed(tenant, session_id):
         return run_id
 
 
+def _seed_graphql(tenant, run_id, entries):
+    """Persist a run-level GraphQL export artifact the way analyze does (enrichment C):
+    a content-addressed `graphql` blob + the `analyze.graphql` event that indexes it."""
+    from recon import storage
+
+    ref = storage.put_blob(tenant, run_id, "graphql", json.dumps(entries).encode("utf-8"))
+    with tenant_session(tenant) as session:
+        session.add(
+            models.RunEvent(
+                tenant_id=tenant,
+                run_id=run_id,
+                type="analyze.graphql",
+                payload={"count": len(entries), "graphql_ref": ref},
+            )
+        )
+
+
+def test_export_carries_graphql_operations(client, authorized_session):
+    # Enrichment C: the OpenAPI export surfaces the run's GraphQL operations as a root
+    # x-recon-graphql-operations annotation, alongside (never inside) the HTTP paths.
+    tenant, session_id = authorized_session
+    run_id = _seed(tenant, session_id)
+    ops = [
+        {
+            "op_type": "query",
+            "name": "Me",
+            "fields": ["me"],
+            "source_path": "https://acme.io/app.js",
+        }
+    ]
+    _seed_graphql(tenant, run_id, ops)
+
+    resp = client.get(f"/runs/{run_id}/export/openapi", headers=_headers(tenant))
+
+    assert resp.status_code == 200
+    doc = json.loads(resp.content)
+    validate(doc)
+    assert doc["x-recon-graphql-operations"] == ops
+    assert "/location/address/search" in doc["paths"]  # HTTP endpoints unaffected
+
+
 def test_export_openapi_json(client, authorized_session):
     tenant, session_id = authorized_session
     run_id = _seed(tenant, session_id)

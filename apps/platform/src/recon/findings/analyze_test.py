@@ -35,6 +35,11 @@ _JS_AUTH = """
 fetch("/api/me", {headers:{Authorization:"Bearer " + token}});
 """
 
+_JS_GRAPHQL = """
+const Me = gql`query Me { me { id email } }`;
+fetch("/api/health");
+"""
+
 
 def _drive(redis, run_id, tenant, *, max_passes=30) -> str:
     terminal = {RunState.DONE, RunState.PARTIAL, RunState.FAILED, RunState.CANCELLED}
@@ -103,6 +108,42 @@ def test_endpoint_finding_carries_auth_headers(redis, authorized_session):
     assert endpoints["GET /api/me"].attributes["auth"] == [
         {"name": "Authorization", "scheme": "bearer"}
     ]
+
+
+def test_graphql_operation_exported_but_never_a_finding(redis, authorized_session):
+    """Enrichment C (export-only): a gql`` document surfaces as a GraphQL operation in the
+    OpenAPI export but NEVER as an endpoint/param finding — a GraphQL op is not an HTTP call,
+    so it must not pollute the HTTP-endpoints read model. The real fetch in the same bundle
+    is still extracted normally. Exercises the exact chain the export router runs (analyze
+    persist -> queries.graphql_operations union -> build_openapi emit)."""
+    from openapi_spec_validator import validate
+
+    from recon.findings import queries as findings_queries
+    from recon.probe import openapi
+    from recon.probe.reconstruct import reconstruct_run
+
+    tenant, session_id = authorized_session
+    view = coordinator.start_run_with_input(
+        redis, tenant_id=tenant, session_id=session_id, js_source=_JS_GRAPHQL, target="acme.io"
+    )
+    assert _drive(redis, view.id, tenant) == RunState.DONE.value
+
+    findings = _findings(tenant, view.id)
+    # The gql`` document created NO endpoint/param finding — only the real fetch did.
+    assert {f.value for f in findings if f.type == "endpoint"} == {"GET /api/health"}
+    assert [f for f in findings if f.type == "param"] == []
+
+    # ...but the operation IS carried by the export (source_path = bundle fallback for an
+    # upload run, where there is no per-asset URL).
+    ops = findings_queries.graphql_operations(tenant, view.id)
+    assert ops == [{"op_type": "query", "name": "Me", "fields": ["me"], "source_path": "input.js"}]
+
+    doc = openapi.build_openapi(
+        reconstruct_run(tenant, view.id), run_id=view.id, graphql_operations=ops
+    )
+    validate(doc)  # the extension must keep the exported document valid
+    assert doc["x-recon-graphql-operations"] == ops
+    assert list(doc["paths"]) == ["/api/health"]  # the GraphQL op is NEVER an HTTP path
 
 
 def test_coverage_event_counts_unattributed(redis, authorized_session):

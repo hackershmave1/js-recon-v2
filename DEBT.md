@@ -196,10 +196,10 @@ fail-closed SSRF egress guard, static/no-active-traffic stance, single-analysis-
 convergence, and the hardened out-of-process engine harness. Each carries a MADR
 **Confirmation** section pointing at the enforcing code/tests (anti-drift anchor) and links
 its slice spec rather than copying it; status is per-decision-reality (all 8 shipped →
-`accepted`). **GraphQL export-only was deliberately NOT written as an accepted ADR** — 0
-hits in `apps/platform/src` (parked on `feat/enrichment`, D13); it is folded honestly as a
-corollary in ADR-0006 (outputs are static exports; GraphQL SDL is a deferred *export*
-format, never a served API). Three decisions whose rejected-alternative rationale is
+`accepted`). **GraphQL export-only is a corollary of ADR-0006, not a standalone accepted ADR** —
+it now ships (enrichment C, D13) as the export-side `x-recon-graphql-operations` annotation,
+consistent with ADR-0006 (outputs are static exports; a reconstructed GraphQL operation is an
+*export* annotation, never a served API nor an HTTP path/finding). Three decisions whose rejected-alternative rationale is
 off-repo (the SIGSTOP rejection, Redis-vs-alternatives, the exact scope of "no active
 traffic") say so explicitly and cite the source. A hermetic structure test
 (`apps/platform/src/recon/adr_structure_test.py` — must live under `src/` to be collected
@@ -285,8 +285,12 @@ enterprise-hygiene cleanup (so the "later" doesn't become "never"):
 
 ## Parked work
 
-### D13 · Enrichment slice [M] — parked, design-gated
-`feat/enrichment` @ `58de1a9`: param risk-tags + header→securitySchemes + GraphQL
-export-only. Spec + §4 design gate done (BUILD WITH CHANGES, 5 must-fixes captured in the
-enrichment design spec on the `feat/enrichment` branch). Resume after
-the hardening slice.
+Nothing parked — D13 (the last parked slice) shipped 2026-08-13; kept below as a record.
+
+### D13 · Enrichment slice [M] — ✅ RESOLVED 2026-08-13
+Param risk-tags (A) + auth headers → OpenAPI `securitySchemes` (B) merged in PR #49; GraphQL
+export-only (C) reviewed and landing on `feat/enrichment-graphql`. Both §4 gates passed (design:
+BUILD WITH CHANGES; code: SHIP-WITH-NITS — the MEDIUM `RecursionError` soft-miss + the M4
+multi-event union test folded). The OpenAPI export now carries `x-recon-risk`,
+`components.securitySchemes`, and `x-recon-graphql-operations`. Spec:
+`apps/platform/docs/superpowers/specs/2026-08-07-enrichment-design.md`.

@@ -8,6 +8,8 @@ compose stack (Postgres RLS, Redis, MinIO).
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from recon.domain import RunState
@@ -169,3 +171,50 @@ def test_list_findings_includes_spec_status_and_run_scoped_summary(redis, author
     assert result.spec_summary.unresolved == 0
     assert result.spec_summary.suffix_verify == 0
     assert result.spec_summary.base_url_incompleteness_ratio == 0.0
+
+
+def test_graphql_operations_unions_dedups_and_sorts_across_assets(authorized_session):
+    """M4: a crawl analyzes once PER asset, each emitting its OWN ``analyze.graphql`` event/blob.
+    ``graphql_operations`` must UNION every event (read-latest would drop all but the last asset),
+    dedup an operation two assets share, and return a deterministic order."""
+    from recon import storage
+    from recon.db import models
+    from recon.db.base import tenant_session
+
+    tenant, session_id = authorized_session
+    with tenant_session(tenant) as session:
+        run = models.Run(tenant_id=tenant, session_id=session_id, state="done")
+        session.add(run)
+        session.flush()
+        run_id = str(run.id)
+
+    shared = {"op_type": "query", "name": "Me", "fields": ["me"], "source_path": "https://h/a.js"}
+    asset_a = [
+        shared,
+        {"op_type": "mutation", "name": "Go", "fields": ["go"], "source_path": "https://h/a.js"},
+    ]
+    asset_b = [
+        shared,
+        {"op_type": "query", "name": "List", "fields": ["items"], "source_path": "https://h/b.js"},
+    ]
+    for entries in (asset_a, asset_b):
+        ref = storage.put_blob(tenant, run_id, "graphql", json.dumps(entries).encode("utf-8"))
+        with tenant_session(tenant) as session:
+            session.add(
+                models.RunEvent(
+                    tenant_id=tenant,
+                    run_id=run_id,
+                    type="analyze.graphql",
+                    payload={"count": len(entries), "graphql_ref": ref},
+                )
+            )
+
+    ops = findings_queries.graphql_operations(tenant, run_id)
+
+    # Union across BOTH events (read-latest would drop "Go"), the shared "Me" deduped to one,
+    # sorted by (op_type, name, fields, source_path): mutation < query, then List < Me.
+    assert ops == [
+        {"op_type": "mutation", "name": "Go", "fields": ["go"], "source_path": "https://h/a.js"},
+        {"op_type": "query", "name": "List", "fields": ["items"], "source_path": "https://h/b.js"},
+        {"op_type": "query", "name": "Me", "fields": ["me"], "source_path": "https://h/a.js"},
+    ]

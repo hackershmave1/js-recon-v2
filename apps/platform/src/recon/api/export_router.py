@@ -13,14 +13,15 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
 from recon.api.deps import get_tenant_id
+from recon.findings import queries
 from recon.probe import openapi
 from recon.probe.reconstruct import reconstruct_run
 
 router = APIRouter(tags=["export"])
 
 
-def _render(requests, run_id: str, fmt: str) -> tuple[bytes, str]:
-    document = openapi.build_openapi(requests, run_id=run_id)
+def _render(requests, graphql_operations, run_id: str, fmt: str) -> tuple[bytes, str]:
+    document = openapi.build_openapi(requests, run_id=run_id, graphql_operations=graphql_operations)
     return openapi.dump_openapi(document, fmt)
 
 
@@ -36,8 +37,13 @@ async def export_openapi(
     requests = await run_in_threadpool(reconstruct_run, tenant_id, run_id)
     if requests is None:
         raise HTTPException(status_code=404, detail="run not found")
+    # GraphQL operations (enrichment C) are a separate run-level artifact, unioned across
+    # the run's assets — export-only, never part of the reconstructed HTTP paths.
+    graphql_operations = await run_in_threadpool(queries.graphql_operations, tenant_id, run_id)
     try:
-        body, media_type = await run_in_threadpool(_render, requests, run_id, format)
+        body, media_type = await run_in_threadpool(
+            _render, requests, graphql_operations, run_id, format
+        )
     except Exception as exc:  # noqa: BLE001 — self-validation backstop (gate B2) → 500
         raise HTTPException(
             status_code=500, detail="failed to build a valid OpenAPI document"

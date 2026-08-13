@@ -550,8 +550,8 @@ def test_empty_document_still_stamps_contract_version():
 def test_export_contract_extension_names_are_stable():
     # The version claims to version the SHAPE of the x-recon-* extensions, so a silent
     # rename of ANY of them must trip the alarm — not just x-recon-confidence. Exercise
-    # a WebSocket, a non-standard verb, and a names-only body so all three conditional
-    # root/operation extensions are emitted.
+    # a WebSocket, a non-standard verb, a names-only body, and a GraphQL op so all the
+    # conditional root/operation extensions are emitted.
     ws = _req(
         operation="WSS wss://h/live",
         method="WSS",
@@ -563,8 +563,32 @@ def test_export_contract_extension_names_are_stable():
     body = _req(
         operation="POST /b", method="POST", path="/b", body_params=("a",), content_type=None
     )
-    doc = build_openapi([ws, purge, body], run_id="00000000-0000-0000-0000-000000000000")
+    ops = [{"op_type": "query", "name": "Me", "fields": ["me"], "source_path": "input.js"}]
+    doc = build_openapi(
+        [ws, purge, body], run_id="00000000-0000-0000-0000-000000000000", graphql_operations=ops
+    )
     validate(doc)
     assert "x-recon-websocket-endpoints" in doc
     assert "x-recon-nonstandard-operations" in doc
+    assert "x-recon-graphql-operations" in doc
     assert doc["paths"]["/b"]["post"]["x-recon-body-params"] == ["a"]
+
+
+# --- enrichment C: GraphQL operations (export-only root extension) ------------ #
+
+
+def test_graphql_operations_surfaced_as_root_extension_and_valid():
+    ops = [
+        {"op_type": "query", "name": "Me", "fields": ["me"], "source_path": "https://h/app.js"},
+        {"op_type": "mutation", "name": None, "fields": ["go"], "source_path": "input.js"},
+    ]
+    doc = build_openapi([], run_id="00000000-0000-0000-0000-000000000000", graphql_operations=ops)
+    validate(doc)  # a root x-recon-graphql-operations extension must stay valid OpenAPI 3.0.3
+    assert doc["x-recon-graphql-operations"] == ops
+    assert doc["paths"] == {}  # a GraphQL op is NEVER emitted as an HTTP path
+
+
+def test_graphql_extension_absent_when_no_operations():
+    # Default (no ops) — the extension key must not appear at all.
+    doc = build_openapi([_req()], run_id="00000000-0000-0000-0000-000000000000")
+    assert "x-recon-graphql-operations" not in doc

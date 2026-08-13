@@ -31,6 +31,9 @@ BLOB_KINDS = frozenset(
         "assets",
         "spec",
         "capture-requests",
+        # Run-level GraphQL operations located by analyze (enrichment C, export-only):
+        # a JSON list the OpenAPI export unions across the run's assets.
+        "graphql",
     }
 )
 
