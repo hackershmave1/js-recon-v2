@@ -876,9 +876,26 @@ class JSExtractor {
     this.scheduleQueueProcessing();
   }
 
+  // Capture just turned on: pull in the JS the ACTIVE tab already loaded. webRequest only sees
+  // NEW script requests and nothing else re-reads a loaded page, so without this an already-open
+  // tab captures nothing until the operator reloads. Best-effort + fire-and-forget — a tab with
+  // no content script (chrome://, the web store, a blank tab) just rejects the message.
+  async rescanActiveTab() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab && Number.isInteger(tab.id)) {
+        const sent = chrome.tabs.sendMessage(tab.id, { action: 'rescanScripts' });
+        if (sent && typeof sent.catch === 'function') sent.catch(() => {});
+      }
+    } catch (e) {
+      // tabs API unavailable / no active tab — non-fatal.
+    }
+  }
+
   startCapture(sendResponse) {
     this.isCapturing = true;
     this.persistCaptureState(true);
+    this.rescanActiveTab();
     sendResponse({ success: true, sessionId: this.sessionId });
   }
 
@@ -935,6 +952,10 @@ class JSExtractor {
     this.batchUploader.setScope({ rootDomains, includeSubdomains });
     this.batchUploader.setConfig({ projectId, captureConfig, overrideKeys });
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
+
+    // A fresh session on an already-loaded page should still capture that page (parity with
+    // startCapture) — webRequest won't refire for JS that loaded before the rotation.
+    if (this.isCapturing) this.rescanActiveTab();
 
     sendResponse({
       success: true,
