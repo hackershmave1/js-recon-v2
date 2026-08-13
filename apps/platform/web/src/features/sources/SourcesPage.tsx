@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getSources, getSourceContent, ApiError } from "../../api/apiClient";
 import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump } from "../../api/types";
-import { highlightJsLines, type HighlightedSpan } from "./highlight";
+import { CodeViewer } from "./CodeViewer";
 import "./sources.css";
 
 // A finding occurrence belongs to a file when: (crawl) its asset_url equals the
@@ -155,62 +155,11 @@ async function formatJs(code: string): Promise<string> {
 // synchronously would freeze the tab (design fix S2).
 const HIGHLIGHT_MAX_CHARS = 200_000;
 
-// Presentational: renders `text` line-by-line. `marks` (line -> finding type) is
-// null when the view is pretty-printed, since the original line numbers no longer
-// map after reformatting. `focusLine` is the jumped-to line (highlighted + scrolled
-// into view); it still applies to pretty-printed text even though marks don't.
-function CodeViewer({ text, truncated, marks, focusLine, canHighlight }: {
-  text: string; truncated: boolean; marks: Map<number, string> | null; focusLine?: number | null; canHighlight: boolean;
-}) {
-  const lines = useMemo(() => text.split("\n"), [text]);
-
-  // Lazily syntax-highlight into per-line spans. Plain text until ready and on
-  // failure (S3); skipped for very large files (S2). Eligibility (`canHighlight`)
-  // is gauged by the caller from the RAW source length, NOT `text.length`: pretty-
-  // printing only inflates whitespace (cheap tokens), so a file that highlights raw
-  // must still highlight after beautify — gating on the expanded length would
-  // wrongly drop highlighting for exactly the minified bundles that auto-format.
-  const [highlighted, setHighlighted] = useState<HighlightedSpan[][] | null>(null);
-  useEffect(() => {
-    setHighlighted(null);
-    if (!canHighlight) return;
-    let live = true;
-    void highlightJsLines(text)
-      .then((out) => { if (live) setHighlighted(out); })
-      .catch(() => { /* fall back to plain text */ });
-    return () => { live = false; };
-  }, [text, canHighlight]);
-
-  // Scroll the jumped-to line into view after it renders. Re-run when highlighting
-  // resolves (it reflows the line). jsdom's scrollIntoView throws, so guard it.
-  const focusRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (focusLine == null) return;
-    try { focusRef.current?.scrollIntoView({ block: "center" }); } catch { /* jsdom no-op */ }
-  }, [focusLine, text, highlighted]);
-
-  return (
-    <div className="sv-code">
-      {truncated && <div className="sv-note sv-warn">File truncated — showing a capped preview.</div>}
-      {lines.map((line, i) => {
-        const n = i + 1;
-        const mark = marks?.get(n);
-        const focused = focusLine === n;
-        const spans = highlighted?.[i];
-        return (
-          <div key={n} ref={focused ? focusRef : undefined}
-            className={"sv-line" + (mark ? " marked" : "") + (focused ? " focus" : "")}>
-            <span className="sv-ln">{n}</span>
-            <span className="sv-code-txt">
-              {spans ? spans.map((s, j) => <span key={j} className={s.className}>{s.text}</span>) : line}
-            </span>
-            {mark && <span className="sv-mark">{mark}</span>}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+// Files past this size are NOT auto-pretty-printed and the "Pretty print" button is disabled:
+// js-beautify runs SYNCHRONOUSLY on the main thread and froze the whole machine on a multi-MiB
+// bundle (the server caps its own beautify at 1 MiB and serves such files raw — the client must
+// not re-run that transform uncapped). Download to format offline instead.
+const BEAUTIFY_MAX_CHARS = 200_000;
 
 function downloadText(name: string, text: string) {
   const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
@@ -322,10 +271,10 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
   const [prettyText, setPrettyText] = useState<string | null>(null);
   useEffect(() => {
     setPrettyText(null);
-    setPretty(content != null && isMinified(content.content));
+    setPretty(content != null && isMinified(content.content) && content.content.length <= BEAUTIFY_MAX_CHARS);
   }, [content]);
   useEffect(() => {
-    if (!pretty || content == null || prettyText != null) return;
+    if (!pretty || content == null || prettyText != null || content.content.length > BEAUTIFY_MAX_CHARS) return;
     let live = true;
     void formatJs(content.content).then((out) => { if (live) setPrettyText(out); });
     return () => { live = false; };
@@ -361,8 +310,11 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
             {findingCount > 0 && <span className="sv-file-count">{findingCount} finding{findingCount === 1 ? "" : "s"} in this file</span>}
             {content && (
               <button type="button" className={"sv-pretty" + (pretty ? " on" : "")}
-                aria-pressed={pretty} onClick={() => setPretty((p) => !p)}
-                title={pretty ? "Show the raw, unformatted source" : "Format (pretty-print) the source"}>
+                aria-pressed={pretty} disabled={content.content.length > BEAUTIFY_MAX_CHARS}
+                onClick={() => setPretty((p) => !p)}
+                title={content.content.length > BEAUTIFY_MAX_CHARS
+                  ? "Too large to format in-app — Download to format offline"
+                  : pretty ? "Show the raw, unformatted source" : "Format (pretty-print) the source"}>
                 <span className="sv-pretty-glyph" aria-hidden="true">{"{ }"}</span> Pretty print
               </button>
             )}
