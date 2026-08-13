@@ -87,6 +87,14 @@ def test_parse_interpolated_template_is_soft_miss():
     assert parse_operations("query Foo { me { ${sel} } }") == ()
 
 
+def test_parse_deeply_nested_document_is_soft_miss():
+    # T2 hardening: graphql-core's recursive-descent parse() has no depth limit, so a crafted
+    # deeply-nested gql`` template raises RecursionError (NOT GraphQLSyntaxError). It must still
+    # soft-miss — parsing one asset's hostile JS may never crash the analyze stage (a per-asset DoS).
+    deep = "query D " + "{ a " * 6000 + "}" * 6000
+    assert parse_operations(deep) == ()
+
+
 # --- collect_operations: end-to-end locate → parse → dedup --------------------- #
 
 

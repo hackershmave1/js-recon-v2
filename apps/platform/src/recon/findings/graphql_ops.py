@@ -46,8 +46,9 @@ class GraphQLOperation:
     fields: tuple[str, ...]  # top-level selection field names
 
 
-# JS callees whose string argument is a GraphQL document (the graphql-tag family).
-_GRAPHQL_CALLEES = frozenset({"gql", "graphql", "graphql-tag"})
+# JS callees whose string argument is a GraphQL document (the graphql-tag family). Only real JS
+# identifiers can match `_call_document`'s `fn.type == "identifier"` gate, so `gql`/`graphql`.
+_GRAPHQL_CALLEES = frozenset({"gql", "graphql"})
 # Object-literal keys whose value is a GraphQL document (a GraphQL-over-HTTP request body).
 _GRAPHQL_BODY_KEYS = frozenset({"query", "mutation"})
 
@@ -107,15 +108,19 @@ def _object_documents(node: Node) -> list[str]:
 def parse_operations(document: str) -> tuple[GraphQLOperation, ...]:
     """Parse one GraphQL document into its operations, or ``()`` if it cannot be parsed.
 
-    A malformed or ``${...}``-interpolated template is a SOFT MISS → ``()`` (spec trap T2):
-    analyze must never fail on a GraphQL template it cannot parse, mirroring the source-map
-    recovery's opportunistic invariant. Top-level selections are filtered to ``FieldNode``
+    A malformed, ``${...}``-interpolated, or pathologically nested template is a SOFT MISS →
+    ``()`` (spec trap T2): analyze must never fail on a GraphQL template it cannot parse,
+    mirroring the source-map recovery's opportunistic invariant. Top-level selections are filtered to ``FieldNode``
     before reading ``.name`` (spec S2 — an inline fragment / fragment spread has no field
     name and would otherwise ``AttributeError``).
     """
     try:
         document_node = parse(document)
-    except GraphQLSyntaxError:
+    except (GraphQLSyntaxError, RecursionError):
+        # RecursionError: graphql-core's parse() is recursive-descent with no depth limit, so a
+        # pathologically nested document (a crafted gql`` template in hostile fetched JS) exhausts
+        # the Python recursion limit. Soft-miss it exactly like a syntax error — analyze must never
+        # fail on a template it cannot parse (T2), and one asset's parse must never DoS the run.
         return ()
     operations: list[GraphQLOperation] = []
     for definition in document_node.definitions:
