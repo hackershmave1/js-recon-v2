@@ -185,4 +185,46 @@ describe("SourcesPage", () => {
       { timeout: 15_000 },
     );
   }, 20_000);
+
+  // ---- large-file guards (a multi-MiB minified clientlib froze the machine) ----
+
+  it("does not auto-pretty a huge minified file and disables the Pretty button", async () => {
+    const HUGE = "a".repeat(250_000); // one line > BEAUTIFY_MAX_CHARS (200k)
+    vi.spyOn(api, "getSources").mockResolvedValue({
+      run_id: "r", count: 1,
+      sources: [{ path: "https://acme.io/big.min.js", kind: "asset", fetch_status: "ok", asset_url: null }],
+    });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "https://acme.io/big.min.js", content: HUGE, truncated: false });
+    render(<SourcesPage data={null} tenantId="t" runId="r" jump={null} />);
+
+    const toggle = await screen.findByRole("button", { name: /pretty print/i });
+    expect(toggle).toBeDisabled(); // never re-runs the synchronous beautifier on the main thread
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(document.querySelectorAll(".sv-line")).toHaveLength(1); // raw single line, no DOM explosion
+  });
+
+  it("caps how many lines it renders for a huge multi-line file", async () => {
+    const MANY = "x\n".repeat(12_000); // 12k short lines, not minified -> rendered raw, capped
+    vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: 1, sources: [UPLOAD] });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "input.js", content: MANY, truncated: false });
+    render(<SourcesPage data={null} tenantId="t" runId="r" jump={null} />);
+
+    await waitFor(() => expect(document.querySelector(".sv-note.sv-warn")?.textContent).toMatch(/large file/i));
+    expect(document.querySelectorAll(".sv-line")).toHaveLength(10_000); // RENDER_MAX_LINES, not ~12k
+  });
+
+  it("clamps the width of a single giant line", async () => {
+    const GIANT = "a=1;".repeat(150_000); // ~600k chars, one line > RENDER_MAX_CHARS (512k)
+    vi.spyOn(api, "getSources").mockResolvedValue({
+      run_id: "r", count: 1,
+      sources: [{ path: "https://acme.io/one.min.js", kind: "asset", fetch_status: "ok", asset_url: null }],
+    });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "https://acme.io/one.min.js", content: GIANT, truncated: false });
+    render(<SourcesPage data={null} tenantId="t" runId="r" jump={null} />);
+
+    await waitFor(() => expect(document.querySelector(".sv-note.sv-warn")?.textContent).toMatch(/large file/i));
+    const rows = document.querySelectorAll(".sv-code-txt");
+    expect(rows).toHaveLength(1);
+    expect((rows[0].textContent ?? "").length).toBeLessThanOrEqual(512_000);
+  });
 });
