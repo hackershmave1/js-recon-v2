@@ -235,6 +235,22 @@ def test_risk_unions_on_path_collision():
     }
 
 
+def test_security_unions_on_path_collision():
+    a = _req(
+        operation="GET /users/${id}",
+        method="GET",
+        path="/users/${id}",
+        auth=(("Authorization", "bearer"),),
+    )
+    b = _req(
+        operation="GET /users/{id}", method="GET", path="/users/{id}", auth=(("X-API-Key", None),)
+    )
+    doc = build_openapi([a, b], run_id="00000000-0000-0000-0000-000000000000")
+    validate(doc)
+    # both ops collapse to /users/{id}; neither op's auth scheme is dropped by the merge.
+    assert doc["paths"]["/users/{id}"]["get"]["security"] == [{"X-API-Key": [], "bearerAuth": []}]
+
+
 def test_bearer_authorization_becomes_http_bearer_scheme():
     req = _req(
         operation="GET /me",

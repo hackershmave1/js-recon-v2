@@ -217,7 +217,8 @@ _INFO_DESCRIPTION = (
     "methods, and parameter names are OBSERVED. Parameter and body TYPES and schemas "
     "are INFERRED. Response bodies were not observed. Authentication is described by "
     "SHAPE only: auth request-header names and their scheme keyword (bearer/basic/apiKey) "
-    "become securitySchemes/security; credential VALUES are never captured or asserted."
+    "become securitySchemes/security (observed on at least one call, not proven required); "
+    "credential VALUES are never captured or asserted."
 )
 _SERVER_DESCRIPTION = "Host observed; scheme/port inferred where not seen in a concrete URL."
 
@@ -238,6 +239,11 @@ def _merge_operations(existing: dict, other: dict) -> dict:
     risk = {**other.get("x-recon-risk", {}), **existing.get("x-recon-risk", {})}
     if risk:
         existing["x-recon-risk"] = risk
+    # Union the auth requirement (each op carries one AND-requirement object) so a
+    # path-canonicalization collision can't drop the second op's security surface.
+    requirement = {**(existing.get("security") or [{}])[0], **(other.get("security") or [{}])[0]}
+    if requirement:
+        existing["security"] = [{key: [] for key in sorted(requirement)}]
     return existing
 
 
@@ -358,7 +364,7 @@ def build_openapi(requests: list[ReconstructedRequest], *, run_id: str) -> dict:
     if nonstandard:
         document["x-recon-nonstandard-operations"] = sorted(set(nonstandard))
     if security_schemes:
-        document["components"] = {"securitySchemes": security_schemes}
+        document["components"] = {"securitySchemes": dict(sorted(security_schemes.items()))}
 
     validate(document)  # honesty guarantee — never return an invalid document
     return document
