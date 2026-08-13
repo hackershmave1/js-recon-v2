@@ -183,6 +183,58 @@ def test_canonicalization_collision_merges():
     assert {"a", "b"} <= names  # both operations' query params survive the merge
 
 
+def test_risk_tags_emitted_for_query_and_body_params():
+    req = _req(
+        method="POST",
+        operation="POST /x",
+        query_params=(QueryParam("token", None), QueryParam("page", None)),
+        body_params=("userId",),
+        content_type="application/json",
+    )
+    op = _operation_object(req, [])
+    assert op["x-recon-risk"] == {"token": ["auth"], "userId": ["idor"]}
+    assert "page" not in op["x-recon-risk"]  # untagged params are omitted
+
+
+def test_no_risk_key_when_no_param_is_tagged():
+    op = _operation_object(_req(query_params=(QueryParam("page", None),)), [])
+    assert "x-recon-risk" not in op
+
+
+def test_risk_extension_keeps_document_valid():
+    req = _req(
+        operation="GET /users",
+        path="/users",
+        hosts=("api.example.com",),
+        query_params=(QueryParam("apiKey", None),),
+    )
+    doc = build_openapi([req], run_id="00000000-0000-0000-0000-000000000000")
+    validate(doc)  # the x-recon-risk extension must not break validation
+    assert doc["paths"]["/users"]["get"]["x-recon-risk"] == {"apiKey": ["auth"]}
+
+
+def test_risk_unions_on_path_collision():
+    a = _req(
+        operation="GET /users/${id}",
+        method="GET",
+        path="/users/${id}",
+        query_params=(QueryParam("token", None),),
+    )
+    b = _req(
+        operation="GET /users/{id}",
+        method="GET",
+        path="/users/{id}",
+        query_params=(QueryParam("userId", None),),
+    )
+    doc = build_openapi([a, b], run_id="00000000-0000-0000-0000-000000000000")
+    validate(doc)
+    # path param "id" is excluded (v1 scope); both query params' risk survive the merge.
+    assert doc["paths"]["/users/{id}"]["get"]["x-recon-risk"] == {
+        "token": ["auth"],
+        "userId": ["idor"],
+    }
+
+
 def test_scheme_and_port_from_example_url():
     req = _req(
         operation="GET /x",

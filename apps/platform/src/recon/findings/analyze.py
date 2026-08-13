@@ -30,7 +30,16 @@ from recon.db.base import tenant_session
 from recon.db.models import Run
 from recon.domain import AssetStatus, FindingType
 from recon.events.log import RecordedEvent, publish, record_event
-from recon.findings import deobfuscate, engines, kingfisher, normalize, queries, sourcemapper, store
+from recon.findings import (
+    deobfuscate,
+    engines,
+    kingfisher,
+    normalize,
+    queries,
+    risk_tags,
+    sourcemapper,
+    store,
+)
 from recon.findings.extract import RawEndpoint, extract
 from recon.findings.kingfisher import RawSecret
 from recon.findings.wrappers import WrapperRule
@@ -564,6 +573,13 @@ def _record_endpoint(
     operation = normalize.endpoint_operation(ep.method, ep.url)
     for param in ep.params:
         value = normalize.normalize_param_value(operation, param.location, param.name)
+        param_attributes: dict[str, Any] = {"location": param.location, "name": param.name}
+        tags = risk_tags.classify_param(param.name)
+        if tags:
+            # Advisory name-based risk tags (auth/admin/idor/flag). attributes is display-only
+            # (NOT part of finding_hash), so this never churns finding identity and rides the
+            # existing passthrough to GET /runs/{id}/findings with no router change.
+            param_attributes["risk_tags"] = list(tags)
         written += _write(
             session,
             tenant_id,
@@ -583,7 +599,7 @@ def _record_endpoint(
                 run_asset_id=run_asset_id,
                 asset_url=asset_url,
             ),
-            attributes={"location": param.location, "name": param.name},
+            attributes=param_attributes,
         )
     return written
 

@@ -26,6 +26,11 @@ new WebSocket("wss://rt.acme.io/socket/7");
 fetch(dynamicUrl);
 """
 
+_JS_RISK = """
+axios.get("/api/session", {params:{token:"x"}});
+fetch("/api/orders", {method:"POST", body:JSON.stringify({userId:1, name:"n"})});
+"""
+
 
 def _drive(redis, run_id, tenant, *, max_passes=30) -> str:
     terminal = {RunState.DONE, RunState.PARTIAL, RunState.FAILED, RunState.CANCELLED}
@@ -64,6 +69,21 @@ def test_js_input_run_produces_findings(redis, authorized_session):
     assert "POST /api/users/{id} body:name" in param_values
     assert "GET /api/orders query:page" in param_values
     assert "POST /api/login body:user" in param_values
+
+
+def test_param_findings_carry_risk_tags(redis, authorized_session):
+    """Enrichment A: a risk-relevant param name is tagged in the finding's attributes, and an
+    untagged param carries no risk_tags key (honest silence, kept clean)."""
+    tenant, session_id = authorized_session
+    view = coordinator.start_run_with_input(
+        redis, tenant_id=tenant, session_id=session_id, js_source=_JS_RISK, target="acme.io"
+    )
+    assert _drive(redis, view.id, tenant) == RunState.DONE.value
+
+    params = {f.value: f for f in _findings(tenant, view.id) if f.type == "param"}
+    assert params["GET /api/session query:token"].attributes["risk_tags"] == ["auth"]
+    assert params["POST /api/orders body:userId"].attributes["risk_tags"] == ["idor"]
+    assert "risk_tags" not in params["POST /api/orders body:name"].attributes
 
 
 def test_coverage_event_counts_unattributed(redis, authorized_session):

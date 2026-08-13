@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 import yaml
 from openapi_spec_validator import validate
 
+from recon.findings import risk_tags
 from recon.probe.reconstruct import ReconstructedRequest
 
 # Version of the recon OpenAPI-EXPORT contract — the machine-readable shape of the
@@ -143,6 +144,19 @@ def _body_confidence(request: ReconstructedRequest) -> str:
     return "inferred" if request.content_type else "names-only"
 
 
+def _param_risk(request: ReconstructedRequest) -> dict[str, list[str]]:
+    """Advisory risk tags (auth/admin/idor/flag) per query/body param NAME, re-derived from
+    the same pure classifier the finding-side write uses (enrichment A). Path params are
+    excluded (v1 scope — path-segment id->idor is a fast-follow). Re-deriving here keeps the
+    export in step with the current taxonomy even for findings created before it existed."""
+    risk: dict[str, list[str]] = {}
+    for name in [p.name for p in request.query_params] + list(request.body_params):
+        tags = risk_tags.classify_param(name)
+        if tags:
+            risk[name] = list(tags)
+    return risk
+
+
 def _operation_object(request: ReconstructedRequest, path_params: list[dict]) -> dict:
     parameters = list(path_params) + [_query_param(p) for p in request.query_params]
     operation: dict = {
@@ -167,6 +181,9 @@ def _operation_object(request: ReconstructedRequest, path_params: list[dict]) ->
             + ", ".join(request.body_params)
             + "; content-type not observed, so no request-body schema is asserted."
         )
+    risk = _param_risk(request)
+    if risk:
+        operation["x-recon-risk"] = risk
     return operation
 
 
@@ -191,6 +208,10 @@ def _merge_operations(existing: dict, other: dict) -> dict:
     if merged:
         existing["parameters"] = merged
     _merge_bodies(existing, other)
+    # Union advisory risk (keyed by param name; deterministic, so shared names agree).
+    risk = {**other.get("x-recon-risk", {}), **existing.get("x-recon-risk", {})}
+    if risk:
+        existing["x-recon-risk"] = risk
     return existing
 
 
