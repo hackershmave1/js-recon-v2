@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from urllib.parse import urlsplit
 
 import yaml
@@ -319,7 +320,12 @@ def _servers(requests: list[ReconstructedRequest]) -> list[dict]:
     return [{"url": url, "description": _SERVER_DESCRIPTION} for url in sorted(by_host.values())]
 
 
-def build_openapi(requests: list[ReconstructedRequest], *, run_id: str) -> dict:
+def build_openapi(
+    requests: list[ReconstructedRequest],
+    *,
+    run_id: str,
+    graphql_operations: Sequence[dict] = (),
+) -> dict:
     paths: dict[str, dict] = {}
     websockets: list[str] = []
     nonstandard: list[str] = []
@@ -363,6 +369,11 @@ def build_openapi(requests: list[ReconstructedRequest], *, run_id: str) -> dict:
         document["x-recon-websocket-endpoints"] = sorted(set(websockets))
     if nonstandard:
         document["x-recon-nonstandard-operations"] = sorted(set(nonstandard))
+    if graphql_operations:
+        # GraphQL ops (enrichment C) ride a root extension, NEVER `paths`: a GraphQL
+        # operation is not an HTTP path (it POSTs to one /graphql route), so emitting it
+        # as a path would misrepresent the surface and is explicitly out of scope.
+        document["x-recon-graphql-operations"] = list(graphql_operations)
     if security_schemes:
         document["components"] = {"securitySchemes": dict(sorted(security_schemes.items()))}
 

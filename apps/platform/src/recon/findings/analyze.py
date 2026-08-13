@@ -16,6 +16,7 @@ unit, unchanged. Both paths share the per-blob work via ``_analyze_blob``.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -33,6 +34,7 @@ from recon.events.log import RecordedEvent, publish, record_event
 from recon.findings import (
     deobfuscate,
     engines,
+    graphql_ops,
     kingfisher,
     normalize,
     queries,
@@ -413,6 +415,11 @@ def _analyze_blob(
             run_asset_id=run_asset_id,
             asset_url=asset_url,
         )
+    # GraphQL operations (enrichment C, export-only): a run-level artifact, never a
+    # finding — persisted separately so it never pollutes the HTTP-endpoints read model.
+    _record_graphql_operations(
+        session, tenant_id=tenant_id, run_id=run_id, source=source, asset_url=asset_url
+    )
     coverage_event = record_event(
         session,
         tenant_id=tenant_id,
@@ -661,6 +668,53 @@ def _record_secret(
             asset_url=asset_url,
         ),
         attributes={"rule": secret.rule_id, "name": secret.rule_name},
+    )
+
+
+def _record_graphql_operations(
+    session: Session,
+    *,
+    tenant_id: str,
+    run_id: str,
+    source: str,
+    asset_url: str | None,
+) -> None:
+    """Persist this blob's GraphQL operations as a run-level export artifact (enrichment C).
+
+    Mirrors the discover assets-manifest (``crawl.py``): store a content-addressed
+    ``graphql`` blob and index it with an ``analyze.graphql`` event. Export-only — a GraphQL
+    operation is NOT an HTTP endpoint (it rides one POST to a ``/graphql`` route), so it is
+    never written as a finding or an OpenAPI path and never pollutes the HTTP-endpoints read
+    model (locked decision 1). ``source_path`` is the asset URL when known, else the bundle
+    fallback. Empty → no blob, no event.
+
+    A crawl run analyzes once PER asset, so each asset emits its OWN ``analyze.graphql``
+    event/blob; the export UNIONs them (``queries.graphql_operations``), so this deliberately
+    does not aggregate run-wide. Not published to Redis: the sole consumer is the OpenAPI
+    export, which reads the durable ``run_event`` log — there is no live GraphQL UI.
+    """
+    operations = graphql_ops.collect_operations(source)
+    if not operations:
+        return
+    source_path = asset_url or _SOURCE_NAME
+    entries: list[dict[str, Any]] = [
+        {
+            "op_type": op.op_type,
+            "name": op.name,
+            "fields": list(op.fields),
+            "source_path": source_path,
+        }
+        for op in operations
+    ]
+    graphql_ref = storage.put_blob(
+        tenant_id, run_id, "graphql", json.dumps(entries).encode("utf-8")
+    )
+    record_event(
+        session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        event_type="analyze.graphql",
+        payload={"count": len(entries), "graphql_ref": graphql_ref},
     )
 
 
