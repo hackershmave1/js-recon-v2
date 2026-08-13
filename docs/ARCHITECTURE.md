@@ -82,7 +82,11 @@ The out-of-process engines run through one hardened harness (wall-clock timeout,
 explicit acceptable exit codes, non-root container user) so the safety controls live in one place
 (`findings/engines.py`). Analysis is honest by construction (REQ-C2): a detected sink whose URL
 isn't statically resolvable is counted as *unattributed*, never invented; a missing engine binary
-degrades coverage honestly rather than silently reporting "clean".
+degrades coverage honestly rather than silently reporting "clean". The reconstructed OpenAPI
+export is security-enriched (the enrichment slice): each operation carries `x-recon-risk` param
+tags, observed request-auth headers become `components.securitySchemes` + per-op `security`, and
+embedded GraphQL operations surface as an `x-recon-graphql-operations` root extension — never as
+HTTP paths or findings.
 
 **API surface + frontend.** The API mounts routers for sessions, engagements, runs, findings,
 manual-probe, sources, the OpenAPI spec + diff, export, base-URL overlay, and wrapper-teaching
