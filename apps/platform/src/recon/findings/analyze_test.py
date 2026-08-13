@@ -31,6 +31,10 @@ axios.get("/api/session", {params:{token:"x"}});
 fetch("/api/orders", {method:"POST", body:JSON.stringify({userId:1, name:"n"})});
 """
 
+_JS_AUTH = """
+fetch("/api/me", {headers:{Authorization:"Bearer " + token}});
+"""
+
 
 def _drive(redis, run_id, tenant, *, max_passes=30) -> str:
     terminal = {RunState.DONE, RunState.PARTIAL, RunState.FAILED, RunState.CANCELLED}
@@ -84,6 +88,21 @@ def test_param_findings_carry_risk_tags(redis, authorized_session):
     assert params["GET /api/session query:token"].attributes["risk_tags"] == ["auth"]
     assert params["POST /api/orders body:userId"].attributes["risk_tags"] == ["idor"]
     assert "risk_tags" not in params["POST /api/orders body:name"].attributes
+
+
+def test_endpoint_finding_carries_auth_headers(redis, authorized_session):
+    """Enrichment B: a captured auth request header lands in the endpoint finding's
+    attributes as name + scheme (never a credential value)."""
+    tenant, session_id = authorized_session
+    view = coordinator.start_run_with_input(
+        redis, tenant_id=tenant, session_id=session_id, js_source=_JS_AUTH, target="acme.io"
+    )
+    assert _drive(redis, view.id, tenant) == RunState.DONE.value
+
+    endpoints = {f.value: f for f in _findings(tenant, view.id) if f.type == "endpoint"}
+    assert endpoints["GET /api/me"].attributes["auth"] == [
+        {"name": "Authorization", "scheme": "bearer"}
+    ]
 
 
 def test_coverage_event_counts_unattributed(redis, authorized_session):

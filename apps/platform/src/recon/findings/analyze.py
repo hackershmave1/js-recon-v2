@@ -544,6 +544,13 @@ def _record_endpoint(
     asset_url: str | None = None,
 ) -> int:
     normalized = normalize.normalize_endpoint(ep.method, ep.url)
+    endpoint_attributes: dict[str, Any] = {"kind": ep.kind, "method": ep.method}
+    if ep.wrapper:
+        endpoint_attributes["wrapper"] = ep.wrapper
+    if ep.headers:
+        # Auth surface captured statically (enrichment B): header names + scheme keyword,
+        # never a credential value. Non-identity attribute -> no finding_hash churn.
+        endpoint_attributes["auth"] = [{"name": h.name, "scheme": h.scheme} for h in ep.headers]
     written = _write(
         session,
         tenant_id,
@@ -564,11 +571,7 @@ def _record_endpoint(
             run_asset_id=run_asset_id,
             asset_url=asset_url,
         ),
-        attributes=(
-            {"kind": ep.kind, "method": ep.method, "wrapper": ep.wrapper}
-            if ep.wrapper
-            else {"kind": ep.kind, "method": ep.method}
-        ),
+        attributes=endpoint_attributes,
     )
     operation = normalize.endpoint_operation(ep.method, ep.url)
     for param in ep.params:

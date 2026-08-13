@@ -2,8 +2,9 @@
 (the inverse of spec-ingest). Pure over ``reconstruct.ReconstructedRequest`` — no
 DB, no engines, no active traffic.
 
-Honesty (REQ-C2): parameter NAMES are observed; parameter/body TYPES and schemas
-are inferred and marked so; no security is asserted (headers are not captured).
+Honesty (REQ-C2): parameter NAMES are observed; parameter/body TYPES and schemas are
+inferred and marked so; auth-header SHAPES (names + scheme keyword) are captured as
+securitySchemes/security, but credential VALUES never are.
 Every emitted document is validated with ``openapi-spec-validator`` before it is
 returned, so a caller never receives an invalid spec.
 """
@@ -157,6 +158,27 @@ def _param_risk(request: ReconstructedRequest) -> dict[str, list[str]]:
     return risk
 
 
+def _scheme_key(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]", "_", name) or "auth"
+
+
+def _security_scheme(header_name: str, scheme: str | None) -> tuple[str, dict]:
+    """(component key, scheme object) for one captured auth header. Authorization + a known
+    scheme -> HTTP bearer/basic; anything else -> apiKey-in-header (a credential rides the
+    header, no HTTP scheme asserted). Deterministic key so a per-op `security` ref always
+    resolves to a `components.securitySchemes` entry (enrichment B)."""
+    if header_name.lower() == "authorization" and scheme in ("bearer", "basic"):
+        return f"{scheme}Auth", {"type": "http", "scheme": scheme}
+    return _scheme_key(header_name), {"type": "apiKey", "in": "header", "name": header_name}
+
+
+def _security_requirement(request: ReconstructedRequest) -> list[dict]:
+    """The op's `security`: one requirement naming every captured auth scheme (all sent
+    together = AND). Empty when no auth header was observed."""
+    keys = sorted({_security_scheme(name, scheme)[0] for name, scheme in request.auth})
+    return [{key: [] for key in keys}] if keys else []
+
+
 def _operation_object(request: ReconstructedRequest, path_params: list[dict]) -> dict:
     parameters = list(path_params) + [_query_param(p) for p in request.query_params]
     operation: dict = {
@@ -184,14 +206,18 @@ def _operation_object(request: ReconstructedRequest, path_params: list[dict]) ->
     risk = _param_risk(request)
     if risk:
         operation["x-recon-risk"] = risk
+    security = _security_requirement(request)
+    if security:
+        operation["security"] = security
     return operation
 
 
 _INFO_DESCRIPTION = (
     "Statically reconstructed from JavaScript by the recon platform. Paths, HTTP "
     "methods, and parameter names are OBSERVED. Parameter and body TYPES and schemas "
-    "are INFERRED. Response bodies were not observed. No authentication is asserted — "
-    "request headers are not captured by static analysis."
+    "are INFERRED. Response bodies were not observed. Authentication is described by "
+    "SHAPE only: auth request-header names and their scheme keyword (bearer/basic/apiKey) "
+    "become securitySchemes/security; credential VALUES are never captured or asserted."
 )
 _SERVER_DESCRIPTION = "Host observed; scheme/port inferred where not seen in a concrete URL."
 
@@ -291,6 +317,7 @@ def build_openapi(requests: list[ReconstructedRequest], *, run_id: str) -> dict:
     paths: dict[str, dict] = {}
     websockets: list[str] = []
     nonstandard: list[str] = []
+    security_schemes: dict[str, dict] = {}
     for request in requests:
         if not request.probeable:
             websockets.append(f"{request.method} {request.example_url or request.path}")
@@ -301,6 +328,9 @@ def build_openapi(requests: list[ReconstructedRequest], *, run_id: str) -> dict:
             continue
         canon_path, path_params = _canonicalize_path(request.path)
         operation = _operation_object(request, path_params)
+        for header_name, scheme in request.auth:
+            key, obj = _security_scheme(header_name, scheme)
+            security_schemes.setdefault(key, obj)
         path_item = paths.setdefault(canon_path, {})
         if method in path_item:
             path_item[method] = _merge_operations(path_item[method], operation)
@@ -327,6 +357,8 @@ def build_openapi(requests: list[ReconstructedRequest], *, run_id: str) -> dict:
         document["x-recon-websocket-endpoints"] = sorted(set(websockets))
     if nonstandard:
         document["x-recon-nonstandard-operations"] = sorted(set(nonstandard))
+    if security_schemes:
+        document["components"] = {"securitySchemes": security_schemes}
 
     validate(document)  # honesty guarantee — never return an invalid document
     return document

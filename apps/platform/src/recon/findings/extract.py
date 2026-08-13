@@ -43,9 +43,11 @@ from recon.findings._jsast import (
     HTTP_METHODS,
     BaseEnv,
     Extraction,
+    HeaderRef,
     RawEndpoint,
     RawParam,
     _args,
+    _auth_headers,
     _body_params_from_value,
     _config_query_params,
     _endpoint,
@@ -141,11 +143,13 @@ def _fetch(call: Node, result: Extraction, env: BaseEnv, base: str = "") -> None
         result.unattributed += 1
         return
     method, params = "GET", _query_params(url)
+    headers: list[HeaderRef] = []
     if len(args) >= 2 and args[1].type == "object":
         options = _object_pairs(args[1])
         method = (_string_value(options.get("method")) or "GET").upper()
         params += _body_params_from_value(options.get("body"))
-    result.endpoints.append(_endpoint("fetch", method, url, params, call))
+        headers = _auth_headers(options.get("headers"))
+    result.endpoints.append(_endpoint("fetch", method, url, params, call, headers=headers))
 
 
 def _xhr_open(call: Node, result: Extraction) -> None:
@@ -174,9 +178,14 @@ def _axios_call(call: Node, result: Extraction, env: BaseEnv, base: str = "") ->
             result.unattributed += 1
             return
         method = "GET"
+        headers: list[HeaderRef] = []
         if len(args) >= 2 and args[1].type == "object":
-            method = (_string_value(_object_pairs(args[1]).get("method")) or "GET").upper()
-        result.endpoints.append(_endpoint("axios", method, url, _query_params(url), call))
+            cfg = _object_pairs(args[1])
+            method = (_string_value(cfg.get("method")) or "GET").upper()
+            headers = _auth_headers(cfg.get("headers"))
+        result.endpoints.append(
+            _endpoint("axios", method, url, _query_params(url), call, headers=headers)
+        )
 
 
 def _axios_member(
@@ -198,16 +207,22 @@ def _axios_member(
         result.unattributed += 1
         return
     params = _query_params(url)
+    config: Node | None = None
     if prop.upper() in ("POST", "PUT", "PATCH"):
         # axios.post(url, data[, config])
         if len(args) >= 2:
             params += _body_params_from_value(args[1])
         if len(args) >= 3:
-            params += _config_query_params(args[2])
+            config = args[2]
+            params += _config_query_params(config)
     elif len(args) >= 2:
-        # axios.get/delete/head(url[, config]) — query params live in the config
-        params += _config_query_params(args[1])
-    result.endpoints.append(_endpoint("axios", prop, url, params, call, wrapper=wrapper))
+        # axios.get/delete/head(url[, config]) — query params + headers live in the config
+        config = args[1]
+        params += _config_query_params(config)
+    headers = _auth_headers(_object_pairs(config).get("headers"))
+    result.endpoints.append(
+        _endpoint("axios", prop, url, params, call, wrapper=wrapper, headers=headers)
+    )
 
 
 def _axios_from_config(
@@ -229,7 +244,10 @@ def _axios_from_config(
         + _config_query_params(config)  # axios `params` -> query, not body
         + _body_params_from_value(pairs.get("data"))
     )
-    result.endpoints.append(_endpoint("axios", method, url, params, call, wrapper=wrapper))
+    headers = _auth_headers(pairs.get("headers"))
+    result.endpoints.append(
+        _endpoint("axios", method, url, params, call, wrapper=wrapper, headers=headers)
+    )
 
 
 def _jquery(call: Node, prop: str, result: Extraction) -> None:

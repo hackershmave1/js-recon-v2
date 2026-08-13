@@ -35,6 +35,44 @@ def test_fetch_template_string_keeps_shape():
     assert ep.url == "/api/users/${id}/orders"
 
 
+# --- enrichment B: auth header capture --------------------------------------- #
+
+
+def _headers(ep):
+    return [(h.name, h.scheme) for h in ep.headers]
+
+
+def test_fetch_captures_bearer_authorization_header():
+    ep = _only('fetch("/api/me", {headers:{Authorization:"Bearer " + token}})')
+    assert _headers(ep) == [("Authorization", "bearer")]
+
+
+def test_fetch_dynamic_header_value_keeps_name_drops_scheme():
+    ep = _only('fetch("/api/me", {headers:{Authorization: token}})')
+    assert _headers(ep) == [("Authorization", None)]
+
+
+def test_non_auth_header_is_not_captured():
+    ep = _only('fetch("/api/me", {headers:{"Content-Type":"application/json"}})')
+    assert ep.headers == ()
+
+
+def test_axios_get_config_headers_captured():
+    # M5: axios.get(url, {headers}) dispatches through _axios_member's config arg.
+    ep = _only('axios.get("/api/me", {headers:{"X-API-Key":"k"}})')
+    assert _headers(ep) == [("X-API-Key", None)]
+
+
+def test_axios_post_config_headers_captured():
+    ep = _only('axios.post("/api/x", {a:1}, {headers:{Authorization:"Bearer " + t}})')
+    assert _headers(ep) == [("Authorization", "bearer")]
+
+
+def test_axios_config_form_basic_scheme():
+    ep = _only('axios({url:"/api/me", headers:{Authorization:"Basic " + creds}})')
+    assert _headers(ep) == [("Authorization", "basic")]
+
+
 def test_window_fetch_is_detected():
     ep = _only('window.fetch("/a")')
     assert ep.kind == "fetch"

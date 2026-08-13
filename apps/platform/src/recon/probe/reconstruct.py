@@ -43,6 +43,9 @@ class ReconstructedRequest:
     example_url: str | None  # a representative concrete occurrence.raw_url
     probeable: bool  # False for websocket operations
     endpoint_hashes: tuple[str, ...]  # every contributing endpoint finding_hash
+    # Auth-relevant request headers seen for this operation (enrichment B): (name, scheme)
+    # pairs deduped by name; scheme is "bearer"/"basic"/None. Empty when none were observed.
+    auth: tuple[tuple[str, str | None], ...] = ()
 
 
 def _method_and_path(operation: str) -> tuple[str, str]:
@@ -88,6 +91,10 @@ def _merge(a: ReconstructedRequest, b: ReconstructedRequest) -> ReconstructedReq
     hosts = tuple(sorted(set(a.hosts) | set(b.hosts)))
     endpoint_hashes = tuple(sorted(set(a.endpoint_hashes) | set(b.endpoint_hashes)))
     example_url = min(filter(None, (a.example_url, b.example_url)), default=None)
+    merged_auth = dict(a.auth)
+    for name, scheme in b.auth:
+        if name not in merged_auth or (merged_auth[name] is None and scheme is not None):
+            merged_auth[name] = scheme
     return replace(
         a,
         hosts=hosts,
@@ -96,6 +103,7 @@ def _merge(a: ReconstructedRequest, b: ReconstructedRequest) -> ReconstructedReq
         content_type=a.content_type or b.content_type,
         example_url=example_url,
         endpoint_hashes=endpoint_hashes,
+        auth=tuple(sorted(merged_auth.items())),
     )
 
 
@@ -178,6 +186,18 @@ def build_requests(
 
         kinds = {f.attributes.get("kind") for f in endpoint_findings}
 
+        # Union the auth headers observed across this operation's endpoint findings, deduped
+        # by name (preferring a known scheme over None on a name collision).
+        auth_by_name: dict[str, str | None] = {}
+        for finding in endpoint_findings:
+            for header in finding.attributes.get("auth") or []:
+                name = header.get("name")
+                if not name:
+                    continue
+                scheme = header.get("scheme")
+                if name not in auth_by_name or (auth_by_name[name] is None and scheme is not None):
+                    auth_by_name[name] = scheme
+
         requests.append(
             ReconstructedRequest(
                 operation=operation,
@@ -192,6 +212,7 @@ def build_requests(
                 example_url=example_url,
                 probeable=method not in _WEBSOCKET_METHODS,
                 endpoint_hashes=tuple(sorted(f.finding_hash for f in endpoint_findings)),
+                auth=tuple(sorted(auth_by_name.items())),
             )
         )
 
