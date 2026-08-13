@@ -3,6 +3,7 @@ import { useTenant } from "../../tenant/TenantContext";
 import { pauseRun, cancelRun, resumeRun, ApiError } from "../../api/apiClient";
 import { TERMINAL_STATES } from "../../api/types";
 import type { RunControlResult } from "../../api/types";
+import { ConfirmModal } from "../../shell/ConfirmModal";
 
 export function RunControls(
   { runId, state, pauseRequested, cancelRequested, onControlResult }: {
@@ -14,11 +15,11 @@ export function RunControls(
   const { tenantId } = useTenant();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
   if (TERMINAL_STATES.has(state)) return null;
 
-  async function act(fn: (t: string, r: string) => Promise<RunControlResult>, confirmMsg?: string) {
+  async function act(fn: (t: string, r: string) => Promise<RunControlResult>) {
     if (!tenantId || busy) return;
-    if (confirmMsg && !window.confirm(confirmMsg)) return;
     setBusy(true); setError(null);
     try {
       // Gating is driven by the POST's authoritative result (state + flags),
@@ -48,8 +49,19 @@ export function RunControls(
             {pauseRequested ? "Pausing…" : "Pause"}
           </button>
         )}
-      <button type="button" onClick={() => act(cancelRun, "Cancel this run? This cannot be undone.")} disabled={busy}>Cancel</button>
+      <button type="button" onClick={() => setConfirmingCancel(true)} disabled={busy}>Cancel</button>
       {error && <span className="sev-high"> {error}</span>}
+      {confirmingCancel && (
+        <ConfirmModal
+          title="Cancel this run?"
+          message="This stops the run and can't be undone."
+          confirmLabel="Cancel run"
+          cancelLabel="Keep running"
+          danger
+          onConfirm={() => { setConfirmingCancel(false); void act(cancelRun); }}
+          onCancel={() => setConfirmingCancel(false)}
+        />
+      )}
     </div>
   );
 }

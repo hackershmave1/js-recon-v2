@@ -62,21 +62,22 @@ describe("RunControls", () => {
     expect(screen.queryByRole("button", { name: /pausing/i })).not.toBeInTheDocument();
   });
 
-  it("confirms before cancelling and lifts the new state", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+  it("confirms in an in-app modal before cancelling and lifts the new state", async () => {
     const res = { run_id: "r", state: "cancelled", cancel_requested: true };
     vi.spyOn(api, "cancelRun").mockResolvedValue(res);
     const onControlResult = ui("analyzing");
-    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
-    expect(window.confirm).toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    // The native confirm is gone (Chrome can suppress it) — confirm via the in-app modal.
+    await userEvent.click(screen.getByRole("button", { name: /cancel run/i }));
+    expect(api.cancelRun).toHaveBeenCalledWith(TENANT, "r");
     expect(onControlResult).toHaveBeenCalledWith(res);
   });
 
-  it("does not cancel when the confirm is dismissed", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(false);
+  it("does not cancel when the modal is dismissed", async () => {
     const cancel = vi.spyOn(api, "cancelRun");
     ui("analyzing");
-    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /keep running/i }));
     expect(cancel).not.toHaveBeenCalled();
   });
 

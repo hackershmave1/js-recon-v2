@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { SessionsPage } from "./SessionsPage";
@@ -64,5 +64,20 @@ describe("SessionsPage", () => {
     renderPage();
     await userEvent.click(await screen.findByRole("button", { name: /open acme\.io/i }));
     expect(navigate).toHaveBeenCalledWith("/runs/r1");
+  });
+
+  it("deletes a session through the in-app modal, then the card is gone", async () => {
+    vi.spyOn(api, "listSessions")
+      .mockResolvedValueOnce({ count: 1, sessions: [DONE] })
+      .mockResolvedValue({ count: 0, sessions: [] });
+    const del = vi.spyOn(api, "deleteSession").mockResolvedValue(undefined);
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /session actions/i }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /delete/i }));
+    // No native window.confirm (Chrome can suppress it) — an in-app dialog gates the delete.
+    const dialog = await screen.findByRole("dialog", { name: /delete session/i });
+    await userEvent.click(within(dialog).getByRole("button", { name: /^delete$/i }));
+    expect(del).toHaveBeenCalledWith("t1", "s1");
+    await waitFor(() => expect(screen.queryByText("acme.io")).not.toBeInTheDocument());
   });
 });
