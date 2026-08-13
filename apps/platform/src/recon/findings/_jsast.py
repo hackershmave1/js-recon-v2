@@ -34,6 +34,16 @@ class RawParam:
 
 
 @dataclass(frozen=True)
+class HeaderRef:
+    """An auth-relevant request header seen statically: its NAME and, when the value starts
+    with a string literal (incl. a ``"Bearer " + token`` concatenation), the auth SCHEME
+    keyword. The credential VALUE is never captured (enrichment B / honesty T3)."""
+
+    name: str
+    scheme: str | None  # "bearer" | "basic" | None (unknown / dynamic value)
+
+
+@dataclass(frozen=True)
 class RawEndpoint:
     kind: str  # fetch | xhr | axios | jquery | websocket
     method: str
@@ -48,6 +58,9 @@ class RawEndpoint:
     # None. NOT folded into `kind` — `kind` stays "axios" so the POST-body
     # Content-Type gate at reconstruct.py:176 still fires (spec §7 / §12 Imp 3).
     wrapper: str | None = None
+    # Auth-relevant request headers captured statically (enrichment B): names + scheme
+    # keyword only, never a credential value. Empty for calls with no auth header.
+    headers: tuple[HeaderRef, ...] = ()
 
 
 @dataclass
@@ -161,6 +174,58 @@ def _config_query_params(config: Node | None) -> list[RawParam]:
     return [RawParam(name, "query") for name in _object_pairs(params_obj)]
 
 
+# Request headers that describe an auth surface (case-insensitive). Only these become
+# OpenAPI security schemes; everything else (Content-Type, Accept, ...) is ignored.
+_AUTH_HEADERS = frozenset(
+    {
+        "authorization",
+        "authentication",
+        "proxy-authorization",
+        "x-api-key",
+        "api-key",
+        "apikey",
+        "x-auth-token",
+        "x-access-token",
+        "x-amz-security-token",
+    }
+)
+
+
+def _leading_string(node: Node | None) -> str | None:
+    """The literal string at the head of a value node: a bare string/template, or the left
+    operand of a ``"prefix" + expr`` concatenation. None if the head is not a literal — so
+    ``"Bearer " + token`` yields ``"Bearer "`` while a bare ``token`` yields None."""
+    if node is None:
+        return None
+    if node.type in ("string", "template_string"):
+        return _string_value(node)
+    if node.type == "binary_expression":
+        return _leading_string(node.child_by_field_name("left"))
+    return None
+
+
+def _header_scheme(value: Node | None) -> str | None:
+    text = _leading_string(value)
+    if text is None:
+        return None
+    lowered = text.strip().lower()
+    if lowered.startswith("bearer"):
+        return "bearer"
+    if lowered.startswith("basic"):
+        return "basic"
+    return None
+
+
+def _auth_headers(headers_node: Node | None) -> list[HeaderRef]:
+    """Auth-relevant headers from a ``headers:`` object literal: NAME + scheme keyword,
+    filtered to the auth allow-list. A dynamic value keeps the name with scheme=None."""
+    result: list[HeaderRef] = []
+    for name, value in _object_pairs(headers_node).items():
+        if name.lower() in _AUTH_HEADERS:
+            result.append(HeaderRef(name=name, scheme=_header_scheme(value)))
+    return result
+
+
 def _endpoint(
     kind: str,
     method: str,
@@ -168,6 +233,7 @@ def _endpoint(
     params: list[RawParam],
     call: Node,
     wrapper: str | None = None,
+    headers: list[HeaderRef] | None = None,
 ) -> RawEndpoint:
     row, col = call.start_point
     deduped = list(dict.fromkeys(params))  # preserve order, drop repeats
@@ -182,4 +248,5 @@ def _endpoint(
         end_byte=call.end_byte,
         snippet=_text(call)[:200],
         wrapper=wrapper,
+        headers=tuple(headers or ()),
     )
