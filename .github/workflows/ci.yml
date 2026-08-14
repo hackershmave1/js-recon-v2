@@ -92,8 +92,12 @@ jobs:
         # run api` one-off joins, so the alias resolves. nginx is up in <1s vs a 30s crawl.
         run: docker compose up -d --build postgres redis minio migrate fixture-site
       - name: Full suite incl. real-engine contract tests + integration
+        # Auth OFF for the suite (RECON_AUTH_SECRET=""): the header-based integration tests use
+        # X-Tenant-Id, but the tracked compose now sets RECON_AUTH_SECRET so a real `docker
+        # compose up` is login-gated (else the served SPA bricks). The auth-specific tests
+        # re-enable auth per-test via monkeypatch, so the login path is still exercised here.
         run: >
-          docker compose run --rm --user root -e RECON_REQUIRE_ENGINES=1
+          docker compose run --rm --user root -e RECON_REQUIRE_ENGINES=1 -e RECON_AUTH_SECRET=""
           api sh -c "pip install --quiet pytest fakeredis && pytest -m ''"
       - name: Dump service logs on failure
         if: failure()
