@@ -59,6 +59,10 @@ def test_list_sessions_returns_card_with_latest_run_stats(tenant, redis):
     assert body["count"] == 1
     card = body["sessions"][0]
     assert card["session_id"] == session_id
+    # external_id (the extension's session id) rides the card so the popup's "open
+    # workspace" deep-link can resolve ?capture=<external_id> to this session; None here
+    # because this session was created via the API, not a capture.
+    assert "external_id" in card and card["external_id"] is None
     # Uploads have no target, no rename yet -> host falls back to the scope host (M3).
     assert card["host"] == "acme.io"
     assert card["latest_run"]["run_id"] == run_id

@@ -136,7 +136,7 @@ export interface SessionRunRef {
   created_at: string | null; started_at: string | null; ended_at: string | null; target: string | null;
 }
 export interface SessionSummary {
-  session_id: string; name: string | null; host: string; scope_hosts: string[];
+  session_id: string; external_id?: string | null; name: string | null; host: string; scope_hosts: string[];
   engagement_id: string | null; archived: boolean; created_at: string | null;
   latest_run: SessionRunRef | null;
   files: number | null; endpoints: number | null; secrets: number | null;
