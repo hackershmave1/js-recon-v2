@@ -13,8 +13,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from redis import Redis
 
-from recon.api.deps import get_principal
+from recon.api.deps import get_login_redis, get_principal
+from recon.auth import login_rate_limit
 from recon.auth import token as auth_token
 from recon.auth.service import Principal, authenticate, tenant_name
 from recon.config import get_settings
@@ -46,17 +48,30 @@ class MeResponse(BaseModel):
 
 
 @router.post("/login", response_model=LoginResponse)
-def login(body: LoginRequest) -> LoginResponse:
+def login(body: LoginRequest, redis: Redis = Depends(get_login_redis)) -> LoginResponse:
     settings = get_settings()
     if not settings.auth_secret:
         # Auth not configured — soft-fail like pairing mint, so a header-mode dev
         # deployment gives a clear signal instead of minting a dead credential.
         raise HTTPException(status_code=503, detail="authentication is not configured")
+    # Brute-force throttle BEFORE the bcrypt verify (design review N1): a login flood
+    # can't burn CPU, and repeated guesses against one account are capped. Read-only
+    # here — the counter only advances on the FAILED attempt below — and fails OPEN on a
+    # Redis error, so a limiter blip never locks operators out (see login_rate_limit).
+    retry_after = login_rate_limit.retry_after_seconds(redis, body.username, settings=settings)
+    if retry_after > 0:
+        raise HTTPException(
+            status_code=429,
+            detail="too many login attempts; try again later",
+            headers={"Retry-After": str(int(retry_after) or 1)},
+        )
     principal = authenticate(body.username, body.password)
     if principal is None:
         # One generic 401 for unknown-user, bad-password, AND ambiguous-username —
-        # never reveal which (no user enumeration).
+        # never reveal which (no user enumeration). Count the failure toward the throttle.
+        login_rate_limit.record_failure(redis, body.username, settings=settings)
         raise HTTPException(status_code=401, detail="invalid credentials")
+    login_rate_limit.clear(redis, body.username, settings=settings)
     token = auth_token.mint(
         user_id=principal.user_id,
         tenant_id=principal.tenant_id,

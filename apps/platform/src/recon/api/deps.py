@@ -33,6 +33,23 @@ def get_redis() -> Redis:
     return Redis.from_url(get_settings().redis_url)
 
 
+# A DEDICATED Redis client for the login throttle, with SHORT socket timeouts so a
+# Redis outage fails fast and the limiter fails OPEN (recon.auth.login_rate_limit)
+# instead of hanging every login on the OS-default connect timeout (design review B3).
+# Kept separate from get_redis(), whose blocking stream reads (the queue consumer's
+# XREAD BLOCK) must NOT carry a socket_timeout.
+_LOGIN_REDIS_TIMEOUT_SECONDS = 0.25
+
+
+@lru_cache
+def get_login_redis() -> Redis:
+    return Redis.from_url(
+        get_settings().redis_url,
+        socket_connect_timeout=_LOGIN_REDIS_TIMEOUT_SECONDS,
+        socket_timeout=_LOGIN_REDIS_TIMEOUT_SECONDS,
+    )
+
+
 def _bearer_claims(authorization: str | None, settings: Settings) -> auth_token.AuthClaims | None:
     """Verify an ``Authorization: Bearer <auth-token>`` header, or ``None``.
 

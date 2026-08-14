@@ -173,6 +173,21 @@ class Settings(BaseSettings):
     # captures so post-auth JS can never leak into the shared tenant.
     allow_anon_capture: bool = True  # env: RECON_ALLOW_ANON_CAPTURE
 
+    # Login brute-force throttle (Redis-backed, POST /auth/login only —
+    # recon.auth.login_rate_limit). Counts FAILED attempts per rolling window and 429s
+    # BEFORE the bcrypt verify, so a login flood can't burn CPU (the no-enumeration
+    # equalizer spends a bcrypt on every attempt). Keyed per-username + a global flood
+    # backstop, NEVER by client IP (bare uvicorn behind an ingress proxy collapses every
+    # client to one bucket = a self-DoS). Fails OPEN on a Redis error — it is defense in
+    # depth, not the access gate (the password + token stay fail-closed). <=0 disables:
+    # max_attempts<=0 turns the limiter off entirely; global<=0 turns off just the
+    # backstop. Mirrors the <=0-disables convention of fetch/politeness. NOTE: the
+    # global backstop is a conscious tradeoff — an attacker can 429 all logins for one
+    # window by generating `global` failures (bounded, self-healing, fail-open).
+    login_ratelimit_max_attempts: int = 10  # env: RECON_LOGIN_RATELIMIT_MAX_ATTEMPTS
+    login_ratelimit_window_seconds: float = 300.0
+    login_ratelimit_global_max_attempts: int = 60
+
     # Realtime / durability (REQ-R2, REQ-R3).
     heartbeat_interval_seconds: float = 5.0
     heartbeat_stall_threshold_seconds: float = 30.0

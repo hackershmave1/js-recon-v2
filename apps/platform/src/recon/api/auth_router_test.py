@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import uuid
 
+import fakeredis
 import pytest
 from fastapi.testclient import TestClient
 
+from recon.api import deps
 from recon.api.app import create_app
 from recon.auth import service as auth_service
 from recon.auth import token as auth_token
@@ -94,6 +96,24 @@ def test_capture_rejects_tokenless_ingest_when_auth_enabled(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_login_is_rate_limited_before_authenticate(make_auth_client):
+    # Pre-seed the GLOBAL counter at its configured limit; the next login is a 429 that
+    # short-circuits BEFORE bcrypt + the PG user lookup — so this stays hermetic (no DB)
+    # and proves the throttle sits ahead of authenticate() (design review N1).
+    c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY)
+    settings = get_settings()
+    fake = fakeredis.FakeRedis()
+    fake.set("ratelimit:login:global", settings.login_ratelimit_global_max_attempts)
+    fake.expire("ratelimit:login:global", int(settings.login_ratelimit_window_seconds))
+    c.app.dependency_overrides[deps.get_login_redis] = lambda: fake
+    try:
+        r = c.post("/auth/login", json={"username": "whoever", "password": "x"})
+    finally:
+        c.app.dependency_overrides.clear()
+    assert r.status_code == 429, r.text
+    assert int(r.headers["Retry-After"]) > 0
+
+
 # --------------------- integration (live PG) --------------------- #
 
 
@@ -117,16 +137,34 @@ def test_login_success_returns_a_working_token(make_auth_client):
 
 
 @pytest.mark.integration
+def test_login_is_case_insensitive(make_auth_client):
+    # Seeded lowercase; a login typed in a different case (and with surrounding
+    # whitespace) still authenticates — usernames are case-insensitive
+    # (recon.auth.service.normalize_username, applied on both seed write and login read).
+    _tenant_id, user_id, username = _seed_unique_user(password="s3cret")
+    c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY)
+    r = c.post("/auth/login", json={"username": f"  {username.upper()}  ", "password": "s3cret"})
+    assert r.status_code == 200, r.text
+    claims = auth_token.verify(r.json()["token"], key=AUTH_KEY)
+    assert claims is not None and claims.user_id == user_id
+
+
+@pytest.mark.integration
 def test_login_wrong_password_is_401(make_auth_client):
     _tenant_id, _user_id, username = _seed_unique_user(password="s3cret")
-    c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY)
+    # Disable the GLOBAL backstop here (per-user stays active): these are the only
+    # integration tests that FAIL a login, so they'd be the sole contributors to the
+    # shared global counter across the suite — keep it untouched (review NIT 4).
+    c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY, RECON_LOGIN_RATELIMIT_GLOBAL_MAX_ATTEMPTS=0)
     r = c.post("/auth/login", json={"username": username, "password": "wrong"})
     assert r.status_code == 401
 
 
 @pytest.mark.integration
 def test_login_unknown_user_is_401(make_auth_client):
-    c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY)
+    # Global backstop off (see test_login_wrong_password_is_401): don't feed the shared
+    # global counter from a failing-login integration test (review NIT 4).
+    c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY, RECON_LOGIN_RATELIMIT_GLOBAL_MAX_ATTEMPTS=0)
     r = c.post("/auth/login", json={"username": f"ghost-{uuid.uuid4().hex}", "password": "x"})
     assert r.status_code == 401
 
