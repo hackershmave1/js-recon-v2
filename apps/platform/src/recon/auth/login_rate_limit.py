@@ -10,8 +10,16 @@ both counting only FAILURES within a rolling window and cleared on success:
   out. The username is normalized (case-insensitive) then hashed, so the raw name
   never lands in a key, and it is counted whether or not the user exists — the
   limiter adds no enumeration oracle (mirrors ``authenticate``'s single generic 401).
-- **global** ``ratelimit:login:global`` — a flood backstop across all usernames, so a
-  rotating-username attack can't sidestep the per-user cap indefinitely.
+- **global** ``ratelimit:login:global`` — a flood backstop across all usernames: it
+  stops a rotating-username attack from sidestepping the per-user cap, and (each fresh
+  username would otherwise get its own per-user bcrypt budget) it bounds the bcrypt CPU
+  a rotating flood can burn. TRADEOFF, consciously accepted: being global, an attacker
+  who generates ``global_max_attempts`` failures in one window 429s *every* operator's
+  login for that window — a self-healing availability DoS. Accepted for an internal
+  tool because it is bounded + self-healing per window, fails OPEN on a Redis error, is
+  tunable (``global_max_attempts<=0`` disables it), and is strictly better than the
+  alternative it replaces — an *unbounded* CPU-exhaustion DoS from rotating usernames
+  with no global cap. The password + signed token remain the real access gate.
 
 Deliberately **not** keyed by client IP: the app is served by a bare uvicorn with no
 ``--proxy-headers`` and real deployments front it with an ingress proxy, so
@@ -27,6 +35,11 @@ only because the strong prod password is the primary control (the weak ``admin/a
 default is refused outside dev — ``bootstrap.py``). The short socket timeout on the
 limiter's client (``api/deps.get_login_redis``) bounds the fail-open stall so an
 outage never *hangs* a login.
+
+**Not atomic (accepted limitation).** The read-only check and the failure increment
+straddle the ~250 ms bcrypt verify, so a tightly concurrent burst can all pass the
+check and overshoot the cap for the width of that burst. The cap is defense in depth,
+not a hard concurrency gate, so this is acceptable — the password is the real control.
 
 ``<=0`` config disables a gate (mirrors ``fetch/politeness``): ``max_attempts<=0``
 turns the whole limiter off (the fast lane can run it off); ``global_max_attempts<=0``

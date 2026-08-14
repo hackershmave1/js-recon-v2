@@ -152,14 +152,19 @@ def test_login_is_case_insensitive(make_auth_client):
 @pytest.mark.integration
 def test_login_wrong_password_is_401(make_auth_client):
     _tenant_id, _user_id, username = _seed_unique_user(password="s3cret")
-    c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY)
+    # Disable the GLOBAL backstop here (per-user stays active): these are the only
+    # integration tests that FAIL a login, so they'd be the sole contributors to the
+    # shared global counter across the suite — keep it untouched (review NIT 4).
+    c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY, RECON_LOGIN_RATELIMIT_GLOBAL_MAX_ATTEMPTS=0)
     r = c.post("/auth/login", json={"username": username, "password": "wrong"})
     assert r.status_code == 401
 
 
 @pytest.mark.integration
 def test_login_unknown_user_is_401(make_auth_client):
-    c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY)
+    # Global backstop off (see test_login_wrong_password_is_401): don't feed the shared
+    # global counter from a failing-login integration test (review NIT 4).
+    c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY, RECON_LOGIN_RATELIMIT_GLOBAL_MAX_ATTEMPTS=0)
     r = c.post("/auth/login", json={"username": f"ghost-{uuid.uuid4().hex}", "password": "x"})
     assert r.status_code == 401
 

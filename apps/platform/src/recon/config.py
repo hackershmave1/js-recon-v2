@@ -181,7 +181,9 @@ class Settings(BaseSettings):
     # client to one bucket = a self-DoS). Fails OPEN on a Redis error — it is defense in
     # depth, not the access gate (the password + token stay fail-closed). <=0 disables:
     # max_attempts<=0 turns the limiter off entirely; global<=0 turns off just the
-    # backstop. Mirrors the <=0-disables convention of fetch/politeness.
+    # backstop. Mirrors the <=0-disables convention of fetch/politeness. NOTE: the
+    # global backstop is a conscious tradeoff — an attacker can 429 all logins for one
+    # window by generating `global` failures (bounded, self-healing, fail-open).
     login_ratelimit_max_attempts: int = 10  # env: RECON_LOGIN_RATELIMIT_MAX_ATTEMPTS
     login_ratelimit_window_seconds: float = 300.0
     login_ratelimit_global_max_attempts: int = 60
