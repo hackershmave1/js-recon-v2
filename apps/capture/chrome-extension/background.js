@@ -132,9 +132,10 @@ class JSExtractor {
     this.sessionId = await this.sessionStore.loadOrCreate();
     this.batchUploader.setEndpoint(this.workspaceClient.resolveApiBase());
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
-    // Re-apply the persisted pairing token so a service-worker respawn keeps routing the
+    // Re-apply the persisted Bearer token so a service-worker respawn keeps routing the
     // operator's captures into their tenant (the uploader holds it in memory, not storage).
-    this.batchUploader.setAuthToken(this.settings.pairingToken);
+    // Prefer the login session token; fall back to a legacy pairing token.
+    this.batchUploader.setAuthToken(this.settings.authToken || this.settings.pairingToken);
     // Re-apply a persisted scope so uploads keep tagging the session even if the
     // service worker recycled after a new session was started.
     if (this.settings.useDomainScope && Array.isArray(this.settings.domainScopes) && this.settings.domainScopes.length) {
@@ -769,6 +770,9 @@ class JSExtractor {
       'includeSubdomains',
       'workspaceUrl',
       'pairingToken',
+      'authToken',
+      'authUser',
+      'authTenantName',
       'muteNoise',
       'outOfScopeMode',
       'maxAssetMb',
@@ -794,6 +798,11 @@ class JSExtractor {
       // Operator-pairing Bearer token. Empty => unauthenticated ingest (shared capture
       // tenant), i.e. today's behavior; a valid token routes captures to the operator's tenant.
       pairingToken: result.pairingToken || '',
+      // Central-login session token (recon.auth) + cached identity for the popup. Empty =>
+      // not signed in. Preferred over pairingToken as the upload Bearer (see setAuthToken).
+      authToken: result.authToken || '',
+      authUser: result.authUser || '',
+      authTenantName: result.authTenantName || '',
       muteNoise: result.muteNoise !== false,
       outOfScopeMode: result.outOfScopeMode || 'tag',
       // Clamp to the 10 MB backend ceiling so a legacy stored value (from the old
@@ -904,6 +913,8 @@ class JSExtractor {
       getAnalysisProgress: () => this.workspaceClient.getAnalysisProgress().then(sendResponse),
       listProjects: () => this.listProjects(sendResponse),
       createProject: (req) => this.workspaceClient.createProject(req.project).then(sendResponse),
+      login: (req) => this.login(req, sendResponse),
+      logout: () => this.logout(sendResponse),
       dynamicScriptDetected: (req) => this.handleDynamicScript(req, sender)
     };
 
@@ -959,6 +970,46 @@ class JSExtractor {
     this.persistCaptureState(true);
     this.rescanActiveTab();
     sendResponse({ success: true, sessionId: this.sessionId });
+  }
+
+  // Central login: authenticate to the workspace and persist the session token + identity so
+  // uploads/analyze route to this operator's tenant. Mirrors the pairing-token model, but the
+  // Bearer comes from a password login (POST /auth/login) instead of a pasted code.
+  async login(request, sendResponse) {
+    const { username, password } = request || {};
+    try {
+      const result = await this.workspaceClient.login(username, password);
+      if (result && result.success) {
+        Object.assign(this.settings, {
+          authToken: result.token || '',
+          authUser: result.user || username || '',
+          authTenantName: (result.tenant && result.tenant.name) || ''
+        });
+        await chrome.storage.local.set(this.settings);
+        this.batchUploader.setAuthToken(this.settings.authToken);
+        sendResponse({ success: true, user: this.settings.authUser, tenant: result.tenant || null, role: result.role || '' });
+        return;
+      }
+      sendResponse(result || { success: false, error: 'login failed' });
+    } catch (e) {
+      // Always respond so the popup's message port never leaks (e.g. storage.set rejects).
+      sendResponse({ success: false, error: e?.message || 'login failed' });
+    }
+  }
+
+  // Clear the session token + identity; captures revert to unauthenticated (rejected by a
+  // fail-closed backend, or routed to the shared tenant when anon capture is allowed).
+  async logout(sendResponse) {
+    // Clear the in-memory token FIRST so uploads stop routing even if the persist fails;
+    // then best-effort persist so a respawn doesn't rehydrate the old token.
+    Object.assign(this.settings, { authToken: '', authUser: '', authTenantName: '' });
+    this.batchUploader.setAuthToken('');
+    try {
+      await chrome.storage.local.set(this.settings);
+    } catch (e) {
+      // Persist is best-effort; the in-memory clear already took effect.
+    }
+    sendResponse({ success: true });
   }
 
   async newSession(request, sendResponse) {
@@ -1111,7 +1162,7 @@ class JSExtractor {
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
     // Push a changed pairing token to the uploader (workspace-client reads it live via
     // getSettings, so it needs no push). A cleared token reverts to shared-tenant ingest.
-    this.batchUploader.setAuthToken(this.settings.pairingToken);
+    this.batchUploader.setAuthToken(this.settings.authToken || this.settings.pairingToken);
     sendResponse({ success: true });
   }
 

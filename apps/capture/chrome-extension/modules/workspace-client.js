@@ -34,8 +34,41 @@ export class WorkspaceClient {
   // tenant-agnostic, so it needs no token.
   authHeaders() {
     const s = this.getSettings() || {};
-    const token = String(s.pairingToken || '').replace(/[^!-~]+/g, '');
+    // Prefer the login session token, else a legacy pairing token — both ride as Bearer and
+    // the backend accepts either (the auth token is verified first). Keep only printable ASCII
+    // (0x21–0x7e); a newline/control char makes fetch throw (identical to setAuthToken). A
+    // missing token adds nothing => the backend's shared-tenant fallback (or a 401 when
+    // anon capture is disabled).
+    const token = String(s.authToken || s.pairingToken || '').replace(/[^!-~]+/g, '');
     return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+
+  // Authenticate to the workspace (POST /auth/login) and return the session token + identity.
+  // Pre-tenant / pre-auth: no Bearer, no tenant header. The caller stores the returned token so
+  // uploads + analyze route to this user's tenant. 401 => bad credentials; 503 => auth disabled.
+  async login(username, password) {
+    const target = this.resolveApiBase() + '/auth/login';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const resp = await fetch(target, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username || '', password: password || '' }),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        let detail = `HTTP ${resp.status}`;
+        try { const b = await resp.json(); if (b && b.detail) detail = b.detail; } catch (e) { /* keep default */ }
+        return { success: false, status: resp.status, error: detail };
+      }
+      const data = await resp.json();
+      return { success: true, token: data.token, user: data.user, role: data.role, tenant: data.tenant || null };
+    } catch (error) {
+      clearTimeout(timer);
+      return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    }
   }
 
   async testConnection() {

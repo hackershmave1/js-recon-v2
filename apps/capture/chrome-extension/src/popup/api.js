@@ -25,6 +25,9 @@ export const newSession = (payload) => send('newSession', payload);
 export const getExportData = () => send('getExportData');
 export const testConnection = () => send('testConnection');
 export const updateSettings = (settings) => send('updateSettings', { settings });
+// Central login: authenticate to the workspace so captures route to the operator's tenant.
+export const login = (username, password) => send('login', { username, password });
+export const logout = () => send('logout');
 // Project-scoped capture: list engagements (cached in the worker) and quick-create one.
 export const listProjects = () => send('listProjects');
 export const createProject = (project) => send('createProject', { project });

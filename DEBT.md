@@ -282,6 +282,11 @@ enterprise-hygiene cleanup (so the "later" doesn't become "never"):
   migration was written; harmless, cleanup only.
 - **(Optional, not a gap)** a workspace-SPA "Analyze" button — the popup already triggers analysis,
   so this is a convenience feature, not missing behavior.
+- **Counter can undercount the final ≤750ms burst before an MV3 teardown** (added by the
+  counter-persistence fix, PR #55): a file captured in that window lands in the dedup store but not
+  the debounced `capturedFilesMeta`, so on respawn it is dedup-suppressed and never re-enters the
+  count. Rare, display-only, self-heals on the next capture — still a strict improvement over the
+  reset-to-0 bug it fixed. Optional close: eager-persist the projection in `stopCapture`.
 
 ## Parked work
 

@@ -17,20 +17,73 @@ async function readErrorDetail(res: Response): Promise<string> {
   return detail;
 }
 
+// The login session token (recon.auth) lives in localStorage and rides every request
+// as `Authorization: Bearer`, read at call time so a login/logout is picked up without
+// re-wiring callers. Absent (logged out, or auth disabled server-side) => no header,
+// and the server falls back to the X-Tenant-Id stand-in (dev/test) or 401s.
+export const AUTH_TOKEN_KEY = "recon.authToken";
+
+function authHeader(): Record<string, string> {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+// A 401 from any tenant call means the session is gone (an expired/rotated token). The app
+// registers a handler here so it can drop to the login screen instead of looping on 401s
+// forever. Login/getMe deliberately DON'T trigger it — a bad login isn't a lost session.
+let unauthorizedHandler: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  unauthorizedHandler = fn;
+}
+export function notifyUnauthorized(): void {
+  unauthorizedHandler?.();
+}
+
 async function request<T>(path: string, init: RequestInit, tenantId: string): Promise<T> {
   const headers: Record<string, string> = {
     "X-Tenant-Id": tenantId,
     Accept: "application/json",
+    ...authHeader(),
     ...(init.headers as Record<string, string> | undefined),
   };
   const res = await fetch(path, { ...init, headers });
-  if (!res.ok) throw new ApiError(res.status, await readErrorDetail(res));
+  if (!res.ok) {
+    const detail = await readErrorDetail(res);
+    if (res.status === 401) notifyUnauthorized();
+    throw new ApiError(res.status, detail);
+  }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
 function json(method: string, body: unknown): RequestInit {
   return { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+}
+
+// --- Authentication -------------------------------------------------------- //
+
+export interface AuthTenant { id: string; name: string | null }
+export interface LoginResult { token: string; user: string; role: string; tenant: AuthTenant }
+export interface MeResult { user_id: string; role: string; tenant: AuthTenant }
+
+// POST /auth/login — pre-tenant, pre-auth (no X-Tenant-Id, no Bearer). Throws ApiError
+// on failure (401 invalid credentials, 503 auth not configured on the server).
+export async function login(username: string, password: string): Promise<LoginResult> {
+  const res = await fetch("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await readErrorDetail(res));
+  return res.json() as Promise<LoginResult>;
+}
+
+// GET /auth/me — re-validate the stored token server-side (its HMAC signature can't be
+// checked in the browser). A 401 means the token is stale/rejected and the caller logs out.
+export async function getMe(): Promise<MeResult> {
+  const res = await fetch("/auth/me", { headers: { Accept: "application/json", ...authHeader() } });
+  if (!res.ok) throw new ApiError(res.status, await readErrorDetail(res));
+  return res.json() as Promise<MeResult>;
 }
 
 export function createSession(
@@ -233,8 +286,12 @@ export function resumeRun(tenantId: string, runId: string): Promise<RunControlRe
 export async function exportOpenApi(tenantId: string, runId: string, format: "json" | "yaml"): Promise<Blob> {
   const res = await fetch(
     `/runs/${encodeURIComponent(runId)}/export/openapi?format=${format}`,
-    { headers: { "X-Tenant-Id": tenantId } },
+    { headers: { "X-Tenant-Id": tenantId, ...authHeader() } },
   );
-  if (!res.ok) throw new ApiError(res.status, await readErrorDetail(res));
+  if (!res.ok) {
+    const detail = await readErrorDetail(res);
+    if (res.status === 401) notifyUnauthorized();
+    throw new ApiError(res.status, detail);
+  }
   return res.blob();
 }

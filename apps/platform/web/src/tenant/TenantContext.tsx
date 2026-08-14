@@ -5,12 +5,12 @@ const Ctx = createContext<TenantCtx | null>(null);
 const KEY = "recon.tenantId";
 
 export function TenantProvider({ children }: { children: ReactNode }) {
-  // DEBT D15: cold-start default. An explicit last-used tenant (localStorage) always
-  // wins; otherwise fall back to an opt-in build-time VITE_DEFAULT_TENANT_ID so a
-  // single-operator/dev deploy need not paste a UUID the operator doesn't know. The
-  // default is read (never persisted) so it always tracks the build rather than freezing
-  // a stale tenant; TenantGate still validates it before entering. Vite inlines the var
-  // into the bundle — set it only for a single-tenant/dev build (see web/.env.example).
+  // The active tenant now comes from the login token: AuthProvider mirrors the signed
+  // tenant claim into `recon.tenantId` before this provider mounts. This seed order is
+  // just the fallback for reading that value — a persisted last-used tenant (localStorage)
+  // wins, else an opt-in build-time VITE_DEFAULT_TENANT_ID (DEBT D15, read but never
+  // persisted so it tracks the build). Post-login the localStorage value is always set,
+  // so the env default is now effectively vestigial — kept as a harmless cold-start net.
   const [tenantId, setState] = useState<string | null>(
     () => localStorage.getItem(KEY) ?? (import.meta.env.VITE_DEFAULT_TENANT_ID || null),
   );

@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { createMemoryRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { TenantProvider } from "./tenant/TenantContext";
+import { AuthProvider } from "./auth/AuthProvider";
 import { Home, RunWorkspace, OverviewRoute, SourcesRoute, FindingsRoute, ApiSpecRoute, ProbeRoute } from "./app";
 import * as api from "./api/apiClient";
 import * as sse from "./api/sseClient";
@@ -42,7 +43,13 @@ const ROUTES = [
 
 function renderAt(path: string) {
   const router = createMemoryRouter(ROUTES, { initialEntries: [path] });
-  render(<TenantProvider><RouterProvider router={router} /></TenantProvider>);
+  render(
+    <AuthProvider>
+      <TenantProvider>
+        <RouterProvider router={router} />
+      </TenantProvider>
+    </AuthProvider>,
+  );
 }
 
 describe("app routes", () => {

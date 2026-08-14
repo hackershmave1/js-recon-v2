@@ -53,6 +53,10 @@ dependencies = [
     # (precedent: openapi-spec-validator). Ceiling-pinned below the next major since
     # the parse()/GraphQLSyntaxError/AST-node surface we use is the stable 3.x API.
     "graphql-core>=3.2,<4",
+    # Password hashing for the central login (recon.auth.passwords). bcrypt is the
+    # only credential primitive we hand to a vetted library rather than hand-rolling;
+    # the self-describing hash string is the whole stored credential (no salt column).
+    "bcrypt>=4.0",
 ]
 
 [project.optional-dependencies]

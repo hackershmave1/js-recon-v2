@@ -152,6 +152,27 @@ class Settings(BaseSettings):
     pairing_key: str = ""  # env: RECON_PAIRING_KEY (secret)
     pairing_ttl_seconds: int = 12 * 3600  # minted-token lifetime; re-mint when it expires
 
+    # ---- User authentication (central login) ----
+    # A stateless signed session token (recon.auth.token) names the logged-in user +
+    # their tenant + role. EMPTY secret => auth DISABLED: /auth/login returns 503 and
+    # every route falls back to the legacy X-Tenant-Id header stand-in (this is how
+    # dev/test run, so the existing header-based tests need no change). Set it in any
+    # real deployment to REQUIRE login. Rotating it is the "revoke all" control
+    # (stateless — no per-token store). It MUST differ from pairing_key so a
+    # self-mintable pairing token can never verify as an auth token — create_app
+    # asserts this, since the two Bearer tokens share a wire format.
+    auth_secret: str = ""  # env: RECON_AUTH_SECRET (secret)
+    auth_token_ttl_seconds: int = 8 * 3600  # login session lifetime; kept < pairing TTL
+    # Escape hatch: honor X-Tenant-Id even when auth is ENABLED (transition/dev only).
+    # DEFAULT OFF — with auth on, a signed login token is the only way in.
+    allow_header_tenant: bool = False  # env: RECON_ALLOW_HEADER_TENANT
+    # Capture ingest with NO valid token (neither an auth session token nor a pairing
+    # token) falls back to the shared capture tenant. DEFAULT ON preserves the "never
+    # drop captured JS on a typo" property and keeps existing tests green; turn OFF
+    # per-deployment (e.g. the dev compose override) to REJECT unauthenticated
+    # captures so post-auth JS can never leak into the shared tenant.
+    allow_anon_capture: bool = True  # env: RECON_ALLOW_ANON_CAPTURE
+
     # Realtime / durability (REQ-R2, REQ-R3).
     heartbeat_interval_seconds: float = 5.0
     heartbeat_stall_threshold_seconds: float = 30.0

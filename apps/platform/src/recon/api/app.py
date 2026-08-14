@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from recon.api import (
+    auth_router,
     base_url_router,
     engagements_router,
     export_router,
@@ -34,10 +35,33 @@ from recon.observability import configure_logging, get_logger
 log = get_logger("recon.api")
 
 
+def _assert_auth_config(settings) -> None:
+    """Fail loud on an unsafe auth config; log the active mode.
+
+    Token domain separation (adversarial review, Blocker 1): auth and pairing tokens
+    share a wire format, so a shared secret would let a self-mintable pairing token
+    verify as a login token. Refuse to boot if the two secrets are set equal. Also
+    surface header-mode (auth disabled) as a warning so a prod misconfig — an unset
+    RECON_AUTH_SECRET silently accepting the X-Tenant-Id stand-in — is visible.
+    """
+    if settings.auth_secret and settings.auth_secret == settings.pairing_key:
+        raise RuntimeError(
+            "RECON_AUTH_SECRET must differ from RECON_PAIRING_KEY: the two token "
+            "types share a wire format, so a shared key lets a pairing token be "
+            "accepted as a login token."
+        )
+    if settings.auth_secret:
+        log.info("api.auth_enabled")
+    else:
+        log.warning("api.auth_disabled_header_tenant_mode")
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level, json=settings.env != "local")
+    _assert_auth_config(settings)
     app = FastAPI(title="Recon platform", version="0.1.0")
+    app.include_router(auth_router.router)
     app.include_router(sessions_router.router)
     app.include_router(engagements_router.router)
     app.include_router(runs_router.router)

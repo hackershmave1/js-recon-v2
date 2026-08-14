@@ -3,7 +3,8 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { TenantProvider } from "./tenant/TenantContext";
-import { TenantGate } from "./tenant/TenantGate";
+import { AuthProvider } from "./auth/AuthProvider";
+import { AuthGate } from "./auth/AuthGate";
 import { Home, RunWorkspace, OverviewRoute, SourcesRoute, FindingsRoute, ApiSpecRoute, ProbeRoute } from "./app";
 import { SessionsView } from "./features/sessions/SessionsView";
 // Self-hosted fonts (a recon tool shouldn't phone home to a font CDN). Imported
@@ -35,10 +36,12 @@ const router = createBrowserRouter([
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <TenantProvider>
-      <TenantGate>
-        <RouterProvider router={router} />
-      </TenantGate>
-    </TenantProvider>
+    <AuthProvider>
+      <AuthGate>
+        <TenantProvider>
+          <RouterProvider router={router} />
+        </TenantProvider>
+      </AuthGate>
+    </AuthProvider>
   </StrictMode>,
 );
