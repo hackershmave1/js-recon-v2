@@ -1,3 +1,4 @@
+import { AUTH_TOKEN_KEY } from "./apiClient";
 import { TERMINAL_STATES } from "./types";
 
 export interface SseEvent { id: string; event: string; data: string; }
@@ -32,6 +33,10 @@ export async function streamRunEvents(runId: string, tenantId: string, h: SseHan
   while (!h.signal?.aborted) {
     try {
       const headers: Record<string, string> = { "X-Tenant-Id": tenantId, Accept: "text/event-stream" };
+      // The live run stream is a tenant-gated route, so it needs the login token too
+      // (adversarial review Blocker 2 — this fetch bypasses the central apiClient).
+      const token = localStorage.getItem(AUTH_TOKEN_KEY);
+      if (token) headers.Authorization = `Bearer ${token}`;
       if (lastId) headers["Last-Event-ID"] = lastId;
       const res = await fetch(`/runs/${encodeURIComponent(runId)}/events`, { headers, signal: h.signal });
       if (!res.ok || !res.body) throw new Error(`sse ${res.status}`);

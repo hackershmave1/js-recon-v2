@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router";
 import { Icon } from "./icons";
 import { PairDeviceButton } from "../features/capture/PairDeviceButton";
+import { useAuth } from "../auth/AuthProvider";
 
 // The search pill is an inert placeholder (global search is a future slice) — a plain
 // non-interactive div, so it can't trap focus or shadow the panels' own inputs. Export
@@ -12,6 +13,7 @@ export function TopBar({ mode = "run", runId }: {
   runId?: string;
 }) {
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
   return (
     <header className="shell-top">
       <div className="shell-search" title="Search — coming soon">
@@ -31,6 +33,21 @@ export function TopBar({ mode = "run", runId }: {
           <Icon name="plus" size={15} />
           New Recon
         </a>
+        {user && (
+          <span
+            className="shell-user"
+            title={`Signed in as ${user.username || "user"} (${user.role})`}
+            style={{ alignSelf: "center", opacity: 0.75, fontSize: 13, whiteSpace: "nowrap" }}
+          >
+            {user.username || "user"}
+            {user.tenantName ? ` · ${user.tenantName}` : ""}
+          </span>
+        )}
+        {user && (
+          <button type="button" className="shell-btn" onClick={logout} title="Log out">
+            Log out
+          </button>
+        )}
       </div>
     </header>
   );
