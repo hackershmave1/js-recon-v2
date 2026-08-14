@@ -46,6 +46,11 @@ const FIRE_AND_FORGET_ACTIONS = new Set(['dynamicScriptDetected']);
 class JSExtractor {
   constructor() {
     this.capturedFiles = new Map(); // url -> fileObject (for export/display)
+    // Reset-to-zero fix: the popup's file/map/secret counters read capturedFiles, which an MV3
+    // service-worker teardown wipes even though the session + uploads survive. A lean projection
+    // is persisted (debounced) under this key and rehydrated on initialize().
+    this.capturedMetaKey = 'capturedFilesMeta';
+    this._captureMetaTimer = null;
     this.capturedHashes = new Map(); // hash -> {url, capturedAt} (for deduplication)
     this.processingQueue = [];
     this.isCapturing = false;
@@ -158,6 +163,8 @@ class JSExtractor {
     // Restore the dedup set (so we don't re-fetch/re-upload files already captured in
     // this session) and resume any uploads a previous worker instance left unsent.
     await this.rehydrateDedup();
+    // Restore the popup's file/map/secret counters so a cold start doesn't read 0.
+    await this.rehydrateCapturedFilesMeta();
     // rehydrate() returns pending count, or -1 if the outbox READ failed. Treat both
     // "has files" and "unknown" as reasons to keep the flush alarm armed (fail safe).
     const pendingUploads = await this.batchUploader.rehydrate();
@@ -498,6 +505,8 @@ class JSExtractor {
     // Persist the dedup entry so a respawn won't re-fetch/re-hash/re-upload this file.
     try { await this.dedupStore.put(contentHash, { contentHash, url, capturedAt: fileObject.capturedAt }); }
     catch (e) { /* dedup is an optimization; a miss just re-uploads (server dedupes) */ }
+    // Keep the persisted counter projection in step so a worker teardown can't reset it to 0.
+    this.schedulePersistCapturedMeta();
 
     this.totalCapturedBytes += contentByteLength;
     this.processingStats.processedFiles += 1;
@@ -827,6 +836,59 @@ class JSExtractor {
     }
   }
 
+  // A lean, content-free projection of one captured file — just what the popup counter and the
+  // recent-captures feed render. Rehydrated objects carry dependencyCount (not the full
+  // dependencies array) to stay small; getFiles reads either shape.
+  _projectCapturedFile(f) {
+    return {
+      url: f.url,
+      contentHash: f.contentHash,
+      contentLength: f.contentLength,
+      capturedAt: f.capturedAt,
+      hasSourceMap: f.hasSourceMap === true,
+      secretCount: f.secretCount || 0,
+      isMinified: f.isMinified === true,
+      classification: f.classification || 'app',
+      isThirdParty: f.isThirdParty === true,
+      dependencyCount: Array.isArray(f.dependencies) ? f.dependencies.length : (f.dependencyCount || 0),
+      sourceMapFetchStatus: f.sourceMapFetchStatus,
+      sourceMapFetchError: f.sourceMapFetchError
+    };
+  }
+
+  // Debounced so a burst of captures collapses into one storage write (avoids O(n^2) writes as
+  // the map grows). Best-effort: a serialize/quota failure just means the counter resets on the
+  // next respawn, which is exactly today's behaviour — it never throws into capture.
+  schedulePersistCapturedMeta() {
+    if (this._captureMetaTimer) return;
+    this._captureMetaTimer = setTimeout(() => {
+      this._captureMetaTimer = null;
+      const meta = Array.from(this.capturedFiles.values()).map((f) => this._projectCapturedFile(f));
+      chrome.storage.local.set({ [this.capturedMetaKey]: meta }).catch(() => {});
+    }, 750);
+  }
+
+  // Restore the persisted projection into capturedFiles on a cold start so getStatus/getFiles
+  // report the real counts instead of 0. Only fills urls not already present (a live capture that
+  // beat rehydrate wins). getExportData tolerates these lean objects — export-builder only reads
+  // fields, so missing ones serialize as absent.
+  async rehydrateCapturedFilesMeta() {
+    try {
+      const stored = (await chrome.storage.local.get(this.capturedMetaKey))[this.capturedMetaKey];
+      if (!Array.isArray(stored)) return;
+      for (const f of stored) {
+        if (f && f.url && !this.capturedFiles.has(f.url)) this.capturedFiles.set(f.url, f);
+      }
+    } catch (e) {
+      // no persisted meta / storage unavailable — the counter just starts empty
+    }
+  }
+
+  clearCapturedFilesMeta() {
+    if (this._captureMetaTimer) { clearTimeout(this._captureMetaTimer); this._captureMetaTimer = null; }
+    chrome.storage.local.remove(this.capturedMetaKey).catch(() => {});
+  }
+
   handleMessage(request, sender, sendResponse) {
     const handlers = {
       startCapture: () => this.startCapture(sendResponse),
@@ -911,6 +973,7 @@ class JSExtractor {
     // state (mirrors clearFiles) so the new session starts clean and survives respawns.
     this.sessionId = await this.sessionStore.rotate();
     this.capturedFiles.clear();
+    this.clearCapturedFilesMeta();
     this.capturedHashes.clear();
     // Reset the persistent dedup set for the new session. The outbox is intentionally
     // NOT cleared — any still-unsent files carry their own (old) per-file session id.
@@ -982,7 +1045,7 @@ class JSExtractor {
       url: f.url,
       size: f.contentLength,
       hasSourceMap: f.hasSourceMap,
-      dependencyCount: f.dependencies.length,
+      dependencyCount: Array.isArray(f.dependencies) ? f.dependencies.length : (f.dependencyCount || 0),
       capturedAt: f.capturedAt,
       isMinified: f.isMinified,
       classification: f.classification || 'app',
@@ -1002,6 +1065,7 @@ class JSExtractor {
 
   clearFiles(sendResponse) {
     this.capturedFiles.clear();
+    this.clearCapturedFilesMeta();
     this.capturedHashes.clear();
     this.dedupStore.clear().catch(() => {});
     this.processingQueue = [];
