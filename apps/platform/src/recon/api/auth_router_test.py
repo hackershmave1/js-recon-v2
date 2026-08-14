@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import uuid
 
+import fakeredis
 import pytest
 from fastapi.testclient import TestClient
 
+from recon.api import deps
 from recon.api.app import create_app
 from recon.auth import service as auth_service
 from recon.auth import token as auth_token
@@ -92,6 +94,24 @@ def test_capture_rejects_tokenless_ingest_when_auth_enabled(monkeypatch):
         assert exc.value.status_code == 401
     finally:
         get_settings.cache_clear()
+
+
+def test_login_is_rate_limited_before_authenticate(make_auth_client):
+    # Pre-seed the GLOBAL counter at its configured limit; the next login is a 429 that
+    # short-circuits BEFORE bcrypt + the PG user lookup — so this stays hermetic (no DB)
+    # and proves the throttle sits ahead of authenticate() (design review N1).
+    c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY)
+    settings = get_settings()
+    fake = fakeredis.FakeRedis()
+    fake.set("ratelimit:login:global", settings.login_ratelimit_global_max_attempts)
+    fake.expire("ratelimit:login:global", int(settings.login_ratelimit_window_seconds))
+    c.app.dependency_overrides[deps.get_login_redis] = lambda: fake
+    try:
+        r = c.post("/auth/login", json={"username": "whoever", "password": "x"})
+    finally:
+        c.app.dependency_overrides.clear()
+    assert r.status_code == 429, r.text
+    assert int(r.headers["Retry-After"]) > 0
 
 
 # --------------------- integration (live PG) --------------------- #
