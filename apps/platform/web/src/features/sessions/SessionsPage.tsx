@@ -6,6 +6,7 @@ import {
 import type { SessionSummary } from "../../api/types";
 import { Icon } from "../../shell/icons";
 import { ConfirmModal } from "../../shell/ConfirmModal";
+import { relativeTime } from "../../shell/relativeTime";
 import { useEngagementFilter } from "./engagementFilter";
 import "./sessions.css";
 
@@ -21,17 +22,6 @@ const STATUS_CLASS: Record<string, string> = {
 const ACTIVE_STATES = new Set([
   "running", "discovering", "fetching", "ingesting", "analyzing", "correlating",
 ]);
-
-function relativeTime(iso: string | null): string {
-  if (!iso) return "—";
-  const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (seconds < 60) return "just now";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
-}
 
 // A null stat means "no run yet" or "analyze hasn't emitted" — render "—", never a 0
 // that reads as a real measurement (project rule §5, honest real data).

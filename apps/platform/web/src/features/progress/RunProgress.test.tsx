@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router";
 import { RunProgress } from "./RunProgress";
 import { RunDataProvider, useRunData } from "./runData";
 import { TenantProvider } from "../../tenant/TenantContext";
@@ -14,7 +15,7 @@ beforeEach(() => { vi.restoreAllMocks(); localStorage.setItem("recon.tenantId", 
 // view over it. Mount both together so these assertions still exercise the real guard
 // logic end-to-end (the provider drives the pipeline the view renders).
 function renderRun(ui: ReactNode, runId = "r") {
-  return render(<TenantProvider><RunDataProvider runId={runId}>{ui}</RunDataProvider></TenantProvider>);
+  return render(<TenantProvider><MemoryRouter><RunDataProvider runId={runId}>{ui}</RunDataProvider></MemoryRouter></TenantProvider>);
 }
 // Tiny consumers standing in for the state/findings that used to be lifted via
 // callbacks; they let a test observe what the provider now holds in context.
@@ -33,6 +34,19 @@ describe("RunProgress", () => {
     await waitFor(() => expect(screen.getByText("analyzing")).toBeInTheDocument());
     expect(screen.getByText(/50%/)).toBeInTheDocument();
     expect(api.getFindings).toHaveBeenCalledWith("123e4567-e89b-12d3-a456-426614174000", "r");
+  });
+
+  it("surfaces the session's other runs when there is more than one (session_id threads through)", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", session_id: "sess", state: "done", stage: null, done: 1, total: 1, pct: 100, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(api, "getSessionRuns").mockResolvedValue({ session_id: "sess", count: 2, runs: [
+      { run_id: "r", state: "done", created_at: null, started_at: null, ended_at: null, target: null },
+      { run_id: "r2", state: "cancelled", created_at: null, started_at: null, ended_at: null, target: null },
+    ] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => { h.onOpen?.(); });
+    renderRun(<RunProgress />);
+    expect(await screen.findByText(/2 runs in this session/i)).toBeInTheDocument();
+    expect(api.getSessionRuns).toHaveBeenCalledWith("123e4567-e89b-12d3-a456-426614174000", "sess");
   });
 
   it("shows an error message when the status/findings fetch fails", async () => {

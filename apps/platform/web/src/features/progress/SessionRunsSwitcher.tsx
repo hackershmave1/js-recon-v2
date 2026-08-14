@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { useTenant } from "../../tenant/TenantContext";
 import { getSessionRuns } from "../../api/apiClient";
 import type { SessionRunRef } from "../../api/types";
+import { relativeTime } from "../../shell/relativeTime";
 import "./sessionRunsSwitcher.css";
 
 // Capture rounds under one session become SEPARATE runs (analyze seals a run; the next
@@ -26,17 +27,19 @@ export function SessionRunsSwitcher({ runId, sessionId }: { runId: string; sessi
   if (!runs || runs.length <= 1) return null;
 
   return (
-    <nav className="srs" aria-label="Other runs in this session">
+    <nav className="srs" aria-label="Runs in this session">
       <span className="srs-label">{runs.length} runs in this session</span>
       <ul className="srs-list">
         {runs.map((run) => {
           const current = run.run_id === runId;
           const when = run.ended_at ?? run.started_at ?? run.created_at;
-          const label = `${run.run_id.slice(0, 8)} · ${run.state}${when ? ` · ${relativeTime(when)}` : ""}`;
+          const label = `${run.run_id.slice(0, 8)} · ${run.state}`
+            + (when ? ` · ${relativeTime(when)}` : "")
+            + (run.target ? ` · ${run.target}` : "");
           return (
             <li key={run.run_id}>
               {current
-                ? <span className="srs-run is-current" aria-current="true">{label} · this run</span>
+                ? <span className="srs-run is-current" aria-current="page">{label} · this run</span>
                 : <Link className="srs-run" to={`/runs/${run.run_id}`}>{label}</Link>}
             </li>
           );
@@ -44,14 +47,4 @@ export function SessionRunsSwitcher({ runId, sessionId }: { runId: string; sessi
       </ul>
     </nav>
   );
-}
-
-function relativeTime(iso: string): string {
-  const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (seconds < 60) return "just now";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
 }
