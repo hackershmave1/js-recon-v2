@@ -47,4 +47,16 @@ describe("useCaptureDeepLink", () => {
     expect(spy).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
   });
+
+  it("falls back to /sessions when the matched session has no run yet", async () => {
+    vi.spyOn(api, "listSessions").mockResolvedValue({ count: 1, sessions: [session({ latest_run: null })] });
+    renderAt("/?capture=ext-1");
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/sessions", { replace: true }));
+  });
+
+  it("falls back to /sessions when the session list fetch fails", async () => {
+    vi.spyOn(api, "listSessions").mockRejectedValue(new Error("boom"));
+    renderAt("/?capture=ext-1");
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/sessions", { replace: true }));
+  });
 });
