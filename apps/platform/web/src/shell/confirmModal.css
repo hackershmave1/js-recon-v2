@@ -1,0 +1,74 @@
+.cfm-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(5, 7, 11, 0.75);
+  backdrop-filter: blur(3px);
+}
+.cfm {
+  width: 420px;
+  max-width: 94vw;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  padding: 22px 24px;
+}
+.cfm-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 17px;
+  margin: 0;
+}
+.cfm-msg {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
+.cfm-field {
+  display: block;
+  margin-top: 16px;
+}
+.cfm-field-label {
+  display: block;
+  font-size: 11px;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+.cfm-input {
+  width: 100%;
+}
+.cfm-foot {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 22px;
+}
+.cfm-btn {
+  padding: 9px 16px;
+  border-radius: var(--r);
+  font-weight: 600;
+  font-size: 13px;
+}
+.cfm-cancel {
+  background: none;
+  border: 1px solid var(--raised);
+  color: var(--muted);
+}
+.cfm-confirm {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: 1px solid var(--accent);
+}
+.cfm-confirm.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}

@@ -5,6 +5,7 @@ import {
 } from "../../api/apiClient";
 import type { SessionSummary } from "../../api/types";
 import { Icon } from "../../shell/icons";
+import { ConfirmModal } from "../../shell/ConfirmModal";
 import { useEngagementFilter } from "./engagementFilter";
 import "./sessions.css";
 
@@ -44,6 +45,9 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
   const [showArchived, setShowArchived] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [pending, setPending] = useState<
+    { kind: "delete" | "rename"; s: SessionSummary } | null
+  >(null);
 
   const reload = useCallback(() => {
     setError(null);
@@ -82,18 +86,15 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
   }
 
   function onRename(s: SessionSummary) {
-    const next = window.prompt("Rename session", s.name ?? s.host);
-    if (next && next.trim()) {
-      void withBusy(s.session_id, () => renameSession(tenantId, s.session_id, next.trim()));
-    }
+    setMenuFor(null);
+    setPending({ kind: "rename", s });
   }
   function onArchive(s: SessionSummary) {
     void withBusy(s.session_id, () => archiveSession(tenantId, s.session_id, !s.archived));
   }
   function onDelete(s: SessionSummary) {
-    if (window.confirm("Delete this session and all its runs? This cannot be undone.")) {
-      void withBusy(s.session_id, () => deleteSession(tenantId, s.session_id));
-    }
+    setMenuFor(null);
+    setPending({ kind: "delete", s });
   }
   async function onRerun(s: SessionSummary) {
     setBusyId(s.session_id);
@@ -220,6 +221,34 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
           );
         })}
       </div>
+
+      {pending?.kind === "delete" && (
+        <ConfirmModal
+          title="Delete session?"
+          message={`This permanently deletes ${pending.s.host} and all its runs. This can't be undone.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            const s = pending.s;
+            setPending(null);
+            void withBusy(s.session_id, () => deleteSession(tenantId, s.session_id));
+          }}
+          onCancel={() => setPending(null)}
+        />
+      )}
+      {pending?.kind === "rename" && (
+        <ConfirmModal
+          title="Rename session"
+          confirmLabel="Save"
+          input={{ label: "Name", initialValue: pending.s.name ?? pending.s.host }}
+          onConfirm={(value) => {
+            const s = pending.s;
+            setPending(null);
+            void withBusy(s.session_id, () => renameSession(tenantId, s.session_id, value));
+          }}
+          onCancel={() => setPending(null)}
+        />
+      )}
     </div>
   );
 }
