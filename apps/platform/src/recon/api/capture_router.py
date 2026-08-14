@@ -194,7 +194,11 @@ def _resolve_ingest_tenant(authorization: str | None) -> tuple[str, bool]:
         tenant_id = pairing_token.verify(token, key=settings.pairing_key)
         if tenant_id is not None:
             return tenant_id, True
-    if not settings.allow_anon_capture:
+    # Anon fallback exists only in unauthenticated mode. Once real login is configured
+    # (auth_secret set), a tokenless capture is NEVER accepted (fail closed) regardless of
+    # allow_anon_capture — so enabling auth can't accidentally leave the shared-tenant leak
+    # open (adversarial review Finding 5). A valid pairing token still routes (handled above).
+    if settings.auth_secret or not settings.allow_anon_capture:
         raise HTTPException(
             status_code=401, detail="capture requires a valid login or pairing token"
         )

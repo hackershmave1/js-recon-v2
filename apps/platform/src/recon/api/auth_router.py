@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from recon.api.deps import get_principal
 from recon.auth import token as auth_token
-from recon.auth.service import AmbiguousUser, Principal, authenticate, tenant_name
+from recon.auth.service import Principal, authenticate, tenant_name
 from recon.config import get_settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -52,14 +52,10 @@ def login(body: LoginRequest) -> LoginResponse:
         # Auth not configured — soft-fail like pairing mint, so a header-mode dev
         # deployment gives a clear signal instead of minting a dead credential.
         raise HTTPException(status_code=503, detail="authentication is not configured")
-    try:
-        principal = authenticate(body.username, body.password)
-    except AmbiguousUser as exc:
-        # Fail closed: the username exists in multiple tenants and there's no
-        # workspace selector to disambiguate (see AmbiguousUser).
-        raise HTTPException(status_code=401, detail="ambiguous username") from exc
+    principal = authenticate(body.username, body.password)
     if principal is None:
-        # Same 401 for unknown-user and bad-password: never reveal which.
+        # One generic 401 for unknown-user, bad-password, AND ambiguous-username —
+        # never reveal which (no user enumeration).
         raise HTTPException(status_code=401, detail="invalid credentials")
     token = auth_token.mint(
         user_id=principal.user_id,

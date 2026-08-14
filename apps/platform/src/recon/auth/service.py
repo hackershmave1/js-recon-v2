@@ -28,30 +28,30 @@ class Principal:
     role: str
 
 
-class AmbiguousUser(Exception):
-    """The login name exists in more than one tenant.
-
-    ``app_user`` is UNIQUE only per (tenant, email), so a username is not globally
-    unique. Login has no workspace selector, so a cross-tenant duplicate is a
-    genuinely ambiguous identity — we fail CLOSED rather than authenticate into an
-    arbitrary tenant. DEBT: multi-tenant login needs a workspace selector or a
-    globally-unique login identity before a second tenant gets the same username.
-    """
+# A fixed valid bcrypt hash so authenticate() always runs a compare — even when the user
+# is missing or ambiguous — equalizing response time so a timing side-channel can't
+# enumerate valid operator usernames. The value is irrelevant; it just can't match.
+_DUMMY_HASH = hash_password("recon-timing-equalizer-not-a-real-password")
 
 
 def authenticate(username: str, password: str) -> Principal | None:
     """Verify credentials, returning the :class:`Principal` or ``None``.
 
-    ``None`` = no such user or a bad password (the caller must not distinguish the
-    two to the client). Raises :class:`AmbiguousUser` when the username is not
-    unique across tenants.
+    ``None`` covers every failure — unknown user, bad password, or an ambiguous
+    username — and the caller must not distinguish them to the client (no user
+    enumeration). ``app_user`` is UNIQUE only per (tenant, email), so a username is
+    not globally unique; a cross-tenant duplicate is genuinely ambiguous (login has
+    no workspace selector) and fails CLOSED as a plain "invalid", never revealing that
+    the name exists in >1 tenant. DEBT: multi-tenant login needs a workspace selector
+    or a globally-unique login identity before a second tenant reuses a username.
     """
     with admin_session() as session:
         users = session.execute(select(AppUser).where(AppUser.email == username)).scalars().all()
-    if not users:
+    if len(users) != 1:
+        # Missing or ambiguous: still spend a bcrypt compare (constant-ish time) so the
+        # response time can't distinguish a real username, then fail generically.
+        verify_password(password, _DUMMY_HASH)
         return None
-    if len(users) > 1:
-        raise AmbiguousUser(username)
     user = users[0]
     if not verify_password(password, user.password_hash):
         return None

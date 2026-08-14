@@ -1,4 +1,4 @@
-import { AUTH_TOKEN_KEY } from "./apiClient";
+import { AUTH_TOKEN_KEY, notifyUnauthorized } from "./apiClient";
 import { TERMINAL_STATES } from "./types";
 
 export interface SseEvent { id: string; event: string; data: string; }
@@ -39,6 +39,7 @@ export async function streamRunEvents(runId: string, tenantId: string, h: SseHan
       if (token) headers.Authorization = `Bearer ${token}`;
       if (lastId) headers["Last-Event-ID"] = lastId;
       const res = await fetch(`/runs/${encodeURIComponent(runId)}/events`, { headers, signal: h.signal });
+      if (res.status === 401) notifyUnauthorized(); // expired/rotated token → drop to login
       if (!res.ok || !res.body) throw new Error(`sse ${res.status}`);
       failures = 0;
       h.onOpen?.();

@@ -113,8 +113,9 @@ export function PairDeviceModal({ tenantId, onClose }: { tenantId: string; onClo
   );
 }
 
-// Tenant-level top-bar action. Rendered inside TenantGate, so tenantId is non-null in
-// practice — but narrow it for tsc-strict and bail defensively if somehow absent.
+// Tenant-level top-bar action. Rendered only once logged in (AuthGate → TenantProvider seeded
+// from the token), so tenantId is non-null in practice — but narrow it for tsc-strict and bail
+// defensively if somehow absent.
 export function PairDeviceButton() {
   const { tenantId } = useTenant();
   const [open, setOpen] = useState(false);

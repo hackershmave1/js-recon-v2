@@ -14,6 +14,7 @@ the dev-login setup and a password reset.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from recon.auth import service as auth_service
@@ -53,11 +54,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "seed-admin":
-        env = get_settings().env
-        if args.password == "admin" and env not in _DEV_ENVS and not args.force:
+        # Fail closed: allow the weak dev default ONLY when RECON_ENV is EXPLICITLY set to a
+        # dev env. An unset RECON_ENV defaults to "local", so without the explicit check a
+        # prod host that forgot to set it would silently seed admin/admin.
+        env_explicit = os.environ.get("RECON_ENV") is not None
+        dev_env = env_explicit and get_settings().env in _DEV_ENVS
+        if args.password == "admin" and not args.force and not dev_env:
+            where = f"env={get_settings().env!r}" if env_explicit else "RECON_ENV unset"
             print(
-                f"refusing to seed the weak dev password 'admin' in env={env!r}; "
-                "pass --password <strong> or --force",
+                f"refusing to seed the weak dev password 'admin' ({where}); "
+                "set RECON_ENV=local|dev|test, pass --password <strong>, or --force",
                 file=sys.stderr,
             )
             return 2

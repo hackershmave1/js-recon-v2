@@ -28,6 +28,17 @@ function authHeader(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// A 401 from any tenant call means the session is gone (an expired/rotated token). The app
+// registers a handler here so it can drop to the login screen instead of looping on 401s
+// forever. Login/getMe deliberately DON'T trigger it — a bad login isn't a lost session.
+let unauthorizedHandler: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  unauthorizedHandler = fn;
+}
+export function notifyUnauthorized(): void {
+  unauthorizedHandler?.();
+}
+
 async function request<T>(path: string, init: RequestInit, tenantId: string): Promise<T> {
   const headers: Record<string, string> = {
     "X-Tenant-Id": tenantId,
@@ -36,7 +47,11 @@ async function request<T>(path: string, init: RequestInit, tenantId: string): Pr
     ...(init.headers as Record<string, string> | undefined),
   };
   const res = await fetch(path, { ...init, headers });
-  if (!res.ok) throw new ApiError(res.status, await readErrorDetail(res));
+  if (!res.ok) {
+    const detail = await readErrorDetail(res);
+    if (res.status === 401) notifyUnauthorized();
+    throw new ApiError(res.status, detail);
+  }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
@@ -273,6 +288,10 @@ export async function exportOpenApi(tenantId: string, runId: string, format: "js
     `/runs/${encodeURIComponent(runId)}/export/openapi?format=${format}`,
     { headers: { "X-Tenant-Id": tenantId, ...authHeader() } },
   );
-  if (!res.ok) throw new ApiError(res.status, await readErrorDetail(res));
+  if (!res.ok) {
+    const detail = await readErrorDetail(res);
+    if (res.status === 401) notifyUnauthorized();
+    throw new ApiError(res.status, detail);
+  }
   return res.blob();
 }

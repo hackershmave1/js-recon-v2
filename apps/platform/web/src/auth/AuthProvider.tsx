@@ -1,5 +1,11 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { AUTH_TOKEN_KEY, ApiError, getMe, login as apiLogin } from "../api/apiClient";
+import {
+  AUTH_TOKEN_KEY,
+  ApiError,
+  getMe,
+  login as apiLogin,
+  setUnauthorizedHandler,
+} from "../api/apiClient";
 
 // The login token is the source of the active tenant. We ALSO mirror its tenant id into
 // `recon.tenantId` so the existing TenantProvider (and every useTenant() consumer) keeps
@@ -101,6 +107,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Any tenant call that 401s means this session is dead (expired/rotated token). Drop to the
+  // login screen instead of looping on 401s until a manual reload (review Finding 3).
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      clearAuthStorage();
+      setUser(null);
+    });
+    return () => setUnauthorizedHandler(null);
   }, []);
 
   const login = async (username: string, password: string): Promise<void> => {

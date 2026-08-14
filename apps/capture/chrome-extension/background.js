@@ -977,27 +977,38 @@ class JSExtractor {
   // Bearer comes from a password login (POST /auth/login) instead of a pasted code.
   async login(request, sendResponse) {
     const { username, password } = request || {};
-    const result = await this.workspaceClient.login(username, password);
-    if (result && result.success) {
-      Object.assign(this.settings, {
-        authToken: result.token || '',
-        authUser: result.user || username || '',
-        authTenantName: (result.tenant && result.tenant.name) || ''
-      });
-      await chrome.storage.local.set(this.settings);
-      this.batchUploader.setAuthToken(this.settings.authToken);
-      sendResponse({ success: true, user: this.settings.authUser, tenant: result.tenant || null, role: result.role || '' });
-      return;
+    try {
+      const result = await this.workspaceClient.login(username, password);
+      if (result && result.success) {
+        Object.assign(this.settings, {
+          authToken: result.token || '',
+          authUser: result.user || username || '',
+          authTenantName: (result.tenant && result.tenant.name) || ''
+        });
+        await chrome.storage.local.set(this.settings);
+        this.batchUploader.setAuthToken(this.settings.authToken);
+        sendResponse({ success: true, user: this.settings.authUser, tenant: result.tenant || null, role: result.role || '' });
+        return;
+      }
+      sendResponse(result || { success: false, error: 'login failed' });
+    } catch (e) {
+      // Always respond so the popup's message port never leaks (e.g. storage.set rejects).
+      sendResponse({ success: false, error: e?.message || 'login failed' });
     }
-    sendResponse(result || { success: false, error: 'login failed' });
   }
 
   // Clear the session token + identity; captures revert to unauthenticated (rejected by a
   // fail-closed backend, or routed to the shared tenant when anon capture is allowed).
   async logout(sendResponse) {
+    // Clear the in-memory token FIRST so uploads stop routing even if the persist fails;
+    // then best-effort persist so a respawn doesn't rehydrate the old token.
     Object.assign(this.settings, { authToken: '', authUser: '', authTenantName: '' });
-    await chrome.storage.local.set(this.settings);
     this.batchUploader.setAuthToken('');
+    try {
+      await chrome.storage.local.set(this.settings);
+    } catch (e) {
+      // Persist is best-effort; the in-memory clear already took effect.
+    }
     sendResponse({ success: true });
   }
 

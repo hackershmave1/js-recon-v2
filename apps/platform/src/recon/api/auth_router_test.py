@@ -75,6 +75,25 @@ def test_pairing_token_is_not_accepted_as_a_login(make_auth_client):
     assert r.status_code == 401
 
 
+def test_capture_rejects_tokenless_ingest_when_auth_enabled(monkeypatch):
+    # Review Finding 5: with auth configured, a tokenless capture is rejected (fail closed)
+    # regardless of allow_anon_capture — never falls back to the shared tenant. Raises before
+    # any DB work, so this stays hermetic.
+    from fastapi import HTTPException
+
+    from recon.api import capture_router
+
+    monkeypatch.setenv("RECON_AUTH_SECRET", AUTH_KEY)
+    monkeypatch.setenv("RECON_ALLOW_ANON_CAPTURE", "true")  # even explicitly on, auth wins
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(HTTPException) as exc:
+            capture_router._resolve_ingest_tenant(None)
+        assert exc.value.status_code == 401
+    finally:
+        get_settings.cache_clear()
+
+
 # --------------------- integration (live PG) --------------------- #
 
 
