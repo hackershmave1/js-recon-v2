@@ -4,6 +4,7 @@ import { useRunData } from "./runData";
 import { RunControls } from "./RunControls";
 import { RunPipeline } from "./RunPipeline";
 import { EditRerunPanel } from "../newRun/EditRerunPanel";
+import { SessionRunsSwitcher } from "./SessionRunsSwitcher";
 
 interface FetchSummary { total: number; fetched: number; failed: number; pending: number; reason: string | null; }
 
@@ -36,7 +37,7 @@ function summarizeFetch(m: AssetsManifest | null): FetchSummary | null {
 // no fetching of its own and lives on the Overview page.
 export function RunProgress() {
   const {
-    runId, state, stage, pct, done, total, eta, error, assets, events,
+    runId, sessionId, state, stage, pct, done, total, eta, error, assets, events,
     pauseRequested, cancelRequested, captureStatus, handleControlResult,
   } = useRunData();
   const fetchSummary = summarizeFetch(assets);
@@ -71,6 +72,8 @@ export function RunProgress() {
           )}
         </div>
       </div>
+
+      <SessionRunsSwitcher runId={runId} sessionId={sessionId} />
 
       {/* A capture run sits QUEUED while /save-files accumulates batches; show the live
           "receiving" banner during that window — gated on the CONFIRMED "queued" snapshot

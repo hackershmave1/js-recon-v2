@@ -67,6 +67,7 @@ class SessionSummary:
     "analyze hasn't emitted"; the UI renders those as "—", never a faked number."""
 
     id: str
+    external_id: str | None
     name: str | None
     host: str
     scope_hosts: list[str]
@@ -275,6 +276,7 @@ def _summary(db: Session, row: EngagementSession) -> SessionSummary:
     )
     return SessionSummary(
         id=str(row.id),
+        external_id=str(row.external_id) if row.external_id else None,
         name=row.name,
         host=host,
         scope_hosts=list(row.scope_hosts or []),

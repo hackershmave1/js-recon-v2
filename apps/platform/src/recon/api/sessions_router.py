@@ -141,6 +141,7 @@ def _session_view_dict(view: service.SessionView) -> dict:
 def _summary_dict(summary: service.SessionSummary) -> dict:
     return {
         "session_id": summary.id,
+        "external_id": summary.external_id,
         "name": summary.name,
         "host": summary.host,
         "scope_hosts": summary.scope_hosts,

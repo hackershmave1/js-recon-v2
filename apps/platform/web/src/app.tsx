@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
+import { listSessions } from "./api/apiClient";
 import { NewRunPanel } from "./features/newRun/NewRunPanel";
 import { RunProgress } from "./features/progress/RunProgress";
 import { RunDataProvider, useRunData } from "./features/progress/runData";
@@ -102,7 +104,30 @@ export function ProbeRoute() {
 // New Recon is framed by the same shell as the rest of the app (sessions mode: no
 // active run) so it carries the sidebar (Sessions nav + engagement switcher) and top
 // bar — a consistent look and a way back out, not a dead-end standalone page.
+// The extension's "Open workspace" deep-links ?capture=<ext session id>. Resolve it to the
+// operator's captured run: match the ext id against the session list's external_id and jump to
+// that session's latest run (or the sessions list if it has no run / isn't in this tenant yet).
+export function useCaptureDeepLink() {
+  const navigate = useNavigate();
+  const { search } = useLocation();
+  const { tenantId } = useTenant();
+  useEffect(() => {
+    const ext = new URLSearchParams(search).get("capture");
+    if (!ext || !tenantId) return;
+    let live = true;
+    listSessions(tenantId)
+      .then((r) => {
+        if (!live) return;
+        const match = r.sessions.find((s) => s.external_id === ext);
+        navigate(match?.latest_run ? `/runs/${match.latest_run.run_id}` : "/sessions", { replace: true });
+      })
+      .catch(() => { if (live) navigate("/sessions", { replace: true }); });
+    return () => { live = false; };
+  }, [search, tenantId, navigate]);
+}
+
 export function Home() {
+  useCaptureDeepLink();
   return (
     <Shell mode="sessions">
       <NewRunPanel />

@@ -55,6 +55,7 @@ def raise_if_control_requested(tenant_id: str, run_id: str) -> None:
 @dataclass(frozen=True)
 class StatusView:
     run_id: str
+    session_id: str
     state: str
     stage: str | None
     done: int
@@ -112,12 +113,14 @@ def get_status(tenant_id: str, run_id: str, *, now: dt.datetime | None = None) -
         stalled = is_stalled(active=active, heartbeat_at=heartbeat, now=now, threshold_s=threshold)
         state = run.state
         stage = run.stage
+        session_id = str(run.session_id)
         pause_requested = run.pause_requested
         cancel_requested = run.cancel_requested
     hb_iso = heartbeat.isoformat() if heartbeat else None
     etag = _etag(state, stage, done, total, hb_iso, stalled, pause_requested, cancel_requested)
     return StatusView(
         run_id=str(run_id),
+        session_id=session_id,
         state=state,
         stage=stage,
         done=done,

@@ -210,12 +210,12 @@ export function App() {
   function openWorkspace() {
     const base = settings?.workspaceUrl || 'http://localhost:8000';
     // Deep-link the current capture session so the workspace opens INTO it instead of
-    // defaulting to whatever session is newest (a recon crawl, a second engagement, or
-    // the workspace's own self-capture). The session id is the backend session's primary
-    // key, so ?session=<id> always resolves. Bare URL when no session id is known yet.
+    // defaulting to whatever run is newest. This id is the EXTENSION's session id (the
+    // backend session's external_id, NOT its primary key); the workspace resolves
+    // ?capture=<external_id> to that session's latest run. Bare URL when none is known yet.
     const sid = status?.sessionId;
     const url = sid
-      ? `${base}${base.includes('?') ? '&' : '?'}session=${encodeURIComponent(sid)}`
+      ? `${base}${base.includes('?') ? '&' : '?'}capture=${encodeURIComponent(sid)}`
       : base;
     api.openTab(url);
   }

@@ -252,6 +252,7 @@ def get_status(
     response.headers["Cache-Control"] = "no-cache"
     return {
         "run_id": status.run_id,
+        "session_id": status.session_id,
         "state": status.state,
         "stage": status.stage,
         "done": status.done,
