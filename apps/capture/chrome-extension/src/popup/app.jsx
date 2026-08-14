@@ -136,9 +136,40 @@ export function App() {
   // ---- actions ----
   async function toggleCapture() {
     const next = !status.isCapturing;
+    // Enforce login before capturing: an unauthenticated upload is rejected by a
+    // fail-closed backend (or leaks into the shared tenant), so send the operator to
+    // sign in first instead of piling doomed captures into the outbox.
+    if (next && !settings?.authToken) {
+      showToast('Sign in to capture');
+      setView('settings');
+      return;
+    }
     setStatus((s) => ({ ...s, isCapturing: next }));
     await (next ? api.startCapture() : api.stopCapture());
     refresh();
+  }
+
+  // Central login: authenticate to the workspace, then mirror the identity into local
+  // settings so the popup reflects it immediately (adoptSettings won't re-pull from the
+  // worker once settings is the edit source of truth). Returns the raw result for the form.
+  async function signIn(username, password) {
+    const res = await api.login(username, password);
+    if (res?.success) {
+      setSettings((prev) => ({
+        ...(prev || {}),
+        authToken: 'session', // truthy marker; the real token stays in the worker
+        authUser: res.user || username,
+        authTenantName: (res.tenant && res.tenant.name) || ''
+      }));
+      showToast(`Signed in${res.tenant?.name ? ` · ${res.tenant.name}` : ''}`);
+    }
+    return res || { success: false };
+  }
+
+  async function signOut() {
+    await api.logout();
+    setSettings((prev) => ({ ...(prev || {}), authToken: '', authUser: '', authTenantName: '' }));
+    showToast('Signed out');
   }
 
   function toggleSetting(key) { patchSettings({ [key]: !(settings?.[key]) }); }
@@ -357,11 +388,14 @@ export function App() {
     wsUrl: settings.workspaceUrl || '',
     setWsUrl: (v) => patchSettings({ workspaceUrl: v }),
     testConnection,
-    // Operator pairing: the token routes captures into the operator's own tenant. `paired`
-    // is the last save-files ack (via the uploader stats) so the UI can confirm a token
-    // worked instead of failing silently on a typo/expiry; undefined until the first upload.
-    pairingToken: settings.pairingToken || '',
-    setPairingToken: (v) => patchSettings({ pairingToken: v }),
+    // Central login: sign in so captures route into the operator's own tenant. `paired` is
+    // the last save-files ack (via the uploader stats) so the UI can confirm the login token
+    // actually routed instead of failing silently; undefined until the first upload.
+    signedIn: !!settings.authToken,
+    authUser: settings.authUser || '',
+    authTenantName: settings.authTenantName || '',
+    signIn,
+    signOut,
     paired: status?.uploader?.paired,
     defScope: (settings.domainScopes || []).join(', '),
     setDefScope,
