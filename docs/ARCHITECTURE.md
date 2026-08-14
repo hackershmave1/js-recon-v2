@@ -121,6 +121,63 @@ egress-scope validation and a per-script in-scope re-check. Driving interaction 
 footprint, so request-layer egress interception is a tracked follow-up (the egress-proxy slice). See
 [ADR 0009](adr/0009-runtime-cdp-js-capture.md).
 
+## Authentication (central login)
+
+**Central login.** `POST /auth/login` (`api/auth_router.py`) is the one route that reads credentials
+and the one that resolves a tenant *without* a prior tenant context. It verifies a username + bcrypt
+password (`auth/service.py`, `auth/passwords.py`) and mints a **stateless HMAC-signed session token**
+(`auth/token.py`) whose payload names the user, tenant, role, and an 8h expiry
+(`{typ:auth, sub, t, role, exp}`). The token shares its `Authorization: Bearer` wire format with the
+capture **pairing** token but is cryptographically separated: verification requires `typ:auth` *and*
+`create_app` asserts `RECON_AUTH_SECRET != RECON_PAIRING_KEY`, so a self-mintable pairing token can
+never verify as a login. A failed login is one generic `401` — unknown user, bad password, and
+cross-tenant-ambiguous username are indistinguishable (no user enumeration), equalized with a dummy
+bcrypt compare so response time can't confirm a username.
+
+**Opt-in by config, tenant-from-token.** Auth is gated on `RECON_AUTH_SECRET`. **Empty ⇒ auth
+disabled**: `/auth/login` soft-fails `503` and every route falls back to the legacy `X-Tenant-Id`
+header stand-in — this is how dev/test run, so the header-based tests need no change. **Set ⇒ login
+required**: `api/deps.get_principal` verifies the Bearer token and `get_tenant_id` derives the tenant
+*from the verified token*, never from a client header (the `allow_header_tenant` escape hatch is
+default-off). Rotating the secret is the platform-wide "revoke all" — the token is stateless, with no
+per-token store. Capture ingest resolves the same way (`capture_router._resolve_ingest_tenant`): auth
+token, then pairing token, then — only while auth is *disabled* — the shared capture tenant; a set
+secret disables the anonymous fallback entirely, so post-auth JS can never leak into the shared
+tenant (fail closed).
+
+**User store + seed.** Logins live in `app_user` (`password_hash` added by migration `0014`), unique
+per `(tenant, email)`. The login lookup is the platform's one legitimate cross-tenant read — it runs
+on the RLS-bypassing admin connection because the tenant isn't known until the user is found — and
+fails closed on an ambiguous (cross-tenant duplicate) username. Usernames are **case-insensitive**:
+`normalize_username` trims + lowercases on both the seed write and the login read, so "Admin" and
+"admin" are one operator. There is no self-serve signup; an operator is seeded out-of-band, off the
+HTTP surface: `python -m recon.bootstrap seed-admin --tenant-id <uuid> --username <u> --password <pw>`
+(idempotent — a re-run doubles as a password reset). A weak-password guard refuses the `admin/admin`
+dev default unless `RECON_ENV` is explicitly a dev env or `--force` is passed, so a prod host that
+forgot to set `RECON_ENV` can't silently seed a guessable admin.
+
+**Web + extension.** The SPA wraps everything in an `AuthGate` (`web/src/auth/`): a `LoginScreen`
+until signed in, then the token rides as `Authorization: Bearer` on every API/SSE call and a global
+`401` handler logs out. The token is mirrored into `recon.tenantId` so the existing `TenantProvider`
+is unchanged, and the TopBar shows the signed-in user · tenant with a Log out control. The Chrome
+extension signs in from its popup instead of pasting a pairing code; the login token becomes its
+upload Bearer and capture is gated on being signed in — so a capture lands in the operator's own
+tenant and is visible in their workspace.
+
+**Brute-force throttle.** `/auth/login` is rate-limited by a Redis-backed failed-attempt counter
+(`auth/login_rate_limit.py`), checked *before* the bcrypt verify so a login flood can't burn CPU (the
+no-enumeration equalizer spends a bcrypt on every attempt). It counts failures per rolling window and
+clears on success, keyed **per-username plus a global backstop** — never by client IP, which behind
+the expected ingress proxy would collapse to a single self-DoS bucket. It **fails open** on a Redis
+error (via a short-timeout client, `deps.get_login_redis`): the throttle is defense in depth, not the
+access gate — the password + signed token stay fail-closed — so a Redis blip must not lock every
+operator out. Config-gated by `RECON_LOGIN_RATELIMIT_MAX_ATTEMPTS` (`<=0` disables; defaults 10 per
+5-minute window, global 60).
+
+**Roadmap.** Google OAuth is the intended second identity path — the stateless-token seam is built
+for it (a verified OAuth identity mints the same session token). Multi-tenant login needs a workspace
+selector or a globally-unique login identity before a second tenant can reuse a username (tracked).
+
 ## The capture extension (the surviving v1 client)
 
 The MV3 Chrome extension (`apps/capture/chrome-extension/`) is the **only** capability carried
