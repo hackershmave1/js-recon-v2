@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from recon.auth.passwords import hash_password, verify_password
 from recon.db.base import admin_session
@@ -34,6 +34,19 @@ class Principal:
 _DUMMY_HASH = hash_password("recon-timing-equalizer-not-a-real-password")
 
 
+def normalize_username(username: str) -> str:
+    """Canonical form for a login identity: trimmed + lowercased.
+
+    Usernames (stored in ``app_user.email``) are case-INSENSITIVE — "Admin",
+    "admin", and "  ADMIN " are the same operator. Normalizing on BOTH the seed
+    write and the login read means the lookup (``func.lower(email) == normalized``)
+    matches however a row was stored, and newly seeded users are stored canonically.
+    A cross-case duplicate within one tenant therefore logs in as genuinely ambiguous
+    (``authenticate`` fails closed), never as two distinct identities.
+    """
+    return username.strip().lower()
+
+
 def authenticate(username: str, password: str) -> Principal | None:
     """Verify credentials, returning the :class:`Principal` or ``None``.
 
@@ -45,8 +58,15 @@ def authenticate(username: str, password: str) -> Principal | None:
     the name exists in >1 tenant. DEBT: multi-tenant login needs a workspace selector
     or a globally-unique login identity before a second tenant reuses a username.
     """
+    normalized = normalize_username(username)
     with admin_session() as session:
-        users = session.execute(select(AppUser).where(AppUser.email == username)).scalars().all()
+        # Case-insensitive lookup (func.lower) so "Admin"/"admin" resolve to one
+        # identity, matching however the row was stored; seed writes are normalized too.
+        users = (
+            session.execute(select(AppUser).where(func.lower(AppUser.email) == normalized))
+            .scalars()
+            .all()
+        )
     if len(users) != 1:
         # Missing or ambiguous: still spend a bcrypt compare (constant-ish time) so the
         # response time can't distinguish a real username, then fail generically.
@@ -89,12 +109,13 @@ def seed_admin(
         if tenant is None:
             session.add(Tenant(id=tid, name=tenant_name))
             session.flush()
+        normalized = normalize_username(username)
         user = session.execute(
-            select(AppUser).where(AppUser.tenant_id == tid, AppUser.email == username)
+            select(AppUser).where(AppUser.tenant_id == tid, func.lower(AppUser.email) == normalized)
         ).scalar_one_or_none()
         hashed = hash_password(password)
         if user is None:
-            user = AppUser(tenant_id=tid, email=username, role=role, password_hash=hashed)
+            user = AppUser(tenant_id=tid, email=normalized, role=role, password_hash=hashed)
             session.add(user)
             session.flush()
         else:

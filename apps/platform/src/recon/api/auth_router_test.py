@@ -117,6 +117,19 @@ def test_login_success_returns_a_working_token(make_auth_client):
 
 
 @pytest.mark.integration
+def test_login_is_case_insensitive(make_auth_client):
+    # Seeded lowercase; a login typed in a different case (and with surrounding
+    # whitespace) still authenticates — usernames are case-insensitive
+    # (recon.auth.service.normalize_username, applied on both seed write and login read).
+    _tenant_id, user_id, username = _seed_unique_user(password="s3cret")
+    c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY)
+    r = c.post("/auth/login", json={"username": f"  {username.upper()}  ", "password": "s3cret"})
+    assert r.status_code == 200, r.text
+    claims = auth_token.verify(r.json()["token"], key=AUTH_KEY)
+    assert claims is not None and claims.user_id == user_id
+
+
+@pytest.mark.integration
 def test_login_wrong_password_is_401(make_auth_client):
     _tenant_id, _user_id, username = _seed_unique_user(password="s3cret")
     c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY)
