@@ -13,7 +13,7 @@ export interface RunConfig {
   scope_hosts: string[]; max_fetch_bytes: number | null; is_upload: boolean;
 }
 export interface RunStatus {
-  run_id: string; state: string; stage: string | null; done: number; total: number;
+  run_id: string; session_id?: string; state: string; stage: string | null; done: number; total: number;
   pct: number | null; eta_seconds: number | null; heartbeat_at: string | null; stalled: boolean;
   // Cooperative-control intent (REQ-A4): requested but not necessarily effected yet.
   // Lets run-control gating survive a page reload mid-pause (ui-catch-up §10, A1).

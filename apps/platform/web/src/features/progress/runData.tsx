@@ -52,6 +52,7 @@ export interface CaptureStatus {
 // so navigating between pages never tears down the SSE stream or refetches findings.
 export interface RunData {
   runId: string;
+  sessionId: string | null;
   state: string;
   stage: string | null;
   pct: number | null;
@@ -105,6 +106,7 @@ function useRunStream(runId: string): RunData {
   const [pauseRequested, setPauseRequested] = useState(false);
   const [cancelRequested, setCancelRequested] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   // stateRef mirrors `state` at accept-time so the guard compares against the
   // running value even within a synchronous burst of replayed SSE events (where
   // `state` hasn't re-rendered yet). liveProgressRef flips once job.progress has
@@ -152,6 +154,7 @@ function useRunStream(runId: string): RunData {
           }
         }
         setFindings(f);
+        setSessionId(s.session_id ?? null);
         setLoaded(true);
         // The assets manifest powers the crawl fetch-outcome line; it is secondary,
         // so a manifest error must never break the status/findings panel.
@@ -257,7 +260,7 @@ function useRunStream(runId: string): RunData {
   }, [tenantId, runId, applyState]);
 
   return {
-    runId, state, stage, pct, done, total, eta, error, assets, events, findings, loaded,
+    runId, sessionId, state, stage, pct, done, total, eta, error, assets, events, findings, loaded,
     pauseRequested, cancelRequested, captureStatus, handleControlResult,
   };
 }

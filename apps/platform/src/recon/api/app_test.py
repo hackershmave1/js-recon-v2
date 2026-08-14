@@ -150,6 +150,7 @@ def test_status_exposes_control_flags(client, authorized_session):
     ]
 
     body = client.get(f"/runs/{run_id}/status", headers=_headers(tenant)).json()
+    assert body["session_id"] == session_id
     assert body["pause_requested"] is False
     assert body["cancel_requested"] is False
 
