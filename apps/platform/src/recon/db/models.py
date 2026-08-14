@@ -73,6 +73,10 @@ class AppUser(Base):
     )
     email: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(Text, nullable=False, server_default="analyst")
+    # bcrypt hash (recon.auth.passwords). NULL for a user with no local password —
+    # e.g. an unfinished seed, or a future Google-OAuth identity — who therefore
+    # cannot authenticate via /auth/login. Added in migration 0014.
+    password_hash: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
 

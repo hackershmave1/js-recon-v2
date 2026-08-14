@@ -43,6 +43,7 @@ from sqlalchemy.exc import IntegrityError
 
 from recon import storage
 from recon.api.deps import get_redis
+from recon.auth import token as auth_token
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
 from recon.db.models import EngagementSession, Job, Run, RunAsset, Tenant
@@ -173,17 +174,30 @@ def _bearer_token(authorization: str | None) -> str | None:
 def _resolve_ingest_tenant(authorization: str | None) -> tuple[str, bool]:
     """Resolve which tenant an ingest request writes into, and whether it is PAIRED.
 
-    A valid Bearer pairing token resolves the operator tenant it names — the tenant is
-    derived ONLY from the server-signed token, never from any client value. Anything else
-    (no token, or an invalid/expired/tampered one) falls back to the shared capture tenant.
-    Fails CLOSED: a bad token never errors open into an operator tenant, and the extension
-    keeps capturing (into the shared tenant) rather than dropping JS on a typo."""
+    Resolution order, tenant derived ONLY from a server-signed token (never a client
+    value): (1) a valid auth SESSION token — a logged-in operator (recon.auth.token);
+    (2) a valid pairing token. Both name the operator tenant and are PAIRED. The two
+    share a Bearer wire format but are cryptographically separated — the auth token
+    requires ``typ=auth`` and a distinct secret (create_app asserts the keys differ),
+    so trying auth first then pairing can't cross-accept.
+
+    With neither token: fall back to the shared capture tenant when
+    ``allow_anon_capture`` is on (the default — preserves "never drop captured JS on a
+    typo"), else REJECT with 401 so post-auth JS can never leak into the shared tenant.
+    Still fails CLOSED — a bad token never errors open into an operator tenant."""
     settings = get_settings()
     token = _bearer_token(authorization)
     if token:
+        claims = auth_token.verify(token, key=settings.auth_secret)
+        if claims is not None:
+            return claims.tenant_id, True
         tenant_id = pairing_token.verify(token, key=settings.pairing_key)
         if tenant_id is not None:
             return tenant_id, True
+    if not settings.allow_anon_capture:
+        raise HTTPException(
+            status_code=401, detail="capture requires a valid login or pairing token"
+        )
     return _get_or_create_tenant(settings.capture_tenant_name), False
 
 
