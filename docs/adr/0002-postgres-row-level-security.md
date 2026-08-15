@@ -46,7 +46,7 @@ Policy creation per table in the migrations (`migrations/versions/0001_initial.p
 including the `recon_app` role; repeated in
 `0002/0004/0005/0006/0007/0008/0009`). The `*_TABLES` tuples (`db/models.py:565-596`), consumed by the RLS migration
 `upgrade()`/`downgrade()` bodies (e.g. `0001_initial.py:32`). Access path + GUC: `db/base.py:35-67` (`tenant_session` /
-`admin_session`); per-request tenant resolution `api/deps.py:24-34`. RLS behaviour is
+`admin_session`); per-request tenant resolution `api/deps.py:83-105` (`get_tenant_id`, signed-token-based post central login). RLS behaviour is
 covered by the DB/integration tests.
 
 ## More Information

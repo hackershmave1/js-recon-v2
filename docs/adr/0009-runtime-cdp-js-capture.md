@@ -102,8 +102,7 @@ crafted `sourceMapURL` soft-misses without aborting the run, cancel-not-swallowe
 
 Requirements: REQ-P2 (executed-script capture), REQ-P3 (authorization before active work),
 REQ-C3 (runtime host resolution).
-Shipped as slice 1 (PR #35) and slice 2 (PR #36), **merged to `main` 2026-08-11**; slice 3 (the
-interaction driver) on `feat/capture-interaction-driver`. Relates to ADR 0005 (SSRF egress guard,
+Shipped as slice 1 (PR #35) and slice 2 (PR #36), **merged to `main` 2026-08-11**; slice 3 (interaction driver) merged as PR #38. Relates to ADR 0005 (SSRF egress guard,
 reused), ADR 0006 (static analysis, no automated *exploit* traffic — capture relaxes the
 *static-only fetch* posture, not that exploit stance), ADR 0008 (process-group kill of
 headless-browser children). Follow-ups: request-layer egress interception (the egress-proxy
