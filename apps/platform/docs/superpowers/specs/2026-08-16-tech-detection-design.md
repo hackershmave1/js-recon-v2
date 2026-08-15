@@ -30,7 +30,7 @@ beyond what fetch/capture already do; no secret storage; static-analysis honesty
 6. **Engine = in-house pure-Python matcher** over the vendored `enthec/webappanalyzer` fingerprint
    JSON (GPL-3.0, server-side only), matched with `google-re2` (linear-time / ReDoS-safe); versions
    via POST-match capture-group substitution.
-7. **One results table** `run_technology`; **migration 0015**; new `TECH_TABLES` RLS group.
+7. **One results table** `run_technology`; **migration 0016**; new `TECH_TABLES` RLS group.
 
 ## Grounding (verified facts this design rests on)
 
@@ -50,8 +50,9 @@ beyond what fetch/capture already do; no secret storage; static-analysis honesty
   (`findings/analyze.py:633-637`); the auth surface is captured as names + scheme only
   (`findings/analyze.py:557-560`); even engine stderr is kept off persisted fields because a scanner
   "can echo matched content" (`findings/engines.py:36-42`). ⇒ the allowlist gate (T1).
-- **Migration head is `0014_app_user_password.py`; `0011` is taken** (`0011_capture_external_ids.py`).
-  The new revision is **0015**, `down_revision="0014"`.
+- **Migration head is `0015_finding_type_unresolved.py`** — the branch advanced past `0014` via PR #64
+  (`05c56fa`) while this was being designed; `0011` was already taken too. The new revision is
+  **0016**, `down_revision="0015_finding_type_unresolved"`.
 - **`RECON_REQUIRE_ENGINES` is test-only** — read in `conftest.py:27-30` and test modules only, no
   production reader. It cannot gate dataset presence for a pure-Python engine (T7).
 - **`google-re2` ships cross-platform wheels** — `win_amd64`/`win32` + manylinux, latest
@@ -194,8 +195,9 @@ run_technology(
 
 `evidence` holds only allowlisted material (which surface + the matched pattern + a short snippet
 **bounded to the matched marker**) — no secrets, no raw HTML (T1). Add `TECH_TABLES = ("run_technology",)` to the RLS groups
-(`db/models.py:576-608`). Migration **`0015_technology.py`** (`down_revision="0014"`) creates the table
-and FORCE-enables RLS, mirroring `0005_run_asset.py:47-56`. `storage.BLOB_KINDS` gains
+(`db/models.py:576-608`). Migration **`0016_technology.py`**
+(`down_revision="0015_finding_type_unresolved"`) creates the table and FORCE-enables RLS, mirroring
+`0005_run_asset.py:47-56`. `storage.BLOB_KINDS` gains
 `"fingerprint-signal"` (A). No `run_host_document` table; no `"html"` blob.
 
 ---
@@ -295,7 +297,7 @@ must-fix is folded into the decisions/traps above:
 - **Runtime-vs-static version honesty** — `js` is runtime, not source bytes (Google M1) ⇒ T12 + Phase 2.
 - **Best-effort + heartbeat + interruptible + upsert** (Meta M1/M2/M3) ⇒ C + T2/T3.
 - **Per-pattern RE2 compile + summed confidence** (Google M2/M3) ⇒ B + T4/T3.
-- **Migration 0015, not 0011** (both) ⇒ D.
+- **Migration 0016** (head advanced to `0015_finding_type_unresolved` via PR #64), not 0011 (both) ⇒ D.
 - **One table, manifest blob for signal** (Google M4) ⇒ A + D.
 - **GPL LICENSE/NOTICE + CI guard, SaaS-only** (Meta M7 / Google M5) ⇒ G + T10.
 - **Fail-closed dataset load, not `RECON_REQUIRE_ENGINES`** (Meta M5) ⇒ T7.
