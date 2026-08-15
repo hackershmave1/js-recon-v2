@@ -134,8 +134,7 @@ class JSExtractor {
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
     // Re-apply the persisted Bearer token so a service-worker respawn keeps routing the
     // operator's captures into their tenant (the uploader holds it in memory, not storage).
-    // Prefer the login session token; fall back to a legacy pairing token.
-    this.batchUploader.setAuthToken(this.settings.authToken || this.settings.pairingToken);
+    this.batchUploader.setAuthToken(this.settings.authToken);
     // Re-apply a persisted scope so uploads keep tagging the session even if the
     // service worker recycled after a new session was started.
     if (this.settings.useDomainScope && Array.isArray(this.settings.domainScopes) && this.settings.domainScopes.length) {
@@ -769,7 +768,6 @@ class JSExtractor {
       'captureAuthContext',
       'includeSubdomains',
       'workspaceUrl',
-      'pairingToken',
       'authToken',
       'authUser',
       'authTenantName',
@@ -795,11 +793,9 @@ class JSExtractor {
       // subdomain capture behaviour (isInScope) for existing users.
       includeSubdomains: result.includeSubdomains !== false,
       workspaceUrl: result.workspaceUrl || '',
-      // Operator-pairing Bearer token. Empty => unauthenticated ingest (shared capture
-      // tenant), i.e. today's behavior; a valid token routes captures to the operator's tenant.
-      pairingToken: result.pairingToken || '',
       // Central-login session token (recon.auth) + cached identity for the popup. Empty =>
-      // not signed in. Preferred over pairingToken as the upload Bearer (see setAuthToken).
+      // not signed in (unauthenticated ingest => shared capture tenant); a valid token routes
+      // captures to the operator's tenant (the upload Bearer, see setAuthToken).
       authToken: result.authToken || '',
       authUser: result.authUser || '',
       authTenantName: result.authTenantName || '',
@@ -973,8 +969,8 @@ class JSExtractor {
   }
 
   // Central login: authenticate to the workspace and persist the session token + identity so
-  // uploads/analyze route to this operator's tenant. Mirrors the pairing-token model, but the
-  // Bearer comes from a password login (POST /auth/login) instead of a pasted code.
+  // uploads/analyze route to this operator's tenant. The Bearer comes from a password login
+  // (POST /auth/login).
   async login(request, sendResponse) {
     const { username, password } = request || {};
     try {
@@ -1160,9 +1156,9 @@ class JSExtractor {
     await chrome.storage.local.set(this.settings);
     this.batchUploader.setEndpoint(this.workspaceClient.resolveApiBase());
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
-    // Push a changed pairing token to the uploader (workspace-client reads it live via
+    // Push a changed login token to the uploader (workspace-client reads it live via
     // getSettings, so it needs no push). A cleared token reverts to shared-tenant ingest.
-    this.batchUploader.setAuthToken(this.settings.authToken || this.settings.pairingToken);
+    this.batchUploader.setAuthToken(this.settings.authToken);
     sendResponse({ success: true });
   }
 

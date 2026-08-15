@@ -145,12 +145,6 @@ class Settings(BaseSettings):
     # cross-origin POSTs and JS cannot forge it). The extension sends
     # chrome-extension://<id> or no Origin. Kill-switch for non-browser ingest clients.
     capture_ingest_origin_lock: bool = True  # env: RECON_CAPTURE_INGEST_ORIGIN_LOCK
-    # Stateless pairing token (capture link): a signed HMAC token routes the extension's
-    # captures into an operator tenant instead of the shared capture tenant. Empty key =>
-    # pairing disabled (mint returns 503). Rotating the key is the "revoke all" control
-    # (stateless — there is no per-token revoke). See recon/pairing + api/pairing_router.
-    pairing_key: str = ""  # env: RECON_PAIRING_KEY (secret)
-    pairing_ttl_seconds: int = 12 * 3600  # minted-token lifetime; re-mint when it expires
 
     # ---- User authentication (central login) ----
     # A stateless signed session token (recon.auth.token) names the logged-in user +
@@ -158,19 +152,17 @@ class Settings(BaseSettings):
     # every route falls back to the legacy X-Tenant-Id header stand-in (this is how
     # dev/test run, so the existing header-based tests need no change). Set it in any
     # real deployment to REQUIRE login. Rotating it is the "revoke all" control
-    # (stateless — no per-token store). It MUST differ from pairing_key so a
-    # self-mintable pairing token can never verify as an auth token — create_app
-    # asserts this, since the two Bearer tokens share a wire format.
+    # (stateless — no per-token store).
     auth_secret: str = ""  # env: RECON_AUTH_SECRET (secret)
-    auth_token_ttl_seconds: int = 8 * 3600  # login session lifetime; kept < pairing TTL
+    auth_token_ttl_seconds: int = 8 * 3600  # login session lifetime
     # Escape hatch: honor X-Tenant-Id even when auth is ENABLED (transition/dev only).
     # DEFAULT OFF — with auth on, a signed login token is the only way in.
     allow_header_tenant: bool = False  # env: RECON_ALLOW_HEADER_TENANT
-    # Capture ingest with NO valid token (neither an auth session token nor a pairing
-    # token) falls back to the shared capture tenant. DEFAULT ON preserves the "never
-    # drop captured JS on a typo" property and keeps existing tests green; turn OFF
-    # per-deployment (e.g. the dev compose override) to REJECT unauthenticated
-    # captures so post-auth JS can never leak into the shared tenant.
+    # Capture ingest with NO valid auth session token falls back to the shared capture
+    # tenant. DEFAULT ON preserves the "never drop captured JS on a typo" property and
+    # keeps existing tests green; turn OFF per-deployment (e.g. the dev compose override)
+    # to REJECT unauthenticated captures so post-auth JS can never leak into the shared
+    # tenant.
     allow_anon_capture: bool = True  # env: RECON_ALLOW_ANON_CAPTURE
 
     # Login brute-force throttle (Redis-backed, POST /auth/login only —

@@ -1,6 +1,5 @@
 import { useNavigate } from "react-router";
 import { Icon } from "./icons";
-import { PairDeviceButton } from "../features/capture/PairDeviceButton";
 import { useAuth } from "../auth/AuthProvider";
 
 // The search pill is an inert placeholder (global search is a future slice) — a plain
@@ -22,7 +21,6 @@ export function TopBar({ mode = "run", runId }: {
         <kbd className="shell-kbd">⌘K</kbd>
       </div>
       <div className="shell-actions">
-        <PairDeviceButton />
         {mode === "run" && runId && (
           <button type="button" className="shell-btn" onClick={() => navigate(`/runs/${runId}/api-spec`)}>
             <Icon name="download" size={15} />

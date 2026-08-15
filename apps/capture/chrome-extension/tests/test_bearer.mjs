@@ -1,9 +1,9 @@
-// Slice 3 — the operator-pairing Bearer token is attached to every tenant-resolving
-// ingest call (save-files + analyze/start + analyze/progress + GET/POST projects) and
-// NOT to the tenant-agnostic /health probe. Also: the token is whitespace-normalized
-// (a wrapped-paste newline in a header value makes fetch throw), an empty token adds no
-// header (shared-tenant fallback = today's behavior), and the uploader records the
-// `paired` ack so the popup can reflect pairing state.
+// The login-session Bearer token is attached to every tenant-resolving ingest call
+// (save-files + analyze/start + analyze/progress + GET/POST projects) and NOT to the
+// tenant-agnostic /health probe. Also: the token is whitespace-normalized (a newline in a
+// header value makes fetch throw), an empty token adds no header (shared-tenant fallback =
+// today's behavior), and the uploader records the `paired` ack so the popup can reflect
+// whether captures routed to the operator's tenant.
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -112,8 +112,8 @@ async function testWorkspaceClientAuth() {
   vm.runInContext(`${source}\nthis.WorkspaceClient = WorkspaceClient;`, sandbox, { filename: modPath });
   const WorkspaceClient = sandbox.WorkspaceClient;
 
-  const make = (pairingToken) => new WorkspaceClient({
-    getSettings: () => ({ workspaceUrl: 'http://localhost:8000', pairingToken }),
+  const make = (authToken) => new WorkspaceClient({
+    getSettings: () => ({ workspaceUrl: 'http://localhost:8000', authToken }),
     getSessionId: () => 'sess-1'
   });
   const authOf = (needle) => calls.find((c) => c.url.includes(needle))?.init?.headers?.Authorization;
@@ -145,7 +145,7 @@ async function testWorkspaceClientAuth() {
 async function run() {
   await testUploaderBearer();
   await testWorkspaceClientAuth();
-  console.log('test_pairing_bearer: ok');
+  console.log('test_bearer: ok');
   process.exit(0);
 }
 run().catch((e) => { console.error(e); process.exit(1); });

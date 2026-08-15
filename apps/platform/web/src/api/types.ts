@@ -1,9 +1,5 @@
 export interface SessionView { session_id: string; scope_hosts: string[]; authorization_ack: boolean; }
 export interface RunRef { run_id: string; state: string; }
-// POST /pairing mint response: a short-lived signed token the operator pastes into the
-// Chrome extension so its captures route into THIS tenant. `expiresAt` is epoch seconds;
-// `ttlSeconds` is the server-chosen lifetime (default 12h).
-export interface PairingToken { token: string; ttlSeconds: number; expiresAt: number; }
 // The source run's editable config for the edit-&-re-run prefill (GET /runs/{id}/config).
 // `is_upload` => the re-run re-analyzes the stored bytes: keep the target (a base-URL
 // hint) editable but hide the capture toggle + fetch cap, which don't apply. `max_fetch_bytes`

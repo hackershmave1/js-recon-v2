@@ -25,7 +25,7 @@ export class WorkspaceClient {
     return base.replace(/\/+$/, '');
   }
 
-  // Authorization header for the operator-pairing token, if one is configured. Read live
+  // Authorization header for the login session token, if one is configured. Read live
   // from settings (same source as workspaceUrl). Normalize by keeping only printable ASCII
   // (0x21–0x7e) — the same throw-safe normalization as the uploader's setAuthToken (a
   // newline/control char in a header value makes fetch throw); keep the two IDENTICAL.
@@ -34,12 +34,11 @@ export class WorkspaceClient {
   // tenant-agnostic, so it needs no token.
   authHeaders() {
     const s = this.getSettings() || {};
-    // Prefer the login session token, else a legacy pairing token — both ride as Bearer and
-    // the backend accepts either (the auth token is verified first). Keep only printable ASCII
-    // (0x21–0x7e); a newline/control char makes fetch throw (identical to setAuthToken). A
-    // missing token adds nothing => the backend's shared-tenant fallback (or a 401 when
+    // The login session token rides as Bearer (the backend verifies it). Keep only printable
+    // ASCII (0x21–0x7e); a newline/control char makes fetch throw (identical to setAuthToken).
+    // A missing token adds nothing => the backend's shared-tenant fallback (or a 401 when
     // anon capture is disabled).
-    const token = String(s.authToken || s.pairingToken || '').replace(/[^!-~]+/g, '');
+    const token = String(s.authToken || '').replace(/[^!-~]+/g, '');
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 

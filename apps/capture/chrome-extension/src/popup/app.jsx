@@ -15,7 +15,7 @@ const NOISE = new Set(['lib', 'cms', 'tracker']);
 const FALLBACK_SETTINGS = {
   includeSubdomains: true, muteNoise: true, outOfScopeMode: 'tag', maxAssetMb: 8,
   denyDefaultProfile: true, performAnalysisOnUpload: false, captureAuthContext: true,
-  workspaceUrl: '', pairingToken: '', domainScopes: [], useDomainScope: false, captureEverything: false,
+  workspaceUrl: '', domainScopes: [], useDomainScope: false, captureEverything: false,
   denyRules: [
     { tag: 'CMS', pattern: '/wp-content/plugins/*' },
     { tag: 'CMS', pattern: '/wp-includes/*' },

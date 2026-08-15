@@ -1,6 +1,6 @@
 // Central login (recon.auth) on the extension: WorkspaceClient.login() posts credentials to
-// /auth/login and returns the session token + identity; authHeaders() PREFERS the login
-// session token over a legacy pairing token (both ride as Bearer; the backend accepts either).
+// /auth/login and returns the session token + identity; authHeaders() rides the login
+// session token as Bearer (the backend verifies it).
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -24,18 +24,17 @@ function loadWorkspaceClient(fetchImpl) {
   return sandbox.WorkspaceClient;
 }
 
-async function testAuthHeaderPrefersAuthToken() {
+async function testAuthHeaderRidesAuthToken() {
   const WorkspaceClient = loadWorkspaceClient(async () => ({ ok: true, status: 200, json: async () => ({}) }));
   // Compare the Authorization string, not the whole object: authHeaders() builds its object
   // inside the vm sandbox, so a cross-realm deepEqual would fail on the differing prototype.
   const auth = (settings) => new WorkspaceClient({ getSettings: () => settings }).authHeaders().Authorization;
 
-  assert.equal(auth({ authToken: 'auth-1', pairingToken: 'pair-1' }), 'Bearer auth-1', 'login token preferred over a legacy pairing token');
-  assert.equal(auth({ pairingToken: 'pair-1' }), 'Bearer pair-1', 'falls back to the pairing token');
+  assert.equal(auth({ authToken: 'auth-1' }), 'Bearer auth-1', 'login token rides as Bearer');
   assert.equal(auth({}), undefined, 'no token => no header (shared-tenant fallback)');
   assert.equal(auth({ authToken: '  a\nb ' }), 'Bearer ab', 'auth token whitespace/control stripped');
 
-  console.log('  authHeaders prefers authToken: ok');
+  console.log('  authHeaders rides authToken: ok');
 }
 
 async function testLogin() {
@@ -69,7 +68,7 @@ async function testLogin() {
 }
 
 async function run() {
-  await testAuthHeaderPrefersAuthToken();
+  await testAuthHeaderRidesAuthToken();
   await testLogin();
   console.log('test_auth_login: ok');
   process.exit(0);
