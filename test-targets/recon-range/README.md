@@ -70,6 +70,10 @@ or directly: `POST /api/sessions/{ext_id}/analyze/start`). Wait for progress to 
 
 ## 5. Resolve the tenant UUID (one-time, out-of-band)
 
+> **Only needed for the header-mode fallback.** The default scoring path (§6) logs in and derives
+> the tenant from the session token, so you can skip this section unless the platform runs auth-off
+> or with `RECON_ALLOW_HEADER_TENANT=1`.
+
 The scoring script's `X-Tenant-Id` header must be the tenant's **UUID**, not its name — the
 platform 400s a non-UUID value. The capture tenant is named `capture-spike` but its UUID is
 randomly generated at creation and no endpoint currently returns it, so resolve it once via `psql`:
@@ -83,6 +87,23 @@ step, not a once-per-run step. (A fast-follow candidate — out of scope here �
 `GET /api/capture/tenant` endpoint so this lookup doesn't need manual `psql`.)
 
 ## 6. Score the run
+
+```bash
+npm run score -- --run <run_id>
+```
+
+The scorer authenticates the same way the SPA and extension do: it logs in via `POST /auth/login`
+and sends the minted session token as `Authorization: Bearer` on the findings request. This is
+required against a default `docker compose up`, which ships auth **on** (`RECON_AUTH_SECRET` set) —
+there, the platform derives the tenant from the token and ignores `X-Tenant-Id`, so a bare-header
+request 401s. Credentials default to the dev login `admin`/`admin` (tenant `QA`); override with
+`--username`/`--password` or the `RECON_USERNAME`/`RECON_PASSWORD` env vars to score as a different
+operator. Because findings are tenant-scoped, score as the **same operator/tenant the capture was
+ingested under** (§3–4), or the run's findings won't be visible.
+
+**Header-mode fallback.** If login can't mint a token — auth is off (`/auth/login` returns 503), or
+you're on a `RECON_ALLOW_HEADER_TENANT=1` deployment and aren't logging in — pass the tenant UUID
+from §5 and the script sends the legacy `X-Tenant-Id` header instead:
 
 ```bash
 npm run score -- --run <run_id> --tenant <tenant_uuid>
@@ -142,5 +163,5 @@ reading a score:
 | `npm run build` | Run both builds |
 | `npm run serve:vite` | Serve `dist/vite/` on `:4173` |
 | `npm run serve:webpack` | Serve `dist/webpack/` on `:4174` |
-| `npm run score -- --run <id> --tenant <uuid>` | Score a run's findings against `answer-key.json` |
+| `npm run score -- --run <id>` | Score a run's findings against `answer-key.json` (logs in as `admin`/`admin`; see §6) |
 | `npm test` | Build both bundlers, then run every `scripts/*.test.mjs` (build invariants, answer-key consistency, planted-surface presence, scoring logic) |
