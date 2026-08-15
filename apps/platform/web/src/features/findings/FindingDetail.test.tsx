@@ -35,6 +35,26 @@ describe("FindingDetail", () => {
     expect(screen.getByText(/https:\/\/acme\.io\/app\.js/)).toBeInTheDocument();
   });
 
+  it("shows the real bundle URL, not the input.js placeholder, when no source map recovered", () => {
+    // The analyze stage stores source_path="input.js" (the bundle-wide fallback) when no
+    // map recovered real paths, but the real bundle rides on asset_url. That bundle — not
+    // the placeholder — must be the occurrence's source label (#2 source attribution).
+    show(finding({ path: "input.js", value: "GET /api/x", occurrences: [occ({
+      source_path: "input.js", line: 2521,
+      asset_url: "https://app.attio.com/web-assets/main.bundle.b1f1c3869bb0e4ee.js" })] }));
+    expect(screen.getByText(/main\.bundle\.b1f1c3869bb0e4ee\.js:2521/)).toBeInTheDocument();
+    // "input.js" must not appear anywhere — not the occurrence label, not the header.
+    expect(screen.queryByText(/input\.js/)).toBeNull();
+  });
+
+  it("jump-to-source of an input.js occurrence targets its real bundle", async () => {
+    const onJump = vi.fn();
+    show(finding({ occurrences: [occ({ source_path: "input.js", line: 3,
+      asset_url: "https://acme.io/app.bundle.js" })] }), onJump);
+    await userEvent.click(screen.getByRole("button", { name: /open https:\/\/acme\.io\/app\.bundle\.js in sources/i }));
+    expect(onJump).toHaveBeenCalledWith({ sourcePath: "input.js", assetUrl: "https://acme.io/app.bundle.js", line: 3 });
+  });
+
   it("makes an occurrence with a source location a jump-to-source button", async () => {
     const onJump = vi.fn();
     show(finding({ occurrences: [occ({ source_path: "app.js", line: 10, asset_url: "https://acme.io/app.js" })] }), onJump);
