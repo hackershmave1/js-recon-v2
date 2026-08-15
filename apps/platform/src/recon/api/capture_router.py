@@ -230,11 +230,13 @@ def _create_capture_session(tenant_id: str, ext_session_id: str, engagement_id: 
     # ingest hot path (§4 defect A): a foreign/deleted engagement makes create_session
     # raise SessionInvalid *before* any row is added, so we retry unbound. A malformed
     # id was already filtered to None by _safe_uuid upstream. external_id is the
-    # idempotency key (DEBT D1); name mirrors it for the UI label.
+    # idempotency key (DEBT D1) and carries the ext UUID; name is left NULL — a capture
+    # session has no user label, and its Sessions-card host is derived from its captured
+    # assets at read time (sessions.service._summary/_card_label), never the raw UUID.
     try:
         view = sessions_service.create_session(
             tenant_id,
-            name=ext_session_id,
+            name=None,
             external_id=ext_session_id,
             scope_hosts=[],
             authorized_by="chrome-extension-capture",
@@ -248,7 +250,7 @@ def _create_capture_session(tenant_id: str, ext_session_id: str, engagement_id: 
         )
         view = sessions_service.create_session(
             tenant_id,
-            name=ext_session_id,
+            name=None,
             external_id=ext_session_id,
             scope_hosts=[],
             authorized_by="chrome-extension-capture",

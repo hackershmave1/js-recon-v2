@@ -725,6 +725,49 @@ def test_save_files_ignores_garbage_or_foreign_project(make_capture_client):
 
 
 # --------------------------------------------------------------------------- #
+# Sessions-list labelling: a capture session's card is labelled by the HOST its JS
+# was captured from (derived from the run's assets), never the extension's raw UUID
+# sessionId. name is stored NULL (like an app crawl session); external_id keeps the
+# UUID (the idempotency key). The label precedence + the legacy-repair shim are
+# unit-pinned in sessions/service_test.py::test_card_label_*.
+# --------------------------------------------------------------------------- #
+
+
+def test_capture_session_card_label_is_captured_host_not_uuid(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    _save(
+        client,
+        sid,
+        [
+            _file("https://app.acme.io/a.js", "a();", sid),
+            _file("https://app.acme.io/b.js", "b();", sid),
+        ],
+    )
+    tid = _tenant_id(client.capture_tenant_name)
+    card = next((s for s in sessions_service.list_sessions(tid) if s.external_id == sid), None)
+    assert card is not None
+    assert card.host == "app.acme.io"  # the captured host, derived from the assets
+    assert card.host != sid  # never the raw extension UUID
+    assert card.name is None  # no user label; the UUID lives only on external_id
+
+
+def test_capture_session_with_legacy_uuid_name_is_repaired_to_host(make_capture_client):
+    # A capture row stored BEFORE this fix carried name == its ext UUID (== external_id).
+    # The read-time shim treats that as unnamed, so its card is repaired to the derived
+    # host with no migration. Simulate the legacy state by renaming the row to the UUID.
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    body = _save(client, sid, [_file("https://app.acme.io/a.js", "a();", sid)])
+    tid = _tenant_id(client.capture_tenant_name)
+    sessions_service.rename_session(tid, body["sessionId"], name=sid)  # name == external_id
+    card = next((s for s in sessions_service.list_sessions(tid) if s.external_id == sid), None)
+    assert card is not None
+    assert card.name == sid  # the row really carries the UUID name...
+    assert card.host == "app.acme.io"  # ...but the card label is repaired to the host
+
+
+# --------------------------------------------------------------------------- #
 # Phase 3: per-asset source map ingest -> source_map blob + run_asset.source_map_ref.
 # --------------------------------------------------------------------------- #
 
