@@ -15,7 +15,7 @@ older/dev DBs with a bare uuid column and no referential integrity — fixed in 
 round 1); run_asset already exists by this point in the same upgrade(), so the FK is
 always satisfiable. On a fresh DB the column (with its FK) already exists via
 create_all, so IF NOT EXISTS makes the ALTER a no-op — no double-add (consistent with
-the documented create_all-vs-incremental posture in slice2-deferred-debt.md).
+the documented create_all-vs-incremental posture in DEBT.md D19).
 """
 
 from __future__ import annotations
