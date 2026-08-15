@@ -74,6 +74,11 @@ or directly: `POST /api/sessions/{ext_id}/analyze/start`). Wait for progress to 
 
 ## 5. Resolve the operator tenant UUID (one-time, out-of-band)
 
+> **Only needed for the header-mode fallback (§6).** The default scoring path logs in as the
+> operator and derives the tenant from the session token, so you can skip the `psql` lookup below
+> unless you're scoring via `RECON_ALLOW_HEADER_TENANT=1` (or an auth-off stack). The tenant model
+> it explains still applies either way.
+
 The default stack runs with **auth ON**, which changes where captures land and how you read them
 back:
 
@@ -100,10 +105,21 @@ ignores `X-Tenant-Id` and 401s unless the request carries an `Authorization: Bea
 by `POST /auth/login` (`admin` / `admin`). A Bearer token already names the operator tenant, so on
 that path no `X-Tenant-Id` is needed — this is the primary, correct way to read findings.
 
-**Caveat — `scripts/score-cli.mjs` still sends only `X-Tenant-Id`, not a Bearer token**, so as-is
-`npm run score` 401s against an auth-on platform. Until the script learns to send the token, run the
-platform with `RECON_ALLOW_HEADER_TENANT=1` (which re-enables the header path with auth on) and pass
-the operator tenant UUID from §5:
+`npm run score` performs that login for you:
+
+```bash
+npm run score -- --run <run_id>
+```
+
+It logs in via `POST /auth/login` (default creds `admin` / `admin` → tenant `QA`) and sends the
+minted token as `Authorization: Bearer` on the findings request — no `--tenant` needed, since the
+token already names the operator tenant. Override the creds with `--username`/`--password` or the
+`RECON_USERNAME`/`RECON_PASSWORD` env vars to score as a different operator. Score as the **same
+operator the capture was signed in as** (§3), or you'll read an empty tenant and get a false FAIL.
+
+**Header-mode fallback.** If login can't mint a token — auth is off (`/auth/login` returns 503), or
+you're on a `RECON_ALLOW_HEADER_TENANT=1` stack and aren't logging in — pass the operator tenant
+UUID from §5 and the script falls back to the legacy `X-Tenant-Id` header:
 
 ```bash
 npm run score -- --run <run_id> --tenant <tenant_uuid>
@@ -163,5 +179,5 @@ reading a score:
 | `npm run build` | Run both builds |
 | `npm run serve:vite` | Serve `dist/vite/` on `:4173` |
 | `npm run serve:webpack` | Serve `dist/webpack/` on `:4174` |
-| `npm run score -- --run <id> --tenant <uuid>` | Score a run's findings against `answer-key.json` |
+| `npm run score -- --run <id>` | Score a run's findings against `answer-key.json` (logs in as `admin`/`admin`; see §6) |
 | `npm test` | Build both bundlers, then run every `scripts/*.test.mjs` (build invariants, answer-key consistency, planted-surface presence, scoring logic) |
