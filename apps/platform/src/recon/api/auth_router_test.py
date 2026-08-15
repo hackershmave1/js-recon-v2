@@ -17,7 +17,6 @@ from recon.api.app import create_app
 from recon.auth import service as auth_service
 from recon.auth import token as auth_token
 from recon.config import get_settings
-from recon.pairing import token as pairing_token
 
 AUTH_KEY = "auth-test-secret"
 
@@ -68,12 +67,16 @@ def test_me_is_401_with_a_garbage_token(make_auth_client):
     assert r.status_code == 401
 
 
-def test_pairing_token_is_not_accepted_as_a_login(make_auth_client):
-    # Domain separation at the HTTP boundary: a pairing token (even signed with the
-    # auth key) can't authenticate a session route.
+def test_non_auth_typ_token_is_not_accepted_as_a_login(make_auth_client):
+    # Domain separation at the HTTP boundary: a well-signed token whose typ is not
+    # "auth" (e.g. a stray capability token) can't authenticate a session route, even
+    # when signed with the auth key.
+    from recon.auth.token import _b64url_encode, _sign
+
     c = make_auth_client(RECON_AUTH_SECRET=AUTH_KEY)
-    paired = pairing_token.mint(str(uuid.uuid4()), key=AUTH_KEY, ttl_seconds=3600)
-    r = c.get("/auth/me", headers={"Authorization": f"Bearer {paired}"})
+    payload = _b64url_encode(b'{"typ":"cap","sub":"u","t":"t","role":"admin","exp":9999999999}')
+    forged = f"{payload}.{_sign(payload, AUTH_KEY)}"
+    r = c.get("/auth/me", headers={"Authorization": f"Bearer {forged}"})
     assert r.status_code == 401
 
 

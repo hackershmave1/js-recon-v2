@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ApiError, getFindings, createSession, startRun, getAssets, attachSpec, getRequests, pauseRun, cancelRun, resumeRun, exportOpenApi, mintPairingToken } from "./apiClient";
+import { ApiError, getFindings, createSession, startRun, getAssets, attachSpec, getRequests, pauseRun, cancelRun, resumeRun, exportOpenApi } from "./apiClient";
 
 beforeEach(() => vi.restoreAllMocks());
 
@@ -117,22 +117,5 @@ describe("apiClient", () => {
       ok: false, status: 404, json: async () => ({ detail: "run not found" }),
     }));
     await expect(exportOpenApi("t", "missing", "json")).rejects.toMatchObject({ status: 404, message: "run not found" });
-  });
-
-  it("POSTs /pairing with the tenant header and returns the minted token", async () => {
-    const f = mockFetch(200, { token: "payload.sig", ttlSeconds: 43200, expiresAt: 1786613064 });
-    vi.stubGlobal("fetch", f);
-    const out = await mintPairingToken("t");
-    const [path, init] = f.mock.calls[0];
-    expect(path).toBe("/pairing");
-    expect(init.method).toBe("POST");
-    expect((init.headers as Record<string, string>)["X-Tenant-Id"]).toBe("t");
-    expect(out.token).toBe("payload.sig");
-    expect(out.ttlSeconds).toBe(43200);
-  });
-
-  it("mintPairingToken throws ApiError(503) when pairing is unconfigured", async () => {
-    vi.stubGlobal("fetch", mockFetch(503, { detail: "pairing is not configured" }));
-    await expect(mintPairingToken("t")).rejects.toMatchObject({ status: 503, message: "pairing is not configured" });
   });
 });

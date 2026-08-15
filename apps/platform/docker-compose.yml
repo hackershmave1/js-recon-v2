@@ -13,8 +13,7 @@ x-app-env: &app-env
   # Local-dev central-login signing key — a committed dev default like the DB/MinIO creds
   # above (a real deployment MUST override it via a secret store). Non-empty => login is
   # REQUIRED and the tenant comes from the signed session token; empty would disable auth
-  # and brick the served SPA (login 503s), so it ships enabled. MUST differ from any
-  # RECON_PAIRING_KEY (create_app refuses to boot otherwise).
+  # and brick the served SPA (login 503s), so it ships enabled.
   RECON_AUTH_SECRET: dev-only-auth-secret-change-in-prod
 
 x-app-base: &app-base

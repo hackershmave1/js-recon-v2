@@ -36,20 +36,9 @@ log = get_logger("recon.api")
 
 
 def _assert_auth_config(settings) -> None:
-    """Fail loud on an unsafe auth config; log the active mode.
-
-    Token domain separation (adversarial review, Blocker 1): auth and pairing tokens
-    share a wire format, so a shared secret would let a self-mintable pairing token
-    verify as a login token. Refuse to boot if the two secrets are set equal. Also
-    surface header-mode (auth disabled) as a warning so a prod misconfig — an unset
-    RECON_AUTH_SECRET silently accepting the X-Tenant-Id stand-in — is visible.
-    """
-    if settings.auth_secret and settings.auth_secret == settings.pairing_key:
-        raise RuntimeError(
-            "RECON_AUTH_SECRET must differ from RECON_PAIRING_KEY: the two token "
-            "types share a wire format, so a shared key lets a pairing token be "
-            "accepted as a login token."
-        )
+    """Log the active auth mode. Surface header-mode (auth disabled) as a warning so a
+    prod misconfig — an unset RECON_AUTH_SECRET silently accepting the X-Tenant-Id
+    stand-in — is visible."""
     if settings.auth_secret:
         log.info("api.auth_enabled")
     else:
@@ -82,10 +71,9 @@ def create_app() -> FastAPI:
     # state-changing POSTs are Origin-locked against cross-site writes
     # (capture_router._enforce_origin_lock). See api/capture_router.py.
     if settings.enable_capture_ingest:
-        from recon.api import capture_router, pairing_router
+        from recon.api import capture_router
 
         app.include_router(capture_router.router)
-        app.include_router(pairing_router.router)
         log.info("api.capture_ingest_enabled")
 
     @app.get("/healthz", tags=["ops"])

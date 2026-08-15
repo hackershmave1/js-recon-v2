@@ -127,10 +127,9 @@ footprint, so request-layer egress interception is a tracked follow-up (the egre
 and the one that resolves a tenant *without* a prior tenant context. It verifies a username + bcrypt
 password (`auth/service.py`, `auth/passwords.py`) and mints a **stateless HMAC-signed session token**
 (`auth/token.py`) whose payload names the user, tenant, role, and an 8h expiry
-(`{typ:auth, sub, t, role, exp}`). The token shares its `Authorization: Bearer` wire format with the
-capture **pairing** token but is cryptographically separated: verification requires `typ:auth` *and*
-`create_app` asserts `RECON_AUTH_SECRET != RECON_PAIRING_KEY`, so a self-mintable pairing token can
-never verify as a login. A failed login is one generic `401` — unknown user, bad password, and
+(`{typ:auth, sub, t, role, exp}`). Verification requires the `typ:auth` discriminator, so any other
+Bearer token that happens to share this compact `Authorization: Bearer` wire format can never verify
+as a login. A failed login is one generic `401` — unknown user, bad password, and
 cross-tenant-ambiguous username are indistinguishable (no user enumeration), equalized with a dummy
 bcrypt compare so response time can't confirm a username.
 
@@ -141,7 +140,7 @@ required**: `api/deps.get_principal` verifies the Bearer token and `get_tenant_i
 *from the verified token*, never from a client header (the `allow_header_tenant` escape hatch is
 default-off). Rotating the secret is the platform-wide "revoke all" — the token is stateless, with no
 per-token store. Capture ingest resolves the same way (`capture_router._resolve_ingest_tenant`): auth
-token, then pairing token, then — only while auth is *disabled* — the shared capture tenant; a set
+token, then — only while auth is *disabled* — the shared capture tenant; a set
 secret disables the anonymous fallback entirely, so post-auth JS can never leak into the shared
 tenant (fail closed).
 
@@ -160,7 +159,7 @@ forgot to set `RECON_ENV` can't silently seed a guessable admin.
 until signed in, then the token rides as `Authorization: Bearer` on every API/SSE call and a global
 `401` handler logs out. The token is mirrored into `recon.tenantId` so the existing `TenantProvider`
 is unchanged, and the TopBar shows the signed-in user · tenant with a Log out control. The Chrome
-extension signs in from its popup instead of pasting a pairing code; the login token becomes its
+extension signs in from its popup; the login token becomes its
 upload Bearer and capture is gated on being signed in — so a capture lands in the operator's own
 tenant and is visible in their workspace.
 
@@ -219,12 +218,10 @@ that always-on surface safe and routes each capture to the *right* tenant:
 - **Origin-lock (anti-CSRF).** A state-changing ingest POST carrying an `http(s)` `Origin` is
   rejected `403` (`_enforce_origin_lock`); default-on kill-switch `capture_ingest_origin_lock`. The
   MV3 worker's `null` Origin is allowed.
-- **Stateless pairing -> operator tenant.** The operator mints a short-lived HMAC token
-  (`recon/pairing/token.py`, signed with `RECON_PAIRING_KEY`, 12 h TTL) via `POST /pairing`; the
-  extension sends it as `Authorization: Bearer` on **all** tenant-resolving ingest calls. A valid
-  Bearer routes the capture into the operator's own tenant; no/invalid Bearer falls back to a fixed
-  `capture-spike` tenant (fail-closed, never a hard drop). `save-files` returns a `paired` flag the
-  popup surfaces.
+- **Login -> operator tenant.** A logged-in operator's capture rides their central-login session
+  token (`recon.auth`) as `Authorization: Bearer` on **all** tenant-resolving ingest calls, routing
+  the capture into their own tenant; no/invalid Bearer falls back to a fixed `capture-spike` tenant
+  (fail-closed, never a hard drop). `save-files` returns a `paired` flag the popup surfaces.
 - **Live indicator.** `save-files` best-effort emits `capture.received` on the run's SSE stream, so
   the operator's run workspace shows a live "receiving from extension" chip.
 

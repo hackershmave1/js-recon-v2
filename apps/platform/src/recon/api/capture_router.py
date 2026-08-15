@@ -51,7 +51,6 @@ from recon.domain import TERMINAL_STATES, AssetStatus, RunStage, RunState
 from recon.engagements import service as engagements_service
 from recon.events.log import emit, publish, record_event
 from recon.observability import get_logger
-from recon.pairing import token as pairing_token
 from recon.runs import assets, coordinator
 from recon.runs import service as runs_service
 from recon.sessions import service as sessions_service
@@ -94,7 +93,7 @@ def capture_health() -> dict:
 # no-Origin cross-site write. Rejecting a present http(s) Origin therefore closes
 # the web vector; the extension's MV3 worker sends chrome-extension://<id> or no
 # Origin, and curl/native clients send none — all allowed. This is independent of
-# (and lands before) the pairing-token capability.
+# the login-token tenant routing below (_resolve_ingest_tenant).
 # --------------------------------------------------------------------------- #
 
 
@@ -109,11 +108,10 @@ def _enforce_origin_lock(origin: str | None, *, enabled: bool) -> None:
     NOTE(DEBT): an opaque/``null`` Origin (a sandboxed iframe / ``data:`` document) has
     no http(s) scheme, so it is currently ALLOWED — a deliberate residual, because the
     MV3 worker may itself emit a ``null`` Origin and we won't risk rejecting real
-    capture. Its severity is TIME-BOUNDED: until the pairing-token slice lands,
-    ``capture-spike`` is where the operator's real captures go, so a ``null``-Origin
-    write still retains this vuln's blast radius (fake findings + DoS) via a
-    ``null``-Origin vehicle. The pairing slice closes it — real captures move to a
-    token-gated operator tenant, leaving ``capture-spike`` a throwaway fallback.
+    capture. Its blast radius is bounded to the SHARED ``capture-spike`` tenant: a
+    logged-in operator's real captures are re-homed by their auth session token into
+    their OWN tenant (``_resolve_ingest_tenant``), so a ``null``-Origin write can only
+    land fake findings / DoS in the throwaway shared tenant, never an operator's.
     Tracked in DEBT.md; revisit rejecting ``null`` once the extension worker's actual
     Origin is confirmed in a live browser.
     """
@@ -172,36 +170,29 @@ def _bearer_token(authorization: str | None) -> str | None:
 
 
 def _resolve_ingest_tenant(authorization: str | None) -> tuple[str, bool]:
-    """Resolve which tenant an ingest request writes into, and whether it is PAIRED.
+    """Resolve which tenant an ingest request writes into, and whether it routed to a
+    logged-in operator's tenant (the ``paired`` flag in the response).
 
-    Resolution order, tenant derived ONLY from a server-signed token (never a client
-    value): (1) a valid auth SESSION token — a logged-in operator (recon.auth.token);
-    (2) a valid pairing token. Both name the operator tenant and are PAIRED. The two
-    share a Bearer wire format but are cryptographically separated — the auth token
-    requires ``typ=auth`` and a distinct secret (create_app asserts the keys differ),
-    so trying auth first then pairing can't cross-accept.
+    The tenant is derived ONLY from a server-signed auth SESSION token (recon.auth.token),
+    never a client value: a valid ``typ=auth`` token names the operator tenant and returns
+    ``True``.
 
-    With neither token: fall back to the shared capture tenant when
-    ``allow_anon_capture`` is on (the default — preserves "never drop captured JS on a
-    typo"), else REJECT with 401 so post-auth JS can never leak into the shared tenant.
-    Still fails CLOSED — a bad token never errors open into an operator tenant."""
+    With no valid token: fall back to the shared capture tenant when ``allow_anon_capture``
+    is on (the default — preserves "never drop captured JS on a typo"), else REJECT with
+    401 so post-auth JS can never leak into the shared tenant. Still fails CLOSED — a bad
+    token never errors open into an operator tenant."""
     settings = get_settings()
     token = _bearer_token(authorization)
     if token:
         claims = auth_token.verify(token, key=settings.auth_secret)
         if claims is not None:
             return claims.tenant_id, True
-        tenant_id = pairing_token.verify(token, key=settings.pairing_key)
-        if tenant_id is not None:
-            return tenant_id, True
     # Anon fallback exists only in unauthenticated mode. Once real login is configured
-    # (auth_secret set), a tokenless capture is NEVER accepted (fail closed) regardless of
-    # allow_anon_capture — so enabling auth can't accidentally leave the shared-tenant leak
-    # open (adversarial review Finding 5). A valid pairing token still routes (handled above).
+    # (auth_secret set), a tokenless OR unrecognized-token capture is NEVER accepted (fail
+    # closed) regardless of allow_anon_capture — so enabling auth can't accidentally leave
+    # the shared-tenant leak open (adversarial review Finding 5).
     if settings.auth_secret or not settings.allow_anon_capture:
-        raise HTTPException(
-            status_code=401, detail="capture requires a valid login or pairing token"
-        )
+        raise HTTPException(status_code=401, detail="capture requires a valid login token")
     return _get_or_create_tenant(settings.capture_tenant_name), False
 
 
@@ -408,7 +399,7 @@ def save_files(
     ext_session_id = meta.get("sessionId") or (
         payload.files[0].get("sessionId") if payload.files else None
     )
-    # The Bearer pairing token (if any) selects the operator tenant; else capture-spike.
+    # The Bearer login token (if any) selects the operator tenant; else capture-spike.
     tenant_id, paired = _resolve_ingest_tenant(authorization)
     if not ext_session_id:
         return {

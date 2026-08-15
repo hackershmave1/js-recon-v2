@@ -5,8 +5,8 @@ resolves a tenant WITHOUT a prior tenant context (it looks the user up cross-ten
 via the admin connection — see recon.auth.service). Everything else derives its
 tenant from the signed token this endpoint mints (api/deps.get_tenant_id).
 
-When auth is disabled (empty ``RECON_AUTH_SECRET``) login returns 503, mirroring the
-pairing endpoint's soft-fail — the app still runs on the X-Tenant-Id header stand-in.
+When auth is disabled (empty ``RECON_AUTH_SECRET``) login returns 503 (a soft-fail) —
+the app still runs on the X-Tenant-Id header stand-in.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ class MeResponse(BaseModel):
 def login(body: LoginRequest, redis: Redis = Depends(get_login_redis)) -> LoginResponse:
     settings = get_settings()
     if not settings.auth_secret:
-        # Auth not configured — soft-fail like pairing mint, so a header-mode dev
+        # Auth not configured — soft-fail (503), so a header-mode dev
         # deployment gives a clear signal instead of minting a dead credential.
         raise HTTPException(status_code=503, detail="authentication is not configured")
     # Brute-force throttle BEFORE the bcrypt verify (design review N1): a login flood

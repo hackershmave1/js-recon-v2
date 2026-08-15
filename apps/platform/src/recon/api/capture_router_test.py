@@ -23,6 +23,7 @@ from sqlalchemy import func, select
 from recon import storage
 from recon.api import capture_router
 from recon.api.app import create_app
+from recon.auth import token as auth_token
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
 from recon.db.models import EngagementSession, Job, Run, Tenant
@@ -32,7 +33,6 @@ from recon.events import stream
 from recon.fetch import egress, fetch
 from recon.findings import analyze as analyze_mod
 from recon.findings import queries as findings_queries
-from recon.pairing import token as pairing_token
 from recon.queue import retry
 from recon.runs import assets as run_assets
 from recon.runs import queries as run_queries
@@ -158,11 +158,23 @@ def test_origin_lock_kill_switch_allows_web_origin(make_capture_client):
 
 
 # --------------------------------------------------------------------------- #
-# Pairing: a valid Bearer token re-homes ingest into the operator tenant; an
-# absent/invalid token falls back (paired flag) to the shared capture tenant.
+# Auth-token routing: a valid login Bearer re-homes ingest into the operator tenant;
+# an absent/invalid token falls back (paired flag) to the shared capture tenant.
 # --------------------------------------------------------------------------- #
 
-_PAIRING_KEY = "test-pairing-key"
+_AUTH_KEY = "test-auth-secret"
+
+
+def _operator_bearer(op_tenant: str) -> str:
+    """A valid login session token naming the operator tenant. Routes captures there
+    when the client is built with RECON_AUTH_SECRET=_AUTH_KEY."""
+    return auth_token.mint(
+        user_id=str(uuid.uuid4()),
+        tenant_id=op_tenant,
+        role="admin",
+        key=_AUTH_KEY,
+        ttl_seconds=3600,
+    )
 
 
 def _make_operator_tenant() -> str:
@@ -181,9 +193,9 @@ def _one_file_batch(sid: str) -> dict:
 
 
 def test_save_files_with_valid_bearer_lands_in_operator_tenant(make_capture_client):
-    client = make_capture_client(RECON_PAIRING_KEY=_PAIRING_KEY)
+    client = make_capture_client(RECON_AUTH_SECRET=_AUTH_KEY)
     op_tenant = _make_operator_tenant()
-    token = pairing_token.mint(op_tenant, key=_PAIRING_KEY, ttl_seconds=3600)
+    token = _operator_bearer(op_tenant)
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     r = client.post(
         "/api/save-files", json=_one_file_batch(sid), headers={"Authorization": f"Bearer {token}"}
@@ -197,7 +209,7 @@ def test_save_files_with_valid_bearer_lands_in_operator_tenant(make_capture_clie
 
 
 def test_save_files_without_bearer_is_unpaired_and_shared(make_capture_client):
-    client = make_capture_client(RECON_PAIRING_KEY=_PAIRING_KEY)
+    client = make_capture_client()
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     r = client.post("/api/save-files", json=_one_file_batch(sid))
     assert r.status_code == 200
@@ -207,7 +219,7 @@ def test_save_files_without_bearer_is_unpaired_and_shared(make_capture_client):
 
 
 def test_save_files_with_invalid_bearer_falls_back_closed(make_capture_client):
-    client = make_capture_client(RECON_PAIRING_KEY=_PAIRING_KEY)
+    client = make_capture_client()
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     r = client.post(
         "/api/save-files",
@@ -221,19 +233,19 @@ def test_save_files_with_invalid_bearer_falls_back_closed(make_capture_client):
 
 
 def test_bearer_rehomes_all_endpoints_not_just_save_files(make_capture_client):
-    # The §4 must-fix: progress must resolve the SAME tenant as save-files, or a paired
-    # popup 404s. Save under the operator tenant with the token, then progress WITH the
-    # token finds the session (200), WITHOUT it (capture-spike) does not (404).
-    client = make_capture_client(RECON_PAIRING_KEY=_PAIRING_KEY)
+    # The §4 must-fix: progress must resolve the SAME tenant as save-files, or a logged-in
+    # popup 404s. Save under the operator tenant with the login token, then progress WITH
+    # the token finds the session (200); WITHOUT it, auth-enabled ingest fails closed (401)
+    # rather than resolving a different tenant.
+    client = make_capture_client(RECON_AUTH_SECRET=_AUTH_KEY)
     op_tenant = _make_operator_tenant()
-    token = pairing_token.mint(op_tenant, key=_PAIRING_KEY, ttl_seconds=3600)
-    auth = {"Authorization": f"Bearer {token}"}
+    auth = {"Authorization": f"Bearer {_operator_bearer(op_tenant)}"}
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     assert (
         client.post("/api/save-files", json=_one_file_batch(sid), headers=auth).status_code == 200
     )
     assert client.get(f"/api/sessions/{sid}/analyze/progress", headers=auth).status_code == 200
-    assert client.get(f"/api/sessions/{sid}/analyze/progress").status_code == 404
+    assert client.get(f"/api/sessions/{sid}/analyze/progress").status_code == 401
 
 
 # --------------------------------------------------------------------------- #
@@ -277,13 +289,13 @@ def test_no_capture_received_event_when_nothing_stored(make_capture_client, redi
     assert _capture_events(redis, body["runId"]) == []
 
 
-def test_capture_received_is_visible_to_paired_operator_tenant(make_capture_client, redis):
-    # The slice's point: a PAIRED capture publishes capture.received onto a run the
-    # OPERATOR tenant can stream (the exact get_status gate the SSE endpoint uses),
-    # while the shared capture tenant cannot see it (RLS) — proving re-homing.
-    client = make_capture_client(RECON_PAIRING_KEY=_PAIRING_KEY)
+def test_capture_received_is_visible_to_operator_tenant(make_capture_client, redis):
+    # A logged-in (auth-token) capture publishes capture.received onto a run the OPERATOR
+    # tenant can stream (the exact get_status gate the SSE endpoint uses), while the shared
+    # capture tenant cannot see it (RLS) — proving the login token re-homes captures.
+    client = make_capture_client(RECON_AUTH_SECRET=_AUTH_KEY)
     op_tenant = _make_operator_tenant()
-    token = pairing_token.mint(op_tenant, key=_PAIRING_KEY, ttl_seconds=3600)
+    token = _operator_bearer(op_tenant)
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     r = client.post(
         "/api/save-files", json=_one_file_batch(sid), headers={"Authorization": f"Bearer {token}"}

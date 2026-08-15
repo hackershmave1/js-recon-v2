@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, Engagement, EngagementsListResponse, FindingsResponse, PairingToken, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SpecSummary, Triage, WrapperRule, WrapperRuleResult,
+  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, Engagement, EngagementsListResponse, FindingsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SpecSummary, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -93,14 +93,6 @@ export function createSession(
   body: { scope_hosts: string[]; authorized_by: string; name?: string; engagement_id?: string; target?: string },
 ): Promise<SessionView> {
   return request("/sessions", json("POST", body), tenantId);
-}
-
-// Mint a capture-pairing token for the current tenant (POST /pairing — at root, not
-// /api). The operator pastes it into the extension's "Pairing token" field so captures
-// route into this tenant; the extension then sends it as `Authorization: Bearer`. 503
-// if the server has no RECON_PAIRING_KEY configured (pairing off).
-export function mintPairingToken(tenantId: string): Promise<PairingToken> {
-  return request("/pairing", { method: "POST" }, tenantId);
 }
 
 // --- R6 Sessions surface --------------------------------------------------- //

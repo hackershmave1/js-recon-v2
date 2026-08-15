@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from recon.auth import token as auth_token
 from recon.auth.token import _b64url_encode, _sign
-from recon.pairing import token as pairing_token
 
 KEY = "auth-secret-key"
 
@@ -55,15 +54,9 @@ def test_tampered_payload_rejected() -> None:
     assert auth_token.verify(f"{forged}.{sig_b64}", key=KEY) is None
 
 
-def test_pairing_token_rejected_even_with_same_key() -> None:
-    # Domain separation: a pairing token (no "typ") must never verify as an auth
-    # token, even if an operator misconfigures both secrets to the same value.
-    paired = pairing_token.mint("tenant-9", key=KEY, ttl_seconds=3600)
-    assert auth_token.verify(paired, key=KEY) is None
-
-
 def test_wrong_typ_rejected() -> None:
-    # A well-signed token carrying a non-"auth" typ is rejected.
+    # A well-signed token carrying a non-"auth" typ is rejected — the domain-separation
+    # guard: a capability token minted with the same key can never verify as a login.
     payload = _b64url_encode(b'{"typ":"pair","sub":"u","t":"t","role":"admin","exp":9999999999}')
     token = f"{payload}.{_sign(payload, KEY)}"
     assert auth_token.verify(token, key=KEY) is None

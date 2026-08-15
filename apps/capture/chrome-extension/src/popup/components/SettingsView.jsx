@@ -38,7 +38,7 @@ function Label({ children, mb = 5 }) {
   return <label style={{ display: 'block', fontSize: '10px', color: C.dim, marginBottom: `${mb}px` }}>{children}</label>;
 }
 
-// Pairing feedback: a bad/expired token fails CLOSED to the shared tenant, which is
+// Auth feedback: a bad/expired token fails CLOSED to the shared tenant, which is
 // otherwise silent (the workspace live-indicator only shows when already paired). Reflect
 // the last save-files `paired` ack so a typo is visible. `paired` is undefined until the
 // first upload under the current token.
@@ -58,8 +58,8 @@ function PairedHint({ token, paired }) {
 }
 
 // Central-login section: sign in with username/password so captures route to your tenant.
-// Replaces the raw pairing-token paste (the token now comes from a real login and is held by
-// the service worker, not typed here). Signed-in state shows the identity + paired indicator.
+// The session token comes from a real login and is held by the service worker (not typed
+// here). Signed-in state shows the identity + paired indicator.
 function AuthSection({ vm }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
