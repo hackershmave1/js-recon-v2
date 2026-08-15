@@ -1,15 +1,16 @@
-"""Unit tests for the pure scope-resolution logic of the session service (S3).
+"""Unit tests for the pure logic of the session service (S3).
 
 The DB-backed create_session / list / mutate paths are covered by the integration
-suite (sessions_router_test, app_test); here we pin _resolve_scope_hosts, which is
-pure (validation, normalization, default-from-target) and needs no Postgres.
+suite (sessions_router_test, app_test); here we pin the pure pieces that need no
+Postgres: _resolve_scope_hosts (validation, normalization, default-from-target) and
+_card_label (the Sessions-card label precedence + the capture-UUID repair shim).
 """
 
 from __future__ import annotations
 
 import pytest
 
-from recon.sessions.service import SessionInvalid, _resolve_scope_hosts
+from recon.sessions.service import SessionInvalid, _card_label, _resolve_scope_hosts
 
 
 def test_explicit_scope_is_normalized_and_deduped():
@@ -55,3 +56,109 @@ def test_blank_scope_does_not_seed_from_an_unusable_target():
 def test_explicit_scope_wins_over_target():
     # A declared scope is authoritative; the target only fills a blank one.
     assert _resolve_scope_hosts(["acme.io"], "other.com") == ["acme.io"]
+
+
+# ---------------------------------------------------------------------------- #
+# _card_label — the Sessions-card label precedence + the capture-UUID repair shim.
+# The DB-backed derived_host (which asset URL feeds it) is covered by the integration
+# suite (capture_router_test); the precedence itself is pure and pinned here.
+# ---------------------------------------------------------------------------- #
+
+_UUID = "0b3e6d2a-1c4f-4a9b-8e7d-2f5a6c9b1d3e"  # an extension crypto.randomUUID()
+
+
+def test_card_label_user_rename_wins_over_everything():
+    assert (
+        _card_label(
+            name="Prod audit",
+            external_id=None,
+            target="acme.io",
+            derived_host=None,
+            scope_hosts=["acme.io"],
+        )
+        == "Prod audit"
+    )
+
+
+def test_card_label_crawl_uses_target():
+    assert (
+        _card_label(
+            name=None,
+            external_id=None,
+            target="acme.io",
+            derived_host=None,
+            scope_hosts=["acme.io"],
+        )
+        == "acme.io"
+    )
+
+
+def test_card_label_capture_uuid_name_falls_through_to_derived_host():
+    # A capture session's auto-assigned name IS its ext-UUID (== external_id): the
+    # shim treats it as unnamed so the captured host shows, never the raw UUID.
+    assert (
+        _card_label(
+            name=_UUID,
+            external_id=_UUID,
+            target=None,
+            derived_host="app.acme.io",
+            scope_hosts=[],
+        )
+        == "app.acme.io"
+    )
+
+
+def test_card_label_renamed_capture_still_wins_over_derived_host():
+    # A genuine rename (name != external_id) is NOT suppressed by the shim.
+    assert (
+        _card_label(
+            name="My capture",
+            external_id=_UUID,
+            target=None,
+            derived_host="app.acme.io",
+            scope_hosts=[],
+        )
+        == "My capture"
+    )
+
+
+def test_card_label_shim_is_capture_only_app_session_named_none():
+    # §4 finding-1 guard: an app session (external_id is None) a user literally renamed
+    # "None" must NOT be swallowed by the shim (str(None) == "None").
+    assert (
+        _card_label(
+            name="None",
+            external_id=None,
+            target=None,
+            derived_host=None,
+            scope_hosts=["acme.io"],
+        )
+        == "None"
+    )
+
+
+def test_card_label_upload_with_no_assets_falls_back_to_scope_host():
+    # A single-blob upload is target-less with no run_asset rows -> derived_host None.
+    assert (
+        _card_label(
+            name=None,
+            external_id=None,
+            target=None,
+            derived_host=None,
+            scope_hosts=["acme.io"],
+        )
+        == "acme.io"
+    )
+
+
+def test_card_label_nothing_resolves_is_em_dash():
+    assert (
+        _card_label(
+            name=None,
+            external_id=None,
+            target=None,
+            derived_host=None,
+            scope_hosts=[],
+        )
+        == "—"
+    )

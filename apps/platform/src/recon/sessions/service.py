@@ -258,6 +258,58 @@ def _run_ref(run: Run) -> RunRefView:
     )
 
 
+# How many url-ordered assets to scan for the first one that carries a host. Mirrors
+# _manifest_domain's "first hostful url wins" over a bounded prefix — a run with this
+# many leading hostless urls (a blob:/data: script sorts before https:) is absurd.
+_HOST_SCAN_LIMIT = 16
+
+
+def _run_host(db: Session, run_id: str) -> str | None:
+    """A representative host for a target-less (capture/upload) run: the host of the
+    first asset URL (by url order) that HAS one — the same "first hostful url wins"
+    rule capture_router._manifest_domain uses for the assets manifest's ``domain``, so
+    a capture session's card label agrees with its run's manifest domain. Scans a
+    bounded prefix rather than trusting ``LIMIT 1`` so a hostless url sorting first (a
+    ``blob:``/``data:`` script) is skipped, not surfaced as no-host. May surface a
+    non-primary in-scope subdomain (or, under the extension's opt-in capture-
+    everything, a third-party host) when that URL sorts first — consistent with the
+    manifest, not a regression. None when the run has no hostful asset (a single-blob
+    upload keeps its file on ``run.input_ref``), so the label falls through to scope."""
+    urls = db.scalars(
+        select(RunAsset.url)
+        .where(RunAsset.run_id == run_id)
+        .order_by(RunAsset.url)
+        .limit(_HOST_SCAN_LIMIT)
+    ).all()
+    for url in urls:
+        host = egress.host_of(url)
+        if host:
+            return host
+    return None
+
+
+def _card_label(
+    *,
+    name: str | None,
+    external_id: str | None,
+    target: str | None,
+    derived_host: str | None,
+    scope_hosts: list[str],
+) -> str:
+    """The Sessions card label (M3): a real user rename wins, then a crawl target,
+    then a capture/upload run's derived asset host, then the declared scope host,
+    then "—". A capture session's auto-assigned name is its ext-UUID (== external_id);
+    treat that as UNNAMED so the derived host shows instead of the raw UUID — this
+    also repairs capture rows already stored with a UUID name, while a genuine rename
+    (name != external_id) still wins. The ``external_id is not None`` guard keeps the
+    shim capture-only, so it can't fire on an app session a user literally renamed
+    "None" (app sessions carry no external_id, and ``str(None) == "None"``)."""
+    user_name = (name or "").strip()
+    if external_id is not None and user_name == external_id.strip():
+        user_name = ""
+    return user_name or target or derived_host or (scope_hosts[0] if scope_hosts else None) or "—"
+
+
 def _summary(db: Session, row: EngagementSession) -> SessionSummary:
     latest = db.scalars(
         select(Run).where(Run.session_id == str(row.id)).order_by(Run.created_at.desc()).limit(1)
@@ -265,14 +317,19 @@ def _summary(db: Session, row: EngagementSession) -> SessionSummary:
     files = endpoints = secrets = coverage_pct = None
     if latest is not None:
         files, endpoints, secrets, coverage_pct = _run_stats(db, latest)
-    # Card label (M3): the rename shows first, then a crawl target, then the
-    # declared scope host — uploads have no target, so scope_hosts[0] is the
-    # dependable fallback. "—" only if a session somehow declared no scope.
-    host = (
-        (row.name or "").strip()
-        or (latest.target if latest else None)
-        or (row.scope_hosts[0] if row.scope_hosts else None)
-        or "—"
+    # Card label (M3, _card_label): a rename first, then a crawl target, then — for a
+    # target-less capture/upload run — a host derived from its assets, then the declared
+    # scope host, then "—". The derived-host query fires only for a target-less run (a
+    # crawl short-circuits on its target), so only capture/upload cards pay it.
+    derived_host = (
+        _run_host(db, str(latest.id)) if latest is not None and not latest.target else None
+    )
+    host = _card_label(
+        name=row.name,
+        external_id=str(row.external_id) if row.external_id else None,
+        target=latest.target if latest is not None else None,
+        derived_host=derived_host,
+        scope_hosts=list(row.scope_hosts or []),
     )
     return SessionSummary(
         id=str(row.id),
