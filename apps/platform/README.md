@@ -72,13 +72,22 @@ docker compose ps                       # api healthy, worker up, stores healthy
 # create a tenant (uses the privileged admin connection — off the HTTP surface)
 docker compose run --rm api python -m recon.bootstrap create-tenant "Acme Security"
 
-# then drive it (X-Tenant-Id is the printed UUID)
-curl -XPOST localhost:8000/sessions -H "X-Tenant-Id: <uuid>" \
+# then seed the first operator + log in for a token (the default stack ships auth ON, so every
+# call carries a Bearer token and the tenant comes from it). --force allows the weak admin/admin
+# dev default — compose sets RECON_ENV=docker, which isn't a recognized dev env.
+docker compose run --rm api python -m recon.bootstrap seed-admin \
+  --tenant-id <uuid> --username admin --password admin --force
+curl -XPOST localhost:8000/auth/login -H 'content-type: application/json' \
+  -d '{"username":"admin","password":"admin"}'          # -> {"token":"<token>", ...}
+
+# then drive it with the login token
+curl -XPOST localhost:8000/sessions -H "Authorization: Bearer <token>" \
   -H 'content-type: application/json' \
   -d '{"scope_hosts":["acme.io"],"authorized_by":"you"}'
-curl -XPOST localhost:8000/runs -H "X-Tenant-Id: <uuid>" \
+curl -XPOST localhost:8000/runs -H "Authorization: Bearer <token>" \
   -H 'content-type: application/json' -d '{"session_id":"<sid>","target":"acme.io"}'
-curl localhost:8000/runs/<run_id>/status -H "X-Tenant-Id: <uuid>"
+curl localhost:8000/runs/<run_id>/status -H "Authorization: Bearer <token>"
+# X-Tenant-Id is a legacy dev-only fallback — it works only when RECON_AUTH_SECRET is empty (auth off).
 ```
 
 Compose wiring: `api`/`worker`/`migrate` share `recon-platform:local`; `api` and `worker`

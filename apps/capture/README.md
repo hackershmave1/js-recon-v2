@@ -27,18 +27,21 @@ platform.
    the build step (`npm run watch` rebuilds on change).
 3. Load it: open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and
    select `apps/capture/chrome-extension`.
-4. The default backend is `http://localhost:8000` and capture ingest is on by default, so captured
-   JS flows straight into the platform's run → analyze pipeline. Point the popup's **Connection**
-   setting at a different workspace URL if needed — it is the single source of truth for uploads,
-   health, and analyze.
+4. **Sign in (required).** The default backend is `http://localhost:8000` — point the popup's
+   **Connection** setting at a different workspace URL if needed (it is the single source of truth
+   for uploads, health, and analyze). The default stack ships auth **on**, so open the popup →
+   **Settings → CONNECTION** and sign in with your platform username/password (dev default
+   `admin`/`admin`). Capture won't start until you're signed in; once signed in, captured JS routes
+   into your own tenant's run → analyze pipeline.
 
 ## How it works
 
-Browse an authenticated app with capture on → the service worker intercepts script responses
-(`webRequest` + a `document_start` content script), hashes and de-dupes them, fetches any
-`//# sourceMappingURL` maps, and batches everything to `POST /api/save-files`. Analysis is
-decoupled: bulk uploads are a fast store, and the popup's **Analyze** action then triggers the
-platform's async job (`POST /api/sessions/{id}/analyze/start`) and polls progress.
+With the extension signed in, browse an authenticated app with capture on → the service worker
+intercepts script responses (`webRequest` + a `document_start` content script), hashes and
+de-dupes them, fetches any `//# sourceMappingURL` maps, and batches everything to
+`POST /api/save-files`. Analysis is decoupled: bulk uploads are a fast store, and the popup's
+**Analyze** action then triggers the platform's async job (`POST /api/sessions/{id}/analyze/start`)
+and polls progress.
 
 ## MV3 durability model
 
