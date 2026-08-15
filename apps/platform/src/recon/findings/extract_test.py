@@ -35,6 +35,56 @@ def test_fetch_template_string_keeps_shape():
     assert ep.url == "/api/users/${id}/orders"
 
 
+# --- Tier 4: surface unresolved sinks (the unconfirmed lane) ------------------ #
+# A detected sink whose URL isn't statically resolvable is no longer silently
+# dropped: it still counts as `unattributed` (REQ-C2 honesty is unchanged) AND is
+# surfaced in `unresolved` with a best-effort _collapse_url skeleton + evidence.
+
+
+def test_fetch_variable_url_is_surfaced_as_unresolved():
+    r = extract("fetch(u)")
+    assert r.endpoints == []
+    assert r.unattributed == 1  # counter unchanged — the call is still "unattributed"
+    assert len(r.unresolved) == 1
+    u = r.unresolved[0]
+    assert (u.kind, u.method, u.url) == ("fetch", "GET", "EXPR")
+    assert "fetch(u)" in u.snippet  # the real call is preserved as evidence
+
+
+def test_fetch_concatenation_yields_a_path_skeleton():
+    r = extract('fetch("/api/" + path)')
+    assert r.endpoints == [] and len(r.unresolved) == 1
+    assert r.unresolved[0].url == "/api/EXPR"  # static head kept, variable -> EXPR
+
+
+def test_fetch_member_url_surfaced_with_method_from_options():
+    r = extract('fetch(g.download_url, {method:"delete"})')
+    assert len(r.unresolved) == 1
+    assert r.unresolved[0].method == "DELETE" and r.unresolved[0].url == "EXPR"
+
+
+def test_axios_member_variable_url_surfaced_with_verb_method():
+    r = extract("axios.post(u, {a:1})")
+    assert r.endpoints == [] and len(r.unresolved) == 1
+    assert (r.unresolved[0].kind, r.unresolved[0].method) == ("axios", "POST")
+
+
+def test_xhr_open_variable_url_surfaced():
+    r = extract('var x = new XMLHttpRequest(); x.open("PUT", u)')
+    assert len(r.unresolved) == 1
+    assert (r.unresolved[0].kind, r.unresolved[0].method) == ("xhr", "PUT")
+
+
+def test_resolved_call_is_not_also_surfaced_as_unresolved():
+    r = extract('fetch("/api/users")')
+    assert len(r.endpoints) == 1 and r.unresolved == [] and r.unattributed == 0
+
+
+def test_multiple_unresolved_calls_all_surfaced_and_counted():
+    r = extract("fetch(a); fetch(b);")
+    assert len(r.unresolved) == 2 and r.unattributed == 2 and r.endpoints == []
+
+
 # --- enrichment B: auth header capture --------------------------------------- #
 
 

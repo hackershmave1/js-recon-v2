@@ -15,6 +15,12 @@ const FACET_LABELS: Record<FacetKey, string> = {
   type: "Type", class: "Classification", triage: "Triage", host: "Host",
 };
 
+// The unconfirmed lane (Tier 4) rides the wire as a distinct finding type,
+// `endpoint_unresolved` (a sink we detected but whose URL wasn't statically
+// resolvable). Show it under a human label wherever the type surfaces.
+const TYPE_LABELS: Record<string, string> = { endpoint_unresolved: "unconfirmed" };
+const typeLabel = (t: string): string => TYPE_LABELS[t] ?? t;
+
 function facetValues(f: Finding, key: FacetKey): string[] {
   switch (key) {
     case "type": return [f.type];
@@ -101,7 +107,7 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                   <button key={o.value} type="button" className={"fp-opt" + (on ? " on" : "")}
                     aria-pressed={on} onClick={() => toggle(facet.key, o.value)}>
                     <span className="fp-opt-box">{on ? "✓" : ""}</span>
-                    <span className="fp-opt-name">{o.value}</span>
+                    <span className="fp-opt-name">{facet.key === "type" ? typeLabel(o.value) : o.value}</span>
                     <span className="fp-opt-count">{o.count}</span>
                   </button>
                 );
@@ -136,7 +142,7 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                     <button type="button"
                       className={"fp-rowbtn" + (selected?.finding_hash === f.finding_hash ? " sel" : "")}
                       onClick={() => setSelected(f)}>
-                      <span className={`fp-type fp-type-${f.type}`}>{f.type}</span>
+                      <span className={`fp-type fp-type-${f.type}`}>{typeLabel(f.type)}</span>
                       <span className={`chip chip-${cls}`}>{cls}</span>
                       <span className="fp-val">{f.value ?? f.path ?? "(unnamed)"}</span>
                       {host && <span className="fp-host">{host}</span>}

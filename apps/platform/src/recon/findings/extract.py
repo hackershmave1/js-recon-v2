@@ -49,6 +49,7 @@ from recon.findings._jsast import (
     _args,
     _auth_headers,
     _body_params_from_value,
+    _collapse_url,
     _config_query_params,
     _endpoint,
     _object_pairs,
@@ -89,6 +90,24 @@ def extract(source: str | bytes, wrappers: Sequence[WrapperRule] = ()) -> Extrac
 
 
 # --- sink handlers -----------------------------------------------------------
+
+
+def _record_unresolved(
+    result: Extraction,
+    kind: str,
+    method: str,
+    url_node: Node | None,
+    call: Node,
+    wrapper: str | None = None,
+) -> None:
+    """Surface a detected sink whose URL isn't statically resolvable (Tier 4, the
+    unconfirmed lane). Still increments the REQ-C2 ``unattributed`` counter (honesty
+    unchanged — the call IS unattributed) AND emits a best-effort ``_collapse_url``
+    skeleton row so the call is visible to the analyst instead of silently dropped."""
+    result.unattributed += 1
+    result.unresolved.append(
+        _endpoint(kind, method, _collapse_url(url_node), [], call, wrapper=wrapper)
+    )
 
 
 def _handle_call(call: Node, result: Extraction, env: BaseEnv, callees: frozenset[str]) -> None:
@@ -140,7 +159,10 @@ def _fetch(call: Node, result: Extraction, env: BaseEnv, base: str = "") -> None
     args = _args(call)
     url = _resolve_url(args[0], env, base) if args else None
     if url is None:
-        result.unattributed += 1
+        method = "GET"
+        if len(args) >= 2 and args[1].type == "object":
+            method = (_string_value(_object_pairs(args[1]).get("method")) or "GET").upper()
+        _record_unresolved(result, "fetch", method, args[0] if args else None, call)
         return
     method, params = "GET", _query_params(url)
     headers: list[HeaderRef] = []
@@ -162,7 +184,7 @@ def _xhr_open(call: Node, result: Extraction) -> None:
         return  # a `.open(...)` on something that isn't an XHR
     url = _string_value(args[1]) if len(args) >= 2 else None
     if url is None:
-        result.unattributed += 1
+        _record_unresolved(result, "xhr", method.upper(), args[1] if len(args) >= 2 else None, call)
         return
     result.endpoints.append(_endpoint("xhr", method, url, _query_params(url), call))
 
@@ -175,7 +197,10 @@ def _axios_call(call: Node, result: Extraction, env: BaseEnv, base: str = "") ->
     elif args:
         url = _resolve_url(args[0], env, base)
         if url is None:
-            result.unattributed += 1
+            method = "GET"
+            if len(args) >= 2 and args[1].type == "object":
+                method = (_string_value(_object_pairs(args[1]).get("method")) or "GET").upper()
+            _record_unresolved(result, "axios", method, args[0], call)
             return
         method = "GET"
         headers: list[HeaderRef] = []
@@ -204,7 +229,9 @@ def _axios_member(
         return
     url = _resolve_url(args[0], env, base) if args else None
     if url is None:
-        result.unattributed += 1
+        _record_unresolved(
+            result, "axios", prop.upper(), args[0] if args else None, call, wrapper=wrapper
+        )
         return
     params = _query_params(url)
     config: Node | None = None
@@ -236,7 +263,8 @@ def _axios_from_config(
     pairs = _object_pairs(config)
     url = _resolve_url(pairs.get("url"), env, base)
     if url is None:
-        result.unattributed += 1
+        method = (_string_value(pairs.get("method")) or "GET").upper()
+        _record_unresolved(result, "axios", method, pairs.get("url"), call, wrapper=wrapper)
         return
     method = (_string_value(pairs.get("method")) or "GET").upper()
     params = (
@@ -257,7 +285,10 @@ def _jquery(call: Node, prop: str, result: Extraction) -> None:
         pairs = _object_pairs(config)
         url = _string_value(pairs.get("url"))
         if url is None:
-            result.unattributed += 1
+            method = (
+                _string_value(pairs.get("type")) or _string_value(pairs.get("method")) or "GET"
+            ).upper()
+            _record_unresolved(result, "jquery", method, pairs.get("url"), call)
             return
         method = (
             _string_value(pairs.get("type")) or _string_value(pairs.get("method")) or "GET"
@@ -271,7 +302,9 @@ def _jquery(call: Node, prop: str, result: Extraction) -> None:
     elif prop in _JQUERY_METHODS:
         url = _string_value(args[0]) if args else None
         if url is None:
-            result.unattributed += 1
+            _record_unresolved(
+                result, "jquery", _JQUERY_METHODS[prop], args[0] if args else None, call
+            )
             return
         params = _query_params(url)
         if len(args) >= 2 and args[1].type == "object":
@@ -288,7 +321,7 @@ def _handle_new(new: Node, result: Extraction) -> None:
     args = _args(new)
     url = _string_value(args[0]) if args else None
     if url is None:
-        result.unattributed += 1
+        _record_unresolved(result, "websocket", "WS", args[0] if args else None, new)
         return
     method = "WSS" if url.lower().startswith("wss") else "WS"
     result.endpoints.append(_endpoint("websocket", method, url, _query_params(url), new))

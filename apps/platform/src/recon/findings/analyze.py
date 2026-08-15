@@ -338,6 +338,21 @@ def _extract_endpoints(
                 run_asset_id=run_asset_id,
                 asset_url=asset_url,
             )
+        # Tier 4 (unconfirmed lane): surface the SAME unresolved sinks already counted
+        # in `unattributed` above, as a distinct ENDPOINT_UNRESOLVED finding. Deliberately
+        # OUTSIDE the attributed/unattributed accounting (REQ-C2 honesty is unchanged) and,
+        # being a distinct type, excluded from every `type == 'endpoint'` read model.
+        for unresolved in extraction.unresolved:
+            written += _record_unresolved_endpoint(
+                session,
+                tenant_id,
+                run_id,
+                path,
+                source_name,
+                unresolved,
+                run_asset_id=run_asset_id,
+                asset_url=asset_url,
+            )
     files = tuple(
         FileCoverage(path=path, attributed=counts[0], unattributed=counts[1])
         for path, counts in sorted(per_file.items())
@@ -612,6 +627,51 @@ def _record_endpoint(
             attributes=param_attributes,
         )
     return written
+
+
+def _record_unresolved_endpoint(
+    session: Session,
+    tenant_id: str,
+    run_id: str,
+    path: str,
+    source_path: str,
+    ep: RawEndpoint,
+    *,
+    run_asset_id: str | None = None,
+    asset_url: str | None = None,
+) -> int:
+    """Write an UNCONFIRMED endpoint (Tier 4): a sink we detected but whose URL wasn't
+    statically resolvable, carried as a best-effort ``_collapse_url`` skeleton.
+
+    Uses the distinct ``ENDPOINT_UNRESOLVED`` type so it is excluded, with no per-consumer
+    filter, from the OpenAPI export, shadow classification, and the endpoint headline count
+    (all keyed on ``type == 'endpoint'``). The value is ``method + skeleton`` and is NOT run
+    through ``normalize_endpoint`` — there is no real URL to host-strip or ``{id}``-template —
+    and no params are recorded (the URL, hence its query, is unknown). The full call rides on
+    the occurrence ``evidence`` so the analyst can resolve it by hand."""
+    value = f"{ep.method} {ep.url}".strip()
+    return _write(
+        session,
+        tenant_id,
+        run_id,
+        FindingType.ENDPOINT_UNRESOLVED,
+        value,
+        path,
+        occurrence=store.Occurrence(
+            host=None,
+            raw_url=ep.url,
+            source_path=source_path,
+            line=ep.line,
+            col=ep.col,
+            offset_start=ep.start_byte,
+            offset_end=ep.end_byte,
+            evidence=ep.snippet,
+            engine="vespasian",
+            run_asset_id=run_asset_id,
+            asset_url=asset_url,
+        ),
+        attributes={"kind": ep.kind, "method": ep.method},
+    )
 
 
 def _record_secret(

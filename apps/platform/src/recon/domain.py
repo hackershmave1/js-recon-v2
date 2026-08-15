@@ -68,6 +68,11 @@ class FindingType(StrEnum):
     ENDPOINT = "endpoint"
     SECRET = "secret"
     PARAM = "param"
+    # A network sink we detected but whose URL isn't statically resolvable — the
+    # "unconfirmed" lane (Tier 4). A DISTINCT type (not an attribute on ENDPOINT) so
+    # every `type == 'endpoint'` read model — OpenAPI export, shadow classification,
+    # headline counts — excludes it automatically, with no per-consumer filter.
+    ENDPOINT_UNRESOLVED = "endpoint_unresolved"
 
 
 class AssetStatus(StrEnum):

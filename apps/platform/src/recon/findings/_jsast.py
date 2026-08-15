@@ -67,6 +67,11 @@ class RawEndpoint:
 class Extraction:
     endpoints: list[RawEndpoint] = field(default_factory=list)
     unattributed: int = 0  # sinks detected but URL not statically resolvable (REQ-C2)
+    # Tier 4 (unconfirmed lane): the SAME unresolved sinks counted in `unattributed`,
+    # surfaced as best-effort skeleton rows instead of silently dropped. They ride
+    # alongside `unattributed` (never instead of it), so the honesty counter is
+    # unchanged — an unresolved call is still counted as unattributed AND shown.
+    unresolved: list[RawEndpoint] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -108,6 +113,28 @@ def _string_value(node: Node | None) -> str | None:
         text = _text(node)
         return text[1:-1] if text.startswith("`") and text.endswith("`") else text
     return None
+
+
+_EXPR = "EXPR"  # jsluice-style placeholder for a non-constant URL sub-expression
+
+
+def _collapse_url(node: Node | None) -> str:
+    """Best-effort skeleton for a sink's UNRESOLVED URL argument (Tier 4 / jsluice
+    ``CollapsedString``): keep static string/template text, collapse any non-constant
+    expression to ``EXPR``. ``"/api/" + id`` -> ``/api/EXPR``; a bare variable or member
+    access (``u``, ``g.download_url``) -> ``EXPR``. Only the unconfirmed lane uses this —
+    a statically resolvable URL never reaches here (it lands in ``endpoints`` instead)."""
+    if node is None:
+        return _EXPR
+    if node.type in ("string", "template_string"):
+        return _string_value(node) or _EXPR
+    if node.type == "binary_expression":
+        operator = node.child_by_field_name("operator")
+        if operator is not None and _text(operator) == "+":  # string concatenation only
+            return _collapse_url(node.child_by_field_name("left")) + _collapse_url(
+                node.child_by_field_name("right")
+            )
+    return _EXPR
 
 
 def _args(call: Node) -> list[Node]:
