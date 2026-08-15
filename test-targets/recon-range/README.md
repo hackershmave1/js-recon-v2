@@ -6,10 +6,11 @@ random live site and eyeballing the output, this target's exact API surface and 
 are documented up front in a machine-readable **answer key** (`answer-key.json`), so a run can be
 scored found / missed / unexpected by `scripts/score.mjs`.
 
-**This is the gate for the Phase 4 `apps/capture/{api,web}` deletion.** That deletion stays blocked
-until the real MV3 extension drives the platform end-to-end against this target and the score is
-green, on both bundler outputs. This README is the runbook for producing that score; it does not
-cover the cutover itself.
+**This is the on-demand scoring harness for the capture→platform pipeline.** The real MV3 extension
+drives the platform end-to-end against this target and the run is scored green / red on both bundler
+outputs. (It originally gated the Phase 4 `apps/capture/{api,web}` deletion — that cutover has since
+landed, so the harness now serves as a repeatable regression check.) This README is the runbook for
+producing that score; it does not cover the cutover itself.
 
 The app is one shared vanilla-ESM source (`src/`) compiled two ways — once by Vite, once by
 Webpack — because the extractor's chunk/source-map handling is bundler-specific and both paths
@@ -45,12 +46,15 @@ a build is missing chunks or maps, `npm test`'s `build-invariants` check will ca
 ## 3. Capture with the real extension (real Chrome only)
 
 The in-app/embedded browser can't drive an MV3 extension, so this step is done in a normal Chrome
-window with the `js-security-extractor` extension loaded. The rest of the runbook (build, score) is
-automatable; this step is not.
+window with the "JS Security Extractor Pro" extension (`apps/capture/chrome-extension`) loaded. The
+rest of the runbook (build, score) is automatable; this step is not.
 
 1. Start one bundler's server from §2 (e.g. `npm run serve:vite` → `http://localhost:4173`).
 2. Open the extension popup → **Settings**:
    - **Workspace URL** = `http://localhost:8000` (the platform API).
+   - **CONNECTION → Sign in** with the dev default `admin` / `admin` (the default stack runs with
+     auth ON, so captures are attributed to the signed-in operator's tenant — see §5. Skip this and
+     the capture lands nowhere you can score).
    - **Capture scope**: add `localhost` (the extension is fail-closed by registrable domain — a
      host not in scope is silently dropped, so this step is required, not optional).
 3. Click **Start** capture.
@@ -68,21 +72,38 @@ or directly: `POST /api/sessions/{ext_id}/analyze/start`). Wait for progress to 
 
 **Note the returned `run_id`** — the scoring script needs it in the next step.
 
-## 5. Resolve the tenant UUID (one-time, out-of-band)
+## 5. Resolve the operator tenant UUID (one-time, out-of-band)
 
-The scoring script's `X-Tenant-Id` header must be the tenant's **UUID**, not its name — the
-platform 400s a non-UUID value. The capture tenant is named `capture-spike` but its UUID is
-randomly generated at creation and no endpoint currently returns it, so resolve it once via `psql`:
+The default stack runs with **auth ON**, which changes where captures land and how you read them
+back:
+
+- **Signed-in captures land in the operator's tenant, not `capture-spike`.** `capture-spike` is only
+  the fallback tenant for *unauthenticated* capture; once the extension is signed in (§3), its
+  uploads are attributed to that operator's tenant — the dev default is **`QA`**. Scoring against
+  `capture-spike` under the default auth-on stack finds none of the run's findings and reports a
+  **false FAIL**, so resolve and score the operator tenant.
+- **Reading `GET /runs/{id}/findings` needs a login token** (or the header escape hatch) — see §6.
+
+Resolve the `QA` tenant's **UUID** — the platform 400s a non-UUID value — once via `psql`:
 
 ```bash
-docker compose -f apps/platform/docker-compose.yml exec -T postgres psql -U recon -d recon -tAc "select id from tenant where name='capture-spike'"
+docker compose -f apps/platform/docker-compose.yml exec -T postgres psql -U recon -d recon -tAc "select id from tenant where name='QA'"
 ```
 
 Copy the printed UUID; it's stable for the life of that tenant, so this is a once-per-environment
-step, not a once-per-run step. (A fast-follow candidate — out of scope here — is a flag-gated
-`GET /api/capture/tenant` endpoint so this lookup doesn't need manual `psql`.)
+step, not a once-per-run step.
 
 ## 6. Score the run
+
+`GET /runs/{run_id}/findings` is an authenticated route. Under the default auth-on stack the platform
+ignores `X-Tenant-Id` and 401s unless the request carries an `Authorization: Bearer <token>` minted
+by `POST /auth/login` (`admin` / `admin`). A Bearer token already names the operator tenant, so on
+that path no `X-Tenant-Id` is needed — this is the primary, correct way to read findings.
+
+**Caveat — `scripts/score-cli.mjs` still sends only `X-Tenant-Id`, not a Bearer token**, so as-is
+`npm run score` 401s against an auth-on platform. Until the script learns to send the token, run the
+platform with `RECON_ALLOW_HEADER_TENANT=1` (which re-enables the header path with auth on) and pass
+the operator tenant UUID from §5:
 
 ```bash
 npm run score -- --run <run_id> --tenant <tenant_uuid>

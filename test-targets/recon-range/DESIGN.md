@@ -1,6 +1,6 @@
 # recon-range — design spec
 
-Date: 2026-08-05 · Status: proposed (§4 adversarial gate applied — verdict BUILD WITH CHANGES; awaiting user approval) · Branch: `spike/platform-ingest`
+Date: 2026-08-05 · Status: built / in-tree (§4 adversarial gate applied — verdict BUILD WITH CHANGES, since built)
 
 > Calibration in §4/§5 was corrected against code by the §4 adversarial review (subagent `ad413c13c03704fe7`). Every expected `value` below is the literal string the platform emits, verified at the cited `file:line`.
 
@@ -8,7 +8,7 @@ Date: 2026-08-05 · Status: proposed (§4 adversarial gate applied — verdict B
 
 `recon-range` is a deliberately-messy, self-contained JS web app that serves as the **controlled verify vehicle** for the extension→platform convergence. It replaces "capture a random live site" with a target whose exact API surface and planted secrets are documented up front (the *answer key*), so the extension→platform pipeline can be scored found / missed / unexpected instead of eyeballed.
 
-It is the vehicle for the **Phase 4 gate**: the `apps/capture/{api,web}` deletion stays blocked until the real MV3 extension drives the platform end-to-end against this target and the score is green. This spec covers only the target, its answer key, and the scoring script — not the cutover.
+It is the on-demand scoring harness for the capture→platform pipeline: the real MV3 extension drives the platform end-to-end against this target and the run is scored green / red on both bundler outputs. It originally gated the **Phase 4** `apps/capture/{api,web}` deletion — that cutover has since landed, so the harness now serves as a repeatable regression check. This spec covers only the target, its answer key, and the scoring script — not the cutover.
 
 Non-goal: a general recon benchmark. This is scoped to *this* platform's proven capabilities on *this* capture path.
 
@@ -45,6 +45,9 @@ test-targets/recon-range/
   README.md                 # what it is + the verify runbook + capture-config + tenant-UUID lookup
   answer-key.json           # machine-readable ground truth (single source; one key, two runs)
   package.json              # scripts: build:vite, build:webpack, serve:vite, serve:webpack, score, test
+  index.html                # Vite entry HTML (webpack's index is generated into dist/webpack by scripts/write-index.mjs)
+  vite.config.js            # build.sourcemap:true (emits sourcesContent); external entry
+  webpack.config.js         # devtool:'source-map' (emits sourcesContent); runtimeChunk external
   src/                      # SHARED source — plain ESM .js (both bundlers parse ESM + import() natively)
     main.js                 # entry (external): IntersectionObserver infinite-scroll → import() lazy chunks
     api/
@@ -57,14 +60,16 @@ test-targets/recon-range/
       live.js               # new WebSocket(wss://…)                                          (LAZY 3)
       blindspots.js         # EventSource, concat URL, variable URL, untaught wrapper
     secrets.js              # planted FAKE secrets (well-formed, non-live) incl. one in a comment
-  build/
-    vite/    { vite.config.js, index.html }      # build.sourcemap:true (emits sourcesContent); external entry
-    webpack/ { webpack.config.js, index.html }   # devtool:'source-map' (emits sourcesContent); runtimeChunk external
   scripts/
-    score.mjs               # GET /runs/{id}/findings → diff vs answer-key.json → found/missed/unexpected + PASS/FAIL
+    score.mjs               # scoreFindings(): partition findings by type + diff vs answer-key.json → found/missed/unexpected + PASS/FAIL
+    score-cli.mjs           # CLI wrapper: GET /runs/{id}/findings → score.mjs → prints JSON + verdict, non-zero exit on FAIL
+    serve.mjs               # tiny static file server for a dist dir on a port (serve:vite/:webpack)
+    write-index.mjs         # writes dist/webpack/index.html after the webpack build
     score.test.mjs          # colocated: fixture findings + fixture key → asserts the diff + verdict
     build-invariants.test.mjs  # asserts each dist has external chunks + .map per chunk + sourceMappingURL comment + non-empty sourcesContent
     answer-key.test.mjs     # asserts answer-key.json internal consistency
+    planted-presence.test.mjs  # asserts every should_find src file exists + each planted construct is present in source
+  dist/                     # build outputs (gitignored): vite/ (serve:vite :4173), webpack/ (serve:webpack :4174)
 ```
 
 Decisions:
@@ -124,7 +129,7 @@ All secrets are synthetic, non-live, local-only fixtures. `--no-validate` flags 
 ## 5. Scoring (`scripts/score.mjs`)
 
 Args: `--run <run_id>` `--tenant <tenant_uuid>` `--base http://localhost:8000`. Steps:
-1. `GET {base}/runs/{run_id}/findings` with header `X-Tenant-Id: <tenant_uuid>`. **The header must be the tenant UUID, not the name** — `get_tenant_id` 400s a non-UUID (`deps.py:24-34`); the capture tenant is named `capture-spike` (`config.py:93`) with a random UUID (`capture_router.py:80-86`) that no endpoint returns, so it is resolved out-of-band (see §6) and passed in.
+1. `GET {base}/runs/{run_id}/findings`, **authenticated**. Under the default auth-on stack this route needs an `Authorization: Bearer <token>` from `POST /auth/login` (`admin`/`admin`); the token carries the tenant, so no `X-Tenant-Id` is required. With auth on the platform ignores `X-Tenant-Id` and 401s (`deps.py:96-97`) unless `RECON_ALLOW_HEADER_TENANT=1` re-enables the header path — in which case the value must be the tenant **UUID**, not the name (`get_tenant_id` 400s a non-UUID, `deps.py:104-105`). Signed-in captures land in the **operator** tenant (dev default `QA`), not the unauthenticated-capture fallback `capture-spike` (`config.py:141`), so resolve and pass the operator tenant's UUID (see §6).
 2. Partition `findings[]` explicitly by `type` into `endpoint` / `param` / `secret` (all three exist — `domain.py:64-71`).
 3. **Endpoints**: for each `should_find`, match method + operation (value before `?`); for third-party rows match `occurrences[].host`. Report found / missed. Endpoint findings not in the key → `unexpected` (informational).
 4. **Params**: for each expected `param`, require a `param`-type finding with matching `attributes.location` + `attributes.name`.
@@ -139,15 +144,13 @@ The same key scores both the Vite run and the Webpack run (two invocations); div
 
 The in-app browser can't drive an MV3 extension, so the capture is user-side; the build + scoring are automatable.
 1. `npm run build:vite && npm run serve:vite` (→ http://localhost:4173).
-2. Real Chrome + the extension: popup → Settings → Workspace URL = `http://localhost:8000`; add `localhost` to capture scope (fail-closed); Start capture.
+2. Real Chrome + the extension ("JS Security Extractor Pro", `apps/capture/chrome-extension`): popup → Settings → Workspace URL = `http://localhost:8000`; **Connection → Sign in** (`admin`/`admin` — the default stack is auth-on, so captures are attributed to the operator's tenant); add `localhost` to capture scope (fail-closed); Start capture.
 3. Load the target, scroll to the bottom to trigger every lazy `import()`; Stop capture.
 4. Trigger analysis (`POST /api/sessions/{ext_id}/analyze/start`, or the popup's Analyze); note the returned `run_id`; wait for progress → done.
-5. Resolve the capture tenant UUID once (documented one-liner):
-   `docker compose -f apps/platform/docker-compose.yml exec -T postgres psql -U recon -d recon -tAc "select id from tenant where name='capture-spike'"`
-6. `npm run score -- --run <run_id> --tenant <tenant_uuid>` → read the verdict.
+5. Resolve the **operator** tenant UUID once — signed-in captures land here, not `capture-spike`:
+   `docker compose -f apps/platform/docker-compose.yml exec -T postgres psql -U recon -d recon -tAc "select id from tenant where name='QA'"`
+6. Score `GET /runs/{run_id}/findings`, authenticated with a Bearer token from `POST /auth/login` (primary). `scripts/score-cli.mjs` currently sends only `X-Tenant-Id`, so to use `npm run score -- --run <run_id> --tenant <tenant_uuid>` run the platform with `RECON_ALLOW_HEADER_TENANT=1` → read the verdict.
 7. Repeat 1–6 with `build:webpack` / `serve:webpack` (:4174).
-
-(Fast-follow candidate, out of scope here: a flag-gated `GET /api/capture/tenant` on the platform so step 5's UUID lookup isn't manual.)
 
 ## 7. Testing (colocated, TDD)
 
