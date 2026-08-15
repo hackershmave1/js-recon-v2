@@ -85,6 +85,14 @@ def test_multiple_unresolved_calls_all_surfaced_and_counted():
     assert len(r.unresolved) == 2 and r.unattributed == 2 and r.endpoints == []
 
 
+def test_deeply_nested_concatenation_is_capped_not_a_recursion_error():
+    # String-splitting ("x"+"x"+...) is a real static-analysis-evasion obfuscation; a
+    # pathologically deep concat must degrade to a skeleton via the depth cap, never blow
+    # the Python stack out of extract(). 2000 terms is well past the interpreter limit.
+    r = extract("fetch(" + "+".join(['"x"'] * 2000) + ")")
+    assert len(r.unresolved) == 1  # surfaced cleanly, no RecursionError
+
+
 # --- enrichment B: auth header capture --------------------------------------- #
 
 

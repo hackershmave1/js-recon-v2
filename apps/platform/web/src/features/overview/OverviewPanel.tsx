@@ -1,5 +1,6 @@
 import { useNavigate, useParams } from "react-router";
 import type { FindingsResponse, Finding } from "../../api/types";
+import { typeLabel } from "../../api/findingLabels";
 import "./overview.css";
 
 const DASH = "—"; // shown when the underlying metric isn't available yet
@@ -76,7 +77,7 @@ export function OverviewPanel({ data }: { data: FindingsResponse }) {
               const isShadow = f.type === "endpoint" && f.spec_status?.status === "shadow";
               return (
                 <li key={f.finding_hash} className="ov-row">
-                  <span className={`ov-type ov-type-${f.type}`}>{f.type}</span>
+                  <span className={`ov-type ov-type-${f.type}`}>{typeLabel(f.type)}</span>
                   {isShadow && <span className="chip chip-shadow">shadow</span>}
                   <span className="ov-val">{f.value ?? f.path ?? "(unnamed)"}</span>
                   {where && <span className="ov-where">{where}</span>}

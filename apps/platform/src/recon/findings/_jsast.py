@@ -118,21 +118,26 @@ def _string_value(node: Node | None) -> str | None:
 _EXPR = "EXPR"  # jsluice-style placeholder for a non-constant URL sub-expression
 
 
-def _collapse_url(node: Node | None) -> str:
+def _collapse_url(node: Node | None, _depth: int = 0) -> str:
     """Best-effort skeleton for a sink's UNRESOLVED URL argument (Tier 4 / jsluice
     ``CollapsedString``): keep static string/template text, collapse any non-constant
     expression to ``EXPR``. ``"/api/" + id`` -> ``/api/EXPR``; a bare variable or member
     access (``u``, ``g.download_url``) -> ``EXPR``. Only the unconfirmed lane uses this —
-    a statically resolvable URL never reaches here (it lands in ``endpoints`` instead)."""
-    if node is None:
+    a statically resolvable URL never reaches here (it lands in ``endpoints`` instead).
+
+    ``_depth`` bounds the ``+``-concat recursion: string-splitting (``"a"+"b"+"c"+…``)
+    is a common static-analysis-evasion obfuscation this product targets, and a
+    pathologically deep chain must degrade to ``EXPR`` rather than blow the Python stack
+    and fail the analyze stage. The cap sits far beyond any legitimate URL literal."""
+    if node is None or _depth >= 32:
         return _EXPR
     if node.type in ("string", "template_string"):
         return _string_value(node) or _EXPR
     if node.type == "binary_expression":
         operator = node.child_by_field_name("operator")
         if operator is not None and _text(operator) == "+":  # string concatenation only
-            return _collapse_url(node.child_by_field_name("left")) + _collapse_url(
-                node.child_by_field_name("right")
+            return _collapse_url(node.child_by_field_name("left"), _depth + 1) + _collapse_url(
+                node.child_by_field_name("right"), _depth + 1
             )
     return _EXPR
 

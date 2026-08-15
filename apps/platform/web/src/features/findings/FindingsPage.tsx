@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { FindingsResponse, Finding, SourceJump } from "../../api/types";
+import { typeLabel } from "../../api/findingLabels";
 import { FindingDrawer } from "./FindingDrawer";
 import { SpecUpload } from "./SpecUpload";
 import { BaseUrlPanel } from "./BaseUrlPanel";
@@ -14,12 +15,6 @@ const FACET_KEYS: FacetKey[] = ["type", "class", "triage", "host"];
 const FACET_LABELS: Record<FacetKey, string> = {
   type: "Type", class: "Classification", triage: "Triage", host: "Host",
 };
-
-// The unconfirmed lane (Tier 4) rides the wire as a distinct finding type,
-// `endpoint_unresolved` (a sink we detected but whose URL wasn't statically
-// resolvable). Show it under a human label wherever the type surfaces.
-const TYPE_LABELS: Record<string, string> = { endpoint_unresolved: "unconfirmed" };
-const typeLabel = (t: string): string => TYPE_LABELS[t] ?? t;
 
 function facetValues(f: Finding, key: FacetKey): string[] {
   switch (key) {

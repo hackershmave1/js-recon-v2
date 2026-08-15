@@ -31,6 +31,16 @@ const finding = (over: Partial<Finding> = {}): Finding => ({
 const card = (label: string) => screen.getByText(label).closest("button") as HTMLElement;
 
 describe("OverviewPanel", () => {
+  it("shows the unconfirmed lane under its label, never the raw wire token", () => {
+    renderPanel({
+      run_id: "r", count: 1, coverage: null, spec: null,
+      findings: [finding({ finding_hash: "u1", type: "endpoint_unresolved", value: "GET /api/EXPR" })],
+    });
+    expect(screen.getByText("GET /api/EXPR")).toBeInTheDocument();
+    expect(screen.getByText("unconfirmed")).toBeInTheDocument();
+    expect(screen.queryByText("endpoint_unresolved")).toBeNull();
+  });
+
   it("derives the four metric cards from real coverage + findings", () => {
     const data: FindingsResponse = {
       run_id: "r", count: 3,

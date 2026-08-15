@@ -650,6 +650,9 @@ def _record_unresolved_endpoint(
     and no params are recorded (the URL, hence its query, is unknown). The full call rides on
     the occurrence ``evidence`` so the analyst can resolve it by hand."""
     value = f"{ep.method} {ep.url}".strip()
+    attributes: dict[str, Any] = {"kind": ep.kind, "method": ep.method}
+    if ep.wrapper:  # provenance: the taught wrapper this sink came through (display-only)
+        attributes["wrapper"] = ep.wrapper
     return _write(
         session,
         tenant_id,
@@ -670,7 +673,7 @@ def _record_unresolved_endpoint(
             run_asset_id=run_asset_id,
             asset_url=asset_url,
         ),
-        attributes={"kind": ep.kind, "method": ep.method},
+        attributes=attributes,
     )
 
 
