@@ -17,7 +17,7 @@ hosts only).
 
 ```
 docs/                   ARCHITECTURE.md (the "what") + adr/ (MADR decision trail, the "why")
-                        + REQUIREMENTS.md (the 40 REQ-* IDs)
+                        + REQUIREMENTS.md (the 41 REQ-* IDs)
 apps/platform/          the product
   src/recon/            Python backend — FastAPI + Redis Streams queue + Postgres
                         (RLS, multi-tenant) + S3/MinIO blobs + a worker
@@ -52,7 +52,7 @@ Tests are **colocated** (`*_test.py` next to source; `*.test.tsx` for web).
 lanes passed:
 - **host-tests**: `uv sync --frozen` (reproducible) → `ruff check src` + `ruff format
   --check src` → `mypy src/recon/findings src/recon/spec` →
-  `pytest -m "not integration" --cov=recon --cov-fail-under=55`, with
+  `pytest -m "not integration" --cov=recon --cov-fail-under=60`, with
   `RECON_REQUIRE_ENGINES=1` (a missing engine is a hard failure, not a silent skip).
 - **frontend**: `npm ci` → `npm run lint` (oxlint + tsc) → vitest → build.
 - **integration-tests**: builds the app image (compiles the pinned Sourcemapper),

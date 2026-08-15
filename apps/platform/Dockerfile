@@ -12,8 +12,8 @@ RUN go install github.com/denandz/sourcemapper@442aed28d1841f32580dda91b4bea740c
 # this stage uses golang:1.25-bookworm rather than 1.23 (sourcemapper-build's
 # version) — a build-stage-only bump that doesn't affect the runtime image.
 # Re-verify the tag + that `-headless -system-chrome` works against the
-# vendored chromium at build time. See docs/slice2-deferred-debt.md
-# (headless-Chrome/CGO note).
+# vendored chromium at build time (verified working 2026-08-02; see the
+# `-system-chrome-path` note in src/recon/discover/katana.py).
 FROM golang:1.25-bookworm AS katana-build
 RUN go install github.com/projectdiscovery/katana/cmd/katana@v1.6.1
 
