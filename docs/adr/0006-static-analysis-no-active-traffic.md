@@ -41,7 +41,7 @@ false "clean".
   GraphQL endpoint.
 * Neutral — static analysis cannot observe responses, so the OpenAPI spec asserts no auth
   and no response shapes ("Not observed — static analysis does not capture responses",
-  `probe/openapi.py:93,166-169`).
+  `probe/openapi.py:104,216-223`).
 * Bad — this bounds recall: runtime-only behaviour is invisible to a static pass. Closing
   that gap via **runtime-evidence ingest** (e.g. Burp/HAR) would *deliberately relax* this
   stance and would be a conscious future decision, not a silent drift. Note the capture
@@ -51,7 +51,7 @@ false "clean".
 ### Confirmation
 
 REQ-P1/P2/P3. The API tier does no fetch/parse/probe/LLM work (`api/app.py:1-5`). Honesty
-strings `probe/openapi.py:3,93,166-169`. Manual-probe is user-initiated
+strings `probe/openapi.py:3,104,216-223`. Manual-probe is user-initiated
 (`api/probe_router.py`). The one allowed egress is guarded by ADR-0005.
 
 ## More Information

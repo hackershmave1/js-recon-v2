@@ -80,6 +80,43 @@ def test_js_input_run_produces_findings(redis, authorized_session):
     assert "POST /api/login body:user" in param_values
 
 
+def test_unresolved_sink_surfaced_as_unconfirmed_and_excluded_from_endpoints(
+    redis, authorized_session
+):
+    """Tier 4 (unconfirmed lane): a sink whose URL is a variable is surfaced as a distinct
+    ENDPOINT_UNRESOLVED finding — not silently dropped — while (a) the REQ-C2 coverage
+    counters are unchanged (it stays counted as `unattributed`, and the unconfirmed row never
+    inflates `attributed`), and (b) it is excluded from the endpoint read model + the
+    OpenAPI/probe reconstruction, both of which key on ``type == 'endpoint'``."""
+    from recon.findings import queries as findings_queries
+    from recon.probe.reconstruct import reconstruct_run
+
+    tenant, session_id = authorized_session
+    js = 'fetch("/api/real"); fetch(dynamicUrl); axios.post(u, {a:1});'
+    view = coordinator.start_run_with_input(
+        redis, tenant_id=tenant, session_id=session_id, js_source=js, target="acme.io"
+    )
+    assert _drive(redis, view.id, tenant) == RunState.DONE.value
+
+    findings = _findings(tenant, view.id)
+    # The resolvable call is a confirmed endpoint; the two variable-URL calls are unconfirmed.
+    assert {f.value for f in findings if f.type == "endpoint"} == {"GET /api/real"}
+    unresolved = {f.value for f in findings if f.type == "endpoint_unresolved"}
+    assert "GET EXPR" in unresolved  # fetch(dynamicUrl)
+    assert "POST EXPR" in unresolved  # axios.post(u, ...)
+
+    # REQ-C2 honesty: 1 resolved endpoint + 2 unresolved sinks; the unconfirmed rows do NOT
+    # inflate `attributed`, and the unresolved sinks are still counted as `unattributed`.
+    coverage = findings_queries.list_findings(tenant, view.id).coverage
+    assert coverage is not None
+    assert (coverage.attributed, coverage.unattributed) == (1, 2)
+
+    # Excluded from OpenAPI/probe reconstruction (keys on type == 'endpoint'): only the one
+    # confirmed endpoint yields a probeable request — never an EXPR skeleton.
+    reqs = reconstruct_run(tenant, view.id)
+    assert reqs is not None and len(reqs) == 1
+
+
 def test_param_findings_carry_risk_tags(redis, authorized_session):
     """Enrichment A: a risk-relevant param name is tagged in the finding's attributes, and an
     untagged param carries no risk_tags key (honest silence, kept clean)."""

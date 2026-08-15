@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { FindingsResponse, Finding, SourceJump } from "../../api/types";
+import { typeLabel } from "../../api/findingLabels";
 import { FindingDrawer } from "./FindingDrawer";
 import { SpecUpload } from "./SpecUpload";
 import { BaseUrlPanel } from "./BaseUrlPanel";
@@ -101,7 +102,7 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                   <button key={o.value} type="button" className={"fp-opt" + (on ? " on" : "")}
                     aria-pressed={on} onClick={() => toggle(facet.key, o.value)}>
                     <span className="fp-opt-box">{on ? "✓" : ""}</span>
-                    <span className="fp-opt-name">{o.value}</span>
+                    <span className="fp-opt-name">{facet.key === "type" ? typeLabel(o.value) : o.value}</span>
                     <span className="fp-opt-count">{o.count}</span>
                   </button>
                 );
@@ -136,7 +137,7 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                     <button type="button"
                       className={"fp-rowbtn" + (selected?.finding_hash === f.finding_hash ? " sel" : "")}
                       onClick={() => setSelected(f)}>
-                      <span className={`fp-type fp-type-${f.type}`}>{f.type}</span>
+                      <span className={`fp-type fp-type-${f.type}`}>{typeLabel(f.type)}</span>
                       <span className={`chip chip-${cls}`}>{cls}</span>
                       <span className="fp-val">{f.value ?? f.path ?? "(unnamed)"}</span>
                       {host && <span className="fp-host">{host}</span>}

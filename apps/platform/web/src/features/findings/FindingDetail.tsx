@@ -1,6 +1,24 @@
-import type { Finding, SourceJump } from "../../api/types";
+import type { Finding, Occurrence, SourceJump } from "../../api/types";
 import { TriageControls } from "./TriageControls";
 import { RevealButton } from "./RevealButton";
+
+// The bundle-wide placeholder the analyze stage assigns when no source map recovered
+// real per-file paths (backend recon.findings.analyze._SOURCE_NAME). It is NOT a real
+// file, so it must never be shown as an occurrence's source — the actual bundle the
+// sighting came from is carried on `asset_url` (Slice Y), and a source-map-recovered
+// original path (when present) is better still. Keep in sync with the backend constant.
+const BUNDLE_FALLBACK = "input.js";
+
+// The occurrence's real source for display: a source-map-recovered original path wins;
+// otherwise the actual bundle URL it was sighted in; the "input.js" placeholder is only
+// ever a last resort (a legacy single-blob upload that has no asset_url). `bundle` is the
+// owning asset shown as a secondary tag ONLY when the primary is a distinct recovered
+// path — otherwise the bundle already IS the primary and repeating it is noise.
+function occSource(o: Occurrence): { primary: string; bundle: string | null } {
+  const recovered = o.source_path && o.source_path !== BUNDLE_FALLBACK ? o.source_path : null;
+  const primary = recovered ?? o.asset_url ?? o.source_path ?? o.host ?? "?";
+  return { primary, bundle: recovered && o.asset_url ? o.asset_url : null };
+}
 
 // `onJumpToSource` is optional (the shared ApiSpec drawer omits it): when present,
 // an occurrence with a source location becomes a button that reveals it in Sources.
@@ -12,11 +30,15 @@ export function FindingDetail({ finding, runId, onJumpToSource }: {
   // finding isn't an endpoint) -- rendered as its own "unclassified" verdict,
   // distinct from the three real classify_operation outcomes.
   const specStatus = finding.spec_status?.status ?? "unclassified";
+  // Header identity: the finding's own value (the endpoint/param/secret), falling back
+  // to its real source — never the "input.js" placeholder that `finding.path` carries.
+  const headerLabel =
+    finding.value ?? [...new Set(finding.occurrences.map((o) => occSource(o).primary))][0] ?? "";
   return (
     <div className="card">
       <div>
         <strong className={finding.severity === "high" ? "sev-high" : ""}>{finding.type}</strong>{" "}
-        <span className="muted">{finding.path ?? finding.value ?? ""}</span>{" "}
+        <span className="muted">{headerLabel}</span>{" "}
         <span className={`chip chip-${specStatus}`}>{specStatus}</span>
         {/* Resolved documented op (post base-URL-rule resolution, REQ-C2) next to
             the finding's own unchanged raw value above -- expected non-churn:
@@ -27,12 +49,12 @@ export function FindingDetail({ finding, runId, onJumpToSource }: {
       </div>
       <ul>
         {finding.occurrences.map((o, i) => {
+          const { primary, bundle } = occSource(o);
           // Same rendered text whether or not it's clickable — kept in one place.
           const text = <>
-            {o.source_path ?? o.host ?? "?"}{o.line != null ? `:${o.line}` : ""}
-            {/* Slice Y: which discovered asset this sighting came from; absent
-                (null) for legacy pre-crawl occurrences, so nothing renders. */}
-            {o.asset_url ? ` · ${o.asset_url}` : ""}
+            {primary}{o.line != null ? `:${o.line}` : ""}
+            {/* Owning bundle, shown only alongside a distinct recovered path. */}
+            {bundle ? ` · ${bundle}` : ""}
             {/* evidence is server-redacted for secrets; render only when present */}
             {o.evidence && !isSecret ? ` — ${o.evidence}` : ""}
             {o.engine ? ` [${o.engine}]` : ""}
@@ -44,7 +66,7 @@ export function FindingDetail({ finding, runId, onJumpToSource }: {
             <li key={i} className="muted">
               {jumpable ? (
                 <button type="button" className="fd-occ"
-                  aria-label={`Open ${o.source_path ?? o.host ?? "source"} in Sources`}
+                  aria-label={`Open ${primary} in Sources`}
                   onClick={() => onJumpToSource({ sourcePath: o.source_path, assetUrl: o.asset_url, line: o.line })}>
                   {text}
                 </button>

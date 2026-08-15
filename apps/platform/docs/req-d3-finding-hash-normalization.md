@@ -133,6 +133,7 @@ occurrence_hash = sha256 over the occurrence's identifying volatile fields
                   (raw_url/value, host, source_path_variant, offset_start, offset_end)
 ```
 
+- `value`/`path` are Unicode **NFC-normalized** before serialization, so two builds differing only in composition form don't churn the D5 diff (review LOW-5).
 - Canonical JSON (sorted keys, no whitespace, UTF-8) ⇒ deterministic bytes.
 - `type` in the tuple ⇒ no cross-type collisions.
 - 64-char lowercase hex.
@@ -187,9 +188,9 @@ INSERT INTO finding_occurrence (finding_hash, occurrence_hash, host, raw_url, �
 ## 9. Build plan
 
 1. `recon/findings/normalize.py` — pure fns: `shannon_entropy`, `normalize_source_path`,
-   `template_path_segment`, `normalize_endpoint`, `normalize_secret`, `normalize_param`,
+   `template_segment`, `normalize_endpoint`, `normalize_secret_value`, `normalize_param_value`,
    `finding_hash`, `occurrence_hash`. Colocated `normalize_test.py` seeded from §8 (TDD).
-2. `recon/findings/models.py` + Alembic migration — `finding` (RLS,
+2. `recon/db/models.py` + Alembic migration — `finding` (RLS,
    `UNIQUE(run_id, finding_hash)`) + `finding_occurrence` child (RLS,
    `UNIQUE(finding_hash, occurrence_hash)`).
 3. Wire into the ANALYZE/CORRELATE staging-transaction outbox (REQ-A3).

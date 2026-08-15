@@ -1,32 +1,33 @@
-# React + TypeScript + Vite
+# Recon Workspace (web)
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The React SPA front-end for the JS API-recon platform. It's a thin UI over the
+platform API: browse capture/crawl **sessions** and their **runs**, watch run
+**progress**, and review reconstructed **findings** (endpoints, params, secrets).
 
-Currently, two official plugins are available:
+Key surfaces:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Sessions / runs** — list sessions, start a new run, follow live progress.
+- **Sources viewer** — read the analyzed JS with syntax highlighting and jump to
+  the source line behind a finding.
+- **Findings** — the reconstructed API surface and secret findings for a run.
+- **Manual probe** — inspect and issue single requests against a resolved endpoint.
+- **OpenAPI export** — download the run's reconstructed OpenAPI spec.
 
-## React Compiler
+## Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+React 19 + Vite, routing via react-router. See `package.json` for exact versions.
 
-## Expanding the Oxlint configuration
+## Develop
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm ci            # install (reproducible)
+npm run dev       # Vite dev server with HMR
+npm run lint      # oxlint + tsc (type-check)
+npm test          # vitest (colocated *.test.tsx)
+npm run build     # tsc -b && vite build
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## See also
+
+- [`../README.md`](../README.md) — the platform backend (FastAPI + worker).
+- [`../../../docs/ARCHITECTURE.md`](../../../docs/ARCHITECTURE.md) — system architecture.

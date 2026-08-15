@@ -1,6 +1,6 @@
 # Enrichment slice — design
 
-Status: DESIGN (pre-§4 gate). Branch: cut `feat/enrichment` off `spike/platform-ingest`.
+Status: LANDED 2026-08-13 (PRs #49, #50). Branch (historical): cut `feat/enrichment` off `spike/platform-ingest`.
 Date: 2026-08-07. Grounded against the current extractor/export code (file:line below).
 
 ## Goal
@@ -220,7 +220,7 @@ extension appears and no spurious ENDPOINT/param finding is created for a gql`` 
 
 ## §4 design-gate verdict (2026-08-07): BUILD WITH CHANGES
 
-Adversarial design review ran against the live code + runtime (graphql-core, openapi-spec-validator 0.9.0, tree-sitter). Architecture CONFIRMED sound (attributes-as-non-identity; export-only run artifact for GraphQL; shared `_record_endpoint`; validator-safe security/extension output). Apply these BEFORE building — the enrichment slice is currently PARKED behind the repo-hardening slice (user picked harden-first, 2026-08-07); resume here.
+Adversarial design review ran against the live code + runtime (graphql-core, openapi-spec-validator 0.9.0, tree-sitter). Architecture CONFIRMED sound (attributes-as-non-identity; export-only run artifact for GraphQL; shared `_record_endpoint`; validator-safe security/extension output). Apply these BEFORE building — the enrichment slice was PARKED behind the repo-hardening slice (user picked harden-first, 2026-08-07), then RESUMED and SHIPPED 2026-08-13 (PRs #49, #50).
 
 Must-fix:
 - **M1 (idor FP — load-bearing).** The spec's idor "ends-with `id`" clause tags `valid`, `grid`, `android`, `solid`, `rapid`, `hybrid`, `liquid` → contradicts the spec's own `valid`→no-idor test. Replace with: idor = a token **== `id`** (tokenizer already yields `userId→[user,id]`, `account_id→[account,id]` correctly, and rejects `valid`/`grid`) **plus** an explicit whole-token allow-list `{uuid, guid}`. Pin `valid`/`grid`/`android` as negative tests.

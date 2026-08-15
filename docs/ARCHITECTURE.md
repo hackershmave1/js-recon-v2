@@ -212,8 +212,11 @@ instead of dropping the asset's findings.
 
 ## Routing captures to the operator (the capture <-> app link)
 
-The ingest is unauthenticated (the extension has no platform login). A stacked slice series makes
-that always-on surface safe and routes each capture to the *right* tenant:
+The ingest doesn't *require* auth, but the extension does log in to the platform: a signed-in
+operator's capture rides their central-login session token as `Authorization: Bearer` into their
+own tenant, while an unauthenticated write falls back (fail-closed) to the shared `capture-spike`
+tenant. A stacked slice series makes that always-on surface safe and routes each capture to the
+*right* tenant:
 
 - **Origin-lock (anti-CSRF).** A state-changing ingest POST carrying an `http(s)` `Origin` is
   rejected `403` (`_enforce_origin_lock`); default-on kill-switch `capture_ingest_origin_lock`. The

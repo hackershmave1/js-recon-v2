@@ -33,6 +33,22 @@ verified **red — 2 jobs — without the guard, green with it**). No migration 
 D1's atomic seal); approach A (a partial unique index) was rejected as unnecessary
 heft since `analyze_start` is the sole capture enqueue path. Both §4 gates passed.
 
+### D19 · Migrations build tables with `create_all`, not frozen snapshots [M]
+`0001_initial`/`0002_findings` (and later new-table revisions) call
+`Base.metadata.create_all(bind)` from the LIVE model metadata, not an explicit
+column-by-column snapshot. On a from-scratch `alembic upgrade head`, 0001 already stands
+up the entire *current* schema (including columns that later revisions "add"), so a plain
+`op.add_column` in a later revision hits `DuplicateColumn` on a fresh DB — this bit CI when
+`0003` added `run.source_map_ref`. **Mitigation in place:** incremental column-adds use
+`ADD COLUMN IF NOT EXISTS` (see `0003`, `0005`). **Still owed:** freeze `0001` to an
+explicit `op.create_table` snapshot and stop calling `create_all` inside migrations, so each
+revision is an immutable historical step and plain `add_column` is safe. Do this before real
+incremental upgrades against live tenant data (M3); deferred because the build is pre-prod
+(no data to preserve) and the rewrite must exactly mirror the models (columns/FKs/indexes/
+RLS). **Detection note:** CI catches a broken migration because api/worker `depends_on
+migrate: service_completed_successfully`; `docker compose up -d migrate` alone swallows the
+exit code. (Migrated 2026-08-15 from the retired `slice2-deferred-debt.md`.)
+
 ## Enforcement / tooling (deferred from the CI-keystone slice)
 
 ### D2 · Ruff format sweep + broaden the ruleset [M] — ✅ RESOLVED 2026-08-07
@@ -135,6 +151,22 @@ Optionally also reject `Origin: null` once the extension worker's real Origin is
 confirmed live. The decision is pinned by `capture_origin_lock_test.py` so it can't be
 flipped silently.
 
+### D18 · OS/network-level egress isolation [L]
+REQ-P2 (metadata/RFC1918 blocked at the **network layer**) and REQ-T2 (net-emitting engines
+in a scoped egress sandbox) are only partially met. Enforcement today is **application-level**
+(`recon/fetch/egress.py`, ADR-0005): scheme + in-scope host + all-resolved-IPs-globally-
+routable, DNS-pinned per request, redirects re-validated per hop, scope never derived from
+crawled URLs. **Why safe now:** the app guard defeats the actual SSRF threat for the only
+outbound traffic we make (the fetch stage); Kingfisher runs `--no-validate` (no network).
+**Still owed (defense-in-depth):** OS-level isolation (network namespace + egress firewall /
+seccomp / nsjail) against a compromised worker or a shelled-out engine that ignores our host
+argument — the spec's "network layer" wording — plus the crawl-time subresource-SSRF gap
+(headless Chrome loads subresources outside `egress.py`; app-level scope flags + per-URL
+`egress.validate_target` on manifest entries only). **Hardening path:** deployment network
+control (no route to metadata/RFC1918) → forced egress proxy enforcing `egress.py` →
+netns/nftables. **Trigger:** before exposing the fetcher/crawler to untrusted multi-tenant
+load. (Migrated 2026-08-15 from the retired `slice2-deferred-debt.md`.)
+
 ## Maintainability
 
 ### D8 · Unversioned contracts [M] — D8a ✅ RESOLVED 2026-08-07; D8b ✅ RESOLVED 2026-08-09
@@ -220,21 +252,21 @@ Pure move (per-symbol AST diff proved byte-identical; §4 code gate SHIP-WITH-NI
 under D3's now-strict `no_implicit_reexport`). All three modules are mypy-strict-clean.
 
 **Deferred (evidence-backed, both §4 design engineers):**
-- `db/models.py` (596) — DON'T split: a cohesive declarative schema (17 classes + 35
+- `db/models.py` (608) — DON'T split: a cohesive declarative schema (17 classes + 35
   FK/`back_populates` cross-refs + the RLS `*_TABLES` tuples read by Alembic `env.py`). With
   `from __future__ import annotations`, `relationship()` targets resolve only via the class
   registry, so a package split makes `__init__` load-bearing for ORM registration (a bypassing
   `from recon.db.models.run import Run` silently breaks `configure_mappers()`). High fragility,
   zero behavior gain.
-- `api/capture_router.py` (654) — DEFER: the D1/D8a tests *rendezvous-monkeypatch*
+- `api/capture_router.py` (793) — DEFER: the D1/D8a tests *rendezvous-monkeypatch*
   `capture_router.<helper>` (e.g. `monkeypatch.setattr(capture_router, "_run_has_job", …)`);
   moving a handler/helper to a sibling module silently breaks the patch (a test would pass while
   testing nothing). Also can't reach the cap (~420 residual). Needs a careful test-aware slice.
-- `findings/analyze.py` (659, the largest) — DEFER: a clean record-trio seam exists but it
+- `findings/analyze.py` (743, the largest) — DEFER: a clean record-trio seam exists but it
   touches the outbox/RLS/REQ-A3–A4 invariants and `reextract.py` imports `_extract_endpoints`;
-  higher-risk, own slice. `findings/queries.py` (455) + `fetch/fetch.py` (462): smaller
+  higher-risk, own slice. `findings/queries.py` (581) + `fetch/fetch.py` (471): smaller
   overages, low priority (fetch is SSRF-fail-closed-critical — don't fragment).
-(The DEBT.md counts above were stale pre-split; actuals measured 2026-08-07.)
+(Line counts re-measured 2026-08-15.)
 
 ### D12 · Stale branches [S] — ✅ RESOLVED 2026-08-09
 Pruned 9 stale remote-tracking refs (`git fetch --prune`) + deleted 9 fully-merged
@@ -262,11 +294,13 @@ endpoint is the strategic replacement (out of scope here). Caveat documented in
 builds only, not a shared multi-tenant prod bundle. Both §4 gates passed (design: BUILD
 WITH CHANGES — the scope caveat + this ledger entry, both addressed; code review: SHIP
 WITH NITS — the precedence test was strengthened to assert the *effective* tenant, not
-just unclobbered storage). Frontend lane green (oxlint + tsc-strict + vitest 136 + build).
+just unclobbered storage). Frontend lane green (oxlint + tsc-strict + vitest 136 + build). NOTE: the `TenantGate`
+UI this entry describes was later removed — superseded by central login (PR #57);
+`TenantContext` + `VITE_DEFAULT_TENANT_ID` remain.
 
 ### D16 · Capture extension deferred items [S]
 Small deferred work in the MV3 capture extension (`apps/capture/chrome-extension/`), recorded here
-when the point-in-time `REFACTOR-NOTES.md` was folded into the extension README during the
+when the point-in-time `REFACTOR-NOTES.md` was folded into the capture app README (`apps/capture/README.md`) during the
 enterprise-hygiene cleanup (so the "later" doesn't become "never"):
 - **Live `tests/*.mjs` suites are ungated in CI** — `security.yml` runs only `npm audit` on the
   extension, so a broken suite wouldn't fail the build. A `for t in tests/test_*.mjs; do node "$t";
@@ -287,6 +321,34 @@ enterprise-hygiene cleanup (so the "later" doesn't become "never"):
   the debounced `capturedFilesMeta`, so on respawn it is dedup-suppressed and never re-enters the
   count. Rare, display-only, self-heals on the next capture — still a strict improvement over the
   reset-to-0 bug it fixed. Optional close: eager-persist the projection in `stopCapture`.
+
+### D20 · Slice-Y multi-asset scale/robustness deferrals [M–L, ongoing]
+Consciously-deferred SHOULDs from the multi-asset (Slice Y) build — safe now at bounded
+single-host scale, revisit at M3/scale. Design spec:
+`apps/platform/docs/superpowers/specs/2026-07-26-slice-y-multi-asset-design.md`.
+- **Per-asset fetch retry** (transient 5xx/429): a failed asset drops to `failed` (run →
+  `PARTIAL`); the queue's retry/backoff isn't applied per-asset.
+- **Analyze mid-scan heartbeat:** a long per-asset `kingfisher.scan` (≤ `engine_timeout_
+  seconds`=120s) can exceed the 30s job lease with no mid-scan beat, so a peer can reclaim and
+  re-run the analyze loop. Correctness-safe (idempotent REQ-A3 outbox upserts + analyze-
+  terminal assets skipped), only wasteful; fix mirrors the crawl harness's in-subprocess beat.
+- **Long-stage stream-reclaim strand:** `progress.beat` renews the DB job lease but never
+  touches the Redis stream, so `reclaim_stalled` can hand a long stage's message to a peer; if
+  the original then crashes the job can strand.
+- **Commit-time DB error inside a per-asset analyze txn:** recorded as a permanent
+  `analyze_failed` (→ `PARTIAL`) rather than job-level retry — structural tension with the
+  per-asset-commit requirement (findings + status share one txn).
+- **Dual asset-list source of truth:** the discovery manifest blob (URL list) and the
+  `run_asset` rows (per-asset state) both list assets; unify only if drift is observed.
+- **Queue fan-out / per-asset parallelism (model C):** fetch/analyze loop assets sequentially
+  in one job (the fetch DNS-pin single-thread invariant); parallel per-asset jobs deferred.
+- **Per-asset secret scanning of recovered source-map files.**
+- **Multi-asset e2e is host-partial:** a real katana crawl→fetch→findings e2e can't be
+  automated locally (`egress.validate_target` rejects the fixture's private Docker IP; we must
+  not auto-crawl a public domain). `multi_asset_integration_test.py` Part A proves the pipeline
+  stubbed (host-green); Part B is engine-gated in CI — run it against a gated staging env with
+  real domain access.
+(Migrated 2026-08-15 from the retired `slice2-deferred-debt.md`.)
 
 ## Parked work
 

@@ -38,6 +38,18 @@ describe("FindingsPage", () => {
     expect(rail()).toHaveTextContent("4 of 4 shown");
   });
 
+  it("labels the unconfirmed lane (endpoint_unresolved) as 'unconfirmed'", () => {
+    const d: FindingsResponse = {
+      run_id: "r", count: 1, coverage: null, spec: null,
+      findings: [f({ finding_hash: "u1", type: "endpoint_unresolved", value: "GET /api/EXPR" })],
+    };
+    render(<TenantProvider><FindingsPage data={d} runId="r" onJumpToSource={() => {}} /></TenantProvider>);
+    expect(screen.getByText("GET /api/EXPR")).toBeInTheDocument();
+    // shown under the human label (row chip + Type facet), never the raw wire token
+    expect(screen.getAllByText("unconfirmed").length).toBeGreaterThan(0);
+    expect(screen.queryByText("endpoint_unresolved")).toBeNull();
+  });
+
   it("filters by a classification facet without a re-fetch", async () => {
     view();
     // all four values present initially

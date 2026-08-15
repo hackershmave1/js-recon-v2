@@ -17,7 +17,7 @@ model carried it. ``run`` already has FORCE row-level security from 0001 and RLS
 is table-level, so a new nullable column needs no policy change.
 
 NOTE: the underlying ``create_all``-vs-incremental-DDL seam is tracked debt
-(docs/slice2-deferred-debt.md); freeze 0001 to a static snapshot before real
+(DEBT.md D19); freeze 0001 to a static snapshot before real
 prod upgrades (M3), after which explicit ``add_column`` becomes safe again.
 """
 
