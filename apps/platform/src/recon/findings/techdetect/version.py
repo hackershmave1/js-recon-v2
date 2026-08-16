@@ -59,8 +59,11 @@ def resolve_version(template: str | None, groups: tuple[str | None, ...]) -> str
         index = int(ternary.group(1))
         chosen = ternary.group(2) if _group(groups, index) else ternary.group(3)
         resolved = resolved.replace(ternary.group(0), chosen)
-    for digit in _GROUP.findall(resolved):
-        resolved = resolved.replace(f"\\{digit}", _group(groups, int(digit)) or "")
+    # Single-pass substitution keyed to each match's position in the *original*
+    # string. A captured group's value is attacker-controlled and may itself
+    # contain a literal "\<digit>"-looking substring; an iterative str.replace
+    # loop would rescan and corrupt it. re.sub never rescans replacement text.
+    resolved = _GROUP.sub(lambda m: _group(groups, int(m.group(1))) or "", resolved)
     resolved = resolved.strip()
     return resolved or None
 
