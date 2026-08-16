@@ -780,9 +780,22 @@ def test_nested_concat_harvest_emits_only_the_top_level_expression():
     assert len(r.routes) == 1
 
 
-def test_off_sink_harvest_on_deep_concat_chain_is_bounded_not_quadratic():
-    # the harvest must not decode every nested builder of a deep chain (that was O(n^2), a
-    # worker-DoS on obfuscated bundles). It prunes nested builders + caps the span, so this
-    # returns promptly and emits at most the one top-level builder (§4 review HIGH).
-    src = 'var u = "https://x/"' + '.concat("a")' * 4000 + ";"
-    assert len(extract(src).routes) <= 1
+def test_harvest_routes_pass_stays_linear_no_dos():
+    # DoS-regression guard (§4 review HIGH) for the harvest pass specifically: on a deeply
+    # nested .concat() chain — the string-splitting obfuscation this product targets — it must
+    # be O(n), not O(n^2). An earlier fix walked node.parent per node (O(depth) in tree-sitter)
+    # and took ~66s at this size; the span-cap-first / claimed-range version is well under 1s.
+    # Tested in ISOLATION on purpose: the main extract() walk has its own separate, PRE-EXISTING
+    # O(n^2) on such chains (a per-node receiver decode — tracked as debt) that would otherwise
+    # mask this guard.
+    import time
+
+    from recon.findings._jsast import Extraction
+    from recon.findings.extract import _harvest_routes
+
+    tree = _PARSER.parse(('"https://x/"' + '.concat("a")' * 20000).encode())
+    result = Extraction()
+    start = time.perf_counter()
+    _harvest_routes(tree.root_node, result)
+    assert time.perf_counter() - start < 10.0
+    assert len(result.routes) <= 1

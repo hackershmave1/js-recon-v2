@@ -242,30 +242,6 @@ def _is_concat_call(node: Node) -> bool:
     )
 
 
-def _is_nested_builder(node: Node) -> bool:
-    """True when ``node`` sits INSIDE a larger URL-building expression — an operand of a ``+``
-    chain, or the receiver/argument of a ``.concat()`` call. The harvest skips these WITHOUT
-    decoding their text, so only the top-level builder of a chain is ever read: that keeps the
-    pass O(n) instead of O(n^2) on a deeply nested concat/``+`` chain — the string-splitting
-    obfuscation this product targets (§4 review). Cheap: only tiny property text is decoded."""
-    parent = node.parent
-    if parent is None:
-        return False
-    if parent.type == "binary_expression":  # an operand of `a + b (+ c ...)`
-        return True
-    if parent.type == "member_expression":  # the object of `X.concat` (the receiver)
-        grandparent = parent.parent
-        return (
-            grandparent is not None
-            and grandparent.type == "call_expression"
-            and _text(parent.child_by_field_name("property")) == "concat"
-        )
-    if parent.type == "arguments":  # an argument of `X.concat(...)`
-        call = parent.parent
-        return call is not None and _is_concat_call(call)
-    return False
-
-
 def _is_absolute_url(skeleton: str) -> bool:
     """A scheme-absolute URL (``https://…``, ``ws://…``), NOT a rooted path that merely embeds
     a URL in a query (``/redirect?to=http://…``). Off-sink harvesting is absolute-only: a bare
@@ -289,11 +265,15 @@ def _harvest_routes(root: Node, result: Extraction) -> None:
         is_builder = node.type in ("string", "template_string", "binary_expression") or (
             node.type == "call_expression" and _is_concat_call(node)
         )
-        # Prune nested builders and oversized spans BEFORE decoding text, then the claimed-range
-        # guard (also decode-free); only a top-level, unclaimed builder is ever read. This keeps
-        # the pass O(n) — decoding every nested builder of a huge chain would be O(n^2) (§4).
-        if not is_builder or _is_nested_builder(node):
+        if not is_builder:
             continue
+        # O(1), decode-free guards FIRST — a span cap, then the claimed-range check — so `_text`
+        # (which decodes the node's whole subtree) is only ever reached for a small, unclaimed
+        # builder. `node.parent` is deliberately unused: it is O(depth) in tree-sitter (re-roots
+        # from the top), so a per-node parent walk is itself O(n^2) on a deep chain (§4 review).
+        # Preorder + the claimed span dedup nested builders: the outer is harvested first and
+        # claims its span, so its inners are skipped here; an oversized outer is span-capped out
+        # (a multi-KB "URL" is not a route) and its inners then carry no `://` — nothing emitted.
         if node.end_byte - node.start_byte > _MAX_HARVEST_SPAN:
             continue
         if any(start <= node.start_byte and node.end_byte <= end for start, end in claimed):
