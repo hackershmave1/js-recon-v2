@@ -57,6 +57,10 @@ dependencies = [
     # only credential primitive we hand to a vetted library rather than hand-rolling;
     # the self-describing hash string is the whole stored credential (no salt column).
     "bcrypt>=4.0",
+    # Linear-time, ReDoS-safe regex for the untrusted enthec fingerprint patterns
+    # (recon.findings.techdetect). Ships win_amd64/win32 + manylinux wheels; pinned
+    # so a bad pattern's compile-time behavior (per-pattern try/except) stays stable.
+    "google-re2==1.1.20251105",
 ]
 
 [project.optional-dependencies]
