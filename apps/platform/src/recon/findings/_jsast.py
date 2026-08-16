@@ -235,10 +235,14 @@ def _expr_token(node: Node | None) -> str:
     if node is None:
         return _EXPR
     text = _text(node).replace(" ", "")
-    if text.endswith(("location.origin", "location.href")):
+    segments = text.split(".")
+    # Same-origin marker: window.location.origin / document.location.href / location.origin.
+    # A structural segment check (not a substring endswith) so `geolocation.origin`,
+    # `mylocation.origin`, `dislocation.href` are NOT collapsed — they are ordinary holders.
+    if len(segments) >= 2 and segments[-1] in ("origin", "href") and segments[-2] == "location":
         return ""
     if node.type in ("identifier", "member_expression", "property_identifier"):
-        last = text.rsplit(".", 1)[-1]
+        last = segments[-1]
         if _is_readable_name(last):
             return ":" + last
     return _EXPR
@@ -250,7 +254,7 @@ def _collapse_url(node: Node | None, _depth: int = 0) -> str:
     ``.concat()`` chains, and render a readable non-constant leaf as a ``:holder`` token
     from its source identifier — ``"/api/" + id`` -> ``/api/:id``, ``g.downloadUrl`` ->
     ``:downloadUrl`` — while a minifier mangle (``u``, ``xr``) stays ``EXPR``. Only the
-    unconfirmed/generic/route lanes use this; a statically resolvable URL never reaches
+    unconfirmed/generic lanes use this; a statically resolvable URL never reaches
     here (it lands in ``endpoints`` instead), so a ``:holder`` can never enter the
     confirmed lane.
 

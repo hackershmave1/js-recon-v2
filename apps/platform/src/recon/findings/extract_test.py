@@ -130,6 +130,13 @@ def test_deeply_nested_concat_calls_are_capped():
     assert len(extract(src).unresolved) == 1  # capped, no RecursionError
 
 
+def test_array_concat_is_not_a_url_false_positive():
+    # `.concat()` also builds ARRAYS; the resulting non-path skeleton is rejected by the
+    # generic path gate, and is harmless as a Tier-4 skeleton (the fetch sink is real).
+    assert extract('apiClient.get(arr.concat("/x"))').generic == []
+    assert extract("fetch([x].concat(y))").unresolved[0].url == "EXPREXPR"
+
+
 # --- Tier 5: generic-call (suspected untaught HTTP clients) ------------------- #
 # A verb call `.get/.post/…` on an UNRECOGNISED but HTTP-client-shaped receiver is
 # surfaced in `generic` (distinct from `unresolved`) as a SUSPECTED sink. It must NOT
