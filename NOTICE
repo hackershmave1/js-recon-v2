@@ -1,0 +1,20 @@
+recon-platform — third-party notices
+====================================
+
+Technology fingerprint dataset
+------------------------------
+apps/platform/src/recon/findings/techdetect_data/ vendors a subset of
+enthec/webappanalyzer (https://github.com/enthec/webappanalyzer), licensed under
+GPL-3.0.
+
+Usage terms (delivery model: SaaS / internal only):
+- The dataset is used SERVER-SIDE ONLY. It is never conveyed to users and never
+  bundled into the distributed browser extension (apps/capture/). Because it is
+  not distributed, GPL-3.0 copyleft is not triggered for the platform's own code.
+- A CI guard (.github/workflows/ci.yml) fails the build if apps/capture/ imports
+  or references techdetect_data, making "server-side only" enforceable.
+- Re-confirm licensing before ANY change to the delivery model (e.g. shipping the
+  dataset to a client or bundling it into a conveyed artifact).
+
+The pinned upstream commit is recorded in techdetect_data/commit.txt and re-pinned
+via recon.findings.techdetect.refresh.

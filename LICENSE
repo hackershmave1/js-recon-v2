@@ -1,0 +1,5 @@
+Copyright (c) 2026 recon-platform authors.
+
+This repository's first-party source is proprietary/internal. Third-party
+components and their licenses — including the GPL-3.0 enthec/webappanalyzer
+fingerprint dataset used server-side only — are recorded in NOTICE.

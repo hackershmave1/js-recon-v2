@@ -53,6 +53,19 @@ jobs:
         env:
           RECON_REQUIRE_ENGINES: "1"
         run: uv run pytest -m "not integration" --cov=recon --cov-fail-under=60
+      # T10/T11 (NOTICE): the enthec/webappanalyzer fingerprint dataset is GPL-3.0
+      # and only safe to vendor because it's server-side only. This step is the
+      # enforcement mechanism the NOTICE promises — it must fail loudly if the
+      # dataset ever leaks into the distributed extension.
+      - name: Guard — enthec dataset stays server-side (GPL-3.0, T10)
+        working-directory: ${{ github.workspace }}
+        run: |
+          if grep -rInq "techdetect_data" apps/capture; then
+            echo "::error::apps/capture references techdetect_data — the GPL-3.0 enthec dataset must stay server-side (see NOTICE)"
+            grep -rIn "techdetect_data" apps/capture
+            exit 1
+          fi
+          echo "ok: apps/capture does not reference techdetect_data"
 
   # Front-end lane: lints, tests, and builds the SPA on its own (no Python/Docker
   # needed), so a broken web build fails fast instead of only surfacing during the
