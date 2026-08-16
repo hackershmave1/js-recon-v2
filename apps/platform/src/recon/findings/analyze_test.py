@@ -152,6 +152,40 @@ def test_generic_call_surfaced_as_endpoint_generic_and_excluded_from_endpoints(
     assert reqs is not None and len(reqs) == 1
 
 
+def test_page_route_surfaced_as_distinct_type_excluded_from_endpoints(redis, authorized_session):
+    """Phase 2: a client-side navigation target (here an `href` built via .concat() off
+    window.location.origin) is surfaced as a distinct PAGE_ROUTE finding — blank method, so its
+    value is the bare route — while (a) it is excluded from the endpoint read model + the
+    OpenAPI/probe reconstruction (both key on ``type == 'endpoint'``), and (b) it never moves the
+    REQ-C2 coverage counters (a referenced route is not a detected backend sink)."""
+    from recon.findings import queries as findings_queries
+    from recon.probe.reconstruct import reconstruct_run
+
+    tenant, session_id = authorized_session
+    js = 'var link = {href:"".concat(window.location.origin, "/player/").concat(id)}; fetch("/api/real");'
+    view = coordinator.start_run_with_input(
+        redis, tenant_id=tenant, session_id=session_id, js_source=js, target="acme.io"
+    )
+    assert _drive(redis, view.id, tenant) == RunState.DONE.value
+
+    findings = _findings(tenant, view.id)
+    # the confirmed fetch is an endpoint; the href route is a DISTINCT page_route, not an endpoint.
+    assert {f.value for f in findings if f.type == "endpoint"} == {"GET /api/real"}
+    routes = [f for f in findings if f.type == "page_route"]
+    assert len(routes) == 1
+    assert routes[0].value == "/player/:id"  # blank method -> value is the bare route
+    assert routes[0].attributes["confidence"] == "low"  # an href key also appears in bodies/config
+
+    # REQ-C2 coverage is untouched by the route: 1 real fetch attributed, nothing unattributed.
+    coverage = findings_queries.list_findings(tenant, view.id).coverage
+    assert coverage is not None
+    assert (coverage.attributed, coverage.unattributed) == (1, 0)
+
+    # Excluded from OpenAPI/probe reconstruction (keys on type == 'endpoint'): only the fetch.
+    reqs = reconstruct_run(tenant, view.id)
+    assert reqs is not None and len(reqs) == 1
+
+
 def test_param_findings_carry_risk_tags(redis, authorized_session):
     """Enrichment A: a risk-relevant param name is tagged in the finding's attributes, and an
     untagged param carries no risk_tags key (honest silence, kept clean)."""

@@ -398,6 +398,22 @@ def _extract_endpoints(
                 asset_url=asset_url,
                 finding_type=FindingType.ENDPOINT_GENERIC,
             )
+        # Page routes (Phase 2): client-side navigation targets. A DISTINCT PAGE_ROUTE type
+        # (auto-excluded from every type=='endpoint' read model) and, like the generic lane,
+        # deliberately OUTSIDE the attributed/unattributed accounting — a referenced route is
+        # not a detected backend sink, so it must never move the REQ-C2 coverage counters.
+        for route in extraction.routes:
+            written += _record_unresolved_endpoint(
+                session,
+                tenant_id,
+                run_id,
+                path,
+                source_name,
+                route,
+                run_asset_id=run_asset_id,
+                asset_url=asset_url,
+                finding_type=FindingType.PAGE_ROUTE,
+            )
     files = tuple(
         FileCoverage(path=path, attributed=counts[0], unattributed=counts[1])
         for path, counts in sorted(per_file.items())
@@ -686,21 +702,25 @@ def _record_unresolved_endpoint(
     asset_url: str | None = None,
     finding_type: FindingType = FindingType.ENDPOINT_UNRESOLVED,
 ) -> int:
-    """Write an UNCONFIRMED-lane endpoint under the given ``finding_type``: a Tier-4
-    ``ENDPOINT_UNRESOLVED`` sink we detected but couldn't resolve, or a Tier-5
-    ``ENDPOINT_GENERIC`` suspected generic-client call — both carried as a best-effort
-    ``_collapse_url`` skeleton.
+    """Write a non-confirmed finding under the given ``finding_type`` from a best-effort
+    ``_collapse_url`` skeleton: a Tier-4 ``ENDPOINT_UNRESOLVED`` sink we detected but couldn't
+    resolve, a Tier-5 ``ENDPOINT_GENERIC`` suspected generic-client call, or a Phase-2
+    ``PAGE_ROUTE`` client-navigation target (blank method, so its value is the bare URL, plus
+    an ``attributes['confidence']`` of ``high``/``low``).
 
-    Either distinct type is excluded, with no per-consumer filter, from the OpenAPI export,
-    shadow classification, and the endpoint headline count (all keyed on ``type ==
-    'endpoint'``). The value is ``method + skeleton`` and is NOT run through
-    ``normalize_endpoint`` — there is no real URL to host-strip or ``{id}``-template — and no
-    params are recorded (the URL, hence its query, is unknown). The full call rides on the
-    occurrence ``evidence`` so the analyst can resolve it by hand."""
+    Every one of these distinct types is excluded, with no per-consumer filter, from the
+    OpenAPI export, shadow classification, and the endpoint headline count (all keyed on
+    ``type == 'endpoint'``). The value is ``method + skeleton`` (a blank method collapses to
+    just the skeleton) and is NOT run through ``normalize_endpoint`` — there is no real URL to
+    host-strip or ``{id}``-template — and no params are recorded (the URL, hence its query, is
+    unknown). The full call rides on the occurrence ``evidence`` so the analyst can resolve it
+    by hand."""
     value = f"{ep.method} {ep.url}".strip()
     attributes: dict[str, Any] = {"kind": ep.kind, "method": ep.method}
     if ep.wrapper:  # provenance: the taught wrapper this sink came through (display-only)
         attributes["wrapper"] = ep.wrapper
+    if finding_type == FindingType.PAGE_ROUTE:  # route-lane display confidence: "high" | "low"
+        attributes["confidence"] = ep.confidence
     return _write(
         session,
         tenant_id,
