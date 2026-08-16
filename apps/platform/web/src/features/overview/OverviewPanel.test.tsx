@@ -93,4 +93,24 @@ describe("OverviewPanel", () => {
     expect(within(card("Endpoints")).getByText("1")).toBeInTheDocument();
     expect(within(card("Secrets")).getByText("0")).toBeInTheDocument();
   });
+
+  it("shows a Tech stack card counting technologies across hosts", () => {
+    const data: FindingsResponse = {
+      run_id: "r", count: 0, coverage: null, spec: null, findings: [],
+    };
+    const technologies = {
+      run_id: "r", count: 3,
+      hosts: { "acme.io": [
+        { name: "Nginx", categories: ["Web servers"], version: "1.25.3", confidence: 100, evidence: [] },
+        { name: "jQuery", categories: ["JavaScript libraries"], version: "3.5.1", confidence: 100, evidence: [] },
+        { name: "React", categories: ["JavaScript frameworks"], version: null, confidence: 100, evidence: [] },
+      ] },
+    };
+    const router = createMemoryRouter(
+      [{ path: "/runs/:id", element: <OverviewPanel data={data} technologies={technologies} /> }],
+      { initialEntries: ["/runs/r1"] },
+    );
+    render(<RouterProvider router={router} />);
+    expect(within(card("Tech stack")).getByText("3")).toBeInTheDocument();
+  });
 });

@@ -154,6 +154,16 @@ export interface Engagement {
   created_at: string; updated_at: string;
 }
 export interface EngagementsListResponse { count: number; engagements: Engagement[]; }
+// Tech detection: one detected technology (recon.findings.queries.TechnologyView).
+// `version` is null when not statically derivable (Phase 1 honesty — T12).
+export interface Technology {
+  name: string; categories: string[]; version: string | null; confidence: number; evidence: string[];
+}
+// GET /runs/{id}/technologies — per-host stack. `hosts` empty (200) is distinct
+// from a 404 unknown run.
+export interface TechnologiesResponse {
+  run_id: string; count: number; hosts: Record<string, Technology[]>;
+}
 
 export const TERMINAL_STATES = new Set(["done", "partial", "failed", "cancelled"]);
 export const TRIAGE_STATUSES = ["open", "confirmed", "dismissed"] as const;

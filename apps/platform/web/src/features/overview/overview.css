@@ -1,13 +1,15 @@
 /* Overview page — the run-summary view (design "Overview"). Real data only:
-   the four metric cards and the priority list derive entirely from the
-   FindingsResponse the workspace already holds. Colours/type come from the
-   design tokens in styles.css. The design's attack-surface graph and
-   "since last run" diff are intentionally absent — we don't produce that data. */
+   the metric cards and the priority list derive entirely from the
+   FindingsResponse (+ the best-effort TechnologiesResponse) the workspace
+   already holds. Colours/type come from the design tokens in styles.css. The
+   design's attack-surface graph and "since last run" diff are intentionally
+   absent — we don't produce that data. */
 
 .ov { display: flex; flex-direction: column; gap: 16px; }
 
-.ov-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-@media (max-width: 760px) { .ov-metrics { grid-template-columns: repeat(2, 1fr); } }
+.ov-metrics { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+@media (max-width: 900px) { .ov-metrics { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 560px) { .ov-metrics { grid-template-columns: repeat(2, 1fr); } }
 
 .ov-card {
   display: flex; flex-direction: column; gap: 9px; width: 100%; text-align: left;

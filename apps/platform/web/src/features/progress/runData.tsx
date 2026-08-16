@@ -1,8 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTenant } from "../../tenant/TenantContext";
 import { streamRunEvents, type SseEvent } from "../../api/sseClient";
-import { getAssets, getFindings, getStatus, ApiError } from "../../api/apiClient";
-import { TERMINAL_STATES, type AssetsManifest, type FindingsResponse, type RunControlResult } from "../../api/types";
+import { getAssets, getFindings, getStatus, getTechnologies, ApiError } from "../../api/apiClient";
+import {
+  TERMINAL_STATES, type AssetsManifest, type FindingsResponse, type RunControlResult,
+  type TechnologiesResponse,
+} from "../../api/types";
 
 // A run's active state equals its stage and the state machine only advances
 // (recon.domain / runs.state_machine), so each active state has a pipeline rank.
@@ -67,6 +70,7 @@ export interface RunData {
   pauseRequested: boolean;
   cancelRequested: boolean;
   captureStatus: CaptureStatus | null;
+  technologies: TechnologiesResponse | null;
   handleControlResult: (res: RunControlResult) => void;
 }
 
@@ -106,6 +110,7 @@ function useRunStream(runId: string): RunData {
   const [pauseRequested, setPauseRequested] = useState(false);
   const [cancelRequested, setCancelRequested] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null);
+  const [technologies, setTechnologies] = useState<TechnologiesResponse | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   // stateRef mirrors `state` at accept-time so the guard compares against the
   // running value even within a synchronous burst of replayed SSE events (where
@@ -162,6 +167,12 @@ function useRunStream(runId: string): RunData {
           const manifest = await getAssets(tenantId, runId);
           if (!controller.signal.aborted) setAssets(manifest);
         } catch { /* ignore — manifest is best-effort */ }
+        // Tech-stack detection (analyze's fingerprint pass) is likewise secondary
+        // enrichment: a failure here must never break the status/findings panel.
+        try {
+          const techs = await getTechnologies(tenantId, runId);
+          if (!controller.signal.aborted) setTechnologies(techs);
+        } catch { /* ignore — technologies are best-effort enrichment */ }
       } catch (e) {
         if (controller.signal.aborted) return;
         setError(e instanceof ApiError ? e.message : "Failed to load run");
@@ -261,7 +272,7 @@ function useRunStream(runId: string): RunData {
 
   return {
     runId, sessionId, state, stage, pct, done, total, eta, error, assets, events, findings, loaded,
-    pauseRequested, cancelRequested, captureStatus, handleControlResult,
+    pauseRequested, cancelRequested, captureStatus, technologies, handleControlResult,
   };
 }
 
