@@ -129,6 +129,34 @@ def test_scripts_surface_version_match_bounds_evidence_to_the_matched_marker(
     assert widget.evidence == ["scripts: WidgetLib.init('2.3.1')"]
 
 
+def test_scripts_surface_zero_width_match_never_leaks_the_raw_js_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A presence-only "scripts" pattern (empty regex, mirrors the cookies-surface
+    # presence test above) matches a zero-width string at position 0, so
+    # `found.group(0)` is "". Unlike cookies/headers, `value` here is the entire
+    # js_texts entry - falling back to it would leak raw JS (possibly a secret,
+    # T1) into `evidence`. The fix: a fixed placeholder, never the raw source.
+    raw: dict[str, RawTechnology] = {
+        "AnyScriptTech": {"cats": [59], "scripts": [""]},
+    }
+    js_texts = ["const SECRET_API_KEY = 'sk_live_abc123';"]
+    detections = _detect_with_raw_dataset(
+        monkeypatch,
+        raw,
+        {"59": "JavaScript libraries"},
+        "acme.io",
+        _signal(),
+        js_texts,
+    )
+    assert len(detections) == 1
+    any_script = detections[0]
+    assert any_script.name == "AnyScriptTech"
+    assert any_script.evidence == ["scripts: <scripts match>"]
+    assert "SECRET_API_KEY" not in any_script.evidence[0]
+    assert "sk_live_abc123" not in any_script.evidence[0]
+
+
 def test_version_conflict_keeps_highest_confidence_and_files_the_rest_as_alternates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

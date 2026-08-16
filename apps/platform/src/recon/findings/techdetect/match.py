@@ -16,6 +16,7 @@ from recon.findings.techdetect import version as version_mod
 from recon.findings.techdetect.compile import CompiledPattern, CompiledTech, Re2Match
 
 _EVIDENCE_MAX = 200  # a bounded marker snippet - never a full body (T1)
+_SCRIPTS_ZERO_WIDTH_PLACEHOLDER = "<scripts match>"  # never the raw JS body (T1)
 
 
 @dataclass(frozen=True)
@@ -111,8 +112,16 @@ def _record(acc: _Accumulator, pattern: CompiledPattern, found: Re2Match, value:
     # Bound the snippet to the actual match (Re2Match.group(0)), never the full raw
     # surface value - `value` can be an entire JS file for the "scripts" surface.
     # A presence-only pattern (empty regex, e.g. a cookie name or Cloudflare's
-    # cf-ray) matches a zero-width string, so fall back to the raw value there.
-    snippet = found.group(0) or value
+    # cf-ray) matches a zero-width string, so fall back to the raw value there -
+    # EXCEPT on the "scripts" surface, where `value` IS an entire JS file and could
+    # itself carry a secret (T1): a zero-width match there gets a fixed placeholder,
+    # never the raw source.
+    if found.group(0):
+        snippet = found.group(0)
+    elif pattern.surface == "scripts":
+        snippet = _SCRIPTS_ZERO_WIDTH_PLACEHOLDER
+    else:
+        snippet = value
     marker = f"{pattern.key or pattern.surface}: {snippet}"
     acc.evidence.append(_bounded(marker))
 
