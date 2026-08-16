@@ -41,12 +41,14 @@ from recon.findings import (
     risk_tags,
     sourcemapper,
     store,
+    techdetect_pass,
 )
 from recon.findings.extract import RawEndpoint, extract
 from recon.findings.kingfisher import RawSecret
 from recon.findings.wrappers import WrapperRule
 from recon.observability import get_logger
 from recon.progress import heartbeat as progress
+from recon.queue import retry
 from recon.runs import assets as run_assets
 from recon.runs import queries as run_queries
 
@@ -106,14 +108,40 @@ def analyze_run(
 
     An upload/single-URL run (no ``run_asset`` rows) falls through unchanged to
     the legacy path below: analyze ``run.input_ref`` as one unit. No input ->
-    no-op."""
+    no-op.
+
+    Both branches then flow through a best-effort per-host tech-detection
+    fingerprint pass (tech-detection slice, Task 8): it loads the run's
+    ``fingerprint-signal`` blob (Tasks 6/7) and upserts ``run_technology``. This
+    is enrichment, not a finding — it is swallowed and logged on any failure so
+    it can never fail the run (T2), and it never affects the returned
+    ``Coverage``."""
     wrappers = _session_wrappers(tenant_id, run_id)  # REQ-D5: recognize taught wrappers live
     rows = run_assets.list_for_run(tenant_id, run_id)
     if rows:
-        return _analyze_assets(
+        coverage = _analyze_assets(
             redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, rows=rows, wrappers=wrappers
         )
-    # ---- legacy single-blob path below (unchanged) ----
+    else:
+        coverage = _analyze_legacy(redis, tenant_id=tenant_id, run_id=run_id, wrappers=wrappers)
+    # Best-effort per-host fingerprint pass (T2): enrichment that must NEVER fail the
+    # run (a raise would DLQ -> run FAILED -> all findings lost). A cooperative
+    # control interrupt is not a failure, so it propagates.
+    try:
+        techdetect_pass.run_fingerprint_pass(
+            redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id
+        )
+    except retry.ControlInterrupt:
+        raise
+    except Exception as exc:  # noqa: BLE001 - best-effort enrichment; log, never fail the run
+        log.warning("analyze.fingerprint_failed", run_id=run_id, error=str(exc))
+    return coverage
+
+
+def _analyze_legacy(
+    redis: Redis, *, tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]
+) -> Coverage:
+    """The upload/single-URL path: analyze ``run.input_ref`` as one unit (unchanged)."""
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
         input_ref = run.input_ref if run is not None else None
