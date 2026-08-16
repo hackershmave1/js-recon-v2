@@ -28,6 +28,7 @@ from recon.db.models import (
     Run,
     RunAsset,
     RunEvent,
+    RunTechnology,
     SessionBaseUrl,
     SessionSpec,
     SessionWrapper,
@@ -144,6 +145,21 @@ class FindingsView:
 
 
 @dataclass(frozen=True)
+class TechnologyView:
+    name: str
+    categories: list[str]
+    version: str | None
+    confidence: int
+    evidence: list[str]
+
+
+@dataclass(frozen=True)
+class TechnologiesView:
+    run_id: str
+    hosts: dict[str, list[TechnologyView]]
+
+
+@dataclass(frozen=True)
 class _AssetRef:
     """A run_asset's blob pointer and URL, keyed by run_asset_id — one lookup
     serves both `revealable`'s blob resolution and the occurrence's asset_url."""
@@ -243,6 +259,32 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
                 _run_spec_summary(findings, spec_status_by_hash) if has_session_spec else None
             ),
         )
+
+
+def list_technologies(tenant_id: str, run_id: str) -> TechnologiesView | None:
+    """Every detected technology for a run, grouped by host, or ``None`` if the run
+    does not exist for this tenant (RLS-invisible). Deterministic order."""
+    with tenant_session(tenant_id) as session:
+        run = session.get(Run, run_id)
+        if run is None:
+            return None
+        rows = session.scalars(
+            select(RunTechnology)
+            .where(RunTechnology.run_id == str(run_id))
+            .order_by(RunTechnology.host, RunTechnology.confidence.desc(), RunTechnology.name)
+        ).all()
+    hosts: dict[str, list[TechnologyView]] = {}
+    for row in rows:
+        hosts.setdefault(row.host, []).append(
+            TechnologyView(
+                name=row.name,
+                categories=list(row.categories or []),
+                version=row.version,
+                confidence=row.confidence,
+                evidence=list(row.evidence or []),
+            )
+        )
+    return TechnologiesView(run_id=str(run_id), hosts=hosts)
 
 
 def _cross_run_sightings(
