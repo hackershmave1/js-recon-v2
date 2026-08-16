@@ -205,6 +205,26 @@ def capture_run(
             },
         )
     publish(redis, event)
+
+    # Task 7: ONE fingerprint-signal blob per capture run (T6) — same schema/event
+    # type the fetch stage emits (recon.fetch.fetch._write_fingerprint_signal), so
+    # analyze reads a crawl/static run and a capture run identically. Recorded, not
+    # published: the sole consumer is the analyze fingerprint pass reading the
+    # durable log, not the live SSE feed.
+    signal = _build_signal(result, target_host=target_host, kept=kept)
+    if signal:
+        signal_ref = storage.put_blob(
+            tenant_id, run_id, "fingerprint-signal", json.dumps(signal).encode("utf-8")
+        )
+        with tenant_session(tenant_id) as session:
+            record_event(
+                session,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                event_type="fingerprint.signal",
+                payload={"signal_ref": signal_ref, "hosts": len(signal)},
+            )
+
     log.info(
         "capture.done",
         run_id=run_id,
@@ -272,6 +292,44 @@ def _requests_in_scope(
         if host == target_host or egress.host_in_scope(host, scope_hosts, allow_local=allow_local):
             kept.append(req)
     return kept
+
+
+def _build_signal(
+    result: driver.CaptureResult,
+    *,
+    target_host: str,
+    kept: list[driver.CapturedScript],
+) -> dict[str, dict]:
+    """Build the host-keyed fingerprint signal from a capture result (same schema as
+    the fetch path — T6). Script URLs come from the kept (in-scope) scripts, so an
+    out-of-scope third-party script never contributes — parity with ``_in_scope``.
+    An anonymous/inline script (no URL) is attributed to the target host. ``meta`` is
+    attached to the target host (the document it was read from), never a script's
+    third-party host. Host keys come from the observed response/script URLs, never
+    ``scope_hosts`` (T11) — a capture session's ``scope_hosts`` can be empty/a
+    wildcard that was never itself fetched from."""
+    signal: dict[str, dict] = {}
+
+    def _entry(host: str) -> dict:
+        return signal.setdefault(host, {"headers": {}, "scripts": [], "meta": [], "cookies": []})
+
+    for host, headers in result.headers_by_host.items():
+        _entry(host)["headers"].update(headers)
+    for host, cookies in result.cookies_by_host.items():
+        entry = _entry(host)
+        entry["cookies"] = sorted(set(entry["cookies"]) | set(cookies))
+    for script in kept:
+        host = (urlsplit(script.url).hostname or "").lower() if script.url else target_host
+        if not host:
+            continue
+        entry = _entry(host)
+        if script.url and script.url not in entry["scripts"]:
+            entry["scripts"].append(script.url)
+    if result.meta and target_host:
+        _entry(target_host)["meta"] = list(result.meta)
+    # Drop a host entry that ended up all-empty (e.g. an anonymous script with no
+    # headers/cookies/meta ever attached to it) rather than emit a blob full of noise.
+    return {h: v for h, v in signal.items() if any(v.values())}
 
 
 def _asset_rows(
