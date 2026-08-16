@@ -1,7 +1,7 @@
 """tech-detection run_technology table + RLS
 
-Revision ID: 0016_technology
-Revises: 0015_finding_type_unresolved
+Revision ID: 0017_technology
+Revises: 0016_finding_type_generic
 Create Date: 2026-08-16
 
 The run_technology TABLE is built from live metadata (create_all is idempotent —
@@ -18,8 +18,8 @@ from alembic import op
 from recon.db import models
 from recon.db.base import Base
 
-revision = "0016_technology"
-down_revision = "0015_finding_type_unresolved"
+revision = "0017_technology"
+down_revision = "0016_finding_type_generic"
 branch_labels = None
 depends_on = None
 
