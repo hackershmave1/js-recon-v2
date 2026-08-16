@@ -395,6 +395,17 @@ def test_meta_generator_is_read_once_after_settle():
     assert result.meta == ["WordPress 6.4"]
 
 
+def test_overlong_meta_generator_is_truncated():
+    # Minor review fix: every other captured artifact is bounded (max_script_bytes,
+    # max_requests); the <meta name=generator> DOM read had no cap of its own, though
+    # it is same-origin page content a target fully controls.
+    long_value = "G" * 500
+    ws = _FakeWS(graph=_TREE, scripts=_TREE_SCRIPTS, generator=long_value)
+    result = _run(ws)
+    assert result.meta == [long_value[: driver._MAX_META_CHARS]]
+    assert len(result.meta[0]) == driver._MAX_META_CHARS
+
+
 def test_no_meta_tag_leaves_meta_empty():
     ws = _FakeWS(graph=_TREE, scripts=_TREE_SCRIPTS)  # generator=None (default)
     result = _run(ws)

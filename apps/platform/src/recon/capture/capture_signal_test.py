@@ -112,6 +112,18 @@ def test_malformed_response_frame_never_raises():
     assert ctx.cookies_by_host == {}
 
 
+def test_malformed_response_url_never_raises_and_is_skipped():
+    # Important review fix: urlsplit(url) itself can raise ValueError ("Invalid IPv6
+    # URL") on a malformed CDP-reported URL. The method's docstring claims
+    # TOTAL/never-raises; unguarded, that raise would propagate out of _route ->
+    # capture_scripts and fail the ENTIRE run (not best-effort). Mirrors the
+    # identical try/except ValueError already on _normalize_request_url.
+    ctx = _ctx()
+    ctx._route(_response_frame("https://[::1/x", {"Server": "nginx"}))
+    assert ctx.headers_by_host == {}
+    assert ctx.cookies_by_host == {}
+
+
 # ---- pure stage._build_signal tests (the consolidation) ----
 
 
@@ -128,6 +140,8 @@ def test_stage_builds_host_keyed_signal_from_capture_result():
         result,
         target_host="acme.io",
         kept=result.scripts,
+        scope_hosts=[],
+        allow_local=False,
     )
     assert signal["acme.io"]["headers"] == {"server": "nginx/1.25.3"}
     assert signal["acme.io"]["scripts"] == ["https://acme.io/app.js"]
@@ -137,7 +151,12 @@ def test_stage_builds_host_keyed_signal_from_capture_result():
 
 def test_signal_is_empty_when_nothing_harvested():
     result = CaptureResult(scripts=[], nav_error=None, requests=[])
-    assert stage._build_signal(result, target_host="acme.io", kept=[]) == {}
+    assert (
+        stage._build_signal(
+            result, target_host="acme.io", kept=[], scope_hosts=[], allow_local=False
+        )
+        == {}
+    )
 
 
 def test_signal_attributes_third_party_script_to_its_own_host():
@@ -146,7 +165,9 @@ def test_signal_attributes_third_party_script_to_its_own_host():
     # (target) host, never a script's host.
     result = CaptureResult(scripts=[], nav_error=None, requests=[], meta=["Shopify"])
     third_party = CapturedScript("https://cdn.acme.io/lib.js", b"x", None, "sha", "page")
-    signal = stage._build_signal(result, target_host="acme.io", kept=[third_party])
+    signal = stage._build_signal(
+        result, target_host="acme.io", kept=[third_party], scope_hosts=[], allow_local=False
+    )
     assert signal["cdn.acme.io"]["scripts"] == ["https://cdn.acme.io/lib.js"]
     assert signal["cdn.acme.io"]["meta"] == []
     assert signal["acme.io"]["meta"] == ["Shopify"]
@@ -157,7 +178,9 @@ def test_anonymous_script_contributes_no_url_but_keeps_the_host_entry_alive():
     result = CaptureResult(
         scripts=[], nav_error=None, requests=[], headers_by_host={"acme.io": {"server": "nginx"}}
     )
-    signal = stage._build_signal(result, target_host="acme.io", kept=[anon])
+    signal = stage._build_signal(
+        result, target_host="acme.io", kept=[anon], scope_hosts=[], allow_local=False
+    )
     assert signal["acme.io"]["headers"] == {"server": "nginx"}
     assert signal["acme.io"]["scripts"] == []  # no URL to record
 
@@ -165,4 +188,38 @@ def test_anonymous_script_contributes_no_url_but_keeps_the_host_entry_alive():
 def test_anonymous_only_script_is_filtered_out_when_nothing_else_harvested():
     anon = CapturedScript("", b"x", None, "sha", "page")
     result = CaptureResult(scripts=[], nav_error=None, requests=[])
-    assert stage._build_signal(result, target_host="acme.io", kept=[anon]) == {}
+    assert (
+        stage._build_signal(
+            result, target_host="acme.io", kept=[anon], scope_hosts=[], allow_local=False
+        )
+        == {}
+    )
+
+
+def test_build_signal_scope_filters_headers_and_cookies_by_host():
+    # Important review fix: _on_response has no scope check of its own (unlike
+    # scripts via _in_scope / requests via _requests_in_scope), so with capture's
+    # TYPICAL empty scope_hosts, headers/cookies from EVERY host the browser tree
+    # saw a response from — including an out-of-scope third-party ad/analytics/CDN
+    # host — would be persisted under the target's fingerprint. The third party's
+    # script is already excluded upstream by _in_scope (kept=[] here), so this test
+    # isolates the headers/cookies leak.
+    result = CaptureResult(
+        scripts=[],
+        nav_error=None,
+        requests=[],
+        headers_by_host={
+            "acme.io": {"server": "nginx/1.25.3"},
+            "cdn.evil-tracker.com": {"server": "Apache"},
+        },
+        cookies_by_host={
+            "acme.io": ["sid"],
+            "cdn.evil-tracker.com": ["_ga"],
+        },
+    )
+    signal = stage._build_signal(
+        result, target_host="acme.io", kept=[], scope_hosts=[], allow_local=False
+    )
+    assert signal["acme.io"]["headers"] == {"server": "nginx/1.25.3"}  # target: kept
+    assert signal["acme.io"]["cookies"] == ["sid"]
+    assert "cdn.evil-tracker.com" not in signal  # third party: excluded entirely

@@ -93,6 +93,12 @@ _MIN_DRIVE_SECONDS = 1.0
 # extractor traces); Document / Script / Image / Font etc. are page/asset loads.
 _REQUEST_TYPES = frozenset({"XHR", "Fetch"})
 
+# Task 7 review fix: every other captured artifact is bounded (max_script_bytes,
+# max_requests); the <meta name=generator> DOM read had no cap of its own. It is
+# same-origin page content a target fully controls, so bound it too before it
+# enters ctx.meta.
+_MAX_META_CHARS = 200
+
 __all__ = ["CaptureError", "CapturedScript", "CaptureResult", "capture_scripts"]
 
 
@@ -383,7 +389,7 @@ def _drive(
             timeout_s=2.0,
         )
         if generator and generator.get("value"):
-            ctx.meta.append(str(generator["value"]))
+            ctx.meta.append(str(generator["value"])[:_MAX_META_CHARS])
         return CaptureResult(
             scripts=ctx.out,
             nav_error=ctx.nav_error,
@@ -642,7 +648,10 @@ class _Ctx:
         params = msg.get("params") or {}
         response = params.get("response") or {}
         url = response.get("url") or ""
-        host = (urlsplit(url).hostname or "").lower()
+        try:
+            host = (urlsplit(url).hostname or "").lower()
+        except ValueError:
+            return  # malformed URL (e.g. an invalid IPv6 literal) — skip, never raise
         if not host:
             return
         headers = {str(k).lower(): str(v) for k, v in (response.get("headers") or {}).items()}
