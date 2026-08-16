@@ -19,8 +19,9 @@ independent reasons:
    (see ``docker compose ps``) run a stale pre-Slice-Y image with no source
    mount, so the real worker code can't be driven through them either.
 
-So Part A stubs ONLY the network boundary (``fetch.fetch_url``) and drives the
-REAL ``fetch_run`` -> ``analyze_run`` -> ``coordinator.advance`` code over
+So Part A stubs ONLY the network boundary (``fetch._fetch_hops`` — the shared
+hop-core ``fetch_url`` itself now wraps, Task 6) and drives the REAL
+``fetch_run`` -> ``analyze_run`` -> ``coordinator.advance`` code over
 seeded ``run_asset`` rows — proving cross-asset dedup+attribution and the
 DONE/PARTIAL split against genuine per-asset DB state (not hand-set flags, as
 ``coordinator_completeness_test.py`` sets them, nor a single stage in
@@ -134,9 +135,9 @@ def test_pipeline_done_with_cross_asset_dedup_and_attribution(
     }
 
     def fake_fetch(url, scope, **kw):
-        return blobs[url]
+        return fetch._FetchedResponse(body=blobs[url], status=200, headers={}, set_cookie=[])
 
-    monkeypatch.setattr(fetch, "fetch_url", fake_fetch)
+    monkeypatch.setattr(fetch, "_fetch_hops", fake_fetch)
     fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
     analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
 
@@ -177,9 +178,11 @@ def test_pipeline_partial_when_one_asset_fetch_fails(redis, authorized_session, 
     def fake_fetch(url, scope, **kw):
         if url == _URL_B:
             raise retry.FatalError("HTTP 404")
-        return b'fetch("/api/shared");'
+        return fetch._FetchedResponse(
+            body=b'fetch("/api/shared");', status=200, headers={}, set_cookie=[]
+        )
 
-    monkeypatch.setattr(fetch, "fetch_url", fake_fetch)
+    monkeypatch.setattr(fetch, "_fetch_hops", fake_fetch)
     fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
     analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
 
