@@ -203,6 +203,9 @@ describe("SourcesPage", () => {
     expect(document.querySelectorAll(".sv-line")).toHaveLength(1); // raw single line, no DOM explosion
   });
 
+  // Generous timeout: committing 10k rows to jsdom (the cap being proven here) outlasts
+  // vitest's 5s default under full-suite parallel-worker CPU contention — passes solo,
+  // flaked in-suite. Cf. the pretty-mode test's 20s override above.
   it("caps how many lines it renders for a huge multi-line file", async () => {
     const MANY = "x\n".repeat(12_000); // 12k short lines, not minified -> rendered raw, capped
     vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: 1, sources: [UPLOAD] });
@@ -211,7 +214,7 @@ describe("SourcesPage", () => {
 
     await waitFor(() => expect(document.querySelector(".sv-note.sv-warn")?.textContent).toMatch(/large file/i));
     expect(document.querySelectorAll(".sv-line")).toHaveLength(10_000); // RENDER_MAX_LINES, not ~12k
-  });
+  }, 15_000);
 
   it("clamps the width of a single giant line", async () => {
     const GIANT = "a=1;".repeat(150_000); // ~600k chars, one line > RENDER_MAX_CHARS (512k)
