@@ -26,6 +26,89 @@ _JQUERY = frozenset({"$", "jQuery"})
 # jQuery helper -> HTTP method (config-driven ones resolve method from the config).
 _JQUERY_METHODS = {"get": "GET", "post": "POST", "getJSON": "GET"}
 
+# --- Tier 5 (generic-call): verb call on an unrecognised HTTP-client-shaped receiver ---
+# A receiver-agnostic member call `receiver.{get,post,…}("/path")` catches an UNTAUGHT
+# custom client (`apiClient.get(...)`). Two gates carry precision, because a receiver-name
+# denylist ALONE is inert on minified bundles: there the receiver text `_dispatch_member`
+# sees is a 1-2 char mangle (`n`/`e`), never a full word. So precision rests on a
+# readable-receiver gate (_is_http_client_name) + a strict path-shape gate
+# (_looks_like_api_path); verb methods only (not the ambiguous `.request`).
+_GENERIC_METHODS = frozenset({"get", "post", "put", "patch", "delete"})
+
+# Substrings that positively mark a receiver as an HTTP client at ANY length.
+_HTTP_CLIENT_HINTS = (
+    "api",
+    "http",
+    "client",
+    "service",
+    "rest",
+    "request",
+    "ajax",
+    "axios",
+    "graphql",
+    "gql",
+)
+
+# Readable receiver names that are common NON-HTTP objects — never an API client even when
+# long enough to pass the length gate. (Minified 1-2 char receivers never reach the gate;
+# this list only has to disambiguate READABLE receivers like `cache`/`router`/`store`.)
+_NON_HTTP_RECEIVERS = frozenset(
+    {
+        "cache",
+        "caches",
+        "map",
+        "set",
+        "weakmap",
+        "weakset",
+        "params",
+        "searchparams",
+        "urlsearchparams",
+        "headers",
+        "cookies",
+        "cookie",
+        "storage",
+        "localstorage",
+        "sessionstorage",
+        "session",
+        "router",
+        "route",
+        "history",
+        "location",
+        "store",
+        "state",
+        "model",
+        "models",
+        "query",
+        "queries",
+        "db",
+        "database",
+        "emitter",
+        "events",
+        "bus",
+        "logger",
+        "console",
+        "promise",
+        "jquery",
+        "lodash",
+        "dayjs",
+        "moment",
+        "window",
+        "document",
+        "self",
+        "globalthis",
+        # server-side route DEFINERS (`app.get("/x", handler)`) and config accessors — a `.get`
+        # here defines/reads, it does not call out. Readable enough to pass the length gate, so
+        # they must be named (unlike minified receivers, which the length gate handles).
+        "app",
+        "server",
+        "express",
+        "fastify",
+        "koa",
+        "config",
+        "settings",
+    }
+)
+
 
 @dataclass(frozen=True)
 class RawParam:
@@ -72,6 +155,11 @@ class Extraction:
     # alongside `unattributed` (never instead of it), so the honesty counter is
     # unchanged — an unresolved call is still counted as unattributed AND shown.
     unresolved: list[RawEndpoint] = field(default_factory=list)
+    # Tier 5 (generic-call): SUSPECTED sinks — a verb call on an unrecognised HTTP-client-
+    # shaped receiver (see recon.findings.extract._record_generic). NOT counted in
+    # `unattributed` (it is not a DETECTED sink, unlike `unresolved`), surfaced as a distinct
+    # ENDPOINT_GENERIC finding so it stays out of coverage AND out of the confirmed read model.
+    generic: list[RawEndpoint] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -140,6 +228,42 @@ def _collapse_url(node: Node | None, _depth: int = 0) -> str:
                 node.child_by_field_name("right"), _depth + 1
             )
     return _EXPR
+
+
+def _is_http_client_name(name: str) -> bool:
+    """Generic-call receiver gate (Tier 5): True when a member-call receiver plausibly denotes
+    an HTTP client. A readable identifier that is NOT a known non-HTTP object, and that either
+    carries an HTTP-ish hint (`apiClient`, `httpService`, `this.http`) or is at least 4 chars —
+    long enough to be a real name rather than a minifier's 1-2 char mangle (`n`, `e`, `xr`).
+    The length floor is what carries precision on minified code: there the receiver is a mangle,
+    so the gate simply does NOT fire (and the real gap on minified fetch-based bundles is Tier
+    4, already surfaced). `map`/`cache`/`store`/`router` are excluded even though they are
+    readable — they are the common non-HTTP `.get`/`.set`/`.delete` receivers."""
+    lowered = name.lower()
+    # Match the LAST dotted segment against the denylist, so a member-chain receiver like
+    # `this.store`/`this.cache`/`this.router` is excluded too — not just a bare `store`. The
+    # denylist is segment-exact (unlike the substring hint check below) so it never denies a
+    # real client like `apiStore`; rsplit with no dot returns the whole name unchanged.
+    if lowered.rsplit(".", 1)[-1] in _NON_HTTP_RECEIVERS:
+        return False
+    if any(hint in lowered for hint in _HTTP_CLIENT_HINTS):
+        return True
+    return len(name) >= 4
+
+
+def _looks_like_api_path(skeleton: str) -> bool:
+    """Generic-call argument gate (Tier 5): True only for a rooted path (`/users`), an absolute
+    URL (`https://…`), or a template base + path (`${base}/users`). A bare word (`userId`), a
+    dotted path (lodash `_.get("a.b.c")`), a relative `a/b`, or a pure `EXPR` is rejected.
+    Deliberately stricter than jsluice `MaybeURL` (which passes ANY leading-`/` string and
+    dotted hostnames): the unconfirmed lane guesses less, so a signal this weak needs a clear
+    path anchor. `skeleton` is `_collapse_url` output — non-constant sub-exprs are already
+    `EXPR`, so a leading `/` here means a real static path head, not a guessed one."""
+    if "://" in skeleton:
+        return True
+    if skeleton.startswith("/"):
+        return True
+    return skeleton.startswith("${") and "/" in skeleton
 
 
 def _args(call: Node) -> list[Node]:

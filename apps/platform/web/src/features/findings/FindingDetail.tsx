@@ -1,4 +1,5 @@
 import type { Finding, Occurrence, SourceJump } from "../../api/types";
+import { typeLabel } from "../../api/findingLabels";
 import { TriageControls } from "./TriageControls";
 import { RevealButton } from "./RevealButton";
 
@@ -37,7 +38,7 @@ export function FindingDetail({ finding, runId, onJumpToSource }: {
   return (
     <div className="card">
       <div>
-        <strong className={finding.severity === "high" ? "sev-high" : ""}>{finding.type}</strong>{" "}
+        <strong className={finding.severity === "high" ? "sev-high" : ""}>{typeLabel(finding.type)}</strong>{" "}
         <span className="muted">{headerLabel}</span>{" "}
         <span className={`chip chip-${specStatus}`}>{specStatus}</span>
         {/* Resolved documented op (post base-URL-rule resolution, REQ-C2) next to

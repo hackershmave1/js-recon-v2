@@ -50,6 +50,18 @@ describe("FindingsPage", () => {
     expect(screen.queryByText("endpoint_unresolved")).toBeNull();
   });
 
+  it("labels the generic-call lane (endpoint_generic) as 'generic call'", () => {
+    const d: FindingsResponse = {
+      run_id: "r", count: 1, coverage: null, spec: null,
+      findings: [f({ finding_hash: "g1", type: "endpoint_generic", value: "GET /api/generic" })],
+    };
+    render(<TenantProvider><FindingsPage data={d} runId="r" onJumpToSource={() => {}} /></TenantProvider>);
+    expect(screen.getByText("GET /api/generic")).toBeInTheDocument();
+    // shown under the human label (row chip + Type facet), never the raw wire token
+    expect(screen.getAllByText("generic call").length).toBeGreaterThan(0);
+    expect(screen.queryByText("endpoint_generic")).toBeNull();
+  });
+
   it("filters by a classification facet without a re-fetch", async () => {
     view();
     // all four values present initially

@@ -73,6 +73,13 @@ class FindingType(StrEnum):
     # every `type == 'endpoint'` read model — OpenAPI export, shadow classification,
     # headline counts — excludes it automatically, with no per-consumer filter.
     ENDPOINT_UNRESOLVED = "endpoint_unresolved"
+    # A verb-method call (`.get/.post/…`) on an unrecognised but HTTP-client-shaped
+    # receiver — a SUSPECTED custom/untaught client (Tier 5, "generic call"). Also a
+    # DISTINCT type, for the same auto-exclusion, and — because it is only SUSPECTED,
+    # not a detected sink — it never moves the REQ-C2 coverage counters. A separate
+    # type (not a shared one with an attribute) keeps its provenance in finding
+    # identity, so it stays filterable and never collides with a Tier-4 skeleton.
+    ENDPOINT_GENERIC = "endpoint_generic"
 
 
 class AssetStatus(StrEnum):
