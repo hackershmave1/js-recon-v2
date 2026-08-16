@@ -1,0 +1,12 @@
+{
+  "1":  {"name": "CMS"},
+  "6":  {"name": "Ecommerce"},
+  "12": {"name": "JavaScript frameworks"},
+  "18": {"name": "Web frameworks"},
+  "22": {"name": "Web servers"},
+  "23": {"name": "Caching"},
+  "27": {"name": "Programming languages"},
+  "31": {"name": "CDN"},
+  "59": {"name": "JavaScript libraries"},
+  "62": {"name": "PaaS"}
+}
