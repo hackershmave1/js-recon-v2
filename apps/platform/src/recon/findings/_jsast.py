@@ -205,29 +205,86 @@ def _string_value(node: Node | None) -> str | None:
 
 _EXPR = "EXPR"  # jsluice-style placeholder for a non-constant URL sub-expression
 
+_VOWELS = frozenset("aeiouAEIOU")
+
+
+def _is_readable_name(name: str) -> bool:
+    """True when ``name`` reads like a real identifier rather than a minifier mangle.
+    Rejects 1-char names and vowelless 2-char names (``u``, ``e``, ``xr``, ``bt``) — the
+    shapes that flood a mangled bundle — while keeping short-but-meaningful names
+    (``id`` has a vowel, so it passes). This is what decides whether a dynamic URL leaf
+    is worth surfacing as a ``:holder`` token instead of a blind ``EXPR``; a length
+    floor alone would both admit mangles and reject the common ``:id`` param."""
+    if not name or not name.replace("_", "").isalnum():
+        return False
+    if len(name) == 1:
+        return False
+    return len(name) != 2 or any(char in _VOWELS for char in name)
+
+
+def _expr_token(node: Node | None) -> str:
+    """Render a non-constant URL leaf as a ``:holder`` token from its source identifier
+    (the developer's own name for the value), or ``EXPR`` when there is no readable name
+    (a call result, computed access, or a minifier mangle).
+
+    ``window.location.origin``/``.href`` (also ``document.location``/bare ``location``)
+    ARE the current origin, so a same-origin URL built from them collapses the marker to
+    ``""`` — letting a following ``/path`` root cleanly (``origin + "/x/" + id`` ->
+    ``/x/:id``). The token is read from real source text, never invented; an unnameable
+    leaf degrades to ``EXPR``, so the never-guess invariant holds."""
+    if node is None:
+        return _EXPR
+    text = _text(node).replace(" ", "")
+    if text.endswith(("location.origin", "location.href")):
+        return ""
+    if node.type in ("identifier", "member_expression", "property_identifier"):
+        last = text.rsplit(".", 1)[-1]
+        if _is_readable_name(last):
+            return ":" + last
+    return _EXPR
+
 
 def _collapse_url(node: Node | None, _depth: int = 0) -> str:
     """Best-effort skeleton for a sink's UNRESOLVED URL argument (Tier 4 / jsluice
-    ``CollapsedString``): keep static string/template text, collapse any non-constant
-    expression to ``EXPR``. ``"/api/" + id`` -> ``/api/EXPR``; a bare variable or member
-    access (``u``, ``g.download_url``) -> ``EXPR``. Only the unconfirmed lane uses this —
-    a statically resolvable URL never reaches here (it lands in ``endpoints`` instead).
+    ``CollapsedString``): keep static string/template text, reconstruct ``+`` AND
+    ``.concat()`` chains, and render a readable non-constant leaf as a ``:holder`` token
+    from its source identifier — ``"/api/" + id`` -> ``/api/:id``, ``g.downloadUrl`` ->
+    ``:downloadUrl`` — while a minifier mangle (``u``, ``xr``) stays ``EXPR``. Only the
+    unconfirmed/generic/route lanes use this; a statically resolvable URL never reaches
+    here (it lands in ``endpoints`` instead), so a ``:holder`` can never enter the
+    confirmed lane.
 
-    ``_depth`` bounds the ``+``-concat recursion: string-splitting (``"a"+"b"+"c"+…``)
-    is a common static-analysis-evasion obfuscation this product targets, and a
-    pathologically deep chain must degrade to ``EXPR`` rather than blow the Python stack
-    and fail the analyze stage. The cap sits far beyond any legitimate URL literal."""
+    ``_depth`` bounds the recursion for BOTH ``+`` and ``.concat()``: string-splitting
+    (``"a"+"b"+…`` or ``"a".concat("b")…``) is a common static-analysis-evasion
+    obfuscation this product targets, and a pathologically deep chain must degrade to
+    ``EXPR`` rather than blow the Python stack. The cap sits far beyond any real URL."""
     if node is None or _depth >= 32:
         return _EXPR
     if node.type in ("string", "template_string"):
-        return _string_value(node) or _EXPR
+        value = _string_value(node)  # an empty literal ("") is a real value, not a miss
+        return value if value is not None else _EXPR
     if node.type == "binary_expression":
         operator = node.child_by_field_name("operator")
         if operator is not None and _text(operator) == "+":  # string concatenation only
             return _collapse_url(node.child_by_field_name("left"), _depth + 1) + _collapse_url(
                 node.child_by_field_name("right"), _depth + 1
             )
-    return _EXPR
+        return _EXPR
+    if node.type == "call_expression":
+        fn = node.child_by_field_name("function")
+        if (
+            fn is not None
+            and fn.type == "member_expression"
+            and _text(fn.child_by_field_name("property")) == "concat"
+        ):
+            # String#concat: ``a.concat(b, c)`` == ``a + b + c`` — reconstructed like ``+``,
+            # sharing the depth cap so a ``.concat()``-split obfuscation degrades to a
+            # skeleton instead of a stack blow-out.
+            parts = [_collapse_url(fn.child_by_field_name("object"), _depth + 1)]
+            parts += [_collapse_url(arg, _depth + 1) for arg in _args(node)]
+            return "".join(parts)
+        return _EXPR
+    return _expr_token(node)
 
 
 def _is_http_client_name(name: str) -> bool:

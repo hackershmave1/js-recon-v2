@@ -54,13 +54,13 @@ def test_fetch_variable_url_is_surfaced_as_unresolved():
 def test_fetch_concatenation_yields_a_path_skeleton():
     r = extract('fetch("/api/" + path)')
     assert r.endpoints == [] and len(r.unresolved) == 1
-    assert r.unresolved[0].url == "/api/EXPR"  # static head kept, variable -> EXPR
+    assert r.unresolved[0].url == "/api/:path"  # static head kept, readable holder -> :path
 
 
 def test_fetch_member_url_surfaced_with_method_from_options():
     r = extract('fetch(g.download_url, {method:"delete"})')
     assert len(r.unresolved) == 1
-    assert r.unresolved[0].method == "DELETE" and r.unresolved[0].url == "EXPR"
+    assert r.unresolved[0].method == "DELETE" and r.unresolved[0].url == ":download_url"
 
 
 def test_axios_member_variable_url_surfaced_with_verb_method():
@@ -91,6 +91,43 @@ def test_deeply_nested_concatenation_is_capped_not_a_recursion_error():
     # the Python stack out of extract(). 2000 terms is well past the interpreter limit.
     r = extract("fetch(" + "+".join(['"x"'] * 2000) + ")")
     assert len(r.unresolved) == 1  # surfaced cleanly, no RecursionError
+
+
+# --- .concat() reconstruction + value-holder tokens --------------------------- #
+# `.concat()` is reconstructed exactly like `+`; a readable non-constant leaf renders as
+# a `:holder` token (its source identifier) so an analyst sees WHICH value fills a
+# dynamic segment, while minifier mangles (1-char / vowelless-2-char) stay EXPR.
+
+
+def test_concat_at_sink_reconstructed_with_holder():
+    r = extract('fetch("/api/users/".concat(userId))')
+    assert r.endpoints == [] and len(r.unresolved) == 1
+    assert r.unresolved[0].url == "/api/users/:userId"
+
+
+def test_concat_chain_keeps_static_text_and_holders():
+    r = extract('apiClient.get("/api/".concat(kind).concat("/list"))')
+    assert r.generic[0].url == "/api/:kind/list"
+
+
+def test_value_holder_uses_last_member_identifier():
+    assert extract("fetch(g.downloadUrl)").unresolved[0].url == ":downloadUrl"
+
+
+def test_minified_holder_stays_expr():
+    assert extract("fetch(u)").unresolved[0].url == "EXPR"  # 1-char mangle
+    assert extract('fetch("/x/".concat(xr))').unresolved[0].url == "/x/EXPR"  # vowelless 2-char
+
+
+def test_same_origin_member_normalizes_to_rooted_path():
+    # window.location.origin is the current origin -> "" so the following /path roots.
+    r = extract('fetch("".concat(window.location.origin, "/player/").concat(playerId))')
+    assert r.unresolved[0].url == "/player/:playerId"
+
+
+def test_deeply_nested_concat_calls_are_capped():
+    src = 'fetch("a"' + '.concat("b")' * 2000 + ")"
+    assert len(extract(src).unresolved) == 1  # capped, no RecursionError
 
 
 # --- Tier 5: generic-call (suspected untaught HTTP clients) ------------------- #
@@ -124,7 +161,7 @@ def test_generic_call_this_http_angular_pattern():
 
 def test_generic_call_keeps_template_and_concat_shape():
     assert extract("apiClient.get(`/api/users/${id}`)").generic[0].url == "/api/users/${id}"
-    assert extract('apiClient.get("/api/" + id)').generic[0].url == "/api/EXPR"
+    assert extract('apiClient.get("/api/" + id)').generic[0].url == "/api/:id"
 
 
 def test_generic_call_absolute_url_is_surfaced():
@@ -159,7 +196,7 @@ def test_generic_call_requires_path_shaped_argument():
     # (stricter than jsluice MaybeURL: a relative or dotted string is not enough).
     assert extract('apiClient.get("userId")').generic == []  # bare word
     assert extract('apiClient.get("a.b.c")').generic == []  # dotted path (lodash-style)
-    assert extract("apiClient.get(userVar)").generic == []  # bare variable -> EXPR
+    assert extract("apiClient.get(userVar)").generic == []  # bare variable -> :userVar, no anchor
     assert extract('apiClient.get("users/list")').generic == []  # relative, no leading slash
 
 
