@@ -632,3 +632,157 @@ def test_wrapper_dynamic_arg_is_unattributed_like_axios():
     # A non-static URL leaves the same honest trace axios would (REQ-C2).
     result = extract("api.get(dynamicUrl);", wrappers=[WrapperRule("api")])
     assert result.endpoints == [] and result.unattributed == 1
+
+
+# --- Phase 2: page routes (href/src/action, nav sinks, off-sink harvest) ------
+# A distinct category from the API lanes — a client-side navigation target, not a backend
+# call. `_looks_like_route` is the false-positive gate; sink/href context classifies API vs
+# route, string shape is only a tiebreak for a context-free harvested literal.
+
+from recon.findings._jsast import _looks_like_route  # noqa: E402
+
+
+def test_looks_like_route_accepts_real_routes():
+    for skeleton in (
+        "/player/:id",
+        "/player/${id}",
+        "https://app.acme.io/player/1",
+        "/about",
+        "${base}/home",
+        "/user/:id/report/:id",
+    ):
+        assert _looks_like_route(skeleton), skeleton
+
+
+def test_looks_like_route_rejects_non_routes():
+    # no anchor (bare word, dotted chain, MIME type), a static asset, or a pure placeholder.
+    for skeleton in (
+        "a.b.c",
+        "image/png",
+        "text/plain",
+        "/static/logo.png",
+        "/vendor.js.map",
+        "/bundle.js",
+        "/logo.svg",
+        "EXPR",
+        "",
+        "userId",
+        "/has space",
+    ):
+        assert not _looks_like_route(skeleton), skeleton
+
+
+def test_href_concat_is_a_low_confidence_page_route():
+    # user example 2: href built via .concat() off window.location.origin -> /player/:id route.
+    r = extract('var link = {href:"".concat(window.location.origin, "/player/").concat(id)};')
+    assert len(r.routes) == 1 and r.endpoints == []
+    route = r.routes[0]
+    assert (route.kind, route.method, route.url, route.confidence) == (
+        "route",
+        "",
+        "/player/:id",
+        "low",
+    )
+
+
+def test_src_and_action_keys_are_routes_href_assets_are_not():
+    assert extract('var f = {action:"/submit/order"};').routes[0].url == "/submit/order"
+    assert extract('var i = {src:"/embed/player/1"};').routes[0].url == "/embed/player/1"
+    # a Redux `action:"USER_LOGIN"` has no path anchor -> the FP gate drops it (no route).
+    assert extract('var a = {action:"USER_LOGIN"};').routes == []
+
+
+def test_href_pseudo_schemes_and_assets_rejected():
+    for value in ('"#top"', '"mailto:a@b.com"', '"javascript:void(0)"', '"/logo.png"'):
+        assert extract("var x = {href:" + value + "};").routes == [], value
+
+
+def test_nav_sink_confidence_high_only_for_explicit_global_receiver():
+    # an explicit global receiver (window./document.-anchored) -> high confidence.
+    for src in ('window.location.assign("/dashboard")', 'document.location.replace("/dashboard")'):
+        r = extract(src)
+        assert len(r.routes) == 1
+        assert (r.routes[0].method, r.routes[0].url, r.routes[0].confidence) == (
+            "",
+            "/dashboard",
+            "high",
+        )
+    # a BARE receiver could be a shadowing local -> same route, but LOW confidence (§4 review).
+    bare = extract('location.assign("/dashboard")')
+    assert (bare.routes[0].url, bare.routes[0].confidence) == ("/dashboard", "low")
+
+
+def test_string_replace_on_var_named_location_is_low_not_a_high_confidence_phantom():
+    # String.prototype.replace on a var named `location` is text-matched as a nav sink, but a
+    # bare receiver is LOW confidence — never a HIGH-confidence phantom route (§4 review MEDIUM).
+    r = extract('var location = slug; location.replace("/api/user", "/v2/api/user");')
+    assert all(x.confidence == "low" for x in r.routes)
+
+
+def test_window_open_is_a_route_not_an_xhr():
+    # window.open is checked BEFORE the `.open`->XHR branch, so it becomes a route, not a sink.
+    r = extract('window.open("/help/getting-started")')
+    assert r.endpoints == [] and len(r.routes) == 1
+    assert r.routes[0].url == "/help/getting-started"
+
+
+def test_history_pushstate_reads_url_from_third_arg():
+    r = extract('history.pushState({page:2}, "", "/feed/2")')
+    assert len(r.routes) == 1 and r.routes[0].url == "/feed/2"
+
+
+def test_router_push_string_and_object_forms():
+    assert extract('router.push("/settings/profile")').routes[0].url == "/settings/profile"
+    assert extract('router.push({pathname:"/account/:id"})').routes[0].url == "/account/:id"
+
+
+def test_non_http_open_is_still_ignored_and_yields_no_route():
+    # regression: modal.open("settings","/foo") is neither window.open nor an XHR method.
+    r = extract('modal.open("settings", "/foo")')
+    assert r.endpoints == [] and r.routes == []
+
+
+def test_off_sink_absolute_concat_url_is_harvested_low_confidence():
+    # user example 1: a `.concat()`-built https:// URL that is RETURNED, never passed to a sink.
+    src = 'function u(t,e){return "https://".concat(window.location.host).concat(t,"/player/").concat(e)}'
+    r = extract(src)
+    assert len(r.routes) == 1 and r.routes[0].confidence == "low"
+    assert r.routes[0].url.startswith("https://") and "/player/" in r.routes[0].url
+
+
+def test_off_sink_api_shaped_absolute_url_goes_to_generic_lane():
+    # a context-free absolute URL whose SHAPE reads API-ish rides the suspected-API lane.
+    r = extract('var base = "https://api.acme.io/v1/users";')
+    assert r.routes == []
+    assert any(g.url == "https://api.acme.io/v1/users" for g in r.generic)
+
+
+def test_absolute_url_at_a_sink_is_not_double_harvested():
+    # the top-level-expression guard: a sink's own URL arg is claimed, never re-emitted.
+    r = extract('fetch("https://api.acme.io/v1/users")')
+    assert len(r.endpoints) == 1 and r.routes == [] and r.generic == []
+
+
+def test_relative_off_sink_literal_is_not_harvested():
+    # harvesting is absolute-only: a bare "/path" literal off-sink needs a sink/href to anchor.
+    assert extract('var p = "/just/a/string/path";').routes == []
+
+
+def test_namespace_urls_are_not_harvested_as_routes():
+    # SVG/XML xmlns and schema.org pervade bundles but are never navigable pages.
+    assert extract('var ns = "http://www.w3.org/2000/svg";').routes == []
+    assert extract('var s = "https://schema.org/Person";').routes == []
+
+
+def test_nested_concat_harvest_emits_only_the_top_level_expression():
+    # the outer concat is harvested and its span claimed; the inner concats do not re-emit.
+    r = extract('var u = "https://cdn.acme.io/".concat("live/").concat(streamId);')
+    assert len(r.routes) == 1
+
+
+def test_off_sink_harvest_on_deep_concat_chain_is_bounded_not_quadratic():
+    # the harvest must not decode every nested builder of a deep chain (that was O(n^2), a
+    # worker-DoS on obfuscated bundles). It prunes nested builders + caps the span, so this
+    # returns promptly and emits at most the one top-level builder (§4 review HIGH).
+    src = 'var u = "https://x/"' + '.concat("a")' * 4000 + ";"
+    assert len(extract(src).routes) <= 1
