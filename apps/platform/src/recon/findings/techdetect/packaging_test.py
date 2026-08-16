@@ -19,7 +19,12 @@ def test_techdetect_data_is_declared_package_data():
     pyproject = tomllib.loads((root / "apps/platform/pyproject.toml").read_text(encoding="utf-8"))
     package_data = pyproject["tool"]["setuptools"]["package-data"]
     assert "recon.findings.techdetect_data" in package_data
-    assert any(g.endswith("*.json") for g in package_data["recon.findings.techdetect_data"])
+    globs = package_data["recon.findings.techdetect_data"]
+    assert any(g.endswith("*.json") for g in globs)
+    # commit.txt is load-bearing (dataset.load_raw reads it for dataset_commit()) but
+    # doesn't match "*.json" -- it needs its OWN explicit glob entry or the wheel
+    # drops it silently (the same wheel-drops-data class of bug as the JSON above).
+    assert "commit.txt" in globs
 
 
 def test_gpl_notice_names_the_enthec_dataset_server_side_only():
