@@ -102,7 +102,7 @@ def test_unresolved_sink_surfaced_as_unconfirmed_and_excluded_from_endpoints(
     # The resolvable call is a confirmed endpoint; the two variable-URL calls are unconfirmed.
     assert {f.value for f in findings if f.type == "endpoint"} == {"GET /api/real"}
     unresolved = {f.value for f in findings if f.type == "endpoint_unresolved"}
-    assert "GET EXPR" in unresolved  # fetch(dynamicUrl)
+    assert "GET :dynamicUrl" in unresolved  # fetch(dynamicUrl) -> value-holder token
     assert "POST EXPR" in unresolved  # axios.post(u, ...)
 
     # REQ-C2 honesty: 1 resolved endpoint + 2 unresolved sinks; the unconfirmed rows do NOT
