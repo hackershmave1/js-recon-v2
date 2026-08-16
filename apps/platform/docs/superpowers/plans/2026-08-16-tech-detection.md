@@ -2073,7 +2073,7 @@ def test_dataset_resolves_via_package_data():
 
 
 def test_techdetect_data_is_declared_package_data():
-    root = Path(__file__).resolve().parents[5]  # repo root
+    root = Path(__file__).resolve().parents[6]  # repo root
     pyproject = tomllib.loads((root / "apps/platform/pyproject.toml").read_text(encoding="utf-8"))
     package_data = pyproject["tool"]["setuptools"]["package-data"]
     assert "recon.findings.techdetect_data" in package_data
@@ -2081,7 +2081,7 @@ def test_techdetect_data_is_declared_package_data():
 
 
 def test_gpl_notice_names_the_enthec_dataset_server_side_only():
-    root = Path(__file__).resolve().parents[5]
+    root = Path(__file__).resolve().parents[6]
     notice = (root / "NOTICE").read_text(encoding="utf-8")
     assert "enthec" in notice and "GPL-3.0" in notice and "server-side" in notice.lower()
 ```
