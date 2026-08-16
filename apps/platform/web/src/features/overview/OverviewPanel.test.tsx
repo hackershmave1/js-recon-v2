@@ -92,5 +92,43 @@ describe("OverviewPanel", () => {
     expect(within(card("Attribution")).getByText("—")).toBeInTheDocument();
     expect(within(card("Endpoints")).getByText("1")).toBeInTheDocument();
     expect(within(card("Secrets")).getByText("0")).toBeInTheDocument();
+    // `technologies` is absent (no prop passed) here, same as a run whose fetch
+    // stage hasn't produced a fingerprint signal yet -- the card must degrade
+    // to a dash rather than rendering "0" (which would misreport "scanned, found
+    // none" instead of "not scanned yet").
+    expect(within(card("Tech stack")).getByText("—")).toBeInTheDocument();
+  });
+
+  it("shows a dash for Tech stack when technologies is explicitly null", () => {
+    const data: FindingsResponse = {
+      run_id: "r", count: 1, coverage: null, spec: null,
+      findings: [finding({ type: "endpoint", value: "/x" })],
+    };
+    const router = createMemoryRouter(
+      [{ path: "/runs/:id", element: <OverviewPanel data={data} technologies={null} /> }],
+      { initialEntries: ["/runs/r1"] },
+    );
+    render(<RouterProvider router={router} />);
+    expect(within(card("Tech stack")).getByText("—")).toBeInTheDocument();
+  });
+
+  it("shows a Tech stack card counting technologies across hosts", () => {
+    const data: FindingsResponse = {
+      run_id: "r", count: 0, coverage: null, spec: null, findings: [],
+    };
+    const technologies = {
+      run_id: "r", count: 3,
+      hosts: { "acme.io": [
+        { name: "Nginx", categories: ["Web servers"], version: "1.25.3", confidence: 100, evidence: [] },
+        { name: "jQuery", categories: ["JavaScript libraries"], version: "3.5.1", confidence: 100, evidence: [] },
+        { name: "React", categories: ["JavaScript frameworks"], version: null, confidence: 100, evidence: [] },
+      ] },
+    };
+    const router = createMemoryRouter(
+      [{ path: "/runs/:id", element: <OverviewPanel data={data} technologies={technologies} /> }],
+      { initialEntries: ["/runs/r1"] },
+    );
+    render(<RouterProvider router={router} />);
+    expect(within(card("Tech stack")).getByText("3")).toBeInTheDocument();
   });
 });

@@ -8,6 +8,7 @@ import { FindingsPage } from "./features/findings/FindingsPage";
 import { SourcesPage } from "./features/sources/SourcesPage";
 import { ApiSpecPage } from "./features/apispec/ApiSpecPage";
 import { ProbePanel } from "./features/probe/ProbePanel";
+import { TechPage } from "./features/tech/TechPage";
 import { OverviewPanel } from "./features/overview/OverviewPanel";
 import { DiscoveryEmpty } from "./features/discovery/DiscoveryEmpty";
 import { Shell } from "./shell/Shell";
@@ -43,11 +44,11 @@ function NotReady({ title, body }: { title: string; body: string }) {
 }
 
 export function OverviewRoute() {
-  const { findings, state } = useRunData();
+  const { findings, technologies, state } = useRunData();
   const { id } = useParams();
   return (
     <>
-      {findings && <OverviewPanel data={findings} />}
+      {findings && <OverviewPanel data={findings} technologies={technologies} />}
       <RunProgress />
       <DiscoveryEmpty runId={id!} state={state === "…" ? null : state} />
     </>
@@ -79,6 +80,13 @@ export function FindingsRoute() {
       onJumpToSource={(j) => navigate(`/runs/${id}/sources`, { state: { jump: j } })}
     />
   );
+}
+
+export function TechRoute() {
+  const { technologies, loaded } = useRunData();
+  if (!loaded) return <NotReady title="Loading…" body="Fetching this run's technologies." />;
+  if (!technologies) return <NotReady title="No tech stack yet" body="Technologies appear here once analysis has run." />;
+  return <TechPage data={technologies} />;
 }
 
 export function ApiSpecRoute() {

@@ -415,6 +415,40 @@ class RunAsset(Base):
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
 
+class RunTechnology(Base):
+    """Detected technology stack for one host of a run (tech-detection slice).
+
+    Per-run snapshot (CASCADE like ``Finding``), upserted on ``(run_id, host, name)``
+    by the best-effort analyze fingerprint pass. ``categories`` and ``evidence`` are
+    JSONB lists of strings; ``evidence`` holds only allowlisted, bounded markers —
+    never a secret or raw HTML (T1). ``host`` comes from observed asset URLs (T11)."""
+
+    __tablename__ = "run_technology"
+    __table_args__ = (
+        UniqueConstraint("run_id", "host", "name", name="uq_run_technology_run_host_name"),
+        Index("ix_run_technology_run", "tenant_id", "run_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("run.id", ondelete="CASCADE"), nullable=False
+    )
+    host: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    categories: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    version: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    evidence: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+
+
 class FindingTriage(Base):
     """A user's triage verdict on a finding (REQ-P1 mark-confirmed, REQ-D1).
 
@@ -606,3 +640,6 @@ WRAPPER_TABLES: tuple[str, ...] = ("session_wrapper",)
 
 # R6 engagement-tier addition, RLS-enabled by migration 0009.
 ENGAGEMENT_TABLES: tuple[str, ...] = ("engagement",)
+
+# Tech-detection addition, RLS-enabled by migration 0016.
+TECH_TABLES: tuple[str, ...] = ("run_technology",)

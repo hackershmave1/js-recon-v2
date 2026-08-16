@@ -19,8 +19,9 @@ independent reasons:
    (see ``docker compose ps``) run a stale pre-Slice-Y image with no source
    mount, so the real worker code can't be driven through them either.
 
-So Part A stubs ONLY the network boundary (``fetch.fetch_url``) and drives the
-REAL ``fetch_run`` -> ``analyze_run`` -> ``coordinator.advance`` code over
+So Part A stubs ONLY the network boundary (``fetch._fetch_hops`` — the shared
+hop-core ``fetch_url`` itself now wraps, Task 6) and drives the REAL
+``fetch_run`` -> ``analyze_run`` -> ``coordinator.advance`` code over
 seeded ``run_asset`` rows — proving cross-asset dedup+attribution and the
 DONE/PARTIAL split against genuine per-asset DB state (not hand-set flags, as
 ``coordinator_completeness_test.py`` sets them, nor a single stage in
@@ -134,9 +135,9 @@ def test_pipeline_done_with_cross_asset_dedup_and_attribution(
     }
 
     def fake_fetch(url, scope, **kw):
-        return blobs[url]
+        return fetch._FetchedResponse(body=blobs[url], status=200, headers={}, set_cookie=[])
 
-    monkeypatch.setattr(fetch, "fetch_url", fake_fetch)
+    monkeypatch.setattr(fetch, "_fetch_hops", fake_fetch)
     fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
     analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
 
@@ -177,9 +178,11 @@ def test_pipeline_partial_when_one_asset_fetch_fails(redis, authorized_session, 
     def fake_fetch(url, scope, **kw):
         if url == _URL_B:
             raise retry.FatalError("HTTP 404")
-        return b'fetch("/api/shared");'
+        return fetch._FetchedResponse(
+            body=b'fetch("/api/shared");', status=200, headers={}, set_cookie=[]
+        )
 
-    monkeypatch.setattr(fetch, "fetch_url", fake_fetch)
+    monkeypatch.setattr(fetch, "_fetch_hops", fake_fetch)
     fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
     analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
 
@@ -194,6 +197,46 @@ def test_pipeline_partial_when_one_asset_fetch_fails(redis, authorized_session, 
     state, completeness = _run_state(tenant, run_id)
     assert state == "partial"
     assert completeness["fetch_ok"] is False
+
+
+def test_pipeline_produces_run_technology_from_crawl_response_headers(
+    redis, authorized_session, monkeypatch
+):
+    """The crawl-path PRODUCER proof for tech-detection (tech-detection slice,
+    Task 8). ``analyze_technologies_test.py`` proves the fingerprint PASS itself,
+    but hand-crafts its ``fingerprint-signal`` blob directly -- it never exercises
+    the real producer that's supposed to write that blob. Here, real
+    ``fetch_run`` (network stubbed at the same ``_fetch_hops`` boundary as every
+    other test in this file) harvests allowlisted response headers off a crawl's
+    ``run_asset`` rows into the signal (Tasks 6/7), and real ``analyze_run`` reads
+    it back through the fingerprint pass -- proving fetch and analyze are
+    actually wired together end-to-end for tech-detection, not just each
+    independently correct.
+
+    (The capture-path producer -- the browser extension's runtime harvest -- is
+    NOT attempted here: chromium does not launch on this host, same constraint
+    as Part B below. The crawl path is the only tech-detection producer an
+    automated test on this host can drive end-to-end.)"""
+    tenant, session_id = authorized_session
+    run_id = _seed_crawl_run(redis, tenant, session_id, [_URL_A])
+
+    def fake_fetch(url, scope, **kw):
+        return fetch._FetchedResponse(
+            body=b"console.log(1)",
+            status=200,
+            headers={"server": "nginx/1.25.3", "x-powered-by": "Express"},
+            set_cookie=[],
+        )
+
+    monkeypatch.setattr(fetch, "_fetch_hops", fake_fetch)
+    fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+    analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    with tenant_session(tenant) as session:
+        rows = session.query(models.RunTechnology).filter_by(run_id=run_id, host="acme.io").all()
+    names = {r.name: r for r in rows}
+    assert names["Nginx"].version == "1.25.3"
+    assert "Express" in names
 
 
 # ---------------------------------------------------------------------------

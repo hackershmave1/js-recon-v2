@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, Engagement, EngagementsListResponse, FindingsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SpecSummary, Triage, WrapperRule, WrapperRuleResult,
+  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, Engagement, EngagementsListResponse, FindingsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -195,6 +195,10 @@ export function getSourceContent(
 
 export function getFindings(tenantId: string, runId: string): Promise<FindingsResponse> {
   return request(`/runs/${encodeURIComponent(runId)}/findings`, {}, tenantId);
+}
+
+export function getTechnologies(tenantId: string, runId: string): Promise<TechnologiesResponse> {
+  return request(`/runs/${encodeURIComponent(runId)}/technologies`, {}, tenantId);
 }
 
 export function triageFinding(

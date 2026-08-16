@@ -25,6 +25,7 @@ from recon.api import (
     sessions_router,
     sources_router,
     spec_router,
+    tech_router,
     wrappers_router,
 )
 from recon.api.deps import get_redis
@@ -55,6 +56,7 @@ def create_app() -> FastAPI:
     app.include_router(engagements_router.router)
     app.include_router(runs_router.router)
     app.include_router(findings_router.router)
+    app.include_router(tech_router.router)
     app.include_router(probe_router.router)
     app.include_router(sources_router.router)
     app.include_router(spec_router.router)

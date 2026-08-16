@@ -63,6 +63,10 @@ def _run_capture(
     fetch_maps=True,
     requests=None,
     blobs=None,
+    events=None,
+    headers_by_host=None,
+    cookies_by_host=None,
+    meta=None,
 ):
     recorded = {}
     seeded = {}
@@ -73,6 +77,18 @@ def _run_capture(
         if blobs is not None:
             blobs.setdefault(kind, []).append(content)
         return _blob(_tenant, _run, kind, content)
+
+    def _record(_session, **k):
+        # capture_run may record more than one event per run (discover.assets,
+        # then an optional fingerprint.signal — Task 7): accumulate every call
+        # into `events` (opt-in, like `blobs`) while `recorded` keeps meaning
+        # "the FIRST event", so every existing assertion (written when there was
+        # only ever one call) still inspects the discover.assets payload.
+        if events is not None:
+            events.append(dict(k))
+        if not recorded:
+            recorded.update(k)
+        return MagicMock()
 
     with (
         patch("recon.capture.stage.get_settings", return_value=settings),
@@ -91,7 +107,12 @@ def _run_capture(
         patch(
             "recon.capture.stage.driver.capture_scripts",
             return_value=CaptureResult(
-                scripts=scripts, nav_error=nav_error, requests=requests or []
+                scripts=scripts,
+                nav_error=nav_error,
+                requests=requests or [],
+                headers_by_host=headers_by_host or {},
+                cookies_by_host=cookies_by_host or {},
+                meta=meta or [],
             ),
         ),
         patch("recon.capture.stage.storage.put_blob", side_effect=_cap_blob),
@@ -108,10 +129,7 @@ def _run_capture(
             "recon.capture.stage.assets.seed_captured",
             side_effect=lambda s, **k: seeded.update(k),
         ),
-        patch(
-            "recon.capture.stage.record_event",
-            side_effect=lambda *a, **k: recorded.update(k) or MagicMock(),
-        ),
+        patch("recon.capture.stage.record_event", side_effect=_record),
         patch("recon.capture.stage.publish") as publish,
     ):
         stage.capture_run(
@@ -165,6 +183,53 @@ def test_capture_persists_in_scope_observed_requests():
         {"method": "GET", "url": "https://api.acme.io/get-job-types"},
         {"method": "POST", "url": "https://acme.io/getJobId"},
     ]
+
+
+def test_capture_writes_one_fingerprint_signal_blob_and_event():
+    # Task 7 / T6: a capture run that harvested headers/cookies/meta writes exactly
+    # ONE fingerprint-signal blob + fingerprint.signal event (never per-asset), same
+    # schema/event type the fetch stage emits, so analyze reads either mode alike.
+    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
+    scripts = [_script("https://acme.io/app.js", "APP")]
+    blobs: dict = {}
+    events: list = []
+    recorded, _seeded, _publish = _run_capture(
+        scripts,
+        engagement,
+        blobs=blobs,
+        events=events,
+        headers_by_host={"acme.io": {"server": "nginx/1.25.3"}},
+        cookies_by_host={"acme.io": ["sid"]},
+        meta=["WordPress 6.4"],
+    )
+
+    assert recorded["event_type"] == "discover.assets"  # the FIRST event is unchanged
+    signal_events = [e for e in events if e["event_type"] == "fingerprint.signal"]
+    assert len(signal_events) == 1  # ONE event for the whole run, not one per asset
+    assert signal_events[0]["payload"]["hosts"] == 1
+
+    signal = json.loads(blobs["fingerprint-signal"][0])
+    assert signal == {
+        "acme.io": {
+            "headers": {"server": "nginx/1.25.3"},
+            "scripts": ["https://acme.io/app.js"],
+            "meta": ["WordPress 6.4"],
+            "cookies": ["sid"],
+        }
+    }
+
+
+def test_capture_writes_no_fingerprint_signal_when_nothing_harvested():
+    # The blob/event pair is skipped entirely (not written empty) when a capture
+    # harvested no headers/cookies/meta at all — mirrors the fetch-side "if signal"
+    # guard (T6): no noise blob for a run that saw nothing.
+    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
+    blobs: dict = {}
+    events: list = []
+    _run_capture([], engagement, blobs=blobs, events=events)
+
+    assert "fingerprint-signal" not in blobs
+    assert all(e["event_type"] != "fingerprint.signal" for e in events)
 
 
 def test_capture_rejects_unauthorized_session():

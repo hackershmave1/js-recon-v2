@@ -23,9 +23,11 @@ OS/network-level egress isolation is deferred (see egress module docstring).
 from __future__ import annotations
 
 import contextlib
+import json
 import socket
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -37,6 +39,7 @@ from recon.config import Settings, clamp_fetch_bytes, get_settings
 from recon.db.base import tenant_session
 from recon.db.models import Run
 from recon.domain import AssetStatus
+from recon.events.log import record_event
 from recon.fetch import egress, politeness
 from recon.findings import sourcemapper
 from recon.observability import get_logger
@@ -65,6 +68,55 @@ _FETCH_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "identity",
 }
+
+# Allowlisted response headers for tech detection (case-insensitive). VALUES of any
+# header NOT in this set are discarded; Set-Cookie contributes NAMES only (T1). No
+# credential-bearing header (Authorization, Cookie) is ever persisted. Shared with
+# the capture stage (Task 7) via `fetch._HEADER_ALLOWLIST` / `_allowlisted_headers`
+# so both signal producers stay in lockstep — one allowlist, not two.
+_HEADER_ALLOWLIST = frozenset(
+    {
+        "server",
+        "x-powered-by",
+        "x-aspnet-version",
+        "x-aspnetmvc-version",
+        "x-generator",
+        "x-drupal-dynamic-cache",
+        "x-drupal-cache",
+        "via",
+        "x-varnish",
+        "cf-ray",
+        "x-amz-cf-id",
+        "x-served-by",
+        "x-shopify-stage",
+        "x-github-request-id",
+    }
+)
+
+
+@dataclass(frozen=True)
+class _FetchedResponse:
+    """The shared hop-core's result: bytes plus the data the fingerprint-signal
+    harvest needs (T5's ``fetch_url`` stays a bytes-only wrapper over this)."""
+
+    body: bytes
+    status: int
+    headers: dict[str, str]  # final response headers, lowercased keys
+    set_cookie: list[str]  # raw Set-Cookie lines; NAMES extracted by _cookie_names
+
+
+def _allowlisted_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Keep only allowlisted header VALUES (T1); ``headers`` keys must already be
+    lowercased (see ``_FetchedResponse.headers``)."""
+    kept = {name: headers[name] for name in _HEADER_ALLOWLIST if name in headers}
+    kept.update({k: v for k, v in headers.items() if k.startswith("x-fastly-")})
+    return kept
+
+
+def _cookie_names(set_cookie_lines: list[str]) -> list[str]:
+    """Cookie NAMES only, never values (T1) — the token before the first '='."""
+    names = {line.split("=", 1)[0].strip() for line in set_cookie_lines if "=" in line}
+    return sorted(n for n in names if n)
 
 
 @contextlib.contextmanager
@@ -107,7 +159,7 @@ def _pin_dns(host: str, ips: tuple[str, ...]) -> Iterator[None]:
         socket.getaddrinfo = real_getaddrinfo
 
 
-def fetch_url(
+def _fetch_hops(
     url: str,
     scope_hosts: list[str],
     *,
@@ -116,8 +168,11 @@ def fetch_url(
     max_redirects: int = _MAX_REDIRECTS,
     allow_local: bool = False,
     transport: httpx.BaseTransport | None = None,
-) -> bytes:
-    """Fetch ``url`` under the egress policy and return its bytes.
+) -> _FetchedResponse:
+    """Fetch ``url`` under the full egress policy and return its bytes, status, and
+    final-hop headers/Set-Cookie lines — the SHARED validated-hop core. ``fetch_url``
+    is a thin bytes-only wrapper over this (its public signature and behavior are
+    UNCHANGED; the SSRF crown jewel is not churned, T5).
 
     Raises :class:`egress.EgressBlocked` (scope/SSRF), :class:`retry.FatalError`
     (deterministic: bad status, too large, too many redirects — do not retry), or
@@ -166,8 +221,36 @@ def fetch_url(
                     body.extend(chunk)
                     if len(body) > max_bytes:
                         raise retry.FatalError(f"response exceeds {max_bytes} bytes")
-                return bytes(body)
+                return _FetchedResponse(
+                    body=bytes(body),
+                    status=response.status_code,
+                    headers={k.lower(): v for k, v in response.headers.items()},
+                    set_cookie=list(response.headers.get_list("set-cookie")),
+                )
     raise retry.FatalError(f"exceeded {max_redirects} redirects")
+
+
+def fetch_url(
+    url: str,
+    scope_hosts: list[str],
+    *,
+    timeout_s: float,
+    max_bytes: int,
+    max_redirects: int = _MAX_REDIRECTS,
+    allow_local: bool = False,
+    transport: httpx.BaseTransport | None = None,
+) -> bytes:
+    """Fetch ``url`` under the egress policy and return its bytes. Thin wrapper over
+    ``_fetch_hops`` — signature and behavior unchanged (T5)."""
+    return _fetch_hops(
+        url,
+        scope_hosts,
+        timeout_s=timeout_s,
+        max_bytes=max_bytes,
+        max_redirects=max_redirects,
+        allow_local=allow_local,
+        transport=transport,
+    ).body
 
 
 def fetch_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None = None) -> None:
@@ -318,18 +401,30 @@ def _fetch_assets(
 
     Every asset actually processed (not skipped) gets an unconditional heartbeat
     BEFORE its fetch attempt, regardless of how it turns out. This bounds the max
-    gap between lease renewals to one ``fetch_url`` call (<= fetch_timeout_seconds)
+    gap between lease renewals to one ``_fetch_hops`` call (<= fetch_timeout_seconds)
     plus a short host-slot wait — safely under heartbeat_stall_threshold_seconds.
     Without it, a run of several slow-then-fail assets whose errors carry no
     ``retry_after`` (a bare FatalError/EgressBlocked, or a RetryableError like
     "overall fetch deadline exceeded") would go unheartbeated long enough for a
     peer worker to reclaim the stream message and double-fetch the remaining
-    assets — exactly what the politeness gate exists to prevent."""
+    assets — exactly what the politeness gate exists to prevent.
+
+    Every successfully-fetched asset also folds its allowlisted headers + cookie
+    NAMES + script URL into an in-memory ``signal`` dict (T1), written as ONE
+    ``fingerprint-signal`` blob after this loop (T6) rather than per asset — a
+    per-asset write would mean "latest blob" drops every earlier asset's signal.
+    NOTE: because ``signal`` is local to THIS call, a redelivered/retried
+    invocation (a crash or lease-timeout mid-crawl, per the idempotency note
+    above) skips already-terminal assets without re-harvesting them, so its own
+    end-of-call write reflects only the assets fetched in that invocation — a
+    known limitation of "one write per call", not per logical run, tracked as
+    follow-up debt rather than solved here."""
     engagement, run_cap = _authorized_engagement(tenant_id, run_id)
     settings = get_settings()
     cap = clamp_fetch_bytes(run_cap, settings)
     total = len(rows)
     terminal = (AssetStatus.OK.value, AssetStatus.FAILED.value)
+    signal: dict[str, dict] = {}
     for i, asset in enumerate(rows, 1):
         if asset.fetch_status in terminal or asset.input_ref:
             continue  # terminal already — idempotent redelivery skip
@@ -345,13 +440,14 @@ def _fetch_assets(
                 redis, host, tenant_id=tenant_id, run_id=run_id, job_id=job_id, settings=settings
             )
         try:
-            content = fetch_url(
+            fetched = _fetch_hops(
                 asset.url,
                 engagement.scope_hosts,
                 timeout_s=settings.fetch_timeout_seconds,
                 max_bytes=cap,
                 allow_local=settings.allow_local_egress,
             )
+            content = fetched.body
         except (egress.EgressBlocked, retry.FatalError, retry.RetryableError) as exc:
             with tenant_session(tenant_id) as s:
                 run_assets.set_fetch_failed(s, asset.id, str(exc))  # per-asset commit
@@ -366,6 +462,7 @@ def _fetch_assets(
                     seconds=float(retry_after),
                 )
             continue
+        _harvest_signal(signal, asset.url, fetched)  # accumulate the per-host signal (T1/T11)
         key = storage.put_blob(tenant_id, run_id, "input", content)
         # Best-effort external source-map recovery (REQ-CE2). JS-SUCCESS path only,
         # inside _fetch_and_store_source_map's own non-re-raising try/except, so a
@@ -400,6 +497,47 @@ def _fetch_assets(
             url=asset.url,
             bytes=len(content),
             source_map=bool(map_key),
+        )
+    _write_fingerprint_signal(redis, tenant_id=tenant_id, run_id=run_id, signal=signal)
+
+
+def _harvest_signal(signal: dict[str, dict], asset_url: str, fetched: _FetchedResponse) -> None:
+    """Fold one asset's allowlisted headers + cookie names + script URL into the
+    per-host signal (T1). Host comes from the OBSERVED asset URL, never
+    ``session.scope_hosts`` (T11) — a scope entry can be a wildcard/parent domain
+    that is not itself a host anything was actually fetched from."""
+    host = (urlsplit(asset_url).hostname or "").lower()
+    if not host:
+        return
+    entry = signal.setdefault(host, {"headers": {}, "scripts": [], "meta": [], "cookies": []})
+    entry["headers"].update(_allowlisted_headers(fetched.headers))
+    for name in _cookie_names(fetched.set_cookie):
+        if name not in entry["cookies"]:
+            entry["cookies"].append(name)
+    if asset_url not in entry["scripts"]:
+        entry["scripts"].append(asset_url)
+
+
+def _write_fingerprint_signal(
+    redis: Redis, *, tenant_id: str, run_id: str, signal: dict[str, dict]
+) -> None:
+    """Persist ONE per-run fingerprint-signal blob + index it with a durable
+    ``fingerprint.signal`` event (consolidated once per call — T6; see the
+    redelivery caveat on ``_fetch_assets``). Recorded, not published: the sole
+    consumer is the analyze fingerprint pass reading the durable log, not the
+    live SSE feed."""
+    if not signal:
+        return
+    signal_ref = storage.put_blob(
+        tenant_id, run_id, "fingerprint-signal", json.dumps(signal).encode("utf-8")
+    )
+    with tenant_session(tenant_id) as session:
+        record_event(
+            session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            event_type="fingerprint.signal",
+            payload={"signal_ref": signal_ref, "hosts": len(signal)},
         )
 
 

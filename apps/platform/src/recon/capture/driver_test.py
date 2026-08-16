@@ -32,12 +32,21 @@ class _FakeWS:
     emitted WITHOUT a ``sessionId`` — mirroring real Chrome — so the driver's bare-id
     matching is exercised."""
 
-    def __init__(self, *, graph, scripts, nav_error=None, requests=None):
+    def __init__(
+        self, *, graph, scripts, nav_error=None, requests=None, responses=None, generator=None
+    ):
         self._graph = graph
         self._scripts = scripts
         self._nav_error = nav_error
         # requests: session -> list of Network.requestWillBeSent `params` dicts
         self._requests = requests or {}
+        # responses: session -> list of Network.responseReceived `params` dicts (Task 7)
+        self._responses = responses or {}
+        # generator: the <meta name=generator> content the page's Runtime.evaluate
+        # "sees" (Task 7); None -> the fake replies with no value, like a page with no
+        # such tag, so every OTHER test (which doesn't care about meta) stays fast and
+        # unaffected.
+        self._generator = generator
         self._sources = {s["scriptId"]: s["source"] for specs in scripts.values() for s in specs}
         self._out: list[dict] = []
         self.enabled: set = set()
@@ -79,6 +88,13 @@ class _FakeWS:
                 self._out.append({"id": msg["id"], "error": {"message": "no source"}})
             else:  # NB: no sessionId on the reply — Chrome may omit it (Puppeteer #14975)
                 self._out.append({"id": msg["id"], "result": {"scriptSource": src}})
+        elif method == "Runtime.evaluate":
+            # The driver's post-settle meta-generator read (Task 7) lands here for
+            # every real capture; answer it immediately (like _InteractionWS already
+            # does for its own eval calls) so every test that doesn't care about meta
+            # stays fast rather than waiting out the pump's phase deadline.
+            value = {"value": self._generator} if self._generator is not None else {}
+            self._out.append({"id": msg["id"], "result": {"result": value}})
 
     def _emit_scripts(self, sid):
         for s in self._scripts.get(sid, []):
@@ -95,6 +111,8 @@ class _FakeWS:
             )
         for p in self._requests.get(sid, []):  # REQ-C3: XHR/fetch the context issues
             self._out.append({"method": "Network.requestWillBeSent", "sessionId": sid, "params": p})
+        for p in self._responses.get(sid, []):  # Task 7: allowlisted-header harvest
+            self._out.append({"method": "Network.responseReceived", "sessionId": sid, "params": p})
 
     def recv(self, timeout=None):
         if self._out:
@@ -332,6 +350,76 @@ def test_request_cap_is_enforced():
     }
     result = _run(_FakeWS(graph=_TREE, scripts=_TREE_SCRIPTS, requests=reqs), max_requests=3)
     assert len(result.requests) == 3
+
+
+# Task 7: end-to-end (no real browser, still the fake-websocket host lane) proof that
+# capture_scripts() plumbs Network.responseReceived frames and the post-settle
+# <meta name=generator> eval all the way through to CaptureResult. The pure
+# _Ctx-level tests in capture_signal_test.py cover the harvest logic in isolation;
+# this proves the wiring (_route dispatch -> _on_response -> _drive's return) is
+# actually connected for a full capture_scripts() call.
+_TREE_RESPONSES = {
+    "page": [
+        {
+            "response": {
+                "url": "https://acme.io/",
+                "headers": {
+                    "Server": "nginx/1.25.3",
+                    "Authorization": "Bearer should-never-appear",
+                    "Set-Cookie": "sid=SECRETVALUE; Path=/\ntheme=dark",
+                },
+            }
+        },
+        {
+            "response": {
+                "url": "https://evil.cdn/track.js",  # a different host -> its own entry
+                "headers": {"Server": "Apache"},
+            }
+        },
+    ]
+}
+
+
+def test_response_headers_and_cookies_are_harvested_per_host():
+    ws = _FakeWS(graph=_TREE, scripts=_TREE_SCRIPTS, responses=_TREE_RESPONSES)
+    result = _run(ws)
+    assert result.headers_by_host["acme.io"] == {"server": "nginx/1.25.3"}
+    assert result.cookies_by_host["acme.io"] == ["sid", "theme"]
+    assert "authorization" not in result.headers_by_host["acme.io"]  # never allowlisted (T1)
+    assert result.headers_by_host["evil.cdn"] == {"server": "Apache"}
+
+
+def test_meta_generator_is_read_once_after_settle():
+    ws = _FakeWS(graph=_TREE, scripts=_TREE_SCRIPTS, generator="WordPress 6.4")
+    result = _run(ws)
+    assert result.meta == ["WordPress 6.4"]
+
+
+def test_overlong_meta_generator_is_truncated():
+    # Minor review fix: every other captured artifact is bounded (max_script_bytes,
+    # max_requests); the <meta name=generator> DOM read had no cap of its own, though
+    # it is same-origin page content a target fully controls.
+    long_value = "G" * 500
+    ws = _FakeWS(graph=_TREE, scripts=_TREE_SCRIPTS, generator=long_value)
+    result = _run(ws)
+    assert result.meta == [long_value[: driver._MAX_META_CHARS]]
+    assert len(result.meta[0]) == driver._MAX_META_CHARS
+
+
+def test_no_meta_tag_leaves_meta_empty():
+    ws = _FakeWS(graph=_TREE, scripts=_TREE_SCRIPTS)  # generator=None (default)
+    result = _run(ws)
+    assert result.meta == []
+
+
+def test_blocked_run_never_waits_on_the_meta_eval():
+    # No page ever attaches -> nav_error is set before the meta read -> evaluate()
+    # must short-circuit instantly rather than waiting out its 2s timeout budget.
+    graph = {None: [{"sessionId": "sw", "type": "service_worker", "waitingForDebugger": True}]}
+    scripts = {"sw": [{"scriptId": "sw1", "url": "", "source": "SW_ONLY"}]}
+    result = _run(_FakeWS(graph=graph, scripts=scripts))
+    assert result.nav_error == "capture never attached to a page target"
+    assert result.meta == []
 
 
 class _InteractionWS:

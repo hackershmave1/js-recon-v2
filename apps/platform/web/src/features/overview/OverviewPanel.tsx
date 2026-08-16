@@ -1,5 +1,5 @@
 import { useNavigate, useParams } from "react-router";
-import type { FindingsResponse, Finding } from "../../api/types";
+import type { FindingsResponse, Finding, TechnologiesResponse } from "../../api/types";
 import { typeLabel } from "../../api/findingLabels";
 import "./overview.css";
 
@@ -19,7 +19,9 @@ function priorityRank(f: Finding): number {
   return 3;
 }
 
-export function OverviewPanel({ data }: { data: FindingsResponse }) {
+export function OverviewPanel(
+  { data, technologies }: { data: FindingsResponse; technologies?: TechnologiesResponse | null },
+) {
   const navigate = useNavigate();
   const { id } = useParams();
   // Each metric card / "View all" is a shortcut to the matching run subpage route.
@@ -30,6 +32,11 @@ export function OverviewPanel({ data }: { data: FindingsResponse }) {
   const endpoints = countType(data.findings, "endpoint");
   const secrets = c ? c.secrets : countType(data.findings, "secret");
   const files = c ? c.files.length : null;
+  // `count` is the FLAT total of technologies across every host (not a host count).
+  const techCount = technologies ? technologies.count : null;
+  const techTop = technologies
+    ? Object.values(technologies.hosts).flat().slice(0, 3).map((t) => t.name).join(", ")
+    : null;
 
   const metrics = [
     { key: "files", label: "Files", section: "sources",
@@ -44,6 +51,9 @@ export function OverviewPanel({ data }: { data: FindingsResponse }) {
     { key: "coverage", label: "Attribution", section: "findings",
       value: attributionPct == null ? DASH : `${attributionPct}%`,
       sub: c ? `${c.attributed} attributed · ${c.unattributed} not` : "awaiting analysis" },
+    { key: "tech", label: "Tech stack", section: "tech",
+      value: techCount == null ? DASH : String(techCount),
+      sub: techTop || "server · framework · libs" },
   ];
 
   const top = [...data.findings].sort((a, b) => priorityRank(a) - priorityRank(b)).slice(0, 6);

@@ -1,0 +1,18 @@
+{
+  "Nginx":       {"cats": [22], "headers": {"Server": "nginx(?:/([\\d.]+))?\\;version:\\1"}},
+  "Apache":      {"cats": [22], "headers": {"Server": "(?:Apache(?:$|/([\\d.]+)|[^/-])|HTTPD)\\;version:\\1"}},
+  "Express":     {"cats": [18], "headers": {"X-Powered-By": "^Express$"}},
+  "PHP":         {"cats": [27], "headers": {"X-Powered-By": "PHP(?:/([\\d.]+))?\\;version:\\1"}},
+  "ASP.NET":     {"cats": [18], "headers": {"X-Powered-By": "ASP\\.NET", "X-AspNet-Version": "([\\d.]+)\\;version:\\1"}},
+  "WordPress":   {"cats": [1],  "meta": {"generator": "WordPress ?([\\d.]+)?\\;version:\\1"}},
+  "Drupal":      {"cats": [1],  "headers": {"X-Drupal-Dynamic-Cache": "", "X-Generator": "Drupal ?([\\d.]+)?\\;version:\\1"}},
+  "jQuery":      {"cats": [59], "scriptSrc": ["jquery(?:-([\\d.]+))?(?:\\.min)?\\.js\\;version:\\1"]},
+  "React":       {"cats": [12], "scriptSrc": ["react(?:\\.min)?\\.js", "react-dom(?:\\.min)?\\.js"]},
+  "Vue.js":      {"cats": [12], "scriptSrc": ["vue(?:@([\\d.]+))?(?:\\.min)?\\.js\\;version:\\1"]},
+  "Cloudflare":  {"cats": [31], "headers": {"cf-ray": "", "Server": "cloudflare"}},
+  "Varnish":     {"cats": [23], "headers": {"Via": "varnish(?: \\(Varnish/([\\d.]+)\\))?\\;version:\\1", "X-Varnish": ""}},
+  "Fastly":      {"cats": [31], "headers": {"X-Served-By": "cache-.+", "Via": ".*fastly.*"}},
+  "Amazon CloudFront": {"cats": [31], "headers": {"X-Amz-Cf-Id": "", "Via": ".*CloudFront.*"}},
+  "Shopify":     {"cats": [6],  "headers": {"X-Shopify-Stage": ""}},
+  "GitHub Pages":{"cats": [62], "headers": {"X-GitHub-Request-Id": ""}}
+}

@@ -75,6 +75,7 @@ from websockets.sync.client import connect
 
 from recon.capture import cdp, interaction
 from recon.capture.cdp import CaptureError, CdpSession
+from recon.fetch.fetch import _allowlisted_headers, _cookie_names
 from recon.observability import get_logger
 
 log = get_logger("recon.capture.driver")
@@ -91,6 +92,12 @@ _MIN_DRIVE_SECONDS = 1.0
 # resolution — XHR + fetch() cover axios / jQuery / fetch (the shapes the static
 # extractor traces); Document / Script / Image / Font etc. are page/asset loads.
 _REQUEST_TYPES = frozenset({"XHR", "Fetch"})
+
+# Task 7 review fix: every other captured artifact is bounded (max_script_bytes,
+# max_requests); the <meta name=generator> DOM read had no cap of its own. It is
+# same-origin page content a target fully controls, so bound it too before it
+# enters ctx.meta.
+_MAX_META_CHARS = 200
 
 __all__ = ["CaptureError", "CapturedScript", "CaptureResult", "capture_scripts"]
 
@@ -140,6 +147,15 @@ class CaptureResult:
     # (url = scheme://host/path, query dropped), for runtime host resolution. Defaulted
     # so slice-2 fakes constructing CaptureResult(scripts=, nav_error=) stay valid.
     requests: list[dict] = field(default_factory=list)
+    # Task 7: the capture-side fingerprint-signal producer — allowlisted response
+    # headers + Set-Cookie NAMES per host (never values, T1) and any <meta
+    # name=generator> content read from the rendered DOM. Same allowlist helpers as
+    # the fetch path (recon.fetch.fetch), so both producers stay in lockstep (T6).
+    # Defaulted so every existing fake constructing CaptureResult(scripts=, nav_error=)
+    # stays valid.
+    headers_by_host: dict[str, dict[str, str]] = field(default_factory=dict)
+    cookies_by_host: dict[str, list[str]] = field(default_factory=dict)
+    meta: list[str] = field(default_factory=list)
 
 
 class _Beater:
@@ -363,7 +379,25 @@ def _drive(
             ctx.pump(
                 settle=True, phase_deadline=min(deadline, time.perf_counter() + idle_settle_s * 2)
             )
-        return CaptureResult(scripts=ctx.out, nav_error=ctx.nav_error, requests=ctx.requests)
+        # Task 7: read the rendered <meta name=generator> ONCE, after the tree has
+        # settled (and any interaction ran) — only the marker string is extracted in
+        # the page's own JS, never the DOM/HTML itself (T1). ``evaluate`` no-ops fast
+        # if there is no page session (blocked/no-page runs), so this never adds a
+        # wait to those outcomes.
+        generator = ctx.evaluate(
+            "document.querySelector('meta[name=generator]')?.content || ''",
+            timeout_s=2.0,
+        )
+        if generator and generator.get("value"):
+            ctx.meta.append(str(generator["value"])[:_MAX_META_CHARS])
+        return CaptureResult(
+            scripts=ctx.out,
+            nav_error=ctx.nav_error,
+            requests=ctx.requests,
+            headers_by_host=ctx.headers_by_host,
+            cookies_by_host=ctx.cookies_by_host,
+            meta=ctx.meta,
+        )
 
 
 class _Ctx:
@@ -412,6 +446,11 @@ class _Ctx:
         self.page_session: str | None = None
         self.loop_start = 0.0
         self.last_event = 0.0
+        # Task 7: per-host allowlisted headers / cookie NAMES / meta-generator strings
+        # (T1) — folded by _on_response, read once by _drive for the meta tag.
+        self.headers_by_host: dict[str, dict[str, str]] = {}
+        self.cookies_by_host: dict[str, list[str]] = {}
+        self.meta: list[str] = []
 
     def pump(
         self,
@@ -466,6 +505,9 @@ class _Ctx:
             return None
         if method == "Network.requestWillBeSent":
             self._on_request(msg)
+            return None
+        if method == "Network.responseReceived":
+            self._on_response(msg)
             return None
         if method == "Target.detachedFromTarget":
             sid = msg["params"].get("sessionId")
@@ -592,6 +634,38 @@ class _Ctx:
             return
         self.seen_requests.add(key)
         self.requests.append({"method": method, "url": normalized})
+
+    def _on_response(self, msg: dict) -> None:
+        """Fold one response's allowlisted headers + cookie names into the per-host
+        signal (tech detection). TOTAL — a malformed frame is skipped, never raised,
+        so one bad event can't abort capture. Values of non-allowlisted headers and
+        Set-Cookie VALUES are discarded here (T1); the allowlist itself lives in
+        ``recon.fetch.fetch`` (single-sourced, so both signal producers stay in
+        lockstep). Does NOT bump ``last_event`` (mirrors ``_on_request``): response
+        traffic must neither defer the quiet-window settle nor gate it — otherwise a
+        chatty background poll could keep the capture "busy" long after the script
+        tree itself has gone quiet."""
+        params = msg.get("params") or {}
+        response = params.get("response") or {}
+        url = response.get("url") or ""
+        try:
+            host = (urlsplit(url).hostname or "").lower()
+        except ValueError:
+            return  # malformed URL (e.g. an invalid IPv6 literal) — skip, never raise
+        if not host:
+            return
+        headers = {str(k).lower(): str(v) for k, v in (response.get("headers") or {}).items()}
+        allow = _allowlisted_headers(headers)
+        if allow:
+            self.headers_by_host.setdefault(host, {}).update(allow)
+        # CDP folds a repeated response header (Set-Cookie is the only one that
+        # matters here) into one value joined by "\n" — never a list.
+        set_cookie = headers.get("set-cookie")
+        if set_cookie:
+            names = self.cookies_by_host.setdefault(host, [])
+            for name in _cookie_names(set_cookie.split("\n")):
+                if name not in names:
+                    names.append(name)
 
     def _on_nav_ack(self, msg: dict) -> None:
         # Only the INITIAL navigation sets nav_error (→ the run is "blocked"). A hard

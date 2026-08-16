@@ -35,4 +35,5 @@ regexes = [
   '''AKIA2E4XZ7K9QW3RT8YV''',                            # findings/rules/aws_access_key_id.yml example
   '''aZ9kQ2mB7xL4wP0rT6uY1eC5''',                        # apps/platform/src/recon/findings/normalize_test.py fixture
   '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0''',  # chrome-extension/tests/test_asset_classifier.mjs example JWT
+  '''sk_live_abc123''',                                 # techdetect/match_test.py T1 fixture: proves a JS-embedded secret never reaches `evidence`
 ]
