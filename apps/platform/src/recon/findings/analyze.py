@@ -353,6 +353,23 @@ def _extract_endpoints(
                 run_asset_id=run_asset_id,
                 asset_url=asset_url,
             )
+        # Tier 5 (generic-call): a SUSPECTED sink — a verb call on an unrecognised HTTP-client-
+        # shaped receiver. A distinct ENDPOINT_GENERIC type (auto-excluded from every
+        # type=='endpoint' read model, same as Tier 4) and, being only suspected rather than
+        # detected, deliberately OUTSIDE the attributed/unattributed accounting — it must never
+        # move the REQ-C2 coverage counters.
+        for generic in extraction.generic:
+            written += _record_unresolved_endpoint(
+                session,
+                tenant_id,
+                run_id,
+                path,
+                source_name,
+                generic,
+                run_asset_id=run_asset_id,
+                asset_url=asset_url,
+                finding_type=FindingType.ENDPOINT_GENERIC,
+            )
     files = tuple(
         FileCoverage(path=path, attributed=counts[0], unattributed=counts[1])
         for path, counts in sorted(per_file.items())
@@ -639,16 +656,19 @@ def _record_unresolved_endpoint(
     *,
     run_asset_id: str | None = None,
     asset_url: str | None = None,
+    finding_type: FindingType = FindingType.ENDPOINT_UNRESOLVED,
 ) -> int:
-    """Write an UNCONFIRMED endpoint (Tier 4): a sink we detected but whose URL wasn't
-    statically resolvable, carried as a best-effort ``_collapse_url`` skeleton.
+    """Write an UNCONFIRMED-lane endpoint under the given ``finding_type``: a Tier-4
+    ``ENDPOINT_UNRESOLVED`` sink we detected but couldn't resolve, or a Tier-5
+    ``ENDPOINT_GENERIC`` suspected generic-client call — both carried as a best-effort
+    ``_collapse_url`` skeleton.
 
-    Uses the distinct ``ENDPOINT_UNRESOLVED`` type so it is excluded, with no per-consumer
-    filter, from the OpenAPI export, shadow classification, and the endpoint headline count
-    (all keyed on ``type == 'endpoint'``). The value is ``method + skeleton`` and is NOT run
-    through ``normalize_endpoint`` — there is no real URL to host-strip or ``{id}``-template —
-    and no params are recorded (the URL, hence its query, is unknown). The full call rides on
-    the occurrence ``evidence`` so the analyst can resolve it by hand."""
+    Either distinct type is excluded, with no per-consumer filter, from the OpenAPI export,
+    shadow classification, and the endpoint headline count (all keyed on ``type ==
+    'endpoint'``). The value is ``method + skeleton`` and is NOT run through
+    ``normalize_endpoint`` — there is no real URL to host-strip or ``{id}``-template — and no
+    params are recorded (the URL, hence its query, is unknown). The full call rides on the
+    occurrence ``evidence`` so the analyst can resolve it by hand."""
     value = f"{ep.method} {ep.url}".strip()
     attributes: dict[str, Any] = {"kind": ep.kind, "method": ep.method}
     if ep.wrapper:  # provenance: the taught wrapper this sink came through (display-only)
@@ -657,7 +677,7 @@ def _record_unresolved_endpoint(
         session,
         tenant_id,
         run_id,
-        FindingType.ENDPOINT_UNRESOLVED,
+        finding_type,
         value,
         path,
         occurrence=store.Occurrence(

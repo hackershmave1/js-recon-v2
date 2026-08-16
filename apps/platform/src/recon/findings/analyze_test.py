@@ -117,6 +117,41 @@ def test_unresolved_sink_surfaced_as_unconfirmed_and_excluded_from_endpoints(
     assert reqs is not None and len(reqs) == 1
 
 
+def test_generic_call_surfaced_as_endpoint_generic_and_excluded_from_endpoints(
+    redis, authorized_session
+):
+    """Tier 5 (generic-call): a verb call on an unrecognised HTTP-client-shaped receiver is
+    surfaced as a distinct ENDPOINT_GENERIC finding — separate from the confirmed lane AND from
+    the Tier-4 ENDPOINT_UNRESOLVED lane — while (a) the REQ-C2 coverage counters are UNTOUCHED
+    (a suspected call is neither attributed nor unattributed, unlike a Tier-4 sink which bumps
+    `unattributed`), and (b) it is excluded from the endpoint read model + the OpenAPI/probe
+    reconstruction, both of which key on ``type == 'endpoint'``."""
+    from recon.findings import queries as findings_queries
+    from recon.probe.reconstruct import reconstruct_run
+
+    tenant, session_id = authorized_session
+    js = 'fetch("/api/real"); apiClient.get("/api/generic");'
+    view = coordinator.start_run_with_input(
+        redis, tenant_id=tenant, session_id=session_id, js_source=js, target="acme.io"
+    )
+    assert _drive(redis, view.id, tenant) == RunState.DONE.value
+
+    findings = _findings(tenant, view.id)
+    assert {f.value for f in findings if f.type == "endpoint"} == {"GET /api/real"}
+    assert {f.value for f in findings if f.type == "endpoint_generic"} == {"GET /api/generic"}
+
+    # REQ-C2 honesty: the suspected generic call moves NEITHER counter (1 real fetch attributed,
+    # nothing unattributed — a Tier-4 sink WOULD have bumped `unattributed`).
+    coverage = findings_queries.list_findings(tenant, view.id).coverage
+    assert coverage is not None
+    assert (coverage.attributed, coverage.unattributed) == (1, 0)
+
+    # Excluded from OpenAPI/probe reconstruction (keys on type == 'endpoint'): only the one
+    # confirmed endpoint yields a probeable request — never a generic-call skeleton.
+    reqs = reconstruct_run(tenant, view.id)
+    assert reqs is not None and len(reqs) == 1
+
+
 def test_param_findings_carry_risk_tags(redis, authorized_session):
     """Enrichment A: a risk-relevant param name is tagged in the finding's attributes, and an
     untagged param carries no risk_tags key (honest silence, kept clean)."""

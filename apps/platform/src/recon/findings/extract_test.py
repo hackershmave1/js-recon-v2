@@ -93,6 +93,100 @@ def test_deeply_nested_concatenation_is_capped_not_a_recursion_error():
     assert len(r.unresolved) == 1  # surfaced cleanly, no RecursionError
 
 
+# --- Tier 5: generic-call (suspected untaught HTTP clients) ------------------- #
+# A verb call `.get/.post/…` on an UNRECOGNISED but HTTP-client-shaped receiver is
+# surfaced in `generic` (distinct from `unresolved`) as a SUSPECTED sink. It must NOT
+# move the REQ-C2 coverage counters (suspected, not detected), and its two precision
+# gates — a readable-receiver gate and a strict path-shape gate — must hold on the
+# minified receivers and non-path args that dominate real bundles.
+
+
+def test_generic_call_on_readable_client_is_surfaced():
+    r = extract('apiClient.get("/api/users")')
+    assert r.endpoints == [] and r.unattributed == 0  # not a detected sink -> counter untouched
+    assert len(r.generic) == 1
+    g = r.generic[0]
+    assert (g.kind, g.method, g.url) == ("generic", "GET", "/api/users")
+    assert "apiClient.get" in g.snippet  # the real call is preserved as evidence
+
+
+def test_generic_call_reads_verb_as_method():
+    assert extract('httpService.post("/api/login")').generic[0].method == "POST"
+    assert extract('apiClient.delete("/api/users/1")').generic[0].method == "DELETE"
+    assert extract('apiClient.put("/api/users/1")').generic[0].method == "PUT"
+
+
+def test_generic_call_this_http_angular_pattern():
+    # `this.http.get("/x")` — receiver text "this.http" carries the `http` hint.
+    r = extract('this.http.get("/api/orders")')
+    assert len(r.generic) == 1 and r.generic[0].url == "/api/orders"
+
+
+def test_generic_call_keeps_template_and_concat_shape():
+    assert extract("apiClient.get(`/api/users/${id}`)").generic[0].url == "/api/users/${id}"
+    assert extract('apiClient.get("/api/" + id)').generic[0].url == "/api/EXPR"
+
+
+def test_generic_call_absolute_url_is_surfaced():
+    r = extract('apiClient.get("https://api.acme.io/v1/users")')
+    assert len(r.generic) == 1 and r.generic[0].url == "https://api.acme.io/v1/users"
+
+
+def test_generic_call_not_fired_on_minified_receiver():
+    # A minified 1-2 char receiver defeats any word denylist but fails the readable-receiver
+    # gate, so the flood of `n.get(...)`/`e.post(...)` in a mangled bundle never fires.
+    assert extract('n.get("/api/users")').generic == []
+    assert extract('e.post("/api/login")').generic == []
+    assert extract('xr.get("/api/x")').generic == []
+
+
+def test_generic_call_skips_known_non_http_receivers():
+    # Readable but well-known NON-HTTP objects: Map/cache/store/router/searchParams/config, and
+    # server-side route definers (app/server) — a `.get` here is not a client call.
+    for src in (
+        'cache.get("/api/x")',
+        'store.get("/api/x")',
+        'router.get("/api/x")',
+        'searchParams.get("/api/x")',
+        'config.get("/api/x")',
+        'server.get("/api/x")',
+    ):
+        assert extract(src).generic == [], src
+
+
+def test_generic_call_requires_path_shaped_argument():
+    # readable client, but the arg has no path anchor -> rejected by the strict path gate
+    # (stricter than jsluice MaybeURL: a relative or dotted string is not enough).
+    assert extract('apiClient.get("userId")').generic == []  # bare word
+    assert extract('apiClient.get("a.b.c")').generic == []  # dotted path (lodash-style)
+    assert extract("apiClient.get(userVar)").generic == []  # bare variable -> EXPR
+    assert extract('apiClient.get("users/list")').generic == []  # relative, no leading slash
+
+
+def test_real_sinks_and_instances_win_over_generic_call():
+    # Every real sink / instance / jQuery / global fetch matches an earlier branch; a call they
+    # own must NEVER also land in `generic`. axios.get(var) is Tier-4 unresolved, not generic.
+    axios_var = extract("axios.get(u)")
+    assert axios_var.generic == [] and len(axios_var.unresolved) == 1
+    assert extract('$.get("/x")').generic == []
+    assert extract('window.fetch("/x")').generic == []
+
+
+def test_generic_call_computed_member_is_surfaced():
+    # property-mangled bundles use computed access; `apiClient["get"]("/x")` reaches the generic
+    # branch via _handle_call's subscript path, exactly like a dotted `.get`.
+    r = extract('apiClient["get"]("/api/x")')
+    assert len(r.generic) == 1 and r.generic[0].method == "GET"
+
+
+def test_generic_call_skips_dotted_non_http_receiver():
+    # A denylisted object reached through a member chain (`this.store`, `this.cache`) is excluded
+    # by matching the LAST dotted segment — while a dotted HTTP client (`this.http`) still fires.
+    assert extract('this.store.get("/api/x")').generic == []
+    assert extract('this.cache.get("/api/x")').generic == []
+    assert len(extract('this.http.get("/api/x")').generic) == 1
+
+
 # --- enrichment B: auth header capture --------------------------------------- #
 
 

@@ -34,6 +34,7 @@
 /* Unconfirmed lane (Tier 4): a detected sink with an unresolved URL. Dashed
    border + warning tint mark it as lower-confidence than a real endpoint. */
 .fp-type-endpoint_unresolved { color: var(--warning, var(--muted)); border-style: dashed; }
+.fp-type-endpoint_generic { color: var(--warning, var(--muted)); border-style: dashed; }
 .fp-val { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fp-host { font-family: var(--font-mono); font-size: 11px; color: var(--muted); flex: 0 0 auto; }
 .fp-empty { padding: 60px 20px; text-align: center; color: var(--faint); }

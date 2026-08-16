@@ -36,6 +36,7 @@ from tree_sitter import Node
 
 from recon.findings._base_env import _resolve_url, collect_base_env
 from recon.findings._jsast import (
+    _GENERIC_METHODS,
     _GLOBAL_OBJECTS,
     _JQUERY,
     _JQUERY_METHODS,
@@ -52,6 +53,8 @@ from recon.findings._jsast import (
     _collapse_url,
     _config_query_params,
     _endpoint,
+    _is_http_client_name,
+    _looks_like_api_path,
     _object_pairs,
     _query_params,
     _string_value,
@@ -110,6 +113,23 @@ def _record_unresolved(
     )
 
 
+def _record_generic(call: Node, prop: str, result: Extraction) -> None:
+    """Tier 5 (generic-call): a verb call on an unrecognised but HTTP-client-shaped receiver
+    whose first arg is path-shaped — a SUSPECTED custom/untaught client.
+
+    Unlike Tier-4 ``_record_unresolved`` this does NOT touch the REQ-C2 ``unattributed``
+    counter: it is a *suspected*, not a *detected*, sink, so moving the honesty counter would
+    over-report coverage. It rides the separate ``generic`` list, surfaced later as a distinct
+    ENDPOINT_GENERIC finding. The receiver/method gates are applied by the caller
+    (``_dispatch_member``); here only the argument's path shape is enforced, so a verb call
+    with a non-path arg (a Map key, a lodash dotted path) records nothing."""
+    args = _args(call)
+    skeleton = _collapse_url(args[0] if args else None)
+    if not _looks_like_api_path(skeleton):
+        return
+    result.generic.append(_endpoint("generic", prop.upper(), skeleton, [], call))
+
+
 def _handle_call(call: Node, result: Extraction, env: BaseEnv, callees: frozenset[str]) -> None:
     fn = call.child_by_field_name("function")
     if fn is None:
@@ -153,6 +173,11 @@ def _dispatch_member(
         _axios_member(call, prop, result, env, base=base or "")
     elif obj in callees:  # taught wrapper — MUST be last so native/instance collisions win
         _axios_member(call, prop, result, env, base="", wrapper=obj)
+    elif prop in _GENERIC_METHODS and _is_http_client_name(obj):
+        # Tier 5 (generic-call): unrecognised receiver + verb method + path-shaped arg = a
+        # SUSPECTED custom client. STRICTLY last — every real sink, axios instance, and taught
+        # wrapper above wins first; this only sees receivers nothing else claimed.
+        _record_generic(call, prop, result)
 
 
 def _fetch(call: Node, result: Extraction, env: BaseEnv, base: str = "") -> None:
