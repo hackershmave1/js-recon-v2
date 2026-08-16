@@ -58,6 +58,25 @@ def test_unknown_run_is_404(client, tenant):
     assert resp.status_code == 404
 
 
+def test_get_technologies_empty_when_run_has_no_tech(client, authorized_session):
+    # Distinct from test_unknown_run_is_404 above: a genuinely-existing run with
+    # zero `run_technology` rows still returns 200 -- `list_technologies` builds
+    # `TechnologiesView(hosts={})`, never `None`, for a real run with no detections.
+    tenant, session_id = authorized_session
+    with tenant_session(tenant) as session:
+        run = models.Run(tenant_id=tenant, session_id=session_id, state="done")
+        session.add(run)
+        session.flush()
+        run_id = str(run.id)
+
+    resp = client.get(f"/runs/{run_id}/technologies", headers=_headers(tenant))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["run_id"] == run_id
+    assert body["hosts"] == {}
+    assert body["count"] == 0
+
+
 def test_other_tenant_sees_none(client, authorized_session):
     tenant, session_id = authorized_session
     run_id = _run_with_tech(tenant, session_id)
