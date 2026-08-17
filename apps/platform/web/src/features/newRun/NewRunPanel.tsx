@@ -6,6 +6,23 @@ import { createSession, startRun, uploadRun } from "../../api/apiClient";
 import { ApiError } from "../../api/apiClient";
 import "./newRun.css";
 
+const UploadIcon = () => (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4 14.9A5 5 0 0 0 8 21h10a4 4 0 0 0 1-7.9" /><path d="M12 12v9" /><path d="m8 15 4-4 4 4" /><path d="M6.5 9a5.5 5.5 0 0 1 10.8-1.2" />
+  </svg>
+);
+const GlobeIcon = () => (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18Z" />
+  </svg>
+);
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
 export function NewRunPanel() {
   const { tenantId } = useTenant();
   const navigate = useNavigate();
@@ -14,6 +31,7 @@ export function NewRunPanel() {
   const [scopeInput, setScopeInput] = useState("");
   const [authorizedBy, setAuthorizedBy] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const [domain, setDomain] = useState("");
   const [capture, setCapture] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -34,6 +52,13 @@ export function NewRunPanel() {
 
   function onScopeKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter") { e.preventDefault(); addHost(); }  // add, don't submit
+  }
+
+  function onDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    const dropped = e.dataTransfer.files?.[0];
+    if (dropped) setFile(dropped);
   }
 
   async function submit(e: React.FormEvent) {
@@ -83,23 +108,45 @@ export function NewRunPanel() {
   return (
     <form className="card nr-form" onSubmit={submit}>
       <h2 className="nr-title">New recon run</h2>
-      <p className="muted nr-sub">Declaring who authorized this is the authorization acknowledgment.</p>
+      <p className="muted nr-sub">Point the analyzer at a JavaScript file or a live domain. Naming who authorized this is the authorization acknowledgment.</p>
 
       <div className="nr-modes" role="radiogroup" aria-label="Run mode">
         <label className={mode === "upload" ? "is-active" : ""}>
           <input type="radio" name="mode" value="upload" checked={mode === "upload"}
-            onChange={() => setMode("upload")} /> Upload a file
+            onChange={() => setMode("upload")} />
+          <UploadIcon /> Upload a file
         </label>
         <label className={mode === "crawl" ? "is-active" : ""}>
           <input type="radio" name="mode" value="crawl" checked={mode === "crawl"}
-            onChange={() => setMode("crawl")} /> Crawl a domain
+            onChange={() => setMode("crawl")} />
+          <GlobeIcon /> Crawl a domain
         </label>
       </div>
 
       {mode === "upload" ? (
-        <div className="nr-field"><label htmlFor="file">JavaScript file</label>
-          <input id="file" type="file" accept=".js,.mjs,text/javascript"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></div>
+        <div className="nr-field">
+          <label htmlFor="file">JavaScript file</label>
+          <label
+            className={"nr-drop" + (dragOver ? " over" : "") + (file ? " has-file" : "")}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}>
+            <span className="nr-drop-icon" aria-hidden="true"><UploadIcon /></span>
+            {file ? (
+              <span className="nr-drop-file">
+                <span className="nr-drop-name">{file.name}</span>
+                <span className="nr-drop-size">{formatBytes(file.size)} · click to replace</span>
+              </span>
+            ) : (
+              <span className="nr-drop-cta">
+                <span className="nr-drop-lead">Drop a <code>.js</code> file, or <span className="nr-drop-browse">browse</span></span>
+                <span className="nr-drop-sub">.js · .mjs</span>
+              </span>
+            )}
+            <input id="file" type="file" accept=".js,.mjs,text/javascript" className="nr-file-native"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          </label>
+        </div>
       ) : (
         <>
           <div className="nr-field"><label htmlFor="domain">Domain</label>
