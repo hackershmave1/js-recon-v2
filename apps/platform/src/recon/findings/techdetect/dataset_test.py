@@ -31,8 +31,9 @@ def test_compile_all_loads_all_and_reports_a_bounded_skip_count():
     techs, _categories, _commit = dataset.load_raw()
     compiled, skipped = tc.compile_all(techs)
     assert len(compiled) > 0
-    # The curated subset is RE2-safe; a future full re-pin (refresh.py) keeps rejects
-    # well under this bound — the load is never all-or-nothing (T4).
+    # The full enthec dataset compiles with only a handful of RE2 rejects (lookahead/
+    # lookbehind constructs RE2 can't express) — well under this bound. The load is
+    # never all-or-nothing (T4): a rejected pattern is skipped + counted, not fatal.
     assert skipped <= 40
 
 
