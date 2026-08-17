@@ -80,6 +80,12 @@ class FindingType(StrEnum):
     # type (not a shared one with an attribute) keeps its provenance in finding
     # identity, so it stays filterable and never collides with a Tier-4 skeleton.
     ENDPOINT_GENERIC = "endpoint_generic"
+    # A client-side navigation target (Phase 2) — an `href`/`src`/`action` value, a nav
+    # sink (`location.assign`, `history.pushState`, `router.push`), or an off-sink
+    # absolute-URL literal — as opposed to a backend API call. A DISTINCT type so it is
+    # its own category: excluded from every `type == 'endpoint'` read model automatically,
+    # and never counted in the API-surface coverage numbers.
+    PAGE_ROUTE = "page_route"
 
 
 class AssetStatus(StrEnum):

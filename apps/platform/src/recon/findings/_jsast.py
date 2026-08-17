@@ -10,6 +10,7 @@ Imports only the standard library and tree-sitter — the leaf of the import DAG
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl
@@ -144,6 +145,10 @@ class RawEndpoint:
     # Auth-relevant request headers captured statically (enrichment B): names + scheme
     # keyword only, never a credential value. Empty for calls with no auth header.
     headers: tuple[HeaderRef, ...] = ()
+    # Route-lane display confidence (Phase 2 page routes): "high" for an explicit nav sink
+    # or an href/src/action value, "low" for an off-sink harvested literal. Every other
+    # lane leaves it at the default and never reads it.
+    confidence: str = "high"
 
 
 @dataclass
@@ -160,6 +165,12 @@ class Extraction:
     # `unattributed` (it is not a DETECTED sink, unlike `unresolved`), surfaced as a distinct
     # ENDPOINT_GENERIC finding so it stays out of coverage AND out of the confirmed read model.
     generic: list[RawEndpoint] = field(default_factory=list)
+    # Page routes (Phase 2): client-side navigation targets — an `href`/`src`/`action` value,
+    # a nav sink (`location.assign`, `history.pushState`, `router.push`), or an off-sink
+    # absolute-URL literal — reconstructed and FP-gated (`_looks_like_route`). Drained as a
+    # DISTINCT FindingType.PAGE_ROUTE (not `endpoint`), so it auto-excludes from every
+    # `type == 'endpoint'` read model AND, like `generic`, never touches the coverage counters.
+    routes: list[RawEndpoint] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -390,6 +401,90 @@ def _looks_like_api_path(skeleton: str) -> bool:
     return skeleton.startswith("${") and "/" in skeleton
 
 
+# Asset file extensions (no leading dot) that mark a URL-shaped string as a STATIC ASSET,
+# never a page route (katana `defaultExtFilter`). A page route serves a document; these serve
+# bytes. `json` is intentionally absent — it is an API response shape, handled by the API-ish
+# tiebreak (`_looks_api_ish`), not an asset. Bare MIME types (`image/png`, `text/plain`) need
+# no entry: with no leading `/` or scheme they already fail the path anchor.
+_ROUTE_ASSET_EXTS = frozenset(
+    {
+        "png",
+        "jpg",
+        "jpeg",
+        "gif",
+        "svg",
+        "webp",
+        "ico",
+        "bmp",
+        "avif",
+        "woff",
+        "woff2",
+        "ttf",
+        "otf",
+        "eot",
+        "css",
+        "map",
+        "mp4",
+        "webm",
+        "mp3",
+        "wav",
+        "ogg",
+        "pdf",
+        "zip",
+        "gz",
+        "wasm",
+        "js",
+        "mjs",
+        "cjs",
+        "xml",
+        "txt",
+    }
+)
+# Characters that never occur in a real URL/route path (jsluice `MaybeURL` reject set).
+# Screened against STATIC segments only — `${...}` substitutions and `:token` holders are
+# stripped first — so a parametrised route (`/player/${id}`, `/player/:id`) survives.
+_ROUTE_BAD_CHARS = frozenset(" ()!<>'\"`{}^$,")
+_TEMPLATE_SUB = re.compile(r"\$\{[^}]*\}")
+_HOLDER_TOKEN = re.compile(r":[A-Za-z_][A-Za-z0-9_]*")
+# Shape hints that read as backend API surface rather than a page route, used ONLY to
+# classify a CONTEXT-FREE harvested absolute URL (a sink/href always classifies by context).
+_API_SHAPE_HINTS = frozenset(
+    {"/api/", "/graphql", "/v1/", "/v2/", "/v3/", "/rest/", "/oauth", ".json", "://api."}
+)
+
+
+def _looks_like_route(skeleton: str) -> bool:
+    """False-positive gate for a candidate PAGE ROUTE (jsluice ``MaybeURL`` strength +
+    katana/GAP asset denylist). Accept only a string that has a real path/URL anchor, whose
+    static text is URL-shaped, and that is not a static asset:
+
+    - anchor: a leading ``/``, a ``://`` scheme, or a ``${base}/…`` head (shared with
+      :func:`_looks_like_api_path`) — this alone rejects a bare word, a dotted chain
+      (``a.b.c``), and a bare MIME type (``image/png``);
+    - the STATIC text (``${…}`` substitutions and ``:token`` holders removed first, so a
+      parametrised route survives) carries none of the never-in-a-URL characters;
+    - it does not end in a static-asset extension (``.png``, ``.svg``, ``.css``, ``.map``…).
+
+    ``/player/:id`` ✅ · ``a.b.c`` ❌ · ``image/png`` ❌ · ``/static/logo.png`` ❌."""
+    if not skeleton or skeleton == _EXPR or not _looks_like_api_path(skeleton):
+        return False
+    static = _HOLDER_TOKEN.sub("", _TEMPLATE_SUB.sub("", skeleton))
+    if any(char in _ROUTE_BAD_CHARS for char in static):
+        return False
+    segment = skeleton.lower().split("?", 1)[0].split("#", 1)[0].rsplit("/", 1)[-1]
+    ext = segment.rsplit(".", 1)[-1] if "." in segment else ""
+    return ext not in _ROUTE_ASSET_EXTS
+
+
+def _looks_api_ish(skeleton: str) -> bool:
+    """Shape tiebreak for a CONTEXT-FREE harvested absolute URL (there is no sink to
+    classify it): an ``/api/``/``/graphql``/version/``.json`` shape reads as API surface, so
+    it rides the generic (suspected-API) lane; anything else is treated as a page route.
+    Sink/href context, when present, always wins over this shape guess (user decision)."""
+    lowered = skeleton.lower()
+    return any(hint in lowered for hint in _API_SHAPE_HINTS)
+
+
 def _args(call: Node) -> list[Node]:
     arguments = call.child_by_field_name("arguments")
     return list(arguments.named_children) if arguments is not None else []
@@ -522,6 +617,7 @@ def _endpoint(
     call: Node,
     wrapper: str | None = None,
     headers: list[HeaderRef] | None = None,
+    confidence: str = "high",
 ) -> RawEndpoint:
     row, col = call.start_point
     deduped = list(dict.fromkeys(params))  # preserve order, drop repeats
@@ -540,4 +636,5 @@ def _endpoint(
         snippet="",
         wrapper=wrapper,
         headers=tuple(headers or ()),
+        confidence=confidence,
     )

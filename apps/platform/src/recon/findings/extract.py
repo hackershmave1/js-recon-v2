@@ -55,7 +55,9 @@ from recon.findings._jsast import (
     _config_query_params,
     _endpoint,
     _is_http_client_name,
+    _looks_api_ish,
     _looks_like_api_path,
+    _looks_like_route,
     _object_pairs,
     _query_params,
     _source_snippet,
@@ -92,7 +94,10 @@ def extract(source: str | bytes, wrappers: Sequence[WrapperRule] = ()) -> Extrac
             _handle_call(node, result, env, callees)
         elif node.type == "new_expression":
             _handle_new(node, result)
-    _fill_snippets(result, data)
+        elif node.type == "pair":  # object-literal href/src/action value -> a page route
+            _handle_property_url(node, result)
+    _harvest_routes(tree.root_node, result)  # off-sink absolute-URL literals, after the sinks
+    _fill_snippets(result, data)  # after all lanes (incl. routes) are populated
     return result
 
 
@@ -101,7 +106,7 @@ def _fill_snippets(result: Extraction, data: bytes) -> None:
     done and `data` is in hand. `_endpoint` leaves ``snippet=""`` because building it there
     from ``call.text`` is O(node span) — O(n^2) over a nested-sink chain (DoS); `_source_snippet`
     slices the source O(cap) with byte-identical output. Rebuilds each frozen row in place."""
-    for lane in (result.endpoints, result.unresolved, result.generic):
+    for lane in (result.endpoints, result.unresolved, result.generic, result.routes):
         lane[:] = [
             replace(ep, snippet=_source_snippet(data, ep.start_byte, ep.end_byte)) for ep in lane
         ]
@@ -145,6 +150,164 @@ def _record_generic(call: Node, prop: str, result: Extraction) -> None:
     result.generic.append(_endpoint("generic", prop.upper(), skeleton, [], call))
 
 
+# --- page routes (Phase 2): href/src/action, nav sinks, off-sink URL literals ------------
+# A distinct category from the API lanes: a client-side navigation target rather than a
+# backend call. Detected from object `href`/`src`/`action` values, client-navigation sinks
+# (`location.assign`, `history.pushState`, `router.push`), and off-sink absolute-URL
+# literals; FP-gated by `_looks_like_route`; drained as FindingType.PAGE_ROUTE.
+
+_ROUTE_KEYS = frozenset({"href", "src", "action"})
+# Pseudo-schemes / fragments that are never a navigable page route. Some embed `://`
+# (`javascript://…`, `blob:https://…`), so they must be rejected BEFORE the path anchor.
+_ROUTE_SCHEME_REJECTS = ("#", "mailto:", "tel:", "javascript:", "data:", "blob:", "about:")
+# Absolute URLs that pervade bundles as namespace / spec identifiers, never a page the app
+# navigates to (SVG/XML/XHTML `xmlns`, schema.org microdata, the RFC example domain).
+# Harvest-only: they carry a `://` so they would otherwise pass the route gate.
+_HARVEST_HOST_DENY = ("w3.org", "schema.org", "ns.adobe.com", "purl.org", "example.com")
+# A URL builder wider than this many source bytes is not a route — skip it without decoding
+# (defence-in-depth against a pathological single top-level concat/`+` chain).
+_MAX_HARVEST_SPAN = 8192
+# Explicit global roots that make a nav-sink receiver unambiguous (`window.location.assign`,
+# `document.location.replace`, `window.open`). A BARE `location`/`history`/`router` could be a
+# shadowing local or an array, so a text-only match is recorded LOW, not HIGH (§4 review).
+_ROUTE_GLOBAL_ROOTS = _GLOBAL_OBJECTS | {"document"}
+
+
+def _record_route(
+    url_node: Node | None, result: Extraction, *, confidence: str, call: Node | None = None
+) -> None:
+    """Reconstruct a page-route URL from ``url_node``, gate it (pseudo-scheme pre-rejects +
+    the ``_looks_like_route`` FP gate), and record it with a BLANK method so the value reads
+    ``/player/:id``, not ``GET /player/:id``. ``call`` overrides which node's byte span is
+    stored as evidence — a nav sink stores the whole call, an href its value — and that span
+    is what the harvest pass treats as claimed, so a URL recorded here is never re-emitted."""
+    if url_node is None:
+        return
+    skeleton = _collapse_url(url_node)
+    if skeleton.lower().startswith(_ROUTE_SCHEME_REJECTS) or not _looks_like_route(skeleton):
+        return
+    result.routes.append(
+        _endpoint("route", "", skeleton, [], call or url_node, confidence=confidence)
+    )
+
+
+def _handle_property_url(pair: Node, result: Extraction) -> None:
+    """An object-literal ``href``/``src``/``action`` value -> a page route. LOW confidence:
+    these keys also appear in request bodies/config, so precision rests on the FP gate + the
+    value's own shape rather than on proving DOM context (design §4 Finding 5e)."""
+    key_node = pair.child_by_field_name("key")
+    value_node = pair.child_by_field_name("value")
+    if key_node is None or value_node is None:
+        return
+    key = (
+        _string_value(key_node)
+        if key_node.type in ("string", "template_string")
+        else _text(key_node)
+    )
+    if key in _ROUTE_KEYS:
+        _record_route(value_node, result, confidence="low")
+
+
+def _nav_route_arg(obj: str, prop: str) -> int | None:
+    """The positional index of the URL argument for a client-navigation sink, or ``None`` if
+    ``obj.prop`` is not one. These receivers (``location``/``history``/``router``) sit in the
+    Tier-5 non-HTTP denylist; here they are RECLAIMED for the route lane. The confidence is
+    decided at record time (``_record_nav_route``), high only for an explicit global receiver.
+    ``history.pushState(state, title, url)`` carries the URL third; the rest carry it first."""
+    tail = obj.rsplit(".", 1)[-1]
+    if tail == "location" and prop in ("assign", "replace"):
+        return 0
+    if obj in _GLOBAL_OBJECTS and prop == "open":  # window.open(url, ...)
+        return 0
+    if tail == "history" and prop in ("pushState", "replaceState"):
+        return 2
+    if tail == "router" and prop in ("push", "replace", "navigate"):
+        return 0
+    return None
+
+
+def _record_nav_route(call: Node, obj: str, arg_index: int, result: Extraction) -> None:
+    """A client-navigation sink -> a page route. HIGH confidence only when the receiver is an
+    explicit global (``window.``/``document.``/``self.``-anchored, or ``window.open`` itself);
+    a bare ``location``/``history``/``router`` receiver is text-only — it could be a shadowing
+    local or an array — so it is recorded LOW (§4 review). ``router.push({pathname})`` /
+    ``({path})`` / ``({url})`` is unwrapped from its object form; otherwise the URL is the
+    positional argument at ``arg_index``."""
+    args = _args(call)
+    if arg_index >= len(args):
+        return
+    node = args[arg_index]
+    target: Node | None = node
+    if node.type == "object":  # router.push({ pathname: "/x" })
+        pairs = _object_pairs(node)
+        target = pairs.get("pathname") or pairs.get("path") or pairs.get("url")
+    confidence = "high" if obj.split(".", 1)[0] in _ROUTE_GLOBAL_ROOTS else "low"
+    _record_route(target, result, confidence=confidence, call=call)
+
+
+def _is_concat_call(node: Node) -> bool:
+    """``a.concat(...)`` — the only ``call_expression`` shape that reconstructs to a URL. Kept
+    cheap (inspects the callee's property, never the whole node text) so the harvest walk
+    doesn't decode giant wrapper calls just to skip them."""
+    fn = node.child_by_field_name("function")
+    return (
+        fn is not None
+        and fn.type == "member_expression"
+        and _text(fn.child_by_field_name("property")) == "concat"
+    )
+
+
+def _is_absolute_url(skeleton: str) -> bool:
+    """A scheme-absolute URL (``https://…``, ``ws://…``), NOT a rooted path that merely embeds
+    a URL in a query (``/redirect?to=http://…``). Off-sink harvesting is absolute-only: a bare
+    ``/path`` with no sink/href context is too ambiguous to claim as a route (user decision)."""
+    scheme, sep, _rest = skeleton.partition("://")
+    return bool(sep) and scheme != "" and "/" not in scheme and " " not in scheme
+
+
+def _harvest_routes(root: Node, result: Extraction) -> None:
+    """Second pass: harvest OFF-SINK absolute-URL literals — a ``.concat()``/``+``-built
+    ``https://…`` that is returned or assigned, never passed to a sink (user pt 1). A
+    top-level-expression guard — the claimed byte spans of every already-recorded sink/route
+    AND each harvest — stops a nested concat, and a sink's own URL arg, from double-emitting.
+    Context-free, so classified by shape (``_looks_api_ish``): API-ish -> the generic
+    suspected-API lane; else -> a LOW-confidence page route."""
+    claimed = [
+        (ep.start_byte, ep.end_byte)
+        for ep in (*result.endpoints, *result.unresolved, *result.generic, *result.routes)
+    ]
+    for node in _walk(root):
+        is_builder = node.type in ("string", "template_string", "binary_expression") or (
+            node.type == "call_expression" and _is_concat_call(node)
+        )
+        if not is_builder:
+            continue
+        # O(1), decode-free guards FIRST — a span cap, then the claimed-range check — so `_text`
+        # (which decodes the node's whole subtree) is only ever reached for a small, unclaimed
+        # builder. `node.parent` is deliberately unused: it is O(depth) in tree-sitter (re-roots
+        # from the top), so a per-node parent walk is itself O(n^2) on a deep chain (§4 review).
+        # Preorder + the claimed span dedup nested builders: the outer is harvested first and
+        # claims its span, so its inners are skipped here; an oversized outer is span-capped out
+        # (a multi-KB "URL" is not a route) and its inners then carry no `://` — nothing emitted.
+        if node.end_byte - node.start_byte > _MAX_HARVEST_SPAN:
+            continue
+        if any(start <= node.start_byte and node.end_byte <= end for start, end in claimed):
+            continue  # inside a recorded sink/route, or a nested sub-expression already taken
+        if "://" not in _text(node):  # "://": absolute-only + cheap pre-skip
+            continue
+        skeleton = _collapse_url(node)
+        lowered = skeleton.lower()
+        if not _is_absolute_url(skeleton) or any(deny in lowered for deny in _HARVEST_HOST_DENY):
+            continue
+        if not _looks_like_route(skeleton):
+            continue
+        if _looks_api_ish(skeleton):
+            result.generic.append(_endpoint("generic", "", skeleton, [], node))
+        else:
+            result.routes.append(_endpoint("route", "", skeleton, [], node, confidence="low"))
+        claimed.append((node.start_byte, node.end_byte))
+
+
 def _handle_call(call: Node, result: Extraction, env: BaseEnv, callees: frozenset[str]) -> None:
     fn = call.child_by_field_name("function")
     if fn is None:
@@ -178,8 +341,13 @@ def _handle_call(call: Node, result: Extraction, env: BaseEnv, callees: frozense
 def _dispatch_member(
     call: Node, obj: str, prop: str, result: Extraction, env: BaseEnv, callees: frozenset[str]
 ) -> None:
+    nav_arg = _nav_route_arg(obj, prop)
     if prop == "fetch" and obj in _GLOBAL_OBJECTS:
         _fetch(call, result, env)
+    elif (
+        nav_arg is not None
+    ):  # client-navigation sink -> page route; before .open so window.open wins
+        _record_nav_route(call, obj, nav_arg, result)
     elif prop == "open":  # ANY receiver's `.open(method, url)` is XHR, checked before instances
         _xhr_open(call, result)
     elif obj == "axios":
