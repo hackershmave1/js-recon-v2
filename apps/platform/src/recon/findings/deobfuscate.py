@@ -50,3 +50,43 @@ def beautify(source: str) -> str | None:
         log.warning("deobfuscate.failed", error=str(exc))
         return None
     return out
+
+
+# A source is "minified" when a line runs absurdly long — a bundle (or a vendor lib
+# shipped minified in a source map's ``sourcesContent``) is one giant line. 500 matches
+# the web viewer's ``isMinified()`` so client and server agree which files get
+# pretty-printed, and only the FIRST lines are scanned (via ``find``, no substring
+# allocation) so a genuinely multi-line original — the common recovered-source case — is
+# rejected cheaply without materializing its lines. Split on ``\n`` only, like the web
+# viewer's ``split("\n")``, so the two stay in lockstep.
+_MINIFIED_LINE_LEN = 500
+_MINIFIED_SCAN_LINES = 200
+
+
+def _is_minified(source: str) -> bool:
+    start = 0
+    for _ in range(_MINIFIED_SCAN_LINES):
+        newline = source.find("\n", start)
+        end = len(source) if newline == -1 else newline
+        if end - start > _MINIFIED_LINE_LEN:
+            return True
+        if newline == -1:
+            return False
+        start = newline + 1
+    return False
+
+
+def beautify_if_minified(source: str) -> str:
+    """Beautify a MINIFIED source; return a genuinely multi-line original unchanged.
+
+    Source-map-recovered originals are usually real, readable code — but some vendor
+    libraries ship minified ``sourcesContent``. Those get the same deterministic,
+    line-distinct :func:`beautify` a no-map bundle does, so a finding lands on a
+    meaningful line and ``recon.probe.sources`` serves matching text (analyze and the
+    on-demand serve run this identically). A non-minified original is returned as-is so
+    its real line numbers survive; over the cap / on failure the raw source is returned
+    unchanged (fail-soft, via :func:`beautify`)."""
+    if not _is_minified(source):
+        return source
+    beautified = beautify(source)
+    return beautified if beautified is not None else source

@@ -597,7 +597,24 @@ def _analysis_units(
     if not recovered.files:  # map present but nothing recovered (e.g. no sourcesContent)
         return _bundle_unit(source), origin, 0
 
-    units = [(f.path, f.content.decode("utf-8", "replace")) for f in recovered.files]
+    # Beautify a recovered original ONLY when it is itself minified (some vendor libs
+    # ship minified sourcesContent) so its findings land on distinct, meaningful lines;
+    # a genuinely multi-line original keeps its real line numbers. recon.probe.sources
+    # runs the SAME beautify_if_minified when it serves the file, so the finding line
+    # matches the served text (the invariant _bundle_unit already holds for no-map
+    # bundles), and the web viewer never has to re-beautify it (which would renumber
+    # lines out from under the finding marks).
+    # NOTE(DEBT): each minified recovered file is beautified here (per-file 1 MiB cap),
+    # but a source map with many large minified sourcesContent entries can total up to
+    # ~engine_max_output_bytes per asset with no heartbeat between files (this loop and
+    # the tree-sitter extract that follows share the one per-asset heartbeat), so a
+    # pathological map could approach the 30s stall window and let a peer reclaim the
+    # RUNNING job — idempotent-safe double-work, not corruption. Follow-up: a per-asset
+    # cumulative-beautify budget (serve raw past it) or a heartbeat between files.
+    units = [
+        (f.path, deobfuscate.beautify_if_minified(f.content.decode("utf-8", "replace")))
+        for f in recovered.files
+    ]
     return units, origin, len(recovered.files)
 
 
