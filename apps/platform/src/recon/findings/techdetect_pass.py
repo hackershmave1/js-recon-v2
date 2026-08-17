@@ -114,11 +114,17 @@ def _js_texts_by_host(tenant_id: str, run_id: str, *, hosts: set[str]) -> dict[s
         if not asset.input_ref:
             continue
         host = (urlsplit(asset.url).hostname or "").lower()
-        if host not in hosts or budget.get(host, 0) >= _MAX_JS_BYTES_PER_HOST:
+        # Slice each blob to the host's REMAINING budget so the total JS fed to the
+        # scripts-field matcher is a hard <= _MAX_JS_BYTES_PER_HOST per host. Counting
+        # full blob length while appending a per-asset 2 MB slice (the earlier form)
+        # let one asset straddling the threshold push the effective total to ~2x — a
+        # real cost now that the full dataset carries ~800 scripts-surface patterns.
+        remaining = _MAX_JS_BYTES_PER_HOST - budget.get(host, 0)
+        if host not in hosts or remaining <= 0:
             continue
-        raw = storage.get_blob(asset.input_ref)
+        raw = storage.get_blob(asset.input_ref)[:remaining]
         budget[host] = budget.get(host, 0) + len(raw)
-        by_host.setdefault(host, []).append(raw[:_MAX_JS_BYTES_PER_HOST].decode("utf-8", "replace"))
+        by_host.setdefault(host, []).append(raw.decode("utf-8", "replace"))
     return by_host
 
 

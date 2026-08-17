@@ -3,9 +3,9 @@ recon-platform — third-party notices
 
 Technology fingerprint dataset
 ------------------------------
-apps/platform/src/recon/findings/techdetect_data/ vendors a subset of
-enthec/webappanalyzer (https://github.com/enthec/webappanalyzer), licensed under
-GPL-3.0.
+apps/platform/src/recon/findings/techdetect_data/ vendors the
+enthec/webappanalyzer fingerprint dataset
+(https://github.com/enthec/webappanalyzer), licensed under GPL-3.0.
 
 Usage terms (delivery model: SaaS / internal only):
 - The dataset is used SERVER-SIDE ONLY. It is never conveyed to users and never

@@ -20,7 +20,9 @@ def test_detects_server_framework_library_and_meta_with_versions() -> None:
     )
     names = {d.name: d for d in techdetect.detect("acme.io", signal, [])}
     assert names["Nginx"].version == "1.25.3"
-    assert names["Nginx"].categories == ["Web servers"]
+    # enthec assigns Nginx more than one category (Web servers + Reverse proxies);
+    # assert membership, not an exact list, so a dataset re-pin can't break this.
+    assert "Web servers" in names["Nginx"].categories
     assert "Express" in names
     assert names["jQuery"].version == "3.5.1"
     assert names["WordPress"].version == "6.4"
@@ -50,11 +52,10 @@ def test_dataset_commit_and_skip_count_are_exposed() -> None:
     assert techdetect.skipped_pattern_count() >= 0
 
 
-# --- CARRYOVER from Task 4 review: the curated vendored dataset has no `cookies` or
-# `scripts` fields, so those two surfaces are otherwise never exercised end-to-end.
-# These tests swap in a synthetic raw dataset (still through the real detect() ->
-# _compiled() -> match() path, not by calling match() directly) so both surfaces, and
-# Re2Match.group() (the version-extracting match below), get real coverage.
+# --- These tests swap in a synthetic raw dataset (still through the real detect() ->
+# _compiled() -> match() path, not by calling match() directly) so the `cookies` and
+# `scripts` surfaces, and Re2Match.group() (the version-extracting match below), get
+# DETERMINISTIC coverage that doesn't drift when the vendored dataset is re-pinned.
 
 
 def _detect_with_raw_dataset(

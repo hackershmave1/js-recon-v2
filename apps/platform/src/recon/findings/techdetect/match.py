@@ -85,9 +85,10 @@ def _surface_values(
         # dataset surface below - the two "scripts" names refer to different things).
         return list(signal.get("scripts", []))
     if pattern.surface == "meta":
-        # The signal only carries meta tag *content*, not tag names, so we can't tell
-        # a "generator" meta from any other; every enthec meta pattern in the vendored
-        # dataset happens to key "generator", so that's the only one Phase 1 supports.
+        # The signal only carries meta tag *content*, not tag names, so we can't tell a
+        # "generator" meta from any other. Phase 1 therefore supports only "generator"
+        # patterns; the full dataset's non-generator meta patterns are compiled but
+        # never matched here — a known Phase-1 coverage gap, not a correctness bug.
         return list(signal.get("meta", [])) if pattern.key == "generator" else []
     if pattern.surface == "scripts":
         return js_texts
