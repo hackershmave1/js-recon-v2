@@ -14,11 +14,13 @@ import re
 from tree_sitter import Node
 
 from recon.findings._jsast import (
+    _MAX_URL_SPAN,
     BaseEnv,
     _args,
     _object_pairs,
     _string_value,
     _text,
+    _text_if_short,
     _walk,
 )
 
@@ -69,25 +71,32 @@ def _declared_names(root: Node) -> set[str]:
 
         A plain `identifier` (or an object-pattern shorthand leaf) is marked
         directly. Anything else is a destructuring/default/rest pattern:
-        recurse into it and mark every binding leaf found inside. An
+        descend into it and mark every binding leaf found inside. An
         object-pattern renaming key (`{ a: loc }`'s `a`) and a default
         value's expression (`x = value`'s `value`) are *references*, not
         bindings, so those subtrees are deliberately not walked — only
         `pair_pattern`'s `value` field and `assignment_pattern` /
         `object_assignment_pattern`'s `left` field are.
+
+        Descends ITERATIVELY (explicit stack), not recursively: a crafted deeply-
+        nested destructuring pattern (`const [[[…]]] = x`) would otherwise overflow
+        the Python stack — a crash-class DoS on this hot path. Marking only ever
+        increments counts, so the pop order does not affect the result.
         """
-        if candidate is None:
-            return
-        if candidate.type in binding_leaf_types:
-            name = _text(candidate)
-            seen[name] = seen.get(name, 0) + 1
-        elif candidate.type == "pair_pattern":  # `{ key: value }` -- only `value` binds
-            mark(candidate.child_by_field_name("value"))
-        elif candidate.type in ("assignment_pattern", "object_assignment_pattern"):
-            mark(candidate.child_by_field_name("left"))  # `x = default`; `default` is a read
-        elif candidate.type in ("object_pattern", "array_pattern", "rest_pattern"):
-            for child in candidate.named_children:
-                mark(child)
+        stack = [candidate]
+        while stack:
+            node = stack.pop()
+            if node is None:
+                continue
+            if node.type in binding_leaf_types:
+                name = _text(node)
+                seen[name] = seen.get(name, 0) + 1
+            elif node.type == "pair_pattern":  # `{ key: value }` -- only `value` binds
+                stack.append(node.child_by_field_name("value"))
+            elif node.type in ("assignment_pattern", "object_assignment_pattern"):
+                stack.append(node.child_by_field_name("left"))  # `x = default`; default is a read
+            elif node.type in ("object_pattern", "array_pattern", "rest_pattern"):
+                stack.extend(node.named_children)
 
     for node in _walk(root):
         if node.type in ("variable_declarator", "function_declaration"):
@@ -96,8 +105,19 @@ def _declared_names(root: Node) -> set[str]:
             mark(node.child_by_field_name("parameter"))
         elif node.type == "arrow_function":
             mark(node.child_by_field_name("parameter"))  # bare single param: `x => ...`
-        elif node.parent is not None and node.parent.type == "formal_parameters":
-            mark(node)  # any param shape: plain/destructured/default/rest
+        elif node.type == "formal_parameters":
+            # Mark params TOP-DOWN from the `formal_parameters` node, never bottom-up via
+            # each child's `.parent`. tree-sitter's `node.parent` re-roots a cursor from
+            # the top on every access (O(depth)), so probing `child.parent.type` once per
+            # node across the whole tree is O(n·depth) — quadratic on a deeply-nested
+            # single expression (a `"a".concat("b")…` / `"a"+"b"+…` string-splitting chain,
+            # exactly the static-analysis-evasion obfuscation this product targets), which
+            # stalled the analyze worker for minutes on a crafted in-cap bundle. Iterating
+            # this node's own children marks the identical binding leaves with no `.parent`
+            # access and O(1) work per parameter. (DoS hardening — see the profile in the
+            # colocated DoS-guard test.)
+            for child in node.named_children:
+                mark(child)  # any param shape: plain/destructured/default/rest
         elif node.type == "assignment_expression":
             mark(node.child_by_field_name("left"))  # plain reassignment: `loc = other`
     return {name for name, count in seen.items() if count > 1}
@@ -126,7 +146,12 @@ def collect_base_env(root: Node, data: bytes) -> BaseEnv:
                 if lit is not None:
                     const_prefixes[name] = lit
         elif node.type == "assignment_expression":
-            left = _text(node.child_by_field_name("left"))
+            # `_text_if_short`, not `_text`: a left-nested member-target assignment
+            # (`((a.x=1).x=1).x=1…`) makes each LHS a member expression that CONTAINS every
+            # inner assignment, so decoding it per node re-decodes overlapping spans — O(n^2).
+            # `left` is only matched against the 23-char `axios.defaults.baseURL`, so an
+            # over-cap LHS can't match; a real LHS is far under the cap. (DoS hardening.)
+            left = _text_if_short(node.child_by_field_name("left"))
             if left in ("axios.defaults.baseURL",):
                 default_base = _string_value(node.child_by_field_name("right"))
     return BaseEnv(instances=instances, default_base=default_base, const_prefixes=const_prefixes)
@@ -203,6 +228,8 @@ def _fold_const_prefix(node: Node, env: BaseEnv) -> str | None:
     """
     if node.type != "template_string":
         return None
+    if node.end_byte - node.start_byte > _MAX_URL_SPAN:
+        return None  # over-cap template — unresolvable, bail before the O(span) decode (DoS)
     named = node.named_children
     if not named or named[0].type != "template_substitution":
         return None

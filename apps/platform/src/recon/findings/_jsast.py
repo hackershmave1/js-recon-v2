@@ -195,6 +195,59 @@ def _text(node: Node | None) -> str:
     return (node.text or b"").decode("utf-8", "replace") if node is not None else ""
 
 
+# Cap for decoding a node's text when the RESULT is only matched against short names or
+# rendered as a short token. No identifier the extractor cares about — a global, `axios`, a
+# jQuery `$`, an axios-instance/const/wrapper var, a `WebSocket` constructor, a `:holder`
+# leaf name — is anywhere near this many bytes (real ones are tens of bytes; minifiers make
+# names SHORTER). Decoding a larger span is wasted O(span) work, and summed over a
+# deeply-nested crafted expression (the `.concat()`/`+` string-splitting or nested-sink
+# obfuscation this product analyzes) it is O(n^2) — a worker-stalling DoS on an in-cap
+# bundle. The span is an O(1) field read taken BEFORE the decode. (DoS hardening.)
+_MAX_NODE_TEXT_SPAN = 256
+
+# Byte budget for a 200-char finding snippet: 200 chars are at most 200*4 bytes of UTF-8, so
+# slicing this many SOURCE bytes (`_source_snippet`) yields output byte-identical to the old
+# `node.text[:200]` while bounding the work — crucial because tree-sitter's `node.text`
+# materializes the WHOLE node span (O(span)), which is O(n^2) summed over a nested-sink chain.
+_SNIPPET_MAX_BYTES = 800
+
+# Span cap for a sink's URL node (string/template). Larger than `_MAX_NODE_TEXT_SPAN` because
+# a real query-string URL can run to a few KB, but a URL node bigger than this can't be
+# statically resolved without an O(span) decode — and on a nested crafted template
+# (`fetch(`a${ fetch(...) }`)`) that per-sink decode is O(n^2). Over-cap → treated as
+# unresolvable / rendered as EXPR (honest, drop-only). (DoS hardening.)
+_MAX_URL_SPAN = 8192
+
+
+def _text_if_short(node: Node | None) -> str:
+    """``_text(node)``, or ``""`` when the node's byte span exceeds ``_MAX_NODE_TEXT_SPAN``.
+
+    For callers that only compare the text against short names: no realistically-sized
+    receiver/constructor/holder reaches the cap, so an over-cap node is treated as
+    unrecognized — the same outcome as any other non-matching text, drop-only and never
+    invented — while the skipped decode keeps per-node work O(1)."""
+    if node is None:
+        return ""
+    if node.end_byte - node.start_byte > _MAX_NODE_TEXT_SPAN:
+        return ""
+    return _text(node)
+
+
+def _source_snippet(data: bytes, start_byte: int, end_byte: int) -> str:
+    """A bounded finding snippet sliced from the SOURCE bytes — byte-identical to the old
+    ``node.text[:200]`` but O(snippet), not O(node span).
+
+    tree-sitter's ``node.text`` materializes the whole ``data[start:end]`` slice before any
+    truncation, so ``node.text[:200]`` is O(span); summed over a nested-sink chain (each
+    enclosing sink re-decoding an overlapping span) that is a worker-stalling O(n^2) DoS.
+    Capping the slice at ``min(start+cap, end)`` reads at most ``_SNIPPET_MAX_BYTES`` and
+    never past the node, so it equals ``data[start:end][:cap]`` == ``node.text[:cap]`` while
+    staying O(cap). ``errors="replace"`` absorbs a multibyte char split at the byte boundary;
+    the trailing ``[:200]`` re-truncates to the char budget. (DoS hardening.)"""
+    stop = min(start_byte + _SNIPPET_MAX_BYTES, end_byte)
+    return data[start_byte:stop].decode("utf-8", "replace")[:200]
+
+
 def _string_value(node: Node | None) -> str | None:
     """Resolve a string/template literal to its text; ``None`` if not static.
 
@@ -209,6 +262,14 @@ def _string_value(node: Node | None) -> str | None:
             return text[1:-1]
         return text
     if node.type == "template_string":
+        # A template can EMBED other sinks in `${…}`, so a crafted nested template
+        # (`fetch(`a${ fetch(...) }`)`) makes every enclosing sink re-decode a URL spanning
+        # all inner sinks — O(n^2). Over-cap → None (not statically resolvable, honest) bounds
+        # that decode at its single source, covering every sink type (fetch/axios/xhr/jquery)
+        # and `_collapse_url`. A plain `string` literal can't embed a sink, so it is left
+        # uncapped (opaque, decoded once per referencing sink = linear). (DoS hardening.)
+        if node.end_byte - node.start_byte > _MAX_URL_SPAN:
+            return None
         text = _text(node)
         return text[1:-1] if text.startswith("`") and text.endswith("`") else text
     return None
@@ -245,6 +306,8 @@ def _expr_token(node: Node | None) -> str:
     leaf degrades to ``EXPR``, so the never-guess invariant holds."""
     if node is None:
         return _EXPR
+    if node.end_byte - node.start_byte > _MAX_NODE_TEXT_SPAN:
+        return _EXPR  # too large to be a readable holder name — honest EXPR, bounds the decode
     text = _text(node).replace(" ", "")
     segments = text.split(".")
     # Same-origin marker: window.location.origin / document.location.href / location.origin.
@@ -441,8 +504,11 @@ def _object_pairs(node: Node | None) -> dict[str, Node]:
             continue
         if key_node.type in ("string", "template_string"):
             key = _string_value(key_node)
-        else:  # property_identifier / identifier
-            key = _text(key_node)
+        else:  # property_identifier / identifier / computed_property_name (`[expr]`)
+            # `_text_if_short`, not `_text`: a computed key `[expr]` can nest a sink, and its
+            # uncapped decode per enclosing object was O(n^2); an over-cap computed key isn't
+            # a static param name anyway, so "" (dropped below) is the honest result. (DoS)
+            key = _text_if_short(key_node)
         if key:
             pairs[key] = value_node
     return pairs
@@ -506,13 +572,18 @@ _AUTH_HEADERS = frozenset(
 def _leading_string(node: Node | None) -> str | None:
     """The literal string at the head of a value node: a bare string/template, or the left
     operand of a ``"prefix" + expr`` concatenation. None if the head is not a literal — so
-    ``"Bearer " + token`` yields ``"Bearer "`` while a bare ``token`` yields None."""
-    if node is None:
+    ``"Bearer " + token`` yields ``"Bearer "`` while a bare ``token`` yields None.
+
+    Walks the ``+`` left-spine ITERATIVELY, not recursively: a crafted deep ``"a"+"b"+…``
+    header value would otherwise overflow the Python stack on this hot path — a crash-class
+    DoS (cf. ``_collapse_url``'s ``_depth`` cap). Only the leftmost literal is needed."""
+    while node is not None:
+        if node.type in ("string", "template_string"):
+            return _string_value(node)
+        if node.type == "binary_expression":
+            node = node.child_by_field_name("left")
+            continue
         return None
-    if node.type in ("string", "template_string"):
-        return _string_value(node)
-    if node.type == "binary_expression":
-        return _leading_string(node.child_by_field_name("left"))
     return None
 
 
@@ -559,7 +630,10 @@ def _endpoint(
         col=col,
         start_byte=call.start_byte,
         end_byte=call.end_byte,
-        snippet=_text(call)[:200],
+        # Snippet deferred to `extract()`'s post-pass (`_source_snippet`), which has the source
+        # bytes and slices them O(cap); building it here from `call.text` would be O(node span)
+        # → O(n^2) over a nested-sink chain. Filled before `extract` returns.
+        snippet="",
         wrapper=wrapper,
         headers=tuple(headers or ()),
         confidence=confidence,

@@ -5,6 +5,11 @@ Pure unit tests — parse JS strings, assert the reconstructed calls. No infra.
 
 from __future__ import annotations
 
+import sys
+import time
+
+import pytest
+
 from recon.findings.extract import _PARSER, collect_base_env, extract
 
 
@@ -632,6 +637,175 @@ def test_wrapper_dynamic_arg_is_unattributed_like_axios():
     # A non-static URL leaves the same honest trace axios would (REQ-C2).
     result = extract("api.get(dynamicUrl);", wrappers=[WrapperRule("api")])
     assert result.endpoints == [] and result.unattributed == 1
+
+
+# --- main-walk DoS guard (deeply-nested string-splitting / nested-sink shapes) --- #
+# Counterpart to the harvest-pass linearity guard: the MAIN extract() walk must not go
+# quadratic on a single deeply-nested expression. A `.concat()`/`+` split chain (and a
+# nested-sink chain) is the static-analysis-evasion obfuscation this product targets, and
+# a crafted ~1-10 MB single expression stays under the ingest cap AND (over 1 MiB) skips
+# beautify, so it reaches the raw walk. Pre-fix this walk was cleanly O(n^2) — the concat
+# shape measured n=1000 0.74s, n=4000 15.7s, n=16000 282s (~4.3x per 2x) — stalling the
+# single analyze worker for minutes-to-hours. Three independent quadratic sources were
+# bounded, all the same class (an unbounded per-node full-text decode / O(depth) `.parent`
+# on the tree walk): (1) a per-node `node.parent` probe in `_declared_names` (tree-sitter
+# re-roots `.parent` from the top → O(depth) each; dominant for the concat/+ shapes),
+# (2) an uncapped receiver decode per member call in `_handle_call`, and (3) an uncapped
+# leaf decode in `_expr_token` (+ the `_endpoint` snippet) on the UNRESOLVED-sink render
+# path, dominant for a nested `new WebSocket(new WebSocket(…))` shape. The three builders
+# below pin all three: `+` isolates `_declared_names` (no call_expression); `.concat()`
+# exercises the receiver decode; nested `WebSocket` exercises the `_expr_token`/snippet
+# path (its outer args are unresolvable sinks).
+
+
+def _concat_chain(depth: int) -> str:
+    """``var u = "https://x/".concat("a").concat("a")…;`` — nested call_expressions."""
+    return 'var u = "https://x/"' + '.concat("a")' * depth + ";"
+
+
+def _plus_chain(depth: int) -> str:
+    """``var u = "a" + "b" + "b" + …;`` — deeply left-nested binary_expressions, no calls."""
+    return 'var u = "a"' + ' + "b"' * depth + ";"
+
+
+def _nested_sink_chain(depth: int) -> str:
+    """``x = new WebSocket(new WebSocket(…("/x")));`` — each outer arg is a non-static sink
+    URL, routing through `_record_unresolved`→`_collapse_url`→`_expr_token`'s leaf decode."""
+    return "x=" + "new WebSocket(" * depth + '"/x"' + ")" * depth + ";"
+
+
+def _extract_seconds(source: str) -> float:
+    start = time.perf_counter()
+    extract(source)
+    return time.perf_counter() - start
+
+
+@pytest.mark.parametrize(
+    "build_chain",
+    [_concat_chain, _plus_chain, _nested_sink_chain],
+    ids=["concat", "plus", "nested_sink"],
+)
+def test_extract_stays_linear_on_deep_split_chain_no_dos(build_chain):
+    """extract() on a deeply-nested `.concat()`/`+`/nested-sink chain must stay linear;
+    pre-fix the walk was O(n^2) (concat 282s at depth 16000, ~0.3s now).
+
+    Three assertions, deliberately layered so the guard is both flake-proof and fast to
+    fail on a real regression:
+      * anchor ceiling at depth 4000 (~0.03-0.06s linear, ~50-100x headroom so runner
+        jitter can't trip it) — a reintroduced O(n^2) is ~16s here and trips this FIRST,
+        so CI fails in seconds instead of dragging the 282s depth-16000 case through;
+      * a runner-speed-INDEPENDENT scaling ratio (4x the input is ~4x work when linear
+        but ~16x when quadratic) — catches a partial regression an absolute bound alone
+        would miss, and holds regardless of how fast the machine is;
+      * an absolute ceiling at depth 16000 (the brief's wall-clock bound), only reached
+        once the walk already looks linear."""
+    extract('fetch("/warmup");')  # steady state: exclude one-time import/parse warmup
+    anchor = _extract_seconds(build_chain(4000))
+    assert anchor < 3.0, (
+        f"extract() at depth 4000 took {anchor:.2f}s (linear ~0.05s; pre-fix O(n^2) 15.7s) — "
+        f"DoS regression"
+    )
+    big = _extract_seconds(build_chain(16000))  # 4x the input
+    assert big < anchor * 10, (  # linear ~4x, quadratic ~16x — 10x sits safely between
+        f"extract() scaled {big / anchor:.1f}x for 4x deeper input "
+        f"(anchor={anchor * 1000:.0f}ms, big={big * 1000:.0f}ms) — looks quadratic, DoS regression"
+    )
+    assert big < 5.0, (
+        f"extract() at depth 16000 took {big:.2f}s (linear ~0.3s; pre-fix O(n^2) 282s) — "
+        f"DoS regression"
+    )
+
+
+def test_oversized_node_text_is_skipped_dos_guard():
+    """Mechanism guard for the shared span-cap `_text_if_short` (the bounded-decode
+    primitive under all the sink-path fixes). A node whose byte span exceeds
+    ``_MAX_NODE_TEXT_SPAN`` — a nested `.concat()` chain used as a call receiver — is not
+    text-decoded: ``_text_if_short`` returns ``""``, which matches no dispatch branch, so
+    the call is treated as unrecognized (never invented as a sink) while per-node work
+    stays O(1). A short, real receiver still decodes so genuine sinks are untouched."""
+    from recon.findings._jsast import _MAX_NODE_TEXT_SPAN, _text_if_short, _walk
+
+    # `var u = (<huge concat chain>).get('/p');` — the outermost call is `().get('/p')`,
+    # whose receiver object is the whole chain (well over the span cap). `_walk` is
+    # pre-order, so the first call_expression it yields is that outermost call.
+    src = 'var u = "https://x/"' + '.concat("a")' * 40 + ".get('/p');"
+    root = _PARSER.parse(src.encode()).root_node
+    outer_call = next(n for n in _walk(root) if n.type == "call_expression")
+    receiver = outer_call.child_by_field_name("function").child_by_field_name("object")
+    assert receiver.end_byte - receiver.start_byte > _MAX_NODE_TEXT_SPAN  # genuinely over cap
+    assert _text_if_short(receiver) == ""  # -> skipped, not decoded
+
+    # Control: a normal short receiver is decoded as before (cap does not change output).
+    axios_root = _PARSER.parse(b"axios.get('/x');").root_node
+    call = next(n for n in _walk(axios_root) if n.type == "call_expression")
+    short_receiver = call.child_by_field_name("function").child_by_field_name("object")
+    assert _text_if_short(short_receiver) == "axios"
+
+
+def test_oversized_template_url_is_unresolvable_not_decoded_dos_guard():
+    """Guard for the URL-span cap at its single decode source (`_string_value`). A
+    `template_string` URL larger than ``_MAX_URL_SPAN`` — a crafted template that embeds
+    inner sinks in ``${…}`` — resolves to None instead of being decoded, bounding the
+    per-sink O(span) decode that was O(n^2) over a nested-template chain across EVERY sink
+    type (fetch/axios/xhr/jquery). A normal in-cap template still decodes to its shape."""
+    from recon.findings._jsast import _MAX_URL_SPAN, _string_value, _walk
+
+    big = "`/api/" + "a" * (_MAX_URL_SPAN + 100) + "`"  # over-cap template literal
+    root = _PARSER.parse(f"fetch({big});".encode()).root_node
+    tmpl = next(n for n in _walk(root) if n.type == "template_string")
+    assert tmpl.end_byte - tmpl.start_byte > _MAX_URL_SPAN  # genuinely over cap
+    assert _string_value(tmpl) is None  # -> unresolvable, not decoded
+
+    # Control: an in-cap template still decodes to its `${…}`-preserving shape.
+    small = _PARSER.parse(b"fetch(`/api/users/${id}`);").root_node
+    tmpl2 = next(n for n in _walk(small) if n.type == "template_string")
+    assert _string_value(tmpl2) == "/api/users/${id}"
+
+
+def test_deep_binary_and_destructuring_do_not_recurse_crash_dos_guard():
+    """Crash-class guard: the extractor's two unbounded recursions are now iterative, so a
+    crafted deep spine can't overflow the Python stack. `_leading_string` (an Authorization
+    header value, a `"a"+"b"+…` chain) and `_declared_names.mark` (a `[[[…]]]` destructuring
+    pattern) each recursed a crafted deep spine and raised RecursionError at a few KB;
+    both must now complete, and the header scheme must still resolve from its leading literal."""
+    depth = sys.getrecursionlimit() * 20  # far past the CPython recursion limit either way
+
+    auth = 'axios.get("/x", {headers: {Authorization: "Bearer "' + '+"x"' * depth + "}});"
+    result = extract(auth)  # must not raise RecursionError
+    assert result.endpoints and result.endpoints[0].headers[0].scheme == "bearer"
+
+    destructure = "const " + "[" * depth + "a" + "]" * depth + " = x;"
+    extract(destructure)  # deep destructuring pattern must not raise RecursionError
+
+
+def test_snippet_is_source_sliced_and_bounded_dos_guard():
+    """Guard for the finding snippet's bounded source-slice (`_source_snippet`). The snippet
+    must be sliced from the SOURCE bytes and capped at ``_SNIPPET_MAX_BYTES``, NOT built from
+    ``node.text`` — tree-sitter's ``node.text`` materializes the whole node span (O(span)),
+    which is O(n^2) summed over a nested-sink chain (each enclosing sink re-decoding an
+    overlapping span). The slice stays byte-identical to the old ``node.text[:200]``."""
+    from recon.findings._jsast import _SNIPPET_MAX_BYTES, _source_snippet
+
+    src = b"fetch('/x/" + b"a" * 100_000 + b"');"  # a single huge call node
+    end = len(src)
+    snippet = _source_snippet(src, 0, end)
+    assert snippet == src[0:end].decode()[:200]  # byte-identical to node.text[:200]
+    assert len(snippet) == 200
+    # Independent of where the node ENDS once past the cap — proof it reads ≤ cap bytes and
+    # never materializes the full span (an over-cap `end` yields the same result as end=cap).
+    assert _source_snippet(src, 0, end) == _source_snippet(src, 0, _SNIPPET_MAX_BYTES)
+
+
+def test_nested_assignment_lhs_capped_and_baseurl_still_resolves():
+    """Defect-9 guard: a left-nested member-target assignment (`((a.x=1).x=1)…`) has an LHS
+    that CONTAINS every inner assignment, so decoding it per node (uncapped `_text`) re-decodes
+    overlapping spans — O(n^2) in `collect_base_env`. The LHS is now capped via `_text_if_short`
+    (it is only matched against the 23-char `axios.defaults.baseURL`). A real, short
+    `axios.defaults.baseURL = …` in the same file must still resolve — the cap changes no real
+    output."""
+    src = "(" * 200 + "a.x=1" + ").x=1" * 200 + "; axios.defaults.baseURL='/api';"
+    env = collect_base_env(_PARSER.parse(src.encode()).root_node, src.encode())
+    assert env.default_base == "/api"
 
 
 # --- Phase 2: page routes (href/src/action, nav sinks, off-sink harvest) ------

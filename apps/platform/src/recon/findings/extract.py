@@ -31,6 +31,7 @@ are re-exported here (see ``__all__``) because downstream modules
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 from tree_sitter import Node
 
@@ -59,8 +60,10 @@ from recon.findings._jsast import (
     _looks_like_route,
     _object_pairs,
     _query_params,
+    _source_snippet,
     _string_value,
     _text,
+    _text_if_short,
     _walk,
 )
 from recon.findings.wrappers import WrapperRule, wrapper_callees
@@ -94,7 +97,19 @@ def extract(source: str | bytes, wrappers: Sequence[WrapperRule] = ()) -> Extrac
         elif node.type == "pair":  # object-literal href/src/action value -> a page route
             _handle_property_url(node, result)
     _harvest_routes(tree.root_node, result)  # off-sink absolute-URL literals, after the sinks
+    _fill_snippets(result, data)  # after all lanes (incl. routes) are populated
     return result
+
+
+def _fill_snippets(result: Extraction, data: bytes) -> None:
+    """Fill each endpoint's deferred display snippet from the source bytes, now the walk is
+    done and `data` is in hand. `_endpoint` leaves ``snippet=""`` because building it there
+    from ``call.text`` is O(node span) — O(n^2) over a nested-sink chain (DoS); `_source_snippet`
+    slices the source O(cap) with byte-identical output. Rebuilds each frozen row in place."""
+    for lane in (result.endpoints, result.unresolved, result.generic, result.routes):
+        lane[:] = [
+            replace(ep, snippet=_source_snippet(data, ep.start_byte, ep.end_byte)) for ep in lane
+        ]
 
 
 # --- sink handlers -----------------------------------------------------------
@@ -306,11 +321,14 @@ def _handle_call(call: Node, result: Extraction, env: BaseEnv, callees: frozense
         return
     # Member access, dotted (axios.get) or computed (axios["get"]) — the latter is
     # common in property-mangled bundles and must not be silently dropped (C2).
+    # `_text_if_short` bounds the receiver decode: a huge receiver (a nested `.concat()`/`+`
+    # chain used as a call object) matches no dispatch branch anyway, so skipping its decode
+    # keeps the walk linear on the string-splitting DoS shape (see `_text_if_short`).
     if fn.type == "member_expression":
-        obj = _text(fn.child_by_field_name("object"))
+        obj = _text_if_short(fn.child_by_field_name("object"))
         prop = _text(fn.child_by_field_name("property"))
     elif fn.type == "subscript_expression":
-        obj = _text(fn.child_by_field_name("object"))
+        obj = _text_if_short(fn.child_by_field_name("object"))
         index = _string_value(fn.child_by_field_name("index"))
         if index is None:  # dynamic index -> can't attribute a method name
             return
@@ -508,7 +526,10 @@ def _jquery(call: Node, prop: str, result: Extraction) -> None:
 
 def _handle_new(new: Node, result: Extraction) -> None:
     constructor = new.child_by_field_name("constructor")
-    name = _text(constructor).split(".")[-1]  # WebSocket or window.WebSocket
+    # `_text_if_short` bounds the decode: a >cap constructor can't be `WebSocket` (a nested
+    # `new WebSocket(new WebSocket(…))` DoS shape has a huge inner constructor), so treat it
+    # as non-matching instead of decoding the whole subtree per `new` node.
+    name = _text_if_short(constructor).split(".")[-1]  # WebSocket or window.WebSocket
     if name != "WebSocket":
         return
     args = _args(new)
