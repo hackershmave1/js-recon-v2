@@ -100,6 +100,25 @@ describe("SourcesPage", () => {
     expect(screen.getByText("endpoint")).toBeInTheDocument();  // marks still shown
   });
 
+  it("does not auto-pretty-print a minified source that carries finding marks", async () => {
+    // A marked file's finding lines are server-authoritative (the server beautified it
+    // before recording them), so auto-pretty stays OFF — a client re-beautify would
+    // renumber the marks. Guards the residual case where a beautified line is still long.
+    const MIN = "const a=fetch('/x');" + "0;".repeat(300); // one long minified line
+    const asset: SourceFile = { path: "https://acme.io/app.js", kind: "asset", fetch_status: "ok", asset_url: null };
+    const data: FindingsResponse = {
+      run_id: "r", count: 1, coverage: null, spec: null,
+      findings: [f({ finding_hash: "e1", occurrences: [occ({ asset_url: asset.path, line: 1 })] })],
+    };
+    vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: 1, sources: [asset] });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: asset.path, content: MIN, truncated: false });
+    render(<SourcesPage data={data} tenantId="t" runId="r" jump={null} />);
+
+    const toggle = await screen.findByRole("button", { name: /pretty print/i });
+    expect(await screen.findByText("endpoint")).toBeInTheDocument();  // mark shown, not dropped
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "false"));  // auto-pretty suppressed
+  });
+
   it("folds a directory and shows an aggregated finding badge on the folder", async () => {
     const asset: SourceFile = { path: "https://acme.io/scripts/app.js", kind: "asset", fetch_status: "ok", asset_url: null };
     const data: FindingsResponse = {
