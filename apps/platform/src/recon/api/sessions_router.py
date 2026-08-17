@@ -164,4 +164,6 @@ def _run_ref_dict(run: service.RunRefView) -> dict:
         "started_at": run.started_at,
         "ended_at": run.ended_at,
         "target": run.target,
+        "failure_category": run.failure_category,
+        "failure_reason": run.failure_reason,
     }

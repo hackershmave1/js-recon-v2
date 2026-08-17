@@ -168,6 +168,7 @@ def transition(
     to_state: RunState,
     stage: RunStage | None = None,
     extra_values: dict[str, Any] | None = None,
+    event_payload_extra: dict[str, Any] | None = None,
 ) -> RunView:
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
@@ -180,6 +181,7 @@ def transition(
             tenant_id=tenant_id,
             stage=stage,
             extra_values=extra_values,
+            event_payload_extra=event_payload_extra,
         )
         snapshot = _snapshot(run)
     publish(redis, event)

@@ -22,7 +22,7 @@ from recon.findings import analyze
 from recon.observability import bind_run, get_logger
 from recon.progress import heartbeat as progress
 from recon.queue import retry, streams
-from recon.runs import coordinator, queries, service
+from recon.runs import coordinator, failure, queries, service
 from recon.runs import state_machine as sm
 
 log = get_logger("recon.worker")
@@ -219,15 +219,33 @@ def _handle_failure(
         return "retry"
     streams.to_dlq(redis, queue, message, error=str(exc))
     progress.finish_job(tenant_id, job_id, JobState.DEAD, attempts=attempt_no)
-    service.transition(
-        redis,
-        tenant_id=tenant_id,
-        run_id=run_id,
-        to_state=RunState.FAILED,
-        extra_values={"error": {"stage": stage.value, "message": str(exc)}},
-    )
+    # Classify into a coarse category + a curated, safe reason. The raw str(exc)
+    # stays in run.error["message"] for logs/DLQ (write-only — the API/UI serve the
+    # classified fields, never the message, since it can embed an internal IP/stderr).
+    info = failure.classify_failure(exc, stage)
+    safe = {
+        "category": info.category,
+        "reason": info.reason,
+        "host": info.host,
+        "http_status": info.http_status,
+    }
+    try:
+        service.transition(
+            redis,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            to_state=RunState.FAILED,
+            extra_values={"error": {"stage": stage.value, "message": str(exc), **safe}},
+            event_payload_extra=safe,
+        )
+    except (service.TransitionConflict, sm.InvalidTransition) as texc:
+        # A reclaimed/duplicate dead message, or a race with a concurrent cancel, may
+        # have already moved the run out of its active state; the guarded UPDATE /
+        # assert_transition then refuses this FAILED write. First-writer-wins — the
+        # reason it already recorded stands. Log and still ACK so we don't redeliver.
+        log.warning("job.dead_transition_skipped", job_id=job_id, error=str(texc))
     streams.ack(redis, queue, msg_id)
-    log.error("job.dead", job_id=job_id, error=str(exc))
+    log.error("job.dead", job_id=job_id, error=str(exc), category=info.category)
     return "dead"
 
 

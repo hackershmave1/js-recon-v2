@@ -71,6 +71,14 @@ class StatusView:
     pause_requested: bool
     cancel_requested: bool
     etag: str
+    # Classified failure (only set on a FAILED run; see runs.failure). The curated,
+    # safe subset of run.error — never the raw message. NOT folded into the etag: the
+    # category is written in the same guarded transition that flips `state`, which is
+    # already in the etag, so state changing busts a polling client's If-None-Match.
+    failure_category: str | None = None
+    failure_reason: str | None = None
+    failure_host: str | None = None
+    failure_http_status: int | None = None
 
 
 def _pct(done: int, total: int) -> int:
@@ -116,6 +124,9 @@ def get_status(tenant_id: str, run_id: str, *, now: dt.datetime | None = None) -
         session_id = str(run.session_id)
         pause_requested = run.pause_requested
         cancel_requested = run.cancel_requested
+        # Surface only the classified, safe subset of run.error — never ["message"],
+        # which is stored for logs and can embed an internal IP / engine stderr.
+        err = run.error or {}
     hb_iso = heartbeat.isoformat() if heartbeat else None
     etag = _etag(state, stage, done, total, hb_iso, stalled, pause_requested, cancel_requested)
     return StatusView(
@@ -132,6 +143,10 @@ def get_status(tenant_id: str, run_id: str, *, now: dt.datetime | None = None) -
         pause_requested=pause_requested,
         cancel_requested=cancel_requested,
         etag=etag,
+        failure_category=err.get("category"),
+        failure_reason=err.get("reason"),
+        failure_host=err.get("host"),
+        failure_http_status=err.get("http_status"),
     )
 
 
