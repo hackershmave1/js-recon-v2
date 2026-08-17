@@ -92,6 +92,45 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  # Capture-extension lane (DEBT D16): the MV3 extension under apps/capture ships
+  # Node test suites (tests/test_*.mjs) that no lane ran — security.yml only
+  # `npm audit`s this package — so a logic regression in the runtime-capture client
+  # could land on main green. The suites import only node: builtins + local modules
+  # (no third-party node_modules), so no `npm ci`/build is needed to run them; a
+  # future suite that adds a dependency import will fail loudly here (add `npm ci` then).
+  extension:
+    runs-on: ubuntu-latest
+    # The suites finish in seconds; cap the job so a hung/leaked-handle suite fails
+    # fast instead of riding the 6h default (CI minutes matter on a Free-tier repo).
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/capture/chrome-extension
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # Fail CLOSED: an empty glob (suites moved/renamed) is a hard error, not a
+      # silent pass — a gate that runs zero tests is a false green. Run every suite
+      # so one failure doesn't mask the rest, then exit non-zero if any failed.
+      - name: Run MV3 capture-extension test suites
+        run: |
+          shopt -s nullglob
+          suites=(tests/test_*.mjs)
+          if [ ${#suites[@]} -eq 0 ]; then
+            echo "::error::no extension test suites found (tests/test_*.mjs) — refusing to pass a zero-test gate"
+            exit 1
+          fi
+          echo "running ${#suites[@]} suite(s)"
+          rc=0
+          for t in "${suites[@]}"; do
+            echo "::group::$t"
+            node "$t" || rc=1
+            echo "::endgroup::"
+          done
+          exit $rc
+
   # Full lane: builds the app image (which compiles the pinned Sourcemapper commit
   # with Go) and brings up the data stores, then runs the whole suite inside the
   # image. This is where Sourcemapper's real-binary golden-map contract test and

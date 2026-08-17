@@ -49,6 +49,22 @@ RLS). **Detection note:** CI catches a broken migration because api/worker `depe
 migrate: service_completed_successfully`; `docker compose up -d migrate` alone swallows the
 exit code. (Migrated 2026-08-15 from the retired `slice2-deferred-debt.md`.)
 
+### D21 · Extractor: linear-but-unbounded worst case on pathological input [S]
+The crafted-input DoS **class is closed** (PR #71, 2026-08-17): the extractor's per-node
+full-text decodes are span-capped and its two unbounded recursions are iterative, so a
+deeply-nested single expression (the `.concat()`/`+`/nested-sink obfuscation this tool
+targets) can no longer drive `extract()` O(n²) or crash it — 9 vectors fixed, verified
+linear. **Residual:** the walk is now LINEAR, not *bounded* — a maximally-pathological
+~10 MB in-cap bundle (hundreds of thousands of nested sinks) still takes linear-minutes,
+which can exceed the analyze job's 30 s heartbeat (cf. D20 "Analyze mid-scan heartbeat").
+**Why safe now:** real bundles are nowhere near this shape; total time is bounded by the
+10 MB ingest cap; the actual DoS (O(n²)/crash) is gone. **Still owed (defense-in-depth):**
+a one-time AST node-count / total-work budget checked once in `extract()` that curtails a
+pathological input, instead of the current per-decode-site caps. **Trigger:** before
+exposing analyze to untrusted multi-tenant load at scale. The fixes + the shared
+bounded-decode primitives (`_text_if_short`, `_source_snippet`, span-cap constants) live in
+`recon.findings._jsast`; DoS guards in `findings/extract_test.py`.
+
 ## Enforcement / tooling (deferred from the CI-keystone slice)
 
 ### D2 · Ruff format sweep + broaden the ruleset [M] — ✅ RESOLVED 2026-08-07
@@ -298,13 +314,21 @@ just unclobbered storage). Frontend lane green (oxlint + tsc-strict + vitest 136
 UI this entry describes was later removed — superseded by central login (PR #57);
 `TenantContext` + `VITE_DEFAULT_TENANT_ID` remain.
 
-### D16 · Capture extension deferred items [S]
+### D16 · Capture extension deferred items [S] — ⏳ PARTIAL 2026-08-17 (CI test gate added)
 Small deferred work in the MV3 capture extension (`apps/capture/chrome-extension/`), recorded here
 when the point-in-time `REFACTOR-NOTES.md` was folded into the capture app README (`apps/capture/README.md`) during the
 enterprise-hygiene cleanup (so the "later" doesn't become "never"):
-- **Live `tests/*.mjs` suites are ungated in CI** — `security.yml` runs only `npm audit` on the
-  extension, so a broken suite wouldn't fail the build. A `for t in tests/test_*.mjs; do node "$t";
-  done` step in the frontend lane would close it.
+- ✅ **RESOLVED 2026-08-17 — Live `tests/*.mjs` suites are now gated in CI.** Added a dedicated
+  `extension` job to `.github/workflows/ci.yml` that runs all `tests/test_*.mjs` Node suites on every
+  push/PR (previously `security.yml` only `npm audit`ed the package, so a broken suite couldn't fail
+  the build). The job needs no `npm ci`/build — the suites import only `node:` builtins + local
+  modules. Fail-closed: an empty glob is a hard error (no silent zero-test pass), and every suite runs
+  so one failure can't mask another. Both §4 gates passed (design: SHIP AS-IS; code: see PR).
+- **Popup bundle (`src/popup/*.jsx`) is not compiled in CI** — the new `extension` lane runs the
+  Node test suites but deliberately stays dependency-free, so it does not `npm run build` the
+  esbuild/Preact popup; a broken popup import/JSX could still merge green. Close with an
+  `npm ci && npm run build` step (needs `node_modules`, so add npm caching keyed to the extension
+  lockfile). Surfaced by the D16 code-review gate 2026-08-17.
 - **`background.js` is well over 1,000 lines** (~3× the ~300 cap) — the message router +
   `processFile` could extract further. Same class as D11; test-aware (the service worker is the
   capture entry point), so a careful slice, low priority.
