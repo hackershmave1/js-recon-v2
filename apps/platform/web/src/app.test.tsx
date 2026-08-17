@@ -73,7 +73,7 @@ describe("app routes", () => {
   it("renders findings on the findings page", async () => {
     renderAt("/runs/r1/findings");
     expect(await screen.findByRole("heading", { name: "Findings" })).toBeInTheDocument(); // FindingsPage rendered
-    expect(screen.getAllByText("endpoint").length).toBeGreaterThan(0);                    // finding surfaced (facet + row)
+    expect(screen.getAllByText("API").length).toBeGreaterThan(0);                         // endpoint finding surfaced, labelled "API" (facet + row)
   });
 
   it("shows the Export spec button on the api-spec page once terminal", async () => {
