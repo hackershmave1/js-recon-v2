@@ -10,6 +10,12 @@ import { highlightJsLines, type HighlightedSpan } from "./highlight";
 const RENDER_MAX_LINES = 10_000;
 const RENDER_MAX_CHARS = 512_000;
 
+const UpIcon = () => (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="m18 15-6-6-6 6" />
+  </svg>
+);
+
 // Presentational: renders `text` line-by-line, capped. `marks` (line -> finding type) is null
 // when the view is pretty-printed (original line numbers no longer map after reformatting).
 // `focusLine` is the jumped-to line (highlighted + scrolled into view); it still applies to
@@ -49,31 +55,50 @@ export function CodeViewer({ text, truncated, marks, focusLine, canHighlight }: 
     try { focusRef.current?.scrollIntoView({ block: "center" }); } catch { /* jsdom no-op */ }
   }, [focusLine, text, highlighted]);
 
+  // A floating "jump to top" affordance so a long file needn't be scrolled all the
+  // way back up; shown once scrolled past ~a screenful.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [scrolled, setScrolled] = useState(false);
+  const onScroll = () => { const el = scrollRef.current; if (el) setScrolled(el.scrollTop > 300); };
+  const scrollToTop = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    try { el.scrollTo({ top: 0, behavior: "smooth" }); } catch { el.scrollTop = 0; }
+  };
+
   return (
-    <div className="sv-code">
-      {truncated && <div className="sv-note sv-warn">File truncated — showing a capped preview.</div>}
-      {clamped && (
-        <div className="sv-note sv-warn">
-          Large file — showing {lines.length.toLocaleString()} of {totalLines.toLocaleString()} line
-          {totalLines === 1 ? "" : "s"}{charClamped ? " (long lines truncated)" : ""}. Download to view or search the full file.
-        </div>
-      )}
-      {lines.map((line, i) => {
-        const n = i + 1;
-        const mark = marks?.get(n);
-        const focused = focusLine === n;
-        const spans = highlighted?.[i];
-        return (
-          <div key={n} ref={focused ? focusRef : undefined}
-            className={"sv-line" + (mark ? " marked" : "") + (focused ? " focus" : "")}>
-            <span className="sv-ln">{n}</span>
-            <span className="sv-code-txt">
-              {spans ? spans.map((s, j) => <span key={j} className={s.className}>{s.text}</span>) : line}
-            </span>
-            {mark && <span className="sv-mark">{mark}</span>}
+    <div className="sv-code-wrap">
+      <div className="sv-code" ref={scrollRef} onScroll={onScroll}>
+        {truncated && <div className="sv-note sv-warn">File truncated — showing a capped preview.</div>}
+        {clamped && (
+          <div className="sv-note sv-warn">
+            Large file — showing {lines.length.toLocaleString()} of {totalLines.toLocaleString()} line
+            {totalLines === 1 ? "" : "s"}{charClamped ? " (long lines truncated)" : ""}. Download to view or search the full file.
           </div>
-        );
-      })}
+        )}
+        {lines.map((line, i) => {
+          const n = i + 1;
+          const mark = marks?.get(n);
+          const focused = focusLine === n;
+          const spans = highlighted?.[i];
+          return (
+            <div key={n} ref={focused ? focusRef : undefined}
+              className={"sv-line" + (mark ? " marked" : "") + (focused ? " focus" : "")}>
+              <span className="sv-ln">{n}</span>
+              <span className="sv-code-txt">
+                {spans ? spans.map((s, j) => <span key={j} className={s.className}>{s.text}</span>) : line}
+              </span>
+              {mark && <span className="sv-mark">{mark}</span>}
+            </div>
+          );
+        })}
+      </div>
+      {scrolled && (
+        <button type="button" className="sv-top" onClick={scrollToTop}
+          title="Jump to top of file" aria-label="Scroll to top of file">
+          <UpIcon />
+        </button>
+      )}
     </div>
   );
 }

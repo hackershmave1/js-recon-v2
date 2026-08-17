@@ -51,7 +51,11 @@ button.sv-node.sel { background: var(--accent-soft); color: var(--accent); }
 .sv-pretty.on:hover:not(:disabled) { border-color: var(--accent); }
 .sv-note { padding: 9px 20px; font-size: 12px; border-bottom: 1px solid var(--border); }
 .sv-warn { color: var(--warn); }
+.sv-code-wrap { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
 .sv-code { flex: 1; overflow: auto; background: var(--field); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; }
+/* Floating jump-to-top, anchored to the non-scrolling wrapper (not the scroller). */
+.sv-top { position: absolute; right: 18px; bottom: 16px; width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--r-pill); background: var(--raised); border: 1px solid var(--border-strong); color: var(--text-2); box-shadow: 0 2px 12px rgba(0,0,0,0.4); }
+.sv-top:hover { background: #2b3446; border-color: var(--faint); color: var(--text); }
 .sv-line { display: flex; border-left: 3px solid transparent; }
 .sv-line.marked { background: rgba(255,77,94,0.08); border-left-color: var(--danger); }
 /* The jump-to-source target line. A lime left-accent + faint wash so it stands out
