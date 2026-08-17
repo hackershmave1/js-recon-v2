@@ -71,6 +71,10 @@ export interface RunData {
   cancelRequested: boolean;
   captureStatus: CaptureStatus | null;
   technologies: TechnologiesResponse | null;
+  // Classified failure on a FAILED run (safe subset; see recon.runs.failure).
+  failureCategory: string | null;
+  failureReason: string | null;
+  failureHost: string | null;
   handleControlResult: (res: RunControlResult) => void;
 }
 
@@ -112,6 +116,9 @@ function useRunStream(runId: string): RunData {
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null);
   const [technologies, setTechnologies] = useState<TechnologiesResponse | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [failureCategory, setFailureCategory] = useState<string | null>(null);
+  const [failureReason, setFailureReason] = useState<string | null>(null);
+  const [failureHost, setFailureHost] = useState<string | null>(null);
   // stateRef mirrors `state` at accept-time so the guard compares against the
   // running value even within a synchronous burst of replayed SSE events (where
   // `state` hasn't re-rendered yet). liveProgressRef flips once job.progress has
@@ -154,6 +161,9 @@ function useRunStream(runId: string): RunData {
         if (!isStaleSnapshot(s.state, prev)) {
           if (s.stage) setStage(s.stage); // never overwrite the pinned stage with a terminal null
           setPauseRequested(s.pause_requested); setCancelRequested(s.cancel_requested);
+          setFailureCategory(s.failure_category ?? null);
+          setFailureReason(s.failure_reason ?? null);
+          setFailureHost(s.failure_host ?? null);
           if (!liveProgressRef.current) {
             setPct(s.pct); setDone(s.done); setTotal(s.total); setEta(s.eta_seconds);
           }
@@ -272,7 +282,8 @@ function useRunStream(runId: string): RunData {
 
   return {
     runId, sessionId, state, stage, pct, done, total, eta, error, assets, events, findings, loaded,
-    pauseRequested, cancelRequested, captureStatus, technologies, handleControlResult,
+    pauseRequested, cancelRequested, captureStatus, technologies,
+    failureCategory, failureReason, failureHost, handleControlResult,
   };
 }
 

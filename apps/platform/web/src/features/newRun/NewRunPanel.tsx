@@ -23,6 +23,19 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+// A bare host already covers its subdomains server-side, so `host` + `*.host` is
+// redundant — keep the wider bare form, matching what the backend stores, so the
+// chips shown equal the scope saved (no silent server-side normalization). A LONE
+// wildcard is preserved as typed: collapsing it to the apex would WIDEN scope,
+// which this tool must never do silently.
+export function addScopeHost(hosts: string[], raw: string): string[] {
+  const host = raw.trim();
+  if (host === "" || hosts.includes(host)) return hosts;
+  const bare = host.startsWith("*.") ? host.slice(2) : host;
+  if (host === bare) return [...hosts.filter((h) => h !== `*.${bare}`), bare];
+  return hosts.includes(bare) ? hosts : [...hosts, host];
+}
+
 export function NewRunPanel() {
   const { tenantId } = useTenant();
   const navigate = useNavigate();
@@ -46,7 +59,7 @@ export function NewRunPanel() {
   function addHost() {
     const host = scopeInput.trim();
     if (host === "") return;
-    setScopeHosts((prev) => (prev.includes(host) ? prev : [...prev, host]));
+    setScopeHosts((prev) => addScopeHost(prev, host));
     setScopeInput("");
   }
 
@@ -68,7 +81,7 @@ export function NewRunPanel() {
     // Fold a typed-but-not-yet-added host into the scope so a value left in the
     // input isn't silently dropped on submit.
     const pending = scopeInput.trim();
-    const hosts = pending && !scopeHosts.includes(pending) ? [...scopeHosts, pending] : scopeHosts;
+    const hosts = pending ? addScopeHost(scopeHosts, pending) : scopeHosts;
     try {
       // Attach the active engagement (picked in the Sessions engagement switcher) so a
       // new run's session rolls up under it. A blank scope + a crawl target lets the

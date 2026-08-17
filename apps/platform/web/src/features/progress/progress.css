@@ -64,6 +64,7 @@
 /* terminal summary line (done / partial / failed / cancelled) */
 .rp-outcome { margin-top:12px; font-size:11.5px; color:var(--muted); }
 .rp-outcome b { color:var(--text-2); font-weight:500; }
+.rp-outcome-empty { color:var(--warn); }
 
 /* crawl fetch outcome (assets fetched vs blocked) — makes a blocked crawl legible
    instead of reading as an empty success (e.g. a Cloudflare 403 on every asset). */

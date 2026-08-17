@@ -44,13 +44,19 @@ function NotReady({ title, body }: { title: string; body: string }) {
 }
 
 export function OverviewRoute() {
-  const { findings, technologies, state } = useRunData();
+  const { findings, technologies, state, failureCategory, failureReason, failureHost } = useRunData();
   const { id } = useParams();
   return (
     <>
       {findings && <OverviewPanel data={findings} technologies={technologies} />}
       <RunProgress />
-      <DiscoveryEmpty runId={id!} state={state === "…" ? null : state} />
+      <DiscoveryEmpty
+        runId={id!}
+        state={state === "…" ? null : state}
+        failureCategory={failureCategory}
+        failureReason={failureReason}
+        failureHost={failureHost}
+      />
     </>
   );
 }

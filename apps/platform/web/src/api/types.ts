@@ -14,6 +14,11 @@ export interface RunStatus {
   // Cooperative-control intent (REQ-A4): requested but not necessarily effected yet.
   // Lets run-control gating survive a page reload mid-pause (ui-catch-up §10, A1).
   pause_requested: boolean; cancel_requested: boolean;
+  // Classified failure (only set on a FAILED run; see recon.runs.failure). `reason`
+  // is a curated, safe string — never the raw exception message. Optional so old
+  // snapshots / non-failed runs simply omit them.
+  failure_category?: string | null; failure_reason?: string | null;
+  failure_host?: string | null; failure_http_status?: number | null;
 }
 export interface Occurrence {
   host: string | null; raw_url: string | null; source_path: string | null;
