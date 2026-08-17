@@ -314,13 +314,16 @@ just unclobbered storage). Frontend lane green (oxlint + tsc-strict + vitest 136
 UI this entry describes was later removed — superseded by central login (PR #57);
 `TenantContext` + `VITE_DEFAULT_TENANT_ID` remain.
 
-### D16 · Capture extension deferred items [S]
+### D16 · Capture extension deferred items [S] — ⏳ PARTIAL 2026-08-17 (CI test gate added)
 Small deferred work in the MV3 capture extension (`apps/capture/chrome-extension/`), recorded here
 when the point-in-time `REFACTOR-NOTES.md` was folded into the capture app README (`apps/capture/README.md`) during the
 enterprise-hygiene cleanup (so the "later" doesn't become "never"):
-- **Live `tests/*.mjs` suites are ungated in CI** — `security.yml` runs only `npm audit` on the
-  extension, so a broken suite wouldn't fail the build. A `for t in tests/test_*.mjs; do node "$t";
-  done` step in the frontend lane would close it.
+- ✅ **RESOLVED 2026-08-17 — Live `tests/*.mjs` suites are now gated in CI.** Added a dedicated
+  `extension` job to `.github/workflows/ci.yml` that runs all `tests/test_*.mjs` Node suites on every
+  push/PR (previously `security.yml` only `npm audit`ed the package, so a broken suite couldn't fail
+  the build). The job needs no `npm ci`/build — the suites import only `node:` builtins + local
+  modules. Fail-closed: an empty glob is a hard error (no silent zero-test pass), and every suite runs
+  so one failure can't mask another. Both §4 gates passed (design: SHIP AS-IS; code: see PR).
 - **`background.js` is well over 1,000 lines** (~3× the ~300 cap) — the message router +
   `processFile` could extract further. Same class as D11; test-aware (the service worker is the
   capture entry point), so a careful slice, low priority.

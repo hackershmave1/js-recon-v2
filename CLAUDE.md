@@ -48,13 +48,15 @@ Tests are **colocated** (`*_test.py` next to source; `*.test.tsx` for web).
 
 ## CI gates (enforced on the trunk — `.github/workflows/ci.yml`)
 
-`main` is the trunk; land work via a PR per slice. A green build means all three
+`main` is the trunk; land work via a PR per slice. A green build means all four
 lanes passed:
 - **host-tests**: `uv sync --frozen` (reproducible) → `ruff check src` + `ruff format
   --check src` → `mypy src/recon/findings src/recon/spec` →
   `pytest -m "not integration" --cov=recon --cov-fail-under=60`, with
   `RECON_REQUIRE_ENGINES=1` (a missing engine is a hard failure, not a silent skip).
 - **frontend**: `npm ci` → `npm run lint` (oxlint + tsc) → vitest → build.
+- **extension**: runs the MV3 capture extension's `tests/test_*.mjs` Node suites
+  (`apps/capture/chrome-extension`) — dependency-free, so no `npm ci`/build (DEBT D16).
 - **integration-tests**: builds the app image (compiles the pinned Sourcemapper),
   brings up the stores, runs the whole suite incl. real-engine + integration tests.
 
