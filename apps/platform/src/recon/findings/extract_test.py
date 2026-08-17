@@ -674,10 +674,18 @@ def _nested_sink_chain(depth: int) -> str:
     return "x=" + "new WebSocket(" * depth + '"/x"' + ")" * depth + ";"
 
 
-def _extract_seconds(source: str) -> float:
-    start = time.perf_counter()
-    extract(source)
-    return time.perf_counter() - start
+def _extract_seconds(source: str, reps: int = 3) -> float:
+    """Best (min) wall-clock over ``reps`` extract() runs. extract() is deterministic, so
+    the fastest run is the one least perturbed by GC / CPU-steal / cache misses. Timing a
+    perf guard exactly ONCE (as this did originally) let a single unlucky sample on a
+    shared CI runner flake the scaling-ratio assertion below; a real O(n^2) regression is
+    slow on EVERY run, so the min still trips the guard."""
+    best = float("inf")
+    for _ in range(reps):
+        start = time.perf_counter()
+        extract(source)
+        best = min(best, time.perf_counter() - start)
+    return best
 
 
 @pytest.mark.parametrize(
@@ -691,12 +699,14 @@ def test_extract_stays_linear_on_deep_split_chain_no_dos(build_chain):
 
     Three assertions, deliberately layered so the guard is both flake-proof and fast to
     fail on a real regression:
-      * anchor ceiling at depth 4000 (~0.03-0.06s linear, ~50-100x headroom so runner
-        jitter can't trip it) — a reintroduced O(n^2) is ~16s here and trips this FIRST,
-        so CI fails in seconds instead of dragging the 282s depth-16000 case through;
-      * a runner-speed-INDEPENDENT scaling ratio (4x the input is ~4x work when linear
-        but ~16x when quadratic) — catches a partial regression an absolute bound alone
-        would miss, and holds regardless of how fast the machine is;
+      * anchor ceiling at depth 4000 (~0.1-0.4s linear depending on chain, several-x
+        headroom under the 3.0s ceiling so runner jitter can't trip it) — a reintroduced
+        O(n^2) is ~16s per run here (so ~45s across the min-of-N reps) and trips this
+        FIRST, well under a minute, instead of dragging the 282s depth-16000 case through;
+      * a scaling ratio with generous headroom (min-of-N timings; when linear, 4x the
+        input is a few-x the work — runner-dependent constant factors put it ~3-8x here —
+        vs ~16x when quadratic) — catches a partial regression an absolute bound alone
+        would miss, while transient runner noise can no longer trip it;
       * an absolute ceiling at depth 16000 (the brief's wall-clock bound), only reached
         once the walk already looks linear."""
     extract('fetch("/warmup");')  # steady state: exclude one-time import/parse warmup
@@ -706,7 +716,7 @@ def test_extract_stays_linear_on_deep_split_chain_no_dos(build_chain):
         f"DoS regression"
     )
     big = _extract_seconds(build_chain(16000))  # 4x the input
-    assert big < anchor * 10, (  # linear ~4x, quadratic ~16x — 10x sits safely between
+    assert big < anchor * 12, (  # min-of-N: linear ~3-8x (runner-dependent), quadratic ~16x
         f"extract() scaled {big / anchor:.1f}x for 4x deeper input "
         f"(anchor={anchor * 1000:.0f}ms, big={big * 1000:.0f}ms) — looks quadratic, DoS regression"
     )
