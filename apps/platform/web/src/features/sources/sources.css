@@ -26,11 +26,24 @@ button.sv-node.sel { background: var(--accent-soft); color: var(--accent); }
 .sv-node-status { font-size: 9.5px; color: var(--warn); flex: 0 0 auto; }
 .sv-ico { flex: 0 0 14px; height: 14px; color: var(--faint); display: inline-flex; }
 
+/* ---- rail collapse toggle + drag-to-resize divider ---- */
+.sv-rail-titlerow { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.sv-rail-titles { min-width: 0; }
+.sv-rail-toggle { flex: 0 0 auto; display: inline-flex; padding: 4px; background: transparent; border: 1px solid transparent; color: var(--faint); border-radius: var(--r-sm); }
+.sv-rail-toggle:hover:not(:disabled) { color: var(--text-2); background: var(--surface); border-color: var(--border); }
+.sv-rail-collapsed { width: 0 !important; flex-basis: 0 !important; border-right: none; overflow: hidden; }
+/* A 6px hit target with a thin accent line that appears on hover/drag. */
+.sv-resizer { flex: 0 0 6px; align-self: stretch; cursor: col-resize; position: relative; background: transparent; touch-action: none; }
+.sv-resizer::before { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; border-radius: 2px; background: transparent; transition: background .12s ease; }
+.sv-resizer:hover::before, .sv-resizer:active::before { background: var(--accent-line); }
+
 /* ---- code viewer ---- */
 .sv-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .sv-file-head { display: flex; align-items: center; gap: 12px; padding: 11px 20px; border-bottom: 1px solid var(--border); }
 .sv-file-path { font-family: var(--font-mono); font-size: 12.5px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sv-file-count { font-size: 11.5px; color: var(--orange); background: rgba(255,138,71,0.1); padding: 3px 10px; border-radius: var(--r-pill); font-weight: 600; flex: 0 0 auto; }
+.sv-jump { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.sv-jump:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-line); }
 .sv-spacer { flex: 1; }
 .sv-pretty { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .sv-pretty-glyph { font-family: var(--font-mono); font-weight: 700; letter-spacing: -1px; }
@@ -38,7 +51,11 @@ button.sv-node.sel { background: var(--accent-soft); color: var(--accent); }
 .sv-pretty.on:hover:not(:disabled) { border-color: var(--accent); }
 .sv-note { padding: 9px 20px; font-size: 12px; border-bottom: 1px solid var(--border); }
 .sv-warn { color: var(--warn); }
+.sv-code-wrap { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
 .sv-code { flex: 1; overflow: auto; background: var(--field); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; }
+/* Floating jump-to-top, anchored to the non-scrolling wrapper (not the scroller). */
+.sv-top { position: absolute; right: 18px; bottom: 16px; width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--r-pill); background: var(--raised); border: 1px solid var(--border-strong); color: var(--text-2); box-shadow: 0 2px 12px rgba(0,0,0,0.4); }
+.sv-top:hover { background: #2b3446; border-color: var(--faint); color: var(--text); }
 .sv-line { display: flex; border-left: 3px solid transparent; }
 .sv-line.marked { background: rgba(255,77,94,0.08); border-left-color: var(--danger); }
 /* The jump-to-source target line. A lime left-accent + faint wash so it stands out

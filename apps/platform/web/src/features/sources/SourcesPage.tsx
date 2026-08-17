@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getSources, getSourceContent, ApiError } from "../../api/apiClient";
 import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump } from "../../api/types";
 import { CodeViewer } from "./CodeViewer";
+import { useResizableRail } from "./useResizableRail";
 import "./sources.css";
 
 // A finding occurrence belongs to a file when: (crawl) its asset_url equals the
@@ -62,6 +63,18 @@ const FolderIcon = () => (
 const FileIcon = () => (
   <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" />
+  </svg>
+);
+// Sidebar-toggle glyph (collapse / show the file rail).
+const PanelIcon = () => (
+  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" />
+  </svg>
+);
+// Jump-to-line glyph (an arrow dropping onto a baseline) for the findings jump.
+const JumpIcon = () => (
+  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 4v10" /><path d="m7.5 11.5 4.5 4.5 4.5-4.5" /><path d="M5 20h14" />
   </svg>
 );
 
@@ -188,6 +201,8 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
   }, []);
   // Manually picking a file cancels a jump's line highlight.
   const selectFile = useCallback((path: string) => { setSelPath(path); setFocusLine(null); }, []);
+  // Draggable + collapsible file rail (task: expand the code view).
+  const { width: railWidth, collapsed: railCollapsed, toggleCollapsed: toggleRail, resizerProps } = useResizableRail();
 
   // A jump can arrive before `files` load, so stash the latest one and apply it
   // once files are present (the applying effect also keys on `files`).
@@ -261,6 +276,15 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
     return m;
   }, [selected, data]);
 
+  // Jump-to-findings: the sorted finding lines in the current file. Clicking the
+  // button advances `focusLine` to the next one (wrapping), reusing CodeViewer's
+  // existing scroll-into-view + lime `.focus` highlight.
+  const jumpLines = useMemo(() => [...marks.keys()].sort((a, b) => a - b), [marks]);
+  const jumpToNextFinding = useCallback(() => {
+    if (jumpLines.length === 0) return;
+    setFocusLine((cur) => jumpLines.find((l) => l > (cur ?? -1)) ?? jumpLines[0]);
+  }, [jumpLines]);
+
   // Memoized: the run stream now re-renders this page on every SSE event, and
   // rebuilding the whole tree each tick would jank a large file list.
   const tree = useMemo(() => buildTree(files ?? []), [files]);
@@ -291,10 +315,17 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
 
   return (
     <div className="sv">
-      <aside className="sv-rail">
+      <aside className={"sv-rail" + (railCollapsed ? " sv-rail-collapsed" : "")}
+        style={railCollapsed ? undefined : { width: railWidth, flexBasis: railWidth }}>
         <div className="sv-rail-head">
-          <h2 className="sv-rail-title">Sources</h2>
-          <div className="sv-rail-sub">{files.length} file{files.length === 1 ? "" : "s"} · fetched from the target</div>
+          <div className="sv-rail-titlerow">
+            <div className="sv-rail-titles">
+              <h2 className="sv-rail-title">Sources</h2>
+              <div className="sv-rail-sub">{files.length} file{files.length === 1 ? "" : "s"} · fetched from the target</div>
+            </div>
+            <button type="button" className="sv-rail-toggle" onClick={toggleRail}
+              title="Collapse sources" aria-label="Collapse sources panel"><PanelIcon /></button>
+          </div>
         </div>
         <div className="sv-tree">
           <TreeLevel nodes={tree.children} depth={0} parentKey="" selectedPath={selected?.path ?? null}
@@ -302,12 +333,27 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
         </div>
       </aside>
 
+      {!railCollapsed && (
+        <div className="sv-resizer" role="separator" aria-orientation="vertical"
+          aria-label="Resize sources panel" title="Drag to resize" {...resizerProps} />
+      )}
+
       <div className="sv-main">
         {selected && (
           <div className="sv-file-head">
+            {railCollapsed && (
+              <button type="button" className="sv-rail-toggle" onClick={toggleRail}
+                title="Show sources" aria-label="Show sources panel"><PanelIcon /></button>
+            )}
             <span className="sv-file-path">{selected.path}</span>
             <span className="sv-spacer" />
             {findingCount > 0 && <span className="sv-file-count">{findingCount} finding{findingCount === 1 ? "" : "s"} in this file</span>}
+            {!pretty && jumpLines.length > 0 && (
+              <button type="button" className="sv-jump" onClick={jumpToNextFinding}
+                title="Scroll to the next finding in this file">
+                <JumpIcon /> Jump to finding
+              </button>
+            )}
             {content && (
               <button type="button" className={"sv-pretty" + (pretty ? " on" : "")}
                 aria-pressed={pretty} disabled={content.content.length > BEAUTIFY_MAX_CHARS}

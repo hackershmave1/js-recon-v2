@@ -49,7 +49,7 @@ describe("auth gate + login", () => {
     renderGated();
 
     await userEvent.type(screen.getByLabelText(/username/i), "admin");
-    await userEvent.type(screen.getByLabelText(/password/i), "admin");
+    await userEvent.type(screen.getByLabelText(/^password$/i), "admin");
     await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
     expect(await screen.findByText("WORKSPACE")).toBeInTheDocument();
@@ -64,7 +64,7 @@ describe("auth gate + login", () => {
     renderGated();
 
     await userEvent.type(screen.getByLabelText(/username/i), "admin");
-    await userEvent.type(screen.getByLabelText(/password/i), "wrong");
+    await userEvent.type(screen.getByLabelText(/^password$/i), "wrong");
     await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/invalid username or password/i);
