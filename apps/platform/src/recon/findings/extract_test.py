@@ -699,9 +699,10 @@ def test_extract_stays_linear_on_deep_split_chain_no_dos(build_chain):
 
     Three assertions, deliberately layered so the guard is both flake-proof and fast to
     fail on a real regression:
-      * anchor ceiling at depth 4000 (~0.03-0.06s linear, ~50-100x headroom so runner
-        jitter can't trip it) — a reintroduced O(n^2) is ~16s here and trips this FIRST,
-        so CI fails in seconds instead of dragging the 282s depth-16000 case through;
+      * anchor ceiling at depth 4000 (~0.1-0.4s linear depending on chain, several-x
+        headroom under the 3.0s ceiling so runner jitter can't trip it) — a reintroduced
+        O(n^2) is ~16s per run here (so ~45s across the min-of-N reps) and trips this
+        FIRST, well under a minute, instead of dragging the 282s depth-16000 case through;
       * a scaling ratio with generous headroom (min-of-N timings; when linear, 4x the
         input is a few-x the work — runner-dependent constant factors put it ~3-8x here —
         vs ~16x when quadratic) — catches a partial regression an absolute bound alone
