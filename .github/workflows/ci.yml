@@ -100,6 +100,9 @@ jobs:
   # future suite that adds a dependency import will fail loudly here (add `npm ci` then).
   extension:
     runs-on: ubuntu-latest
+    # The suites finish in seconds; cap the job so a hung/leaked-handle suite fails
+    # fast instead of riding the 6h default (CI minutes matter on a Free-tier repo).
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: apps/capture/chrome-extension

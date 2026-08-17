@@ -324,6 +324,11 @@ enterprise-hygiene cleanup (so the "later" doesn't become "never"):
   the build). The job needs no `npm ci`/build — the suites import only `node:` builtins + local
   modules. Fail-closed: an empty glob is a hard error (no silent zero-test pass), and every suite runs
   so one failure can't mask another. Both §4 gates passed (design: SHIP AS-IS; code: see PR).
+- **Popup bundle (`src/popup/*.jsx`) is not compiled in CI** — the new `extension` lane runs the
+  Node test suites but deliberately stays dependency-free, so it does not `npm run build` the
+  esbuild/Preact popup; a broken popup import/JSX could still merge green. Close with an
+  `npm ci && npm run build` step (needs `node_modules`, so add npm caching keyed to the extension
+  lockfile). Surfaced by the D16 code-review gate 2026-08-17.
 - **`background.js` is well over 1,000 lines** (~3× the ~300 cap) — the message router +
   `processFile` could extract further. Same class as D11; test-aware (the service worker is the
   capture entry point), so a careful slice, low priority.
