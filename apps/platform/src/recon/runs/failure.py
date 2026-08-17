@@ -17,6 +17,7 @@ an HTTP status code. The raw message stays write-only in ``run.error`` for logs.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from dataclasses import dataclass
 
@@ -59,6 +60,19 @@ class FailureInfo:
 _HTTP_RE = re.compile(r"HTTP (\d{3})")
 _SCOPE_RE = re.compile(r"not in engagement scope: (\S+)")
 _DNS_RE = re.compile(r"DNS resolution failed for (\S+)")
+_NOADDR_RE = re.compile(r"no addresses resolved for (\S+)")
+
+
+def _echoable_host(host: str) -> str | None:
+    """A host is safe to surface unless it's a non-public IP literal: an out-of-scope
+    redirect can point a hop at an internal address (egress checks scope BEFORE the
+    public-IP guard), and we must not echo that. DNS names pass through unchanged."""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return host  # a hostname, not an IP literal — safe to show
+    return host if ip.is_global else None
+
 
 _CAPTURE_HINT = (
     "If it is an auth-gated or bot-protected page, capture the JavaScript from a "
@@ -108,15 +122,22 @@ def classify_failure(exc: BaseException, stage: RunStage | None = None) -> Failu
 
     scope = _SCOPE_RE.search(msg)
     if scope:
-        host = scope.group(1)
+        host = _echoable_host(scope.group(1))
+        detail = (
+            f"The crawl reached {host}, which is outside the engagement scope"
+            if host
+            else "The crawl was redirected to a host outside the engagement scope"
+        )
         return FailureInfo(
             FailureCategory.OUT_OF_SCOPE,
-            f"The crawl reached {host}, which is outside the engagement scope, so it "
-            "was not fetched. Add it to the scope (or target it directly) and re-run.",
+            f"{detail}, so it was not fetched. Add it to the scope (or target it "
+            "directly) and re-run.",
             host=host,
         )
 
-    dns = _DNS_RE.search(msg)
+    # An unresolvable host (getaddrinfo failed, or resolved to zero addresses) is a
+    # DNS condition, not a non-public-address block.
+    dns = _DNS_RE.search(msg) or _NOADDR_RE.search(msg)
     if dns:
         host = dns.group(1)
         return FailureInfo(
@@ -126,15 +147,15 @@ def classify_failure(exc: BaseException, stage: RunStage | None = None) -> Failu
         )
 
     # SSRF guard: NEVER echo the message — it embeds our resolved internal IP.
-    if "non-public address" in msg or "no addresses resolved" in msg:
+    if "non-public address" in msg:
         return FailureInfo(
             FailureCategory.BLOCKED_ADDRESS,
             "The target resolved to a non-public address and was blocked by the egress guard.",
         )
-    if "not authorized for egress" in msg:
+    if "not authorized for" in msg:
         return FailureInfo(
             FailureCategory.NOT_AUTHORIZED,
-            "This session is not authorized to fetch from the network.",
+            "This session is not authorized to run recon against the network.",
         )
     if any(
         s in msg

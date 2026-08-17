@@ -312,17 +312,25 @@ def test_handle_failure_persists_classified_reason(monkeypatch):
     assert "capture extension" in ev["reason"].lower()
 
 
-def test_handle_failure_swallows_transition_conflict(monkeypatch):
+@pytest.mark.parametrize(
+    "make_exc",
+    [
+        lambda: worker.service.TransitionConflict("run already terminal"),
+        lambda: worker.sm.InvalidTransition("cancelled -> failed"),
+    ],
+)
+def test_handle_failure_swallows_terminal_transition_race(monkeypatch, make_exc):
     # A concurrent cancel / reclaimed dead message may have already moved the run out
-    # of its active state; the guarded FAILED transition then raises. _handle_failure
-    # must NOT propagate (it still ACKs + returns "dead") or the message redelivers.
+    # of its active state; the guarded FAILED transition then raises (a lost guarded
+    # UPDATE -> TransitionConflict, or an illegal terminal->FAILED -> InvalidTransition).
+    # _handle_failure must NOT propagate (it still ACKs + returns "dead") or it redelivers.
     acked = {"n": 0}
     monkeypatch.setattr(progress, "finish_job", lambda *a, **k: True)
     monkeypatch.setattr(streams, "ack", lambda *a, **k: acked.__setitem__("n", acked["n"] + 1))
     monkeypatch.setattr(streams, "to_dlq", lambda *a, **k: None)
 
     def boom(*a, **k):
-        raise worker.service.TransitionConflict("run already terminal")
+        raise make_exc()
 
     monkeypatch.setattr(worker.service, "transition", boom)
     result = worker._handle_failure(

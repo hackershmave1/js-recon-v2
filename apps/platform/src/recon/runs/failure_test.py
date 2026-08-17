@@ -96,6 +96,33 @@ def test_invalid_scheme_classified():
     assert info.category == FailureCategory.INVALID_TARGET
 
 
+def test_out_of_scope_suppresses_private_ip_host():
+    # A redirect to an internal IP is scope-rejected BEFORE the public-IP guard, so the
+    # message carries the IP — it must not be echoed (review #2). Scope reject needs no DNS.
+    exc = _capture(lambda: egress.validate_target("http://10.0.0.5/", _SCOPE))
+    info = classify_failure(exc)
+    assert info.category == FailureCategory.OUT_OF_SCOPE
+    assert info.host is None
+    assert "10.0.0.5" not in info.reason
+
+
+def test_no_addresses_resolved_is_dns_error(monkeypatch):
+    # getaddrinfo returning [] is a resolution failure, not a non-public-address block.
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [])
+    exc = _capture(lambda: egress.validate_target("https://acme.io/", _SCOPE))
+    info = classify_failure(exc)
+    assert info.category == FailureCategory.DNS_ERROR
+    assert info.host == "acme.io"
+
+
+def test_not_authorized_matches_recon_and_egress():
+    # discover/capture raise "...for recon", fetch raises "...for egress" — both classify
+    # (review #1: the discover-stage form was previously misclassified as UNKNOWN).
+    for msg in ("session is not authorized for recon", "session is not authorized for egress"):
+        info = classify_failure(egress.EgressBlocked(msg))
+        assert info.category == FailureCategory.NOT_AUTHORIZED
+
+
 # --- HTTP-status failures (real fetch.fetch_url + MockTransport) -------------
 
 
