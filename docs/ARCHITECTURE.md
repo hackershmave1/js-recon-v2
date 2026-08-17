@@ -73,7 +73,7 @@ boto3 client, path-style + s3v4 so the same code hits MinIO locally and S3 in pr
 
 | engine | role | how it runs |
 |---|---|---|
-| **Vespasian** | tree-sitter JS AST walker; traces `fetch` / `XMLHttpRequest.open` / `axios.*` / jQuery `$.ajax\|$.get\|$.post` / `new WebSocket` into endpoints, methods, URLs, and statically-resolvable params (engine tag `vespasian`) | **in-process** (`findings/extract.py`, `findings/analyze.py` — `tree_sitter` + `tree_sitter_javascript`) |
+| **Vespasian** | tree-sitter JS AST walker; traces `fetch` / `XMLHttpRequest.open` / `axios.*` / jQuery `$.ajax\|$.get\|$.post` / `new WebSocket` into endpoints, methods, URLs, and statically-resolvable params, and separately recovers client-side **page routes** (`href`/`src`/`action` values, nav sinks, and off-sink absolute-URL literals) as a distinct `page_route` finding kept out of the API surface (engine tag `vespasian`) | **in-process** (`findings/extract.py`, `findings/analyze.py` — `tree_sitter` + `tree_sitter_javascript`) |
 | **Kingfisher** | MongoDB Kingfisher secret scanner (`kingfisher-bin==1.106.0`), run offline (`--no-validate --no-update-check --no-dedup`); the raw token is hashed into the finding, never stored in the identity | **out-of-process** binary (`findings/kingfisher.py`) |
 | **Sourcemapper** | recovers a bundle's original sources from its source map so findings attribute to real paths (`app/src/api.js`) instead of the `input.js` placeholder (`github.com/denandz/sourcemapper`, Go-built) | **out-of-process** binary (`findings/sourcemapper.py`) |
 | katana | JS-asset discovery crawler for the DISCOVER stage (discovery-only argv; "Vespasian parses, not katana") | out-of-process (`discover/katana.py`) |
