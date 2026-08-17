@@ -85,6 +85,23 @@ no `<framework>`" becomes a recurring operator complaint. **Detection note:** th
 `analyze.technologies` event carries per-host detection counts + `skipped_patterns`, so a
 widening blind spot is observable, not silent.
 
+### D23 · Per-asset cumulative beautify has no budget/heartbeat [S]
+`findings/analyze._analysis_units` beautifies each source-map-recovered *minified* file before
+extraction (`deobfuscate.beautify_if_minified`, per-file 1 MiB cap) so its findings land on
+distinct lines that match what `probe/sources` later serves — the byte-identical invariant that
+fixed jump-to-finding for recovered minified vendor sources (PR #76, 2026-08-17). **Residual:**
+the per-file cap bounds each file, but a single source map with many large minified
+`sourcesContent` entries can total up to ~`engine_max_output_bytes` of beautify work per asset
+with **no heartbeat between files** — this loop and the tree-sitter `extract()` that follows share
+the one per-asset `progress.beat`, so a pathological map could approach the 30 s job-lease stall
+window and let a peer reclaim the RUNNING job. **Why safe now:** the outcome is idempotent-safe
+double-work (the reclaiming peer re-runs the analyze loop; REQ-A3 outbox upserts + analyze-
+terminal-asset skipping make it wasteful, not corrupting), not data loss, and real source maps are
+nowhere near this shape. **Still owed:** a per-asset cumulative-beautify budget (serve raw past it)
+or a heartbeat between files — same heartbeat family as D20 ("Analyze mid-scan heartbeat") and D21
+(extractor linear-but-unbounded). **Trigger:** before exposing analyze to untrusted multi-tenant
+load at scale. Anchor: the `# NOTE(DEBT)` in `findings/analyze.py::_analysis_units`.
+
 ## Enforcement / tooling (deferred from the CI-keystone slice)
 
 ### D2 · Ruff format sweep + broaden the ruleset [M] — ✅ RESOLVED 2026-08-07
