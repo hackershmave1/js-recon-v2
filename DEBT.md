@@ -49,6 +49,22 @@ RLS). **Detection note:** CI catches a broken migration because api/worker `depe
 migrate: service_completed_successfully`; `docker compose up -d migrate` alone swallows the
 exit code. (Migrated 2026-08-15 from the retired `slice2-deferred-debt.md`.)
 
+### D21 · Extractor: linear-but-unbounded worst case on pathological input [S]
+The crafted-input DoS **class is closed** (PR #71, 2026-08-17): the extractor's per-node
+full-text decodes are span-capped and its two unbounded recursions are iterative, so a
+deeply-nested single expression (the `.concat()`/`+`/nested-sink obfuscation this tool
+targets) can no longer drive `extract()` O(n²) or crash it — 9 vectors fixed, verified
+linear. **Residual:** the walk is now LINEAR, not *bounded* — a maximally-pathological
+~10 MB in-cap bundle (hundreds of thousands of nested sinks) still takes linear-minutes,
+which can exceed the analyze job's 30 s heartbeat (cf. D20 "Analyze mid-scan heartbeat").
+**Why safe now:** real bundles are nowhere near this shape; total time is bounded by the
+10 MB ingest cap; the actual DoS (O(n²)/crash) is gone. **Still owed (defense-in-depth):**
+a one-time AST node-count / total-work budget checked once in `extract()` that curtails a
+pathological input, instead of the current per-decode-site caps. **Trigger:** before
+exposing analyze to untrusted multi-tenant load at scale. The fixes + the shared
+bounded-decode primitives (`_text_if_short`, `_source_snippet`, span-cap constants) live in
+`recon.findings._jsast`; DoS guards in `findings/extract_test.py`.
+
 ## Enforcement / tooling (deferred from the CI-keystone slice)
 
 ### D2 · Ruff format sweep + broaden the ruleset [M] — ✅ RESOLVED 2026-08-07
