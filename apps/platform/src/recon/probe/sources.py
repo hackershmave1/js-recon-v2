@@ -165,7 +165,7 @@ def get_source_content(
         # demand so the served text matches analyze's beautified endpoint units and
         # the finding marks align — the SAME deterministic deobfuscate.beautify, so no
         # persisted blob. Over-cap/unavailable -> raw served (fail-soft). Recovered
-        # originals go through _recovered_content -> _as_content and stay verbatim.
+        # originals go through _recovered_content, beautified only if themselves minified.
         text = raw.decode("utf-8", "replace")
         beautified = deobfuscate.beautify(text)
         return _content_from_text(path, beautified if beautified is not None else text)
@@ -173,16 +173,9 @@ def get_source_content(
     return _recovered_content(tenant_id, run_id, path, asset_url)
 
 
-def _as_content(path: str, raw: bytes) -> SourceContent:
-    truncated = len(raw) > _MAX_CONTENT_BYTES
-    # Slice the raw BYTES before decoding so the decoded string is bounded too.
-    content = raw[:_MAX_CONTENT_BYTES].decode("utf-8", "replace")
-    return SourceContent(path=path, content=content, truncated=truncated)
-
-
 def _content_from_text(path: str, text: str) -> SourceContent:
-    """A decoded (possibly beautified) source string as bounded content. Mirrors
-    ``_as_content`` but for text already decoded (the on-demand beautify path)."""
+    """A decoded (possibly beautified) source string as bounded content: the response
+    cap is applied to the UTF-8 bytes so a huge file can't stream an unbounded string."""
     encoded = text.encode("utf-8")
     truncated = len(encoded) > _MAX_CONTENT_BYTES
     if truncated:
@@ -233,7 +226,12 @@ def _recovered_content(
         return None
     for recovered_file in recovered.files:
         if recovered_file.path == path:
-            return _as_content(path, recovered_file.content)
+            # The SAME beautify_if_minified analyze ran before extraction, so a minified
+            # vendor original's served line numbers match its finding marks (and the web
+            # viewer no longer re-beautifies it, which would renumber lines out from
+            # under those marks).
+            text = recovered_file.content.decode("utf-8", "replace")
+            return _content_from_text(path, deobfuscate.beautify_if_minified(text))
     return None
 
 

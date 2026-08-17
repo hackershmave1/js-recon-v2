@@ -11,7 +11,7 @@ then the viewer's on-demand recovery is stubbed per test.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from recon import storage
 from recon.db import models
@@ -115,17 +115,13 @@ def test_no_map_bundle_served_beautified_multiline(redis, authorized_session):
     assert 'fetch("/api/a")' in content.content
 
 
-def test_recovered_source_served_verbatim_not_beautified(redis, authorized_session, monkeypatch):
-    # Recovered originals (kind="source") come straight from the source map via
-    # _recovered_content -> _as_content and must NEVER be beautified — only the raw
-    # no-map bundle is. A MINIFIED recovered source makes "verbatim" (one line)
-    # visibly distinct from "beautified" (multi-line).
-    tenant, session_id = authorized_session
-    minified_original = b'const a=fetch("/api/a");const b=fetch("/api/b");'
+def _seed_recovered_run(redis, tenant, session_id, monkeypatch, recovered: bytes, path: str) -> str:
+    """A legacy run whose (faked) source map recovers one original at ``path`` carrying
+    ``recovered`` bytes, analyzed — so a real recovered-source finding is persisted."""
 
     def fake_recover(map_bytes, **_kwargs):
         return sourcemapper.RecoveredSources(
-            files=[sourcemapper.RecoveredFile("app/src/api.js", minified_original)],
+            files=[sourcemapper.RecoveredFile(path, recovered)],
             status="ok",
             origin="uploaded",
         )
@@ -141,11 +137,59 @@ def test_recovered_source_served_verbatim_not_beautified(redis, authorized_sessi
             .values(input_ref=input_key, source_map_ref=map_key)
         )
     analyze.analyze_run(redis, tenant_id=tenant, run_id=view.id)
+    return view.id
 
-    content = sources.get_source_content(tenant, view.id, "app/src/api.js")
+
+def test_recovered_non_minified_source_served_verbatim(redis, authorized_session, monkeypatch):
+    # A genuinely multi-line recovered original (real code, short lines) is served
+    # VERBATIM so its own, meaningful line numbers survive — only a MINIFIED recovered
+    # source is beautified (next test), mirroring analyze._analysis_units.
+    tenant, session_id = authorized_session
+    readable = b'import x from "x";\nconst a = fetch("/api/a");\nexport default a;\n'
+    run_id = _seed_recovered_run(redis, tenant, session_id, monkeypatch, readable, "app/src/api.js")
+
+    content = sources.get_source_content(tenant, run_id, "app/src/api.js")
     assert content is not None
-    assert content.content == minified_original.decode("utf-8")  # verbatim
-    assert len(content.content.splitlines()) == 1  # NOT beautified
+    assert content.content == readable.decode("utf-8")  # verbatim — real line numbers kept
+
+
+def test_recovered_minified_source_beautified_and_finding_line_aligns(
+    redis, authorized_session, monkeypatch
+):
+    # A MINIFIED recovered original (a vendor lib shipped minified in the map's
+    # sourcesContent) is beautified on serve — the SAME beautify_if_minified analyze ran
+    # before recording finding lines — so the finding lands on a distinct line that, in
+    # the served text, actually contains the call. This is the jump-to-finding fix (#2).
+    tenant, session_id = authorized_session
+    minified = b'const a=fetch("/api/aaa");const b=fetch("/api/bbb");' * 12  # one >500-char line
+    assert len(minified.splitlines()) == 1 and len(minified) > 500
+    run_id = _seed_recovered_run(
+        redis, tenant, session_id, monkeypatch, minified, "app/src/vendor.min.js"
+    )
+
+    content = sources.get_source_content(tenant, run_id, "app/src/vendor.min.js")
+    assert content is not None
+    served_lines = content.content.splitlines()
+    assert len(served_lines) > 1  # beautified, not the raw one-liner
+
+    with tenant_session(tenant) as session:
+        lines = [
+            ln
+            for ln in session.execute(
+                select(models.FindingOccurrence.line)
+                .join(models.Finding, models.FindingOccurrence.finding)
+                .where(
+                    models.Finding.run_id == run_id,
+                    models.FindingOccurrence.source_path == "app/src/vendor.min.js",
+                )
+            ).scalars()
+            if ln is not None
+        ]
+    # Findings now span DISTINCT lines (pre-fix every one collapsed onto line 1 of the
+    # one-line source), and every finding line points AT its call in the served
+    # (beautified) text — the whole point of beautifying analyze + serve identically.
+    assert lines and max(lines) > 1
+    assert all("fetch(" in served_lines[ln - 1] for ln in lines)
 
 
 def test_no_map_bundle_soft_off_serves_raw(redis, authorized_session, monkeypatch):

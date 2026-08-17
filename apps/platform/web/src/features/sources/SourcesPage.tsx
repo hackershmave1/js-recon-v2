@@ -293,10 +293,23 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
   // Resets per file; the beautified text is computed lazily (js-beautify) once.
   const [pretty, setPretty] = useState(false);
   const [prettyText, setPrettyText] = useState<string | null>(null);
+  // A file with finding marks is server-authoritative for its lines; key the effect on
+  // the boolean (not the `marks` Map identity) so it doesn't re-run when `data` gets a
+  // new reference while the has-marks state is unchanged.
+  const hasMarks = marks.size > 0;
   useEffect(() => {
     setPrettyText(null);
-    setPretty(content != null && isMinified(content.content) && content.content.length <= BEAUTIFY_MAX_CHARS);
-  }, [content]);
+    // Don't auto-pretty-print a file that carries finding marks: the server already
+    // beautified such sources before recording the finding lines, so those lines are
+    // authoritative — a second client-side beautify would renumber them out from under
+    // the marks (and drop them). The user can still pretty-print manually.
+    setPretty(
+      content != null &&
+        !hasMarks &&
+        isMinified(content.content) &&
+        content.content.length <= BEAUTIFY_MAX_CHARS,
+    );
+  }, [content, hasMarks]);
   useEffect(() => {
     if (!pretty || content == null || prettyText != null || content.content.length > BEAUTIFY_MAX_CHARS) return;
     let live = true;

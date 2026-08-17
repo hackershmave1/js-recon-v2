@@ -47,3 +47,31 @@ def test_beautifier_error_soft_fails_to_none(monkeypatch):
     monkeypatch.setattr(jsbeautifier, "beautify", boom)
 
     assert deobfuscate.beautify('fetch("/api/x");') is None
+
+
+def test_beautify_if_minified_reformats_a_minified_source():
+    # A minified one-liner (a long line, e.g. a vendor lib's minified sourcesContent)
+    # is beautified so its findings get distinct, locatable lines.
+    minified = 'const a=fetch("/api/a");' * 40
+    assert len(minified.splitlines()) == 1 and len(minified) > 500
+
+    out = deobfuscate.beautify_if_minified(minified)
+
+    assert len(out.splitlines()) > 1
+
+
+def test_beautify_if_minified_leaves_a_real_multiline_source_unchanged():
+    # A genuinely multi-line original (a recovered source's real code) is returned
+    # verbatim — no reformat — so its own, meaningful line numbers survive.
+    readable = 'import x from "x";\nconst a = fetch("/api/a");\nexport default a;\n'
+
+    assert deobfuscate.beautify_if_minified(readable) == readable
+
+
+def test_beautify_if_minified_soft_fails_to_raw_over_cap():
+    # A minified source past the beautify cap returns the raw source UNCHANGED (not
+    # None): the caller (analyze unit / Sources serve) still gets usable text.
+    oversized = 'a="x";' * (deobfuscate._MAX_BEAUTIFY_BYTES // 6 + 1)
+    assert len(oversized) > deobfuscate._MAX_BEAUTIFY_BYTES and deobfuscate._is_minified(oversized)
+
+    assert deobfuscate.beautify_if_minified(oversized) == oversized
