@@ -4,15 +4,16 @@ import { Icon } from "../../shell/icons";
 import "./hosts.css";
 
 // The discovered-host inventory (DEBT D26): every host recon surfaced — from
-// fetched assets, resolved-host endpoints, tech detection, and declared base-URL
-// rules — with an in/out-of-scope badge (the canonical egress classification the
-// server computed) and per-host roll-up counts. Filterable by scope and by name,
-// sortable by any count. Honesty (design §5): the per-host "Endpoints" count is
-// only endpoints whose host resolved — a relative /api/x has none — so the count
-// of host-less endpoints is surfaced in the summary rather than hidden.
+// fetched assets, resolved-host endpoints, suspected-backend calls, tech detection,
+// and declared base-URL rules — with an in/out-of-scope badge (the canonical egress
+// classification the server computed) and per-host roll-up counts. Filterable by
+// scope and by name, sortable by any count. Honesty (design §5): "Endpoints" counts
+// only CONFIRMED endpoints whose host resolved; "Suspected" is a SEPARATE column for
+// generic/unresolved-lane calls (DEBT D24/D26) so the two never blur — and each
+// lane's host-less total is surfaced in the summary rather than hidden.
 
 type ScopeFilter = "all" | "in" | "out";
-type SortKey = "host" | "assets" | "endpoints" | "techs";
+type SortKey = "host" | "assets" | "endpoints" | "suspected" | "techs";
 
 const SCOPE_LABEL: Record<ScopeFilter, string> = { all: "All", in: "In scope", out: "Out of scope" };
 
@@ -74,6 +75,14 @@ export function HostsPage({ data }: { data: HostsResponse }) {
               </span>
             </>
           )}
+          {data.suspected_unattributed > 0 && (
+            <>
+              {" · "}
+              <span className="hosts-note">
+                {data.suspected_unattributed} suspected with no host
+              </span>
+            </>
+          )}
         </p>
       </div>
 
@@ -114,7 +123,12 @@ export function HostsPage({ data }: { data: HostsResponse }) {
               </th>
               <th>Scope</th>
               {numHead("assets", "Assets")}
-              {numHead("endpoints", "Endpoints", "Endpoints whose host resolved")}
+              {numHead("endpoints", "Endpoints", "Confirmed endpoints whose host resolved")}
+              {numHead(
+                "suspected",
+                "Suspected",
+                "Suspected-backend calls (generic / unresolved) whose host resolved — not a confirmed endpoint",
+              )}
               {numHead("techs", "Tech")}
             </tr>
           </thead>
@@ -148,6 +162,13 @@ function HostTableRow({ row }: { row: HostRow }) {
       </td>
       <td className="hosts-num">{row.assets}</td>
       <td className="hosts-num">{row.endpoints}</td>
+      <td className="hosts-num">
+        {row.suspected > 0 ? (
+          <span className="hosts-suspected-val">{row.suspected}</span>
+        ) : (
+          row.suspected
+        )}
+      </td>
       <td className="hosts-num">{row.techs}</td>
     </tr>
   );

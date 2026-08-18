@@ -22,6 +22,18 @@ host but is a read-time overlay that never writes ``occurrence.host``, so it
 surfaces as a ``declared`` row, not as a per-host endpoint count.) On
 runtime-capture runs attribution is sparser still (DEBT D24 — many captured
 findings keep ``host=null``).
+
+Suspected-backend lanes (DEBT D24/D26 follow-up): the unconfirmed lanes
+``endpoint_generic`` (a SUSPECTED custom HTTP client) and ``endpoint_unresolved``
+(a detected sink we couldn't statically resolve) also carry a recovered
+``occurrence.host`` when their value is an absolute URL (DEBT D24). Those roll up
+into a SEPARATE ``suspected`` per-host count — never the confirmed ``endpoints``
+count — so the confirmed-endpoint reconciliation with the Overview "Endpoints"
+card is unaffected and the confirmed vs suspected surfaces stay distinguishable.
+``page_route`` is deliberately excluded: a client-nav / doc-link target
+(``mui.com``, ``github.com``) is not a backend the client talks to. (WebSocket
+sinks ride ``endpoint_unresolved`` but their ``ws(s)://`` host is not attributed
+by ``egress.attributed_host``, so they surface under ``suspected_unattributed``.)
 """
 
 from __future__ import annotations
@@ -56,6 +68,10 @@ class HostRow:
     declared: bool
     assets: int
     endpoints: int
+    # Suspected-backend findings (endpoint_generic + endpoint_unresolved) whose host
+    # resolved to this host — a SUSPECTED custom client / unresolved sink, kept as a
+    # count SEPARATE from the confirmed ``endpoints`` above (DEBT D24/D26 follow-up).
+    suspected: int
     techs: int
 
 
@@ -68,6 +84,10 @@ class HostsView:
     # a host). count(resolved endpoints) + endpoints_unattributed == the run's
     # total endpoint findings, so this reconciles with the Overview "Endpoints" card.
     endpoints_unattributed: int
+    # Suspected-backend findings (endpoint_generic + endpoint_unresolved) with NO
+    # resolved host — the honest host-less suspected surface, parallel to
+    # endpoints_unattributed but kept SEPARATE so neither denominator mixes lanes.
+    suspected_unattributed: int
     hosts: list[HostRow]
 
 
@@ -79,10 +99,35 @@ def _host(value: str | None) -> str:
     return egress._normalize_host(egress.host_of(value))
 
 
+def _group_occurrences_by_host(
+    occurrences: list[tuple[str | None, str]],
+) -> tuple[dict[str, int], int]:
+    """Roll ``(host, finding_hash)`` occurrences into (per-host distinct-finding
+    counts, unattributed-finding count). A finding counts once per host it resolved
+    to (so per-host counts may sum higher than the distinct-finding total — one
+    finding seen on two hosts counts under each), and a finding whose every
+    occurrence is host-less is 'unattributed'. Shared verbatim by the confirmed
+    (``endpoint``) and suspected (``endpoint_generic`` / ``endpoint_unresolved``)
+    lanes so the two are counted by identical rules but tallied separately."""
+    hosts_of_finding: dict[str, set[str]] = defaultdict[str, set[str]](set)
+    findings: set[str] = set()
+    for raw_host, finding_hash in occurrences:
+        findings.add(finding_hash)
+        h = _host(raw_host)
+        if h:
+            hosts_of_finding[finding_hash].add(h)
+    by_host: dict[str, int] = defaultdict[str, int](int)
+    for finding_hosts in hosts_of_finding.values():
+        for h in finding_hosts:
+            by_host[h] += 1
+    return by_host, len(findings) - len(hosts_of_finding)
+
+
 def _aggregate_hosts(
     run_id: str,
     asset_urls: list[str],
     endpoint_occurrences: list[tuple[str | None, str]],
+    suspected_occurrences: list[tuple[str | None, str]],
     tech_hosts: list[str],
     declared_hosts: list[str],
     scope_hosts: list[str],
@@ -90,10 +135,10 @@ def _aggregate_hosts(
     allow_local: bool,
 ) -> HostsView:
     """Pure roll-up (no DB/network) so the host-universe + scope logic is unit
-    testable. ``endpoint_occurrences`` is ``(host, finding_hash)`` per endpoint
-    occurrence; a finding recurs across hosts, so per-host endpoint counts may
-    sum higher than the distinct endpoint total (an endpoint seen on two hosts
-    counts under each)."""
+    testable. ``endpoint_occurrences`` / ``suspected_occurrences`` are each
+    ``(host, finding_hash)`` per occurrence — confirmed endpoints and suspected
+    backend calls respectively, counted by the same rules but tallied into
+    separate per-host columns so the confirmed reconciliation is never diluted."""
     assets_by_host: dict[str, int] = defaultdict[str, int](int)
     for url in asset_urls:
         # Only a real http(s) asset carries a network host. Capture stores eval'd /
@@ -114,20 +159,12 @@ def _aggregate_hosts(
         if h:
             tech_by_host[h] += 1
 
-    # Group occurrences by finding so a finding counts once per host, and a
-    # finding whose every occurrence is host-less becomes endpoints_unattributed.
-    hosts_of_finding: dict[str, set[str]] = defaultdict[str, set[str]](set)
-    endpoint_findings: set[str] = set()
-    for raw_host, finding_hash in endpoint_occurrences:
-        endpoint_findings.add(finding_hash)
-        h = _host(raw_host)
-        if h:
-            hosts_of_finding[finding_hash].add(h)
-    endpoints_by_host: dict[str, int] = defaultdict[str, int](int)
-    for finding_hosts in hosts_of_finding.values():
-        for h in finding_hosts:
-            endpoints_by_host[h] += 1
-    endpoints_unattributed = len(endpoint_findings) - len(hosts_of_finding)
+    # Confirmed endpoints and suspected backend calls are grouped by identical
+    # rules (see _group_occurrences_by_host) but into SEPARATE tallies: the
+    # confirmed endpoints_unattributed keeps reconciling with the Overview
+    # "Endpoints" card, and the suspected lane never dilutes it.
+    endpoints_by_host, endpoints_unattributed = _group_occurrences_by_host(endpoint_occurrences)
+    suspected_by_host, suspected_unattributed = _group_occurrences_by_host(suspected_occurrences)
 
     declared: set[str] = set()
     for raw_declared in declared_hosts:
@@ -135,7 +172,13 @@ def _aggregate_hosts(
         if h:
             declared.add(h)
 
-    universe = set(assets_by_host) | set(tech_by_host) | set(endpoints_by_host) | declared
+    universe = (
+        set(assets_by_host)
+        | set(tech_by_host)
+        | set(endpoints_by_host)
+        | set(suspected_by_host)
+        | declared
+    )
     rows = [
         HostRow(
             host=h,
@@ -143,6 +186,7 @@ def _aggregate_hosts(
             declared=h in declared,
             assets=assets_by_host.get(h, 0),
             endpoints=endpoints_by_host.get(h, 0),
+            suspected=suspected_by_host.get(h, 0),
             techs=tech_by_host.get(h, 0),
         )
         for h in sorted(universe)
@@ -152,6 +196,7 @@ def _aggregate_hosts(
         count=len(rows),
         in_scope=sum(1 for r in rows if r.in_scope),
         endpoints_unattributed=endpoints_unattributed,
+        suspected_unattributed=suspected_unattributed,
         hosts=rows,
     )
 
@@ -160,8 +205,10 @@ def list_hosts(tenant_id: str, run_id: str) -> HostsView | None:
     """The run's discovered-host inventory, or ``None`` if the run does not exist
     for this tenant (RLS-invisible → 404). Bounded run-scoped reads (each covered
     by an existing index: ix_run_asset_run, ix_finding_run, ix_occurrence_finding,
-    ix_run_technology_run, ix_base_url_session); the endpoint hosts come from a
-    direct ``Finding⋈FindingOccurrence`` join, never the heavy ``list_findings``."""
+    ix_run_technology_run, ix_base_url_session); the endpoint + suspected-backend
+    hosts come from two ``Finding⋈FindingOccurrence`` joins (confirmed ``endpoint``
+    vs ``endpoint_generic``/``endpoint_unresolved``), never the heavy
+    ``list_findings``."""
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
         if run is None:
@@ -187,6 +234,25 @@ def list_hosts(tenant_id: str, run_id: str) -> HostsView | None:
                 )
             ).all()
         ]
+        # Suspected-backend lanes, as an explicit ALLOWLIST (never `type != endpoint`):
+        # PARAM and SECRET occurrences also carry a resolved host, so a denylist would
+        # leak their hosts into the suspected count. page_route is intentionally out.
+        suspected_occurrences: list[tuple[str | None, str]] = [
+            (row[0], row[1])
+            for row in session.execute(
+                select(FindingOccurrence.host, Finding.finding_hash)
+                .join(Finding, Finding.id == FindingOccurrence.finding_id)
+                .where(
+                    Finding.run_id == str(run_id),
+                    Finding.type.in_(
+                        [
+                            FindingType.ENDPOINT_GENERIC.value,
+                            FindingType.ENDPOINT_UNRESOLVED.value,
+                        ]
+                    ),
+                )
+            ).all()
+        ]
         tech_hosts = list(
             session.scalars(
                 select(RunTechnology.host).where(RunTechnology.run_id == str(run_id))
@@ -201,6 +267,7 @@ def list_hosts(tenant_id: str, run_id: str) -> HostsView | None:
         str(run_id),
         asset_urls,
         endpoint_occurrences,
+        suspected_occurrences,
         tech_hosts,
         declared_hosts,
         list(scope_hosts),

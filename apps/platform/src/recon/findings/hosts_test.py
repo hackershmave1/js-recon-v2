@@ -14,6 +14,7 @@ def _agg(
     *,
     asset_urls: list[str] | None = None,
     endpoint_occurrences: list[tuple[str | None, str]] | None = None,
+    suspected_occurrences: list[tuple[str | None, str]] | None = None,
     tech_hosts: list[str] | None = None,
     declared_hosts: list[str] | None = None,
     scope_hosts: list[str] | None = None,
@@ -23,6 +24,7 @@ def _agg(
         "r1",
         asset_urls or [],
         endpoint_occurrences or [],
+        suspected_occurrences or [],
         tech_hosts or [],
         declared_hosts or [],
         scope_hosts or [],
@@ -82,6 +84,41 @@ def test_empty_run_is_zeroed_not_errored():
     view = _agg()
     assert view.count == 0 and view.in_scope == 0
     assert view.endpoints_unattributed == 0 and view.hosts == []
+    assert view.suspected_unattributed == 0
+
+
+def test_suspected_lane_rolls_up_separately_from_confirmed():
+    # Suspected-backend occurrences (endpoint_generic / endpoint_unresolved) roll up
+    # into their OWN per-host column + suspected_unattributed, leaving the confirmed
+    # endpoints count and endpoints_unattributed untouched — the reconciliation the
+    # Overview "Endpoints" card depends on. A host with BOTH lanes counts each once.
+    view = _agg(
+        endpoint_occurrences=[("api.acme.io", "e1"), (None, "e2")],  # 1 resolved, 1 host-less
+        suspected_occurrences=[
+            ("api.acme.io", "s1"),  # suspected on a host that also has a confirmed endpoint
+            ("guess.acme.io", "s2"),  # suspected-only host -> its own row
+            (None, "s3"),  # host-less suspected -> suspected_unattributed
+        ],
+        scope_hosts=["acme.io"],
+    )
+    # Confirmed lane is unchanged by the suspected occurrences.
+    assert _row(view, "api.acme.io").endpoints == 1
+    assert view.endpoints_unattributed == 1  # only e2, never s3
+    # Suspected lane is tallied separately (no double-count against endpoints).
+    assert _row(view, "api.acme.io").suspected == 1
+    guess = _row(view, "guess.acme.io")
+    assert guess.suspected == 1 and guess.endpoints == 0  # suspected-only host
+    assert view.suspected_unattributed == 1  # s3
+
+
+def test_suspected_only_host_enters_the_universe():
+    # A host known ONLY from a suspected call still gets a row (it is discovered
+    # attack surface) and is scope-classified like any other host.
+    view = _agg(suspected_occurrences=[("api.evil.com", "s1")], scope_hosts=["acme.io"])
+    assert view.count == 1
+    row = _row(view, "api.evil.com")
+    assert (row.assets, row.endpoints, row.suspected, row.techs) == (0, 0, 1, 0)
+    assert not row.in_scope
 
 
 def test_normalizes_case_and_trailing_dot_and_drops_non_hosts():

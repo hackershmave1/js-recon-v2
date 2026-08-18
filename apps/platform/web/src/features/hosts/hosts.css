@@ -58,6 +58,12 @@
   border: 1px solid var(--border-strong); border-radius: var(--r-sm); padding: 1px 6px;
 }
 
+/* A non-zero SUSPECTED count is tinted amber (the app's "unconfirmed / unresolved"
+   hue) so an operator separates suspected-backend hosts from confirmed-endpoint
+   hosts at a glance; the "Suspected" column header carries the meaning (never colour
+   alone — accessibility). */
+.hosts-suspected-val { color: var(--warn); }
+
 .hosts-scope-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; }
 .hosts-scope-badge.is-in { color: var(--accent); }
 .hosts-scope-badge.is-out { color: var(--muted); }
