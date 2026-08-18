@@ -20,6 +20,16 @@ const NORUN: SessionSummary = {
   engagement_id: null, archived: false, created_at: "2026-08-01T00:00:00Z",
   latest_run: null, files: null, endpoints: null, secrets: null, coverage_pct: null,
 };
+const FAILED: SessionSummary = {
+  session_id: "s3", name: null, host: "visa.com", scope_hosts: ["visa.com"],
+  engagement_id: null, archived: false, created_at: "2026-08-01T00:00:00Z",
+  latest_run: {
+    run_id: "r3", state: "failed", created_at: "2026-08-01T00:00:00Z",
+    started_at: "2026-08-01T00:00:00Z", ended_at: "2026-08-01T00:01:00Z", target: "visa.com",
+    failure_category: "out_of_scope", failure_reason: "Target host is out of scope for this session.",
+  },
+  files: 0, endpoints: 0, secrets: 0, coverage_pct: null,
+};
 
 beforeEach(() => { vi.restoreAllMocks(); navigate.mockClear(); });
 
@@ -79,5 +89,22 @@ describe("SessionsPage", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: /^delete$/i }));
     expect(del).toHaveBeenCalledWith("t1", "s1");
     await waitFor(() => expect(screen.queryByText("acme.io")).not.toBeInTheDocument());
+  });
+
+  it("surfaces a failed run's classified reason on the card (visible tip + accessible name)", async () => {
+    vi.spyOn(api, "listSessions").mockResolvedValue({ count: 1, sessions: [FAILED] });
+    renderPage();
+    await screen.findByText("visa.com");
+    // The reason renders in the DOM as the aria-hidden visual tip (no double-announce)...
+    const tip = screen.getByText("Target host is out of scope for this session.");
+    expect(tip).toBeInTheDocument();
+    expect(tip).toHaveAttribute("aria-hidden", "true");
+    // ...and is reachable by assistive tech via the card's accessible name (not a
+    // hover-only title, and not nested inside the button where ARIA would strip it).
+    expect(
+      screen.getByRole("button", {
+        name: /open visa\.com — run failed: target host is out of scope/i,
+      }),
+    ).toBeInTheDocument();
   });
 });

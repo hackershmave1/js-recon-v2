@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-from recon.sessions.service import SessionInvalid, _card_label, _resolve_scope_hosts
+from recon.sessions.service import (
+    SessionInvalid,
+    _card_label,
+    _resolve_scope_hosts,
+    _target_host,
+)
 
 
 def test_explicit_scope_is_normalized_and_deduped():
@@ -161,4 +166,56 @@ def test_card_label_nothing_resolves_is_em_dash():
             scope_hosts=[],
         )
         == "—"
+    )
+
+
+# ---------------------------------------------------------------------------- #
+# _target_host — clean the crawl target to a bare host for the card label (D27).
+# Crash-guarded on purpose: run.target is nullable free-text (the upload path stores
+# it unvalidated), and one raising row would 500 the whole /sessions list.
+# ---------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        (None, ""),  # nullable target must not raise (would 500 the list)
+        ("", ""),
+        ("   ", ""),  # whitespace-only -> split() is [] -> no IndexError
+        ("acme.io", "acme.io"),
+        ("www.nhl.com/stats", "www.nhl.com"),  # drop the path
+        ("https://acme.io:8443/app.js", "acme.io"),  # drop scheme/port/path
+        ("visa.com — verify classified failure", "visa.com"),  # drop the free-text memo
+    ],
+)
+def test_target_host_cleans_or_empties(target: str | None, expected: str):
+    assert _target_host(target) == expected
+
+
+def test_card_label_crawl_target_is_normalized_to_host():
+    # A path/free-text target shows only its host on the card, never the raw string (D27).
+    assert (
+        _card_label(
+            name=None,
+            external_id=None,
+            target="www.nhl.com/stats",
+            derived_host=None,
+            scope_hosts=["www.nhl.com"],
+        )
+        == "www.nhl.com"
+    )
+
+
+def test_card_label_unparseable_target_falls_through_and_never_raises():
+    # A blank/whitespace target must fall through to the next label source, not raise —
+    # a single raising row would 500 the whole Sessions list.
+    assert (
+        _card_label(
+            name=None,
+            external_id=None,
+            target="   ",
+            derived_host="app.acme.io",
+            scope_hosts=[],
+        )
+        == "app.acme.io"
     )
