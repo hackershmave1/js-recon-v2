@@ -107,6 +107,12 @@ function fileFindingCounts(files: SourceFile[], data: FindingsResponse | null): 
       if (o.source_path === "input.js" && o.asset_url == null) candidates.push(...uploadFiles);
       for (const file of candidates) {
         if (!matchFile(o, file)) continue;
+        // Accumulate by tree PATH: a source path recovered from >1 asset (same path,
+        // different asset_url) collapses to a single tree node, so its badge is the
+        // UNION of distinct findings across those recoveries — the node's true count.
+        // (The old per-file scan kept only the last such file's count, a latent
+        // undercount; the Set dedups by finding_hash so a shared finding isn't
+        // double-counted.)
         let set = hashesByPath.get(file.path);
         if (!set) { set = new Set(); hashesByPath.set(file.path, set); }
         set.add(finding.finding_hash);

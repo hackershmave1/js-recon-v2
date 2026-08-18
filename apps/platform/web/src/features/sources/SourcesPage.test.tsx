@@ -267,6 +267,24 @@ describe("SourcesPage", () => {
     expect(nodes.length).toBeLessThan(151);                    // windowed, not one node per file
   });
 
+  it("unions findings for one source path recovered from two assets (same path, different asset)", async () => {
+    // The backend emits a shared source path recovered from >1 asset as distinct
+    // (source_path, asset_url) files; they collapse to ONE tree node, whose badge is
+    // the union of both recoveries' distinct findings (D25 by-path aggregation).
+    const s1: SourceFile = { path: "webpack:/src/shared.js", kind: "source", fetch_status: "ok", asset_url: "https://acme.io/app.js" };
+    const s2: SourceFile = { path: "webpack:/src/shared.js", kind: "source", fetch_status: "ok", asset_url: "https://acme.io/vendor.js" };
+    const data: FindingsResponse = {
+      run_id: "r", count: 2, coverage: null, spec: null,
+      findings: [
+        f({ finding_hash: "a1", occurrences: [occ({ source_path: s1.path, asset_url: s1.asset_url, line: 1 })] }),
+        f({ finding_hash: "b2", occurrences: [occ({ source_path: s2.path, asset_url: s2.asset_url, line: 2 })] }),
+      ],
+    };
+    mount([s1, s2], data);
+    const node = await screen.findByText("shared.js");
+    expect(node.closest("button")).toHaveTextContent("2"); // union of a1 + b2
+  });
+
   it("aggregates a folder badge from an inverted index at scale", async () => {
     // Two of 120 files carry a finding; the enclosing folder badge sums them — proving
     // the O(findings) index (not the old O(files x findings) scan) still counts right.
