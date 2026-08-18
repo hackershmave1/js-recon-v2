@@ -5,7 +5,11 @@
    occurrences. The design's Deobfuscate action + source-map "reconstructed from
    source maps" file set are omitted — neither is produced by the backend. */
 
-.sv { display: flex; align-items: stretch; min-height: 460px; }
+/* Fit the run viewport so the tree + code panes scroll INTERNALLY rather than the
+   whole page — this is what makes the windowed tree effective (D25): .sv-tree
+   becomes a bounded scroll viewport instead of growing to the full content height.
+   The 80px is .shell-view-inner's vertical padding (20 top + 60 bottom). */
+.sv { display: flex; align-items: stretch; height: calc(100dvh - var(--topbar-h) - 80px); min-height: 360px; }
 
 /* ---- file tree ---- */
 .sv-rail { width: 300px; flex: 0 0 300px; border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
