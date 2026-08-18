@@ -135,6 +135,11 @@ export interface RunControlResult { run_id: string; state: string; pause_request
 export interface SessionRunRef {
   run_id: string; state: string;
   created_at: string | null; started_at: string | null; ended_at: string | null; target: string | null;
+  // Classified failure (only set on a FAILED run; see recon.runs.failure). `reason` is
+  // a curated, safe string — never the raw exception. Optional: absent on non-failed
+  // runs / pre-classification snapshots. Surfaced on the card via the body's aria-label
+  // + an aria-hidden hover/focus tip (D27).
+  failure_category?: string | null; failure_reason?: string | null;
 }
 export interface SessionSummary {
   session_id: string; external_id?: string | null; name: string | null; host: string; scope_hosts: string[];

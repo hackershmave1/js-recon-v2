@@ -22,47 +22,6 @@ nothing is lost in the regrouping. Nothing is currently parked.
 
 Visible in results today, on the real targets you point the tool at. Fix these first.
 
-#### D25 · Sources view freezes the app on large sessions (un-virtualized file tree) [L, needs investigation]  ·  performance
-The Sources view hangs the browser tab — and can lock up the workstation — on sessions with many
-files (repro on QA tenant `d187ba73`: sessions with 475 / 500 / 1262 files; the 1262-file one shows
-`791 via source maps`). Prior fixes already bound the *content* pane: `CodeViewer` commits ≤10k lines
-/ ≤512k chars and skips syntax-highlight + in-app beautify past 200k chars (fixes S2/S3), and content
-is lazily fetched per selected file. So the freeze is no longer the code pane — the remaining
-unbounded work is the **file tree** (`SourcesPage.tsx`): `TreeLevel` renders *every* node (1262+ files
-+ all directories) as live DOM with no virtualization; `countFindingsUnder` is recomputed per
-directory on every render (O(nodes·depth), uncached); the `badges` map is O(files × findings ×
-occurrences); and the whole tree re-renders on every SSE tick during an active run. Together these
-blow the main-thread frame budget on a large tree (ui-ux-pro-max §3 `virtualize-lists`: virtualize
-50+ rows). **Grounded fix directions (for the deep-dive):** virtualize the tree (render only visible
-rows); precompute finding counts in one bottom-up pass instead of per-directory; index occurrences →
-file once (O(findings), not O(files × findings)); decouple the tree from mid-stream SSE re-renders;
-and consider not auto-selecting/rendering the first file on load (`selected` defaults to the first ok
-file today, so a huge first file auto-renders) — i.e. show nothing until a file is chosen. A
-source-content cache is secondary (content is already lazily fetched). **Why it's the worst open
-defect:** it makes a whole view unusable on exactly the large, source-map-rich targets where recon is
-most valuable, and can hang the operator's machine. **Owed:** a profiling-led investigation (measure
-the real freeze on the 1262-file session before choosing between tree-virtualization, count-
-precompute, and render-decoupling — a job for a swarm of senior FE-performance engineers), then the
-fix. **Detection note:** open `/runs/<id>/sources` on a large QA session (visa / nhl / vercel /
-attio, tenant `d187ba73`).
-
-#### D26 · No host/domain inventory — add a discovered-hosts metric + filterable page [M]  ·  maintainability
-Recon discovers many hosts — the crawl target + subdomains, plus API / asset hosts recovered from JS
-(the nhl.com runs surfaced `api.nhle.com`, `api-web.nhle.com`, `live.nhle.com`, `wsr.nhle.com`,
-`assets.nhle.com`, `dcs.nhl.com`) — but nothing enumerates them: the Overview shows Files / Endpoints
-/ Secrets / Attribution / Tech stack, and hosts are only implicit in assets, endpoint occurrences,
-and the per-host Tech-stack tables. **Add:** (a) an Overview metric card counting distinct hosts
-discovered; (b) a dedicated **Hosts** page (left-nav, beside Tech stack) listing every discovered
-domain / subdomain / host, filterable by **scope** (in- vs out-of-scope per the session's
-`scope_hosts`) and by **name** (substring). Each row: host, in/out-of-scope badge, and roll-up counts
-(assets · endpoints · techs). **Data:** derive from the correlate stage / assets / endpoint
-occurrences + `/technologies` (already grouped by host) — likely a small `GET /runs/{id}/hosts`
-aggregation or a client-side roll-up. **Why it matters:** the discovered-host map *is* core recon
-output (attack surface = which backends the client talks to) and directly complements D24 (host
-attribution) — the Hosts page is where an operator pivots. **UX** (ui-ux-pro-max): filterable
-`sortable-table`, meaningful `empty-state`, scope shown by icon + label (not colour alone). **Owed:**
-the aggregation + metric + page. **Trigger:** requested by the operator (2026-08-18).
-
 #### D22 · Tech detection is Phase-1 only (no JS-runtime surface) + curated header allowlist [M]  ·  correctness
 The fingerprint matcher (`findings/techdetect/match.py`) implements only the Phase-1 signal
 surfaces — response headers, cookie names, `scriptSrc` URLs, `scripts` (JS source text), and
@@ -146,46 +105,6 @@ enterprise-hygiene cleanup (so the "later" doesn't become "never"):
   reset-to-0 bug it fixed. Optional close: eager-persist the projection in `stopCapture`.
 
 **Tier-1 facet:** the "Popup bundle is not compiled in CI" bullet is the user-facing risk (a broken capture popup could merge green); the other bullets are housekeeping. Kept together as one register entry.
-
-#### D24 · Runtime-capture findings lose host/source attribution [M]  ·  correctness
-Headless *runtime-capture* runs analyze the executing JS, but the findings drop the source host +
-URL the static path preserves. Reproduced live on nhl.com (2026-08-18): a `/stats` capture (475
-assets) recovered the real NHL backend host map as finding *values* — `https://api.nhle.com/stats/
-rest/en`, `https://api-web.nhle.com`, `https://live.nhle.com/ppt`, `https://wsr.nhle.com/config` —
-yet every one has `host: null` and `source_path: "input.js"` (the extractor's internal temp name),
-so the Attribution column is empty for exactly the hosts it found. Separately, ~88% of captured
-assets (421/475) surface a 64-char content hash where a URL/host belongs: inline / injected / eval'd
-/ worker scripts have no source URL, so `assets`/`sources` show the hash and an operator can't tell
-which host a captured script came from. Knock-on: Tech-stack detection degrades in proportion to the
-inline-asset share (a homepage capture of mostly-hashed inline assets detected 1 tech; the `/stats`
-capture, which also pulled real-URL `dcs.nhl.com` assets, detected 4) because the header / cookie /
-`scriptSrc` surfaces need a real URL. **Why safe now:** the finding *values* are correct (the real
-hosts are in the strings), no data is lost, and capture on a good entry page still out-recons static
-(60 findings incl. the host map + a Rollbar token vs static's 24) — an attribution/pivot gap, not
-corruption. **Not a regression the other way:** the earlier "capture is thinner than static" reading
-was an *entry-page* artifact (the homepage under-exercised the app), not inherent — confirmed by the
-`/stats` capture surpassing static. **Still owed:** populate a captured finding's `host` from its URL
-literal (or the observed request), and carry the real captured URL as `source_path` instead of
-`input.js` (same root as the static-path `input.js` display mislabel). Ties to REQ-C3 (correlate /
-observed-URL host resolution). **Trigger:** already user-visible — raise if operators pivot recon by
-host. **Detection note:** diff a static vs capture run of one session (nhl.com session `19b53550`,
-runs `c8eb172b` static / `1acf4795` capture `/stats`).
-
-#### D27 · Session card shows the raw target as host + no failure-reason affordance [S]  ·  maintainability
-Two session-card issues (`SessionsPage.tsx`), seen on the `visa` QA cards:
-- **Host = raw, unnormalized target.** `sx-host` renders `s.host` verbatim, but `host` stores whatever
-  was typed as the crawl target — a path (`www.nhl.com/stats`) or free text (`visa.com — verify
-  classified failure`) — so the card title shows a non-domain string. It should show only the domain.
-  Fix: normalize the target → registrable hostname at session creation (parse the host out of a URL,
-  drop path/label), and/or normalize at display; existing polluted rows want a one-off backfill or
-  display-time parse.
-- **Failure reason has no affordance.** A failed card shows only the `failed` pill; the *why* (the
-  classified `failure_reason` that PR #77 added to `latest_run`) is in the data but never shown.
-  Surface it on hover / focus of the status pill as a tooltip — not in the title (ui-ux-pro-max:
-  `tooltip-on-interact`, keyboard-reachable per `tooltip-keyboard`; never hover-only).
-**Why low:** cosmetic / discoverability, not data loss — the reason is one click into the run.
-**Owed:** host normalization at creation + a status-pill tooltip wired to `failure_reason`.
-**Detection note:** the `visa.com — verify classified failure` card, tenant `d187ba73`.
 
 ### Tier 2 · fix before it scales up
 
@@ -526,3 +445,30 @@ WITH NITS — the precedence test was strengthened to assert the *effective* ten
 just unclobbered storage). Frontend lane green (oxlint + tsc-strict + vitest 136 + build). NOTE: the `TenantGate`
 UI this entry describes was later removed — superseded by central login (PR #57);
 `TenantContext` + `VITE_DEFAULT_TENANT_ID` remain.
+
+### D24 · Runtime-capture / unconfirmed-lane findings lose host attribution [M] — ✅ RESOLVED 2026-08-19  ·  correctness
+Host is now lifted from a finding's absolute-URL literal on the unconfirmed lanes
+(`egress.attributed_host` + `analyze`), and the `source_path` mislabel was fixed (52e5669),
+so the Findings host facet populates for the hosts capture recovered. Shipped in PR #81
+(with the D26-broadening per-host "Suspected" column, PR #82). Both §4 gates passed.
+
+### D25 · Sources view freezes the app on large sessions [L] — ✅ RESOLVED 2026-08-19  ·  performance
+Fixed via file-tree virtualization + a one-pass bottom-up finding-count precompute + an
+occurrence→file index + decoupling the tree from mid-stream SSE re-renders (plus a FE
+long-task/error boundary and BE timing logs). A 500-file tree now renders ~25–40 DOM nodes
+instead of thousands. Shipped in PR #78. Both §4 gates passed; live-verified.
+
+### D26 · No host/domain inventory [M] — ✅ RESOLVED 2026-08-19  ·  maintainability
+Added a discovered-hosts endpoint (`GET /runs/{id}/hosts`), an Overview metric card, and a
+filterable Hosts page (by scope + name) with per-host roll-up counts. Shipped in PR #80
+(with the per-host "Suspected" backend column, PR #82). Key fix: http(s)-scheme-only assets
+so a capture run's `vm://<hash>` pseudo-hosts don't flood the list. Both §4 gates passed.
+
+### D27 · Session card shows the raw target as host + no failure-reason affordance [S] — ✅ RESOLVED 2026-08-19  ·  maintainability
+Card host is now derived from the crawl target's host (`_target_host` → `egress.host_of` of
+the first whitespace token, read-time only — fixes existing rows and keeps `run.target` raw
+for the re-run prefill; a user rename still shows verbatim). The classified `failure_reason`
+is surfaced accessibly on a failed card: on the card-body `aria-label` (screen readers) plus
+an `aria-hidden` hover/focus tip that is a SIBLING of the `role="button"` body (not nested,
+which would strip its ARIA). Both §4 gates passed (design: BUILD WITH CHANGES — crash-guard
++ tooltip-out-of-button; code: SHIP WITH NITS — folded). Shipped in this PR.

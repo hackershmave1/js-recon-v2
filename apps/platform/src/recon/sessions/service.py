@@ -294,6 +294,23 @@ def _run_host(db: Session, run_id: str) -> str | None:
     return None
 
 
+def _target_host(target: str | None) -> str:
+    """The clean host to show for a crawl target on a card, so it reads ``www.nhl.com``
+    rather than the raw ``www.nhl.com/stats`` or a free-text label like
+    ``visa.com — verify …`` (DEBT D27). Takes the first whitespace token (dropping a
+    trailing memo) then strips scheme/port/path via :func:`egress.host_of` — the same
+    host extraction the derived-host branch already uses.
+
+    Returns ``""`` (never raises) when the target is blank or has no parseable host, so
+    the label falls through to the next source instead of showing junk. The crash guard
+    is load-bearing: ``run.target`` is nullable free-text (the upload path stores it
+    unvalidated), and ``list_sessions`` builds every card in one comprehension, so a
+    single raising row would 500 the whole Sessions page. ``run.target`` itself stays
+    raw (the edit/re-run prefill needs it); this is display-only."""
+    parts = (target or "").split()
+    return egress.host_of(parts[0]) if parts else ""
+
+
 def _card_label(
     *,
     name: str | None,
@@ -302,8 +319,8 @@ def _card_label(
     derived_host: str | None,
     scope_hosts: list[str],
 ) -> str:
-    """The Sessions card label (M3): a real user rename wins, then a crawl target,
-    then a capture/upload run's derived asset host, then the declared scope host,
+    """The Sessions card label (M3): a real user rename wins, then the crawl target's
+    host, then a capture/upload run's derived asset host, then the declared scope host,
     then "—". A capture session's auto-assigned name is its ext-UUID (== external_id);
     treat that as UNNAMED so the derived host shows instead of the raw UUID — this
     also repairs capture rows already stored with a UUID name, while a genuine rename
@@ -313,7 +330,13 @@ def _card_label(
     user_name = (name or "").strip()
     if external_id is not None and user_name == external_id.strip():
         user_name = ""
-    return user_name or target or derived_host or (scope_hosts[0] if scope_hosts else None) or "—"
+    return (
+        user_name
+        or _target_host(target)
+        or derived_host
+        or (scope_hosts[0] if scope_hosts else None)
+        or "—"
+    )
 
 
 def _summary(db: Session, row: EngagementSession) -> SessionSummary:
@@ -323,8 +346,8 @@ def _summary(db: Session, row: EngagementSession) -> SessionSummary:
     files = endpoints = secrets = coverage_pct = None
     if latest is not None:
         files, endpoints, secrets, coverage_pct = _run_stats(db, latest)
-    # Card label (M3, _card_label): a rename first, then a crawl target, then — for a
-    # target-less capture/upload run — a host derived from its assets, then the declared
+    # Card label (M3, _card_label): a rename first, then the crawl target's host, then —
+    # for a target-less capture/upload run — a host derived from its assets, then the declared
     # scope host, then "—". The derived-host query fires only for a target-less run (a
     # crawl short-circuits on its target), so only capture/upload cards pay it.
     derived_host = (

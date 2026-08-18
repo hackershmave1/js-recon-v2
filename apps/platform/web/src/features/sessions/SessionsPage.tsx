@@ -142,6 +142,12 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
           const state = s.latest_run?.state ?? "queued";
           const cls = STATUS_CLASS[state] ?? "muted";
           const running = ACTIVE_STATES.has(state);
+          // A failed run's classified, safe reason (never the raw exception). Surfaced
+          // as an accessible affordance on the card: the reason rides the card's
+          // aria-label for screen readers (reliable), plus an aria-hidden visual tip
+          // shown on card hover/focus (D27). null on non-failed runs.
+          const failReason =
+            state === "failed" ? s.latest_run?.failure_reason ?? null : null;
           const lastRun = s.latest_run
             ? s.latest_run.ended_at ?? s.latest_run.started_at ?? s.latest_run.created_at
             : null;
@@ -149,7 +155,7 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
             <div key={s.session_id}
               className={"sx-card status-" + cls + (busyId === s.session_id ? " is-busy" : "")}>
               <div className="sx-card-body" role="button" tabIndex={0}
-                aria-label={`Open ${s.host}`}
+                aria-label={failReason ? `Open ${s.host} — run failed: ${failReason}` : `Open ${s.host}`}
                 onClick={() => open(s)}
                 onKeyDown={(e) => { if (e.key === "Enter") open(s); }}>
                 <div className="sx-card-top">
@@ -182,6 +188,14 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
                   {s.coverage_pct == null ? "— attributed" : `${s.coverage_pct}% attributed`}
                 </div>
               </div>
+
+              {/* Failure reason (D27): a SIBLING of the role="button" body — never a
+                  descendant (ARIA strips a button's descendant semantics). SR users
+                  get it via the body's aria-label; this is the aria-hidden visual tip,
+                  revealed on card-body hover/focus by CSS. */}
+              {failReason && (
+                <div className="sx-tip" aria-hidden="true">{failReason}</div>
+              )}
 
               <div className="sx-card-actions">
                 <button type="button" className="sx-kebab" aria-label="Session actions"
