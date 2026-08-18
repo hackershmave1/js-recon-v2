@@ -97,10 +97,10 @@ Its **Sources** page browses both the fetched JS chunks and the source-map-recov
 the recovered list is derived from persisted `occurrence.source_path` (no subprocess fan-out; the
 Sourcemapper binary reruns on demand only for the one file being viewed) — with lazy syntax
 highlighting, and a finding occurrence links straight to its line in the recovered original. Its
-**Hosts** page enumerates every host a run discovered — from assets, resolved-host endpoints, tech
-detection, and declared base-URL rules — each badged in/out of the session's declared scope by the
-same egress guard the crawl enforces (`GET /runs/{id}/hosts`; host-less endpoints are reported, not
-hidden).
+**Hosts** page enumerates every host a run discovered — from assets, resolved-host endpoints,
+suspected-backend calls (the generic/unresolved lanes), tech detection, and declared base-URL rules —
+each badged in/out of the session's declared scope by the same egress guard the crawl enforces (`GET
+/runs/{id}/hosts`; host-less endpoints and suspected calls are reported, not hidden).
 
 **Runtime JS capture (server-side, default-off).** A run can set `crawl_mode="capture"` to route the
 DISCOVER stage away from katana and into an in-process CDP capture stage (`recon/capture/`) instead.

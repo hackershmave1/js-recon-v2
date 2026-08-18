@@ -8,10 +8,11 @@ const data: HostsResponse = {
   count: 3,
   in_scope: 2,
   endpoints_unattributed: 2,
+  suspected_unattributed: 1,
   hosts: [
-    { host: "acme.io", in_scope: true, declared: false, assets: 3, endpoints: 0, techs: 1 },
-    { host: "api.acme.io", in_scope: true, declared: false, assets: 0, endpoints: 5, techs: 0 },
-    { host: "cdn.evil.com", in_scope: false, declared: false, assets: 1, endpoints: 2, techs: 0 },
+    { host: "acme.io", in_scope: true, declared: false, assets: 3, endpoints: 0, suspected: 1, techs: 1 },
+    { host: "api.acme.io", in_scope: true, declared: false, assets: 0, endpoints: 5, suspected: 3, techs: 0 },
+    { host: "cdn.evil.com", in_scope: false, declared: false, assets: 1, endpoints: 2, suspected: 0, techs: 0 },
   ],
 };
 
@@ -57,8 +58,23 @@ describe("HostsPage", () => {
 
   it("shows an empty state when nothing was discovered", () => {
     render(
-      <HostsPage data={{ run_id: "r1", count: 0, in_scope: 0, endpoints_unattributed: 0, hosts: [] }} />,
+      <HostsPage
+        data={{ run_id: "r1", count: 0, in_scope: 0, endpoints_unattributed: 0, suspected_unattributed: 0, hosts: [] }}
+      />,
     );
     expect(screen.getByText(/no hosts discovered/i)).toBeInTheDocument();
+  });
+
+  it("renders a Suspected column and sorts by it", () => {
+    render(<HostsPage data={data} />);
+    fireEvent.click(screen.getByRole("button", { name: /Suspected/ }));
+    const names = screen.getAllByText(/\./).filter((el) => el.className === "hosts-host-name");
+    // suspected desc: api.acme.io (3), acme.io (1), cdn.evil.com (0)
+    expect(names.map((n) => n.textContent)).toEqual(["api.acme.io", "acme.io", "cdn.evil.com"]);
+  });
+
+  it("surfaces suspected findings with no resolved host in the summary", () => {
+    render(<HostsPage data={data} />);
+    expect(screen.getByText(/suspected with no host/i)).toBeInTheDocument();
   });
 });

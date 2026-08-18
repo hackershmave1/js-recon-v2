@@ -95,10 +95,11 @@ def _seed_run(tenant, session_id) -> str:
                 host=None,
             )
         )
-        # A SECRET and a PARAM finding must NOT count as endpoints (the query filters
-        # type=="endpoint"). The secret carries an in-scope host that already exists
-        # via the endpoint; the param a host-less occurrence — neither may move any
-        # host's endpoint count or endpoints_unattributed.
+        # A SECRET and a PARAM finding must NOT count as endpoints OR suspected: both
+        # host-consuming queries are explicit ALLOWLISTS, so a host on a secret/param
+        # occurrence leaks into neither lane. The secret carries an in-scope host that
+        # also has a real endpoint (so the assertions below prove no leak/double-count);
+        # the param a host-less occurrence.
         secret = models.Finding(
             tenant_id=tenant,
             run_id=run_id,
@@ -133,6 +134,73 @@ def _seed_run(tenant, session_id) -> str:
                 host=None,
             )
         )
+        # Suspected-backend lanes (DEBT D24/D26 follow-up): a generic-client call
+        # (Tier 5) and an unresolved sink (Tier 4) each carry a resolved host that
+        # rolls up into `suspected` (SEPARATE from confirmed endpoints). A host-less
+        # unresolved sink is a suspected_unattributed, never an endpoints_unattributed.
+        # A page_route (client-nav target) must be EXCLUDED entirely.
+        generic = models.Finding(
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_hash="g1",
+            type="endpoint_generic",
+            value="GET https://guess.acme.io/x",
+            path="app.js",
+        )
+        unresolved = models.Finding(
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_hash="u1",
+            type="endpoint_unresolved",
+            value="https://api.acme.io/maybe",
+            path="app.js",
+        )
+        unresolved_hostless = models.Finding(
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_hash="u2",
+            type="endpoint_unresolved",
+            value="/relative/sink",
+            path="app.js",
+        )
+        page_route = models.Finding(
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_hash="r1",
+            type="page_route",
+            value="https://cdn.mui.com/docs",
+            path="app.js",
+        )
+        session.add_all([generic, unresolved, unresolved_hostless, page_route])
+        session.flush()
+        session.add_all(
+            [
+                models.FindingOccurrence(
+                    tenant_id=tenant,
+                    finding_id=str(generic.id),
+                    occurrence_hash="o5",
+                    host="guess.acme.io",
+                ),
+                models.FindingOccurrence(
+                    tenant_id=tenant,
+                    finding_id=str(unresolved.id),
+                    occurrence_hash="o6",
+                    host="api.acme.io",
+                ),
+                models.FindingOccurrence(
+                    tenant_id=tenant,
+                    finding_id=str(unresolved_hostless.id),
+                    occurrence_hash="o7",
+                    host=None,
+                ),
+                models.FindingOccurrence(
+                    tenant_id=tenant,
+                    finding_id=str(page_route.id),
+                    occurrence_hash="o8",
+                    host="cdn.mui.com",
+                ),
+            ]
+        )
         return run_id
 
 
@@ -143,16 +211,27 @@ def test_get_hosts_aggregates_and_classifies_scope(client, authorized_session):
     assert resp.status_code == 200
     body = resp.json()
     assert body["run_id"] == run_id
-    assert body["count"] == 3  # acme.io, api.acme.io, cdn.evil.com
-    assert body["in_scope"] == 2  # acme.io + api.acme.io (subdomain of the scope)
-    assert body["endpoints_unattributed"] == 1  # the host-less endpoint (h2)
+    assert body["count"] == 4  # acme.io, api.acme.io, cdn.evil.com, guess.acme.io
+    assert body["in_scope"] == 3  # + guess.acme.io (subdomain of the scope)
+    assert body["endpoints_unattributed"] == 1  # only h2; the host-less sink is suspected
+    assert body["suspected_unattributed"] == 1  # u2 (host-less unresolved), NOT the host-less param
 
     by_host = {h["host"]: h for h in body["hosts"]}
-    assert list(by_host) == ["acme.io", "api.acme.io", "cdn.evil.com"]  # host-asc order
+    # guess.acme.io joins the universe (suspected-only); cdn.mui.com (page_route) does not.
+    assert list(by_host) == ["acme.io", "api.acme.io", "cdn.evil.com", "guess.acme.io"]
+    assert "cdn.mui.com" not in by_host  # page_route target excluded by the allowlist
 
     assert by_host["acme.io"]["in_scope"] is True
     assert (by_host["acme.io"]["assets"], by_host["acme.io"]["techs"]) == (1, 1)
-    assert by_host["api.acme.io"]["endpoints"] == 1 and by_host["api.acme.io"]["in_scope"] is True
+    # api.acme.io carries a confirmed endpoint AND a suspected sink — counted once each;
+    # the SECRET occurrence on the same host leaks into NEITHER (the allowlist proof).
+    assert by_host["api.acme.io"]["endpoints"] == 1
+    assert by_host["api.acme.io"]["suspected"] == 1
+    assert by_host["api.acme.io"]["in_scope"] is True
+    # guess.acme.io exists ONLY because of the generic lane (a suspected-only host).
+    assert by_host["guess.acme.io"]["suspected"] == 1
+    assert by_host["guess.acme.io"]["endpoints"] == 0
+    assert by_host["guess.acme.io"]["in_scope"] is True
     assert by_host["cdn.evil.com"]["in_scope"] is False
     assert by_host["cdn.evil.com"]["assets"] == 1
 
@@ -177,6 +256,7 @@ def test_get_hosts_empty_when_run_has_nothing(client, authorized_session):
     body = resp.json()
     assert body["count"] == 0 and body["hosts"] == []
     assert body["in_scope"] == 0 and body["endpoints_unattributed"] == 0
+    assert body["suspected_unattributed"] == 0
 
 
 def test_declared_base_url_host_is_flagged(client, authorized_session):

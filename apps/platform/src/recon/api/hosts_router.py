@@ -1,8 +1,8 @@
 """Discovered-hosts read endpoint: ``GET /runs/{run_id}/hosts`` (DEBT D26).
 
-A thin read over the per-run host inventory recon surfaced (assets · endpoint
-hosts · tech · declared base-URLs), each classified in/out of the session's
-declared scope by the canonical egress guard. Isolation is the database's (RLS):
+A thin read over the per-run host inventory recon surfaced (assets · endpoint hosts ·
+suspected-backend hosts · tech · declared base-URLs), each classified in/out of the
+session's declared scope by the canonical egress guard. Isolation is the database's (RLS):
 a run absent for this tenant is a 404, distinct from a real run with no hosts
 (200 + empty ``hosts``)."""
 
@@ -29,6 +29,7 @@ def get_run_hosts(
         "count": result.count,
         "in_scope": result.in_scope,
         "endpoints_unattributed": result.endpoints_unattributed,
+        "suspected_unattributed": result.suspected_unattributed,
         "hosts": [
             {
                 "host": row.host,
@@ -36,6 +37,7 @@ def get_run_hosts(
                 "declared": row.declared,
                 "assets": row.assets,
                 "endpoints": row.endpoints,
+                "suspected": row.suspected,
                 "techs": row.techs,
             }
             for row in result.hosts

@@ -172,17 +172,21 @@ export interface TechnologiesResponse {
 
 // GET /runs/{id}/hosts — the discovered-host inventory (DEBT D26). Each host is
 // classified in/out of the session's declared scope by the canonical egress guard.
-// `endpoints` counts only endpoints whose host RESOLVED (a relative /api/x carries
-// no host); `endpoints_unattributed` is the run-wide count of endpoints with no
-// resolved host, so (resolved endpoints) + endpoints_unattributed == the total
-// endpoint findings the Overview "Endpoints" card shows. `declared` = an operator
+// `endpoints` counts only CONFIRMED endpoints whose host RESOLVED (a relative /api/x
+// carries no host); `endpoints_unattributed` is the run-wide count of confirmed
+// endpoints with no resolved host, so (resolved endpoints) + endpoints_unattributed
+// == the total endpoint findings the Overview "Endpoints" card shows. `suspected` is
+// the SEPARATE roll-up of suspected-backend calls (the generic + unresolved lanes,
+// DEBT D24/D26) whose host resolved — never mixed into the confirmed count — with
+// `suspected_unattributed` its host-less counterpart. `declared` = an operator
 // base-URL host (REQ-C2) that may have no directly-attributed asset/endpoint/tech.
 export interface HostRow {
   host: string; in_scope: boolean; declared: boolean;
-  assets: number; endpoints: number; techs: number;
+  assets: number; endpoints: number; suspected: number; techs: number;
 }
 export interface HostsResponse {
-  run_id: string; count: number; in_scope: number; endpoints_unattributed: number; hosts: HostRow[];
+  run_id: string; count: number; in_scope: number;
+  endpoints_unattributed: number; suspected_unattributed: number; hosts: HostRow[];
 }
 
 export const TERMINAL_STATES = new Set(["done", "partial", "failed", "cancelled"]);
