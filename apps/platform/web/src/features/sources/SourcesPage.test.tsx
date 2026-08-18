@@ -249,4 +249,40 @@ describe("SourcesPage", () => {
     expect(rows).toHaveLength(1);
     expect((rows[0].textContent ?? "").length).toBeLessThanOrEqual(512_000);
   });
+
+  // ---- windowed file tree (D25: the freeze was committing every node to the DOM) ----
+
+  it("windows a large file tree instead of committing every node", async () => {
+    // 150 files under one host -> 151 rows, over WINDOW_THRESHOLD (100), so the tree
+    // is windowed: only the rows intersecting the viewport are in the DOM, not all 150.
+    const many: SourceFile[] = Array.from({ length: 150 }, (_, i) => ({
+      path: `https://acme.io/chunk-${String(i).padStart(3, "0")}.js`,
+      kind: "asset", fetch_status: "ok", asset_url: null,
+    }));
+    mount(many, null);
+    await screen.findByText("acme.io");                        // tree rendered (root dir on screen)
+    expect(screen.getByText(/150 files/i)).toBeInTheDocument();
+    const nodes = document.querySelectorAll(".sv-node");
+    expect(nodes.length).toBeGreaterThan(0);
+    expect(nodes.length).toBeLessThan(151);                    // windowed, not one node per file
+  });
+
+  it("aggregates a folder badge from an inverted index at scale", async () => {
+    // Two of 120 files carry a finding; the enclosing folder badge sums them — proving
+    // the O(findings) index (not the old O(files x findings) scan) still counts right.
+    const many: SourceFile[] = Array.from({ length: 120 }, (_, i) => ({
+      path: `https://acme.io/lib/m-${String(i).padStart(3, "0")}.js`,
+      kind: "asset", fetch_status: "ok", asset_url: null,
+    }));
+    const data: FindingsResponse = {
+      run_id: "r", count: 2, coverage: null, spec: null,
+      findings: [
+        f({ finding_hash: "e1", occurrences: [occ({ asset_url: many[0].path, line: 1 })] }),
+        f({ finding_hash: "e2", occurrences: [occ({ asset_url: many[1].path, line: 1 })] }),
+      ],
+    };
+    mount(many, data);
+    const libDir = await screen.findByRole("button", { name: /^lib/i });
+    expect(libDir).toHaveTextContent("2");                     // 2 findings aggregated under lib/
+  });
 });

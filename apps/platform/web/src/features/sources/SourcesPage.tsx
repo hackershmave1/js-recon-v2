@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getSources, getSourceContent, ApiError } from "../../api/apiClient";
 import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump } from "../../api/types";
 import { CodeViewer } from "./CodeViewer";
 import { useResizableRail } from "./useResizableRail";
+import { measureSync } from "../../shell/observability";
 import "./sources.css";
 
 // A finding occurrence belongs to a file when: (crawl) its asset_url equals the
@@ -32,7 +33,10 @@ function resolveJumpPath(j: SourceJump, files: SourceFile[]): string {
   return "input.js";
 }
 
-interface TreeNode { name: string; children: Map<string, TreeNode>; file: SourceFile | null; }
+// `count` is the finding total AT and UNDER this node (a file's own count; a
+// directory's aggregated descendants), precomputed once by annotateCounts so it
+// isn't recursively recomputed per-directory on every render (D25).
+interface TreeNode { name: string; children: Map<string, TreeNode>; file: SourceFile | null; count: number; }
 
 function segmentsOf(path: string): string[] {
   const noScheme = path.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
@@ -41,18 +45,102 @@ function segmentsOf(path: string): string[] {
 }
 
 function buildTree(files: SourceFile[]): TreeNode {
-  const root: TreeNode = { name: "", children: new Map(), file: null };
+  const root: TreeNode = { name: "", children: new Map(), file: null, count: 0 };
   for (const file of files) {
     let node = root;
     const segs = segmentsOf(file.path);
     segs.forEach((seg, i) => {
       let child = node.children.get(seg);
-      if (!child) { child = { name: seg, children: new Map(), file: null }; node.children.set(seg, child); }
+      if (!child) { child = { name: seg, children: new Map(), file: null, count: 0 }; node.children.set(seg, child); }
       if (i === segs.length - 1) child.file = file;
       node = child;
     });
   }
   return root;
+}
+
+// One bottom-up pass: set each node's `count` = its own file's finding count plus
+// every descendant's. Replaces the per-directory countFindingsUnder() that reran
+// the whole subtree inside every render (D25 hot path).
+function annotateCounts(node: TreeNode, fileCounts: Map<string, number>): number {
+  let total = node.file ? (fileCounts.get(node.file.path) ?? 0) : 0;
+  for (const child of node.children.values()) total += annotateCounts(child, fileCounts);
+  node.count = total;
+  return total;
+}
+
+function pushInto<K>(m: Map<K, SourceFile[]>, k: K, v: SourceFile): void {
+  const a = m.get(k);
+  if (a) a.push(v); else m.set(k, [v]);
+}
+
+// A source file's join key: its path AND its owning asset_url together (M4 — a path
+// recovered by two assets must not cross-match). JSON.stringify gives an unambiguous,
+// collision-proof composite key (proper escaping, no delimiter that could appear in a
+// URL/path).
+function sourceKey(path: string | null, assetUrl: string | null): string {
+  return JSON.stringify([path ?? "", assetUrl ?? ""]);
+}
+
+// path -> distinct finding count, built by inverting matchFile ONCE over the
+// occurrences (O(findings) instead of the old O(files x findings x occurrences)
+// scan). Files are indexed by their join keys; each occurrence looks up only its
+// candidate files, then matchFile re-confirms to preserve exact semantics (incl.
+// the M4 same-path/different-asset rule). D25.
+function fileFindingCounts(files: SourceFile[], data: FindingsResponse | null): Map<string, number> {
+  const counts = new Map<string, number>();
+  if (!data) return counts;
+  const assetsByPath = new Map<string, SourceFile[]>();               // kind "asset", keyed by path
+  const sourcesByKey = new Map<string, SourceFile[]>();               // kind "source", keyed by sourceKey()
+  const uploadFiles: SourceFile[] = [];                              // legacy "input.js" bundle(s)
+  for (const file of files) {
+    if (file.kind === "asset") pushInto(assetsByPath, file.path, file);
+    else if (file.kind === "source") pushInto(sourcesByKey, sourceKey(file.path, file.asset_url), file);
+    else uploadFiles.push(file);
+  }
+  const hashesByPath = new Map<string, Set<string>>();
+  for (const finding of data.findings) {
+    for (const o of finding.occurrences) {
+      const candidates: SourceFile[] = [];
+      if (o.asset_url != null) { const a = assetsByPath.get(o.asset_url); if (a) candidates.push(...a); }
+      const s = sourcesByKey.get(sourceKey(o.source_path, o.asset_url)); if (s) candidates.push(...s);
+      if (o.source_path === "input.js" && o.asset_url == null) candidates.push(...uploadFiles);
+      for (const file of candidates) {
+        if (!matchFile(o, file)) continue;
+        let set = hashesByPath.get(file.path);
+        if (!set) { set = new Set(); hashesByPath.set(file.path, set); }
+        set.add(finding.finding_hash);
+      }
+    }
+  }
+  for (const [path, set] of hashesByPath) counts.set(path, set.size);
+  return counts;
+}
+
+// A flattened, depth-tagged row for one visible tree node. Directories carry
+// `isCollapsed`; a collapsed directory's children are simply not emitted (so the
+// windowed list only ever holds what's on screen). File nodes with children are
+// not collapsible and always emit their descendants, matching the prior tree.
+interface FlatRow { key: string; node: TreeNode; depth: number; isDir: boolean; isCollapsed: boolean; badge: number; }
+
+function flattenTree(root: TreeNode, collapsed: Set<string>, fileCounts: Map<string, number>): FlatRow[] {
+  const out: FlatRow[] = [];
+  const walk = (nodes: Map<string, TreeNode>, depth: number, parentKey: string) => {
+    const entries = [...nodes.values()].sort((a, b) =>
+      (a.file ? 1 : 0) - (b.file ? 1 : 0) || a.name.localeCompare(b.name),
+    );
+    for (const node of entries) {
+      const key = parentKey + "/" + node.name;
+      const isDir = !node.file;
+      const isCollapsed = isDir && collapsed.has(key);
+      const badge = node.file ? (fileCounts.get(node.file.path) ?? 0) : node.count;
+      out.push({ key, node, depth, isDir, isCollapsed, badge });
+      if (node.file) { if (node.children.size > 0) walk(node.children, depth + 1, key); }
+      else if (!isCollapsed) walk(node.children, depth + 1, key);
+    }
+  };
+  walk(root.children, 0, "");
+  return out;
 }
 
 const FolderIcon = () => (
@@ -77,72 +165,6 @@ const JumpIcon = () => (
     <path d="M12 4v10" /><path d="m7.5 11.5 4.5 4.5 4.5-4.5" /><path d="M5 20h14" />
   </svg>
 );
-
-// Total findings under a node — its own file's count plus every descendant's — so a
-// directory can show that it (transitively) contains findings, even when collapsed.
-function countFindingsUnder(node: TreeNode, badges: Map<string, number>): number {
-  let total = node.file ? (badges.get(node.file.path) ?? 0) : 0;
-  for (const child of node.children.values()) total += countFindingsUnder(child, badges);
-  return total;
-}
-
-function TreeLevel({ nodes, depth, parentKey, selectedPath, onSelect, badges, collapsed, onToggle }: {
-  nodes: Map<string, TreeNode>; depth: number; parentKey: string; selectedPath: string | null;
-  onSelect: (path: string) => void; badges: Map<string, number>;
-  collapsed: Set<string>; onToggle: (key: string) => void;
-}) {
-  const entries = [...nodes.values()].sort((a, b) =>
-    (a.file ? 1 : 0) - (b.file ? 1 : 0) || a.name.localeCompare(b.name),
-  );
-  return (
-    <>
-      {entries.map((node) => {
-        const pad = { paddingLeft: 8 + depth * 14 };
-        const key = parentKey + "/" + node.name;
-        const childLevel = (
-          <TreeLevel nodes={node.children} depth={depth + 1} parentKey={key}
-            selectedPath={selectedPath} onSelect={onSelect} badges={badges}
-            collapsed={collapsed} onToggle={onToggle} />
-        );
-        if (node.file) {
-          const file = node.file;
-          const badge = badges.get(file.path);
-          return (
-            <div key={node.name}>
-              <button type="button" style={pad}
-                className={"sv-node" + (selectedPath === file.path ? " sel" : "")}
-                onClick={() => onSelect(file.path)}>
-                <span className="sv-caret" aria-hidden="true" />
-                <span className="sv-ico"><FileIcon /></span>
-                <span className="sv-node-name">{node.name}</span>
-                {badge ? <span className="sv-node-badge">{badge}</span> : null}
-                {file.fetch_status !== "ok" && <span className="sv-node-status">{file.fetch_status}</span>}
-              </button>
-              {node.children.size > 0 && childLevel}
-            </div>
-          );
-        }
-        const isCollapsed = collapsed.has(key);
-        const dirFindings = countFindingsUnder(node, badges);
-        return (
-          <div key={node.name}>
-            <button type="button" className="sv-node sv-dir" style={pad}
-              aria-expanded={!isCollapsed} onClick={() => onToggle(key)}>
-              <span className={"sv-caret" + (isCollapsed ? "" : " open")} aria-hidden="true">▸</span>
-              <span className="sv-ico"><FolderIcon /></span>
-              <span className="sv-node-name">{node.name}</span>
-              {dirFindings > 0 && (
-                <span className="sv-node-badge"
-                  title={`${dirFindings} finding${dirFindings === 1 ? "" : "s"} in this folder`}>{dirFindings}</span>
-              )}
-            </button>
-            {!isCollapsed && childLevel}
-          </div>
-        );
-      })}
-    </>
-  );
-}
 
 // A source is "minified" if any line is absurdly long — a webpack/rollup bundle is
 // one giant line. Such files are auto-pretty-printed; a source recovered from a
@@ -174,6 +196,12 @@ const HIGHLIGHT_MAX_CHARS = 200_000;
 // not re-run that transform uncapped). Download to format offline instead.
 const BEAUTIFY_MAX_CHARS = 200_000;
 
+// Fixed tree-row height (must equal .sv-node height in sources.css) + the row count
+// above which the tree is windowed. Below it the whole (small) tree renders in flow,
+// which keeps the jsdom tests — and small trees — on the simple, un-windowed path.
+const ROW_HEIGHT = 26;
+const WINDOW_THRESHOLD = 100;
+
 function downloadText(name: string, text: string) {
   const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
   const a = document.createElement("a");
@@ -182,7 +210,86 @@ function downloadText(name: string, text: string) {
   URL.revokeObjectURL(url);
 }
 
-export function SourcesPage({ data, tenantId, runId, jump }: {
+// Windowed tree body: renders only the rows intersecting the scroll viewport
+// (plus a small overscan), absolutely positioned inside a full-height spacer. A
+// hand-rolled fixed-height virtualizer — no dependency — since the D25 freeze was
+// committing every one of hundreds-to-thousands of nodes to the DOM on each SSE
+// tick. Used only above WINDOW_THRESHOLD rows.
+function WindowedTree({ rows, renderRow }: { rows: FlatRow[]; renderRow: (r: FlatRow) => ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewHeight, setViewHeight] = useState(600);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => { setScrollTop(el.scrollTop); setViewHeight(el.clientHeight || 600); };
+    update();
+    // ResizeObserver is absent in jsdom (and conceivably older runtimes); without it
+    // the viewport falls back to the 600px default and windowing still works.
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const overscan = 12;
+  const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - overscan);
+  const end = Math.min(rows.length, Math.ceil((scrollTop + viewHeight) / ROW_HEIGHT) + overscan);
+  return (
+    <div className="sv-tree" ref={ref} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
+      <div style={{ height: rows.length * ROW_HEIGHT, position: "relative" }}>
+        {rows.slice(start, end).map((r, i) => (
+          <div key={r.key} style={{ position: "absolute", top: (start + i) * ROW_HEIGHT, left: 0, right: 0 }}>
+            {renderRow(r)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// The file tree. Memoized so the run's per-asset SSE ticks — which re-render the
+// run layout — don't re-render (or re-flatten) the tree unless its inputs actually
+// change (D25). Small trees render in flow; large trees are windowed.
+const SourceTree = memo(function SourceTree({ rows, selectedPath, onSelect, onToggle }: {
+  rows: FlatRow[]; selectedPath: string | null;
+  onSelect: (path: string) => void; onToggle: (key: string) => void;
+}) {
+  const renderRow = (r: FlatRow) => {
+    const pad = { paddingLeft: 8 + r.depth * 14 };
+    if (!r.isDir) {
+      const file = r.node.file!;
+      return (
+        <button type="button" key={r.key} style={pad}
+          className={"sv-node" + (selectedPath === file.path ? " sel" : "")}
+          onClick={() => onSelect(file.path)}>
+          <span className="sv-caret" aria-hidden="true" />
+          <span className="sv-ico"><FileIcon /></span>
+          <span className="sv-node-name">{r.node.name}</span>
+          {r.badge ? <span className="sv-node-badge">{r.badge}</span> : null}
+          {file.fetch_status !== "ok" && <span className="sv-node-status">{file.fetch_status}</span>}
+        </button>
+      );
+    }
+    return (
+      <button type="button" key={r.key} className="sv-node sv-dir" style={pad}
+        aria-expanded={!r.isCollapsed} onClick={() => onToggle(r.key)}>
+        <span className={"sv-caret" + (r.isCollapsed ? "" : " open")} aria-hidden="true">▸</span>
+        <span className="sv-ico"><FolderIcon /></span>
+        <span className="sv-node-name">{r.node.name}</span>
+        {r.badge > 0 && (
+          <span className="sv-node-badge"
+            title={`${r.badge} finding${r.badge === 1 ? "" : "s"} in this folder`}>{r.badge}</span>
+        )}
+      </button>
+    );
+  };
+  if (rows.length <= WINDOW_THRESHOLD) {
+    return <div className="sv-tree">{rows.map(renderRow)}</div>;
+  }
+  return <WindowedTree rows={rows} renderRow={renderRow} />;
+});
+
+export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, jump }: {
   data: FindingsResponse | null; tenantId: string; runId: string; jump: SourceJump | null;
 }) {
   const [files, setFiles] = useState<SourceFile[] | null>(null);
@@ -256,16 +363,9 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
     return () => { live = false; };
   }, [tenantId, runId, selected?.path, selected?.fetch_status, selected?.kind, selected?.asset_url]);
 
-  const badges = useMemo(() => {
-    const m = new Map<string, number>();
-    if (!files || !data) return m;
-    for (const file of files) {
-      const hashes = new Set<string>();
-      for (const f of data.findings) if (f.occurrences.some((o) => matchFile(o, file))) hashes.add(f.finding_hash);
-      if (hashes.size) m.set(file.path, hashes.size);
-    }
-    return m;
-  }, [files, data]);
+  // path -> distinct finding count. Inverted index (D25): O(findings), not the old
+  // O(files x findings) scan that ran on every large run's mount.
+  const fileCounts = useMemo(() => fileFindingCounts(files ?? [], data), [files, data]);
 
   const marks = useMemo(() => {
     const m = new Map<number, string>();
@@ -285,9 +385,15 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
     setFocusLine((cur) => jumpLines.find((l) => l > (cur ?? -1)) ?? jumpLines[0]);
   }, [jumpLines]);
 
-  // Memoized: the run stream now re-renders this page on every SSE event, and
-  // rebuilding the whole tree each tick would jank a large file list.
-  const tree = useMemo(() => buildTree(files ?? []), [files]);
+  // Rebuild + annotate the tree once per file/count change, then flatten it to a
+  // windowable row list. Memoized (and the tree component is memoized) so a
+  // per-asset SSE tick can't rebuild or re-render the whole tree (D25).
+  const tree = useMemo(() => measureSync("sources.tree-build", 50, () => {
+    const root = buildTree(files ?? []);
+    annotateCounts(root, fileCounts);
+    return root;
+  }), [files, fileCounts]);
+  const rows = useMemo(() => flattenTree(tree, collapsed, fileCounts), [tree, collapsed, fileCounts]);
 
   // Pretty-print: auto-on for minified content, off for already-readable source.
   // Resets per file; the beautified text is computed lazily (js-beautify) once.
@@ -323,7 +429,7 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
     return <div className="sv-empty"><div className="sv-empty-title">No source captured</div><div>This run has no stored JavaScript to display yet.</div></div>;
   }
 
-  const findingCount = selected ? (badges.get(selected.path) ?? 0) : 0;
+  const findingCount = selected ? (fileCounts.get(selected.path) ?? 0) : 0;
   const baseName = selected ? segmentsOf(selected.path).slice(-1)[0] : "source.js";
 
   return (
@@ -340,10 +446,7 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
               title="Collapse sources" aria-label="Collapse sources panel"><PanelIcon /></button>
           </div>
         </div>
-        <div className="sv-tree">
-          <TreeLevel nodes={tree.children} depth={0} parentKey="" selectedPath={selected?.path ?? null}
-            onSelect={selectFile} badges={badges} collapsed={collapsed} onToggle={toggleDir} />
-        </div>
+        <SourceTree rows={rows} selectedPath={selected?.path ?? null} onSelect={selectFile} onToggle={toggleDir} />
       </aside>
 
       {!railCollapsed && (
@@ -404,4 +507,4 @@ export function SourcesPage({ data, tenantId, runId, jump }: {
       </div>
     </div>
   );
-}
+});
