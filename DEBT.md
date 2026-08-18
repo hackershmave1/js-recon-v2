@@ -106,6 +106,30 @@ enterprise-hygiene cleanup (so the "later" doesn't become "never"):
 
 **Tier-1 facet:** the "Popup bundle is not compiled in CI" bullet is the user-facing risk (a broken capture popup could merge green); the other bullets are housekeeping. Kept together as one register entry.
 
+#### D24 · Runtime-capture findings lose host/source attribution [M]  ·  correctness
+Headless *runtime-capture* runs analyze the executing JS, but the findings drop the source host +
+URL the static path preserves. Reproduced live on nhl.com (2026-08-18): a `/stats` capture (475
+assets) recovered the real NHL backend host map as finding *values* — `https://api.nhle.com/stats/
+rest/en`, `https://api-web.nhle.com`, `https://live.nhle.com/ppt`, `https://wsr.nhle.com/config` —
+yet every one has `host: null` and `source_path: "input.js"` (the extractor's internal temp name),
+so the Attribution column is empty for exactly the hosts it found. Separately, ~88% of captured
+assets (421/475) surface a 64-char content hash where a URL/host belongs: inline / injected / eval'd
+/ worker scripts have no source URL, so `assets`/`sources` show the hash and an operator can't tell
+which host a captured script came from. Knock-on: Tech-stack detection degrades in proportion to the
+inline-asset share (a homepage capture of mostly-hashed inline assets detected 1 tech; the `/stats`
+capture, which also pulled real-URL `dcs.nhl.com` assets, detected 4) because the header / cookie /
+`scriptSrc` surfaces need a real URL. **Why safe now:** the finding *values* are correct (the real
+hosts are in the strings), no data is lost, and capture on a good entry page still out-recons static
+(60 findings incl. the host map + a Rollbar token vs static's 24) — an attribution/pivot gap, not
+corruption. **Not a regression the other way:** the earlier "capture is thinner than static" reading
+was an *entry-page* artifact (the homepage under-exercised the app), not inherent — confirmed by the
+`/stats` capture surpassing static. **Still owed:** populate a captured finding's `host` from its URL
+literal (or the observed request), and carry the real captured URL as `source_path` instead of
+`input.js` (same root as the static-path `input.js` display mislabel). Ties to REQ-C3 (correlate /
+observed-URL host resolution). **Trigger:** already user-visible — raise if operators pivot recon by
+host. **Detection note:** diff a static vs capture run of one session (nhl.com session `19b53550`,
+runs `c8eb172b` static / `1acf4795` capture `/stats`).
+
 ### Tier 2 · fix before it scales up
 
 Safe now for a single trusted operator. Each has a concrete future trigger - untrusted /
