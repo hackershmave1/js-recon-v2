@@ -12,9 +12,22 @@ vi.mock("react-router", async (orig) => ({ ...(await orig() as object), useNavig
 
 beforeEach(() => { vi.restoreAllMocks(); localStorage.setItem("recon.tenantId", "123e4567-e89b-12d3-a456-426614174000"); });
 
-function renderEmpty(state: string | null) {
+function renderEmpty(
+  state: string | null,
+  failure?: { category: string; reason: string; host?: string | null },
+) {
   return render(
-    <MemoryRouter><TenantProvider><DiscoveryEmpty runId="r1" state={state} /></TenantProvider></MemoryRouter>,
+    <MemoryRouter>
+      <TenantProvider>
+        <DiscoveryEmpty
+          runId="r1"
+          state={state}
+          failureCategory={failure?.category ?? null}
+          failureReason={failure?.reason ?? null}
+          failureHost={failure?.host ?? null}
+        />
+      </TenantProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -57,5 +70,39 @@ describe("DiscoveryEmpty", () => {
     const { container } = renderEmpty("done");
     await waitFor(() => expect(api.getAssets).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("does not show the empty-crawl card for a non-done terminal run", () => {
+    // Card (b) is done-only: a partial/cancelled crawl is explained by the pipeline,
+    // not mislabelled "no in-scope JavaScript discovered".
+    const spy = vi.spyOn(api, "getAssets").mockResolvedValue(CRAWL_EMPTY);
+    const { container } = renderEmpty("partial");
+    expect(container).toBeEmptyDOMElement();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("shows the classified reason for a failed run without fetching the manifest", () => {
+    const spy = vi.spyOn(api, "getAssets").mockResolvedValue(CRAWL_EMPTY);
+    renderEmpty("failed", {
+      category: "access_denied",
+      reason:
+        "The target refused the request (HTTP 403 Forbidden). If it is an auth-gated or " +
+        "bot-protected page, capture the JavaScript from a signed-in browser session with " +
+        "the capture extension.",
+    });
+    expect(screen.getByText(/the target refused the crawler/i)).toBeInTheDocument();
+    expect(screen.getByText(/capture extension/i)).toBeInTheDocument();
+    // A classified failure carries its own message — no manifest lookup needed.
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("names the out-of-scope host in a failed run's headline", () => {
+    renderEmpty("failed", {
+      category: "out_of_scope",
+      reason: "The crawl reached evil.example, which is outside the engagement scope.",
+      host: "evil.example",
+    });
+    // The host appears in the headline (and again in the reason body); assert the headline.
+    expect(screen.getByText(/the crawl reached evil\.example, outside your scope/i)).toBeInTheDocument();
   });
 });

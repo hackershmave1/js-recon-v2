@@ -23,6 +23,17 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+// A bare host already authorizes its subdomains, so `*.host` and `host` are
+// equivalent in scope — the backend (egress.normalize_scope_entry) folds `*.host`
+// down to `host`. Mirror that fold here so the chips the user sees equal the scope
+// that gets stored (no silent server-side normalization). A lone `*.` is dropped.
+export function addScopeHost(hosts: string[], raw: string): string[] {
+  const host = raw.trim();
+  const bare = host.startsWith("*.") ? host.slice(2) : host;
+  if (bare === "") return hosts; // empty / a bare "*." is not a usable host
+  return hosts.includes(bare) ? hosts : [...hosts, bare];
+}
+
 export function NewRunPanel() {
   const { tenantId } = useTenant();
   const navigate = useNavigate();
@@ -46,7 +57,7 @@ export function NewRunPanel() {
   function addHost() {
     const host = scopeInput.trim();
     if (host === "") return;
-    setScopeHosts((prev) => (prev.includes(host) ? prev : [...prev, host]));
+    setScopeHosts((prev) => addScopeHost(prev, host));
     setScopeInput("");
   }
 
@@ -68,7 +79,7 @@ export function NewRunPanel() {
     // Fold a typed-but-not-yet-added host into the scope so a value left in the
     // input isn't silently dropped on submit.
     const pending = scopeInput.trim();
-    const hosts = pending && !scopeHosts.includes(pending) ? [...scopeHosts, pending] : scopeHosts;
+    const hosts = pending ? addScopeHost(scopeHosts, pending) : scopeHosts;
     try {
       // Attach the active engagement (picked in the Sessions engagement switcher) so a
       // new run's session rolls up under it. A blank scope + a crawl target lets the

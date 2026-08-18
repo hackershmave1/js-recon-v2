@@ -56,9 +56,9 @@ function CheckMark() {
 }
 
 export function RunPipeline(
-  { state, stage, pct, done, total, etaSeconds }: {
+  { state, stage, pct, done, total, etaSeconds, emptyCrawl = false }: {
     state: string; stage: string | null; pct: number | null;
-    done: number; total: number; etaSeconds: number | null;
+    done: number; total: number; etaSeconds: number | null; emptyCrawl?: boolean;
   },
 ) {
   const statuses = nodeStatuses(state, stage);
@@ -107,8 +107,11 @@ export function RunPipeline(
         </div>
       )}
 
-      {state === "done" && (
+      {state === "done" && !emptyCrawl && (
         <p className="rp-outcome"><b>{STAGES.length} of {STAGES.length}</b> stages complete</p>
+      )}
+      {state === "done" && emptyCrawl && (
+        <p className="rp-outcome rp-outcome-empty">Completed — no in-scope JavaScript found</p>
       )}
       {isTerminal && state !== "done" && (
         <p className="rp-outcome">

@@ -58,6 +58,9 @@ class RunRefView:
     started_at: str | None
     ended_at: str | None
     target: str | None
+    # Classified failure (safe subset of run.error; only set on a FAILED run).
+    failure_category: str | None = None
+    failure_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -248,6 +251,7 @@ def _view(row: EngagementSession) -> SessionView:
 
 
 def _run_ref(run: Run) -> RunRefView:
+    err = run.error or {}
     return RunRefView(
         run_id=str(run.id),
         state=run.state,
@@ -255,6 +259,8 @@ def _run_ref(run: Run) -> RunRefView:
         started_at=run.started_at.isoformat() if run.started_at else None,
         ended_at=run.ended_at.isoformat() if run.ended_at else None,
         target=run.target,
+        failure_category=err.get("category"),
+        failure_reason=err.get("reason"),
     )
 
 

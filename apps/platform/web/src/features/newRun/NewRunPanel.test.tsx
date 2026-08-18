@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { NewRunPanel } from "./NewRunPanel";
+import { NewRunPanel, addScopeHost } from "./NewRunPanel";
 import { TenantProvider } from "../../tenant/TenantContext";
 import * as api from "../../api/apiClient";
 
@@ -119,5 +119,25 @@ describe("NewRunPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: /crawl/i }));
     expect(api.createSession).toHaveBeenCalledWith(TENANT,
       { scope_hosts: ["static.acme.io"], authorized_by: "tester", target: "acme.io" });
+  });
+});
+
+describe("addScopeHost (mirrors the backend's *.host -> host fold)", () => {
+  it("folds a wildcard to its bare host — equivalent scope, and what the backend stores", () => {
+    expect(addScopeHost([], "*.acme.io")).toEqual(["acme.io"]);
+  });
+
+  it("drops a wildcard whose bare host is already in scope", () => {
+    expect(addScopeHost(["acme.io"], "*.acme.io")).toEqual(["acme.io"]);
+  });
+
+  it("keeps distinct hosts and ignores exact duplicates", () => {
+    expect(addScopeHost(["cdn.acme.io"], "static.acme.io")).toEqual(["cdn.acme.io", "static.acme.io"]);
+    expect(addScopeHost(["acme.io"], "acme.io")).toEqual(["acme.io"]);
+  });
+
+  it("drops empty / lone-'*.' input instead of adding a junk chip", () => {
+    expect(addScopeHost(["acme.io"], "   ")).toEqual(["acme.io"]);
+    expect(addScopeHost(["acme.io"], "*.")).toEqual(["acme.io"]);
   });
 });

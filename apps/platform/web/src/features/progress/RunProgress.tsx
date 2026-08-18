@@ -41,6 +41,9 @@ export function RunProgress() {
     pauseRequested, cancelRequested, captureStatus, handleControlResult,
   } = useRunData();
   const fetchSummary = summarizeFetch(assets);
+  // A crawl (manifest has a domain) that discovered zero in-scope assets: a `done`
+  // run here is a de-facto empty result, not the full success "5 of 5" implies (M2).
+  const emptyCrawl = assets != null && assets.domain != null && assets.assets.length === 0;
   const [showRerun, setShowRerun] = useState(false);
 
   return (
@@ -93,7 +96,8 @@ export function RunProgress() {
       )}
 
       {state !== "…" && (
-        <RunPipeline state={state} stage={stage} pct={pct} done={done} total={total} etaSeconds={eta} />
+        <RunPipeline state={state} stage={stage} pct={pct} done={done} total={total}
+          etaSeconds={eta} emptyCrawl={emptyCrawl} />
       )}
 
       {fetchSummary && (

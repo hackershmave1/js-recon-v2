@@ -279,3 +279,72 @@ def test_handle_failure_dead_letters_when_retries_exhausted(monkeypatch):
     assert result == "dead"
     assert seen["dlq"] == 1
     assert seen["to_state"] == RunState.FAILED
+
+
+def test_handle_failure_persists_classified_reason(monkeypatch):
+    # The dead path classifies the exception and records the safe subset to
+    # run.error + the SSE event; the raw message stays only in error["message"].
+    seen: dict = {}
+    monkeypatch.setattr(progress, "finish_job", lambda *a, **k: True)
+    monkeypatch.setattr(streams, "ack", lambda *a, **k: None)
+    monkeypatch.setattr(streams, "to_dlq", lambda *a, **k: None)
+    monkeypatch.setattr(worker.service, "transition", lambda *a, **k: seen.update(k))
+    result = worker._handle_failure(
+        None,
+        QueueName.FETCH,
+        "1-0",
+        {"attempts": 5, "max_attempts": 5},
+        retry.FatalError("target returned HTTP 403"),
+        tenant_id="t",
+        run_id="r",
+        job_id="j",
+        stage=RunStage.FETCHING,
+        attempts=5,
+        max_attempts=5,
+    )
+    assert result == "dead"
+    err = seen["extra_values"]["error"]
+    assert err["category"] == "access_denied"
+    assert err["http_status"] == 403
+    assert err["message"] == "target returned HTTP 403"  # raw kept for logs only
+    ev = seen["event_payload_extra"]
+    assert ev["category"] == "access_denied"
+    assert "capture extension" in ev["reason"].lower()
+
+
+@pytest.mark.parametrize(
+    "make_exc",
+    [
+        lambda: worker.service.TransitionConflict("run already terminal"),
+        lambda: worker.sm.InvalidTransition("cancelled -> failed"),
+    ],
+)
+def test_handle_failure_swallows_terminal_transition_race(monkeypatch, make_exc):
+    # A concurrent cancel / reclaimed dead message may have already moved the run out
+    # of its active state; the guarded FAILED transition then raises (a lost guarded
+    # UPDATE -> TransitionConflict, or an illegal terminal->FAILED -> InvalidTransition).
+    # _handle_failure must NOT propagate (it still ACKs + returns "dead") or it redelivers.
+    acked = {"n": 0}
+    monkeypatch.setattr(progress, "finish_job", lambda *a, **k: True)
+    monkeypatch.setattr(streams, "ack", lambda *a, **k: acked.__setitem__("n", acked["n"] + 1))
+    monkeypatch.setattr(streams, "to_dlq", lambda *a, **k: None)
+
+    def boom(*a, **k):
+        raise make_exc()
+
+    monkeypatch.setattr(worker.service, "transition", boom)
+    result = worker._handle_failure(
+        None,
+        QueueName.FETCH,
+        "1-0",
+        {"attempts": 5, "max_attempts": 5},
+        RuntimeError("boom"),
+        tenant_id="t",
+        run_id="r",
+        job_id="j",
+        stage=RunStage.FETCHING,
+        attempts=5,
+        max_attempts=5,
+    )
+    assert result == "dead"
+    assert acked["n"] == 1

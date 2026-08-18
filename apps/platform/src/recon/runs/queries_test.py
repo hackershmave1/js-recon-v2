@@ -70,3 +70,42 @@ def test_status_view_exposes_control_flags(redis, authorized_session):
     assert intent.state == active.state  # still active — the pause is cooperative
     assert intent.pause_requested is True
     assert intent.etag != active.etag  # the flag alone invalidates the ETag
+
+
+def test_status_view_surfaces_classified_failure_not_raw_message(redis, authorized_session):
+    """A FAILED run surfaces the classified, SAFE failure subset — category/reason —
+    but never run.error['message'], which can embed an internal IP / engine stderr (M1)."""
+    tenant, session_id = authorized_session
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id, target="acme.io")
+    service.transition(
+        redis,
+        tenant_id=tenant,
+        run_id=view.id,
+        to_state=RunState.DISCOVERING,
+        stage=RunStage.DISCOVERING,
+    )
+    # Mirror what worker._handle_failure writes for an SSRF block: the message holds
+    # the resolved internal IP; the classified fields are the safe projection.
+    service.transition(
+        redis,
+        tenant_id=tenant,
+        run_id=view.id,
+        to_state=RunState.FAILED,
+        extra_values={
+            "error": {
+                "stage": "fetching",
+                "message": "host acme.io resolves to a non-public address: 10.0.0.5",
+                "category": "blocked_address",
+                "reason": "The target resolved to a non-public address and was blocked by the egress guard.",
+                "host": None,
+                "http_status": None,
+            }
+        },
+    )
+    status = queries.get_status(tenant, view.id)
+    assert status.state == "failed"
+    assert status.failure_category == "blocked_address"
+    assert status.failure_reason and "egress guard" in status.failure_reason
+    assert status.failure_host is None
+    # M1: the raw message (carrying the internal IP) must not leak into the projection.
+    assert "10.0.0.5" not in (status.failure_reason or "")

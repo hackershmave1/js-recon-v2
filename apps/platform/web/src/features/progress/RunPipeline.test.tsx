@@ -31,6 +31,14 @@ describe("RunPipeline", () => {
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
+  it("does not read as full success when a done crawl discovered nothing", () => {
+    render(
+      <RunPipeline state="done" stage={null} pct={100} done={0} total={0} etaSeconds={null} emptyCrawl />,
+    );
+    expect(screen.getByText(/no in-scope javascript found/i)).toBeInTheDocument();
+    expect(screen.queryByText(/5 of 5/)).not.toBeInTheDocument();
+  });
+
   it("marks the stopped stage and counts completed stages for a partial run", () => {
     render(<RunPipeline state="partial" stage="ingesting" pct={null} done={0} total={0} etaSeconds={null} />);
     expect(screen.getByText("Discover").closest("li")!.className).toContain("is-complete");

@@ -263,6 +263,10 @@ def get_status(
         "stalled": status.stalled,
         "pause_requested": status.pause_requested,
         "cancel_requested": status.cancel_requested,
+        "failure_category": status.failure_category,
+        "failure_reason": status.failure_reason,
+        "failure_host": status.failure_host,
+        "failure_http_status": status.failure_http_status,
     }
 
 
