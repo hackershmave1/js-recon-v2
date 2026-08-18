@@ -157,6 +157,41 @@ def host_of(target: str | None) -> str:
         return ""  # malformed (e.g. a bad IPv6 literal) -> no host -> out of scope
 
 
+def attributed_host(url: str | None) -> str | None:
+    """The host to attribute a finding to from an absolute-URL *literal*, or ``None``.
+
+    The unconfirmed lanes (``analyze._record_unresolved_endpoint``) keep the raw URL
+    literal as the finding value, so when that literal is an absolute http(s) URL the
+    host is recoverable and belongs on the occurrence for the Findings host facet
+    (DEBT D24). Deliberately STRICTER than the confirmed-endpoint path
+    (``normalize.normalize_endpoint`` trusts ``urlsplit().hostname`` unvalidated):
+    these lanes also carry unresolved / minifier-mangled junk, so a host is
+    attributed ONLY when it is a real, non-templated hostname — the same
+    ``is_valid_scope_entry`` bar scope uses (>= 2 LDH labels, no scheme/port/path/
+    IP-literal/public-suffix). A relative path, a template literal
+    (``https://${base}/x``), the extractor's ``EXPR`` sentinel anywhere in the host
+    (``https://api-EXPR.acme.com`` from a mangled sub-expression), or a non-web scheme
+    all stay unattributed rather than invent a host from junk. Reusing the scope
+    validator couples attribution to those rules on purpose — both answer "is this a
+    real host", and the stricter bar is the point on these noisier lanes."""
+    if not url:
+        return None
+    try:
+        split = urlsplit(url)
+        if split.scheme not in _ALLOWED_SCHEMES:
+            return None  # relative path / non-web scheme -> no attributable host
+        netloc = split.netloc  # case-preserving, unlike the lowercased .hostname
+        host = split.hostname or ""
+    except ValueError:
+        return None  # malformed (e.g. a bad IPv6 literal) -> never crash the asset (DoS)
+    # _jsast._EXPR ("EXPR", uppercase) glued into the host means a partially-unresolved
+    # host, not a real one; a real host is effectively always lowercase, so this never
+    # false-drops a legit `express.acme.com` (only the sentinel's uppercase run matches).
+    if "EXPR" in netloc:
+        return None
+    return _normalize_host(host) if is_valid_scope_entry(host) else None
+
+
 def host_in_scope(host: str | None, scope_hosts: list[str], *, allow_local: bool = False) -> bool:
     """True if ``host`` equals, or is a subdomain of, a VALID declared scope entry
     (REQ-P2). Subdomain = an exact dot-boundary suffix: ``acme.io`` authorizes

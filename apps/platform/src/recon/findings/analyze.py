@@ -31,6 +31,7 @@ from recon.db.base import tenant_session
 from recon.db.models import Run
 from recon.domain import AssetStatus, FindingType
 from recon.events.log import RecordedEvent, publish, record_event
+from recon.fetch import egress
 from recon.findings import (
     deobfuscate,
     engines,
@@ -746,7 +747,12 @@ def _record_unresolved_endpoint(
         value,
         path,
         occurrence=store.Occurrence(
-            host=None,
+            # DEBT D24: these lanes keep the raw URL literal in `value`, so when it is an
+            # absolute http(s) URL its host is recoverable — lift it onto the occurrence so
+            # the Findings host facet/chip can pivot on it. `attributed_host` is STRICTER
+            # than the confirmed path (validates the host) because this lane also carries
+            # unresolved/mangled junk; a relative path or template literal stays host-less.
+            host=egress.attributed_host(ep.url),
             raw_url=ep.url,
             source_path=source_path,
             line=ep.line,
