@@ -7,6 +7,7 @@ import { AuthProvider } from "./auth/AuthProvider";
 import { AuthGate } from "./auth/AuthGate";
 import { Home, RunWorkspace, OverviewRoute, SourcesRoute, FindingsRoute, ApiSpecRoute, ProbeRoute, TechRoute, HostsRoute } from "./app";
 import { SessionsView } from "./features/sessions/SessionsView";
+import { installPerfObserver } from "./shell/observability";
 // Self-hosted fonts (a recon tool shouldn't phone home to a font CDN). Imported
 // before styles.css so the @font-face rules are registered when the design tokens
 // (--font-display / --font-sans / --font-mono) reference these families.
@@ -35,6 +36,9 @@ const router = createBrowserRouter([
     ],
   },
 ]);
+
+// Client-side long-task warnings, tagged by route (D25 observability follow-up).
+installPerfObserver();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
