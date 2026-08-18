@@ -1,0 +1,124 @@
+"""Hermetic tests for the pure host-inventory roll-up (DEBT D26).
+
+No DB/network: `_aggregate_hosts` takes plain rows, so the host-universe union,
+normalization, scope classification, and the endpoints-unattributed honesty
+counter are all exercised in the fast lane.
+"""
+
+from __future__ import annotations
+
+from recon.findings.hosts import HostRow, HostsView, _aggregate_hosts
+
+
+def _agg(
+    *,
+    asset_urls: list[str] | None = None,
+    endpoint_occurrences: list[tuple[str | None, str]] | None = None,
+    tech_hosts: list[str] | None = None,
+    declared_hosts: list[str] | None = None,
+    scope_hosts: list[str] | None = None,
+    allow_local: bool = False,
+) -> HostsView:
+    return _aggregate_hosts(
+        "r1",
+        asset_urls or [],
+        endpoint_occurrences or [],
+        tech_hosts or [],
+        declared_hosts or [],
+        scope_hosts or [],
+        allow_local=allow_local,
+    )
+
+
+def _row(view, host: str) -> HostRow:
+    return next(r for r in view.hosts if r.host == host)
+
+
+def test_unions_all_sources_and_rolls_up_counts():
+    view = _agg(
+        asset_urls=[
+            "https://acme.io/a.js",
+            "https://api.acme.io/b.js",
+            "https://api.acme.io/c.js",
+        ],
+        endpoint_occurrences=[
+            ("api.acme.io", "h1"),  # attributed, in-scope subdomain
+            ("cdn.evil.com", "h2"),  # attributed, out of scope
+            (None, "h3"),  # relative path -> no host -> unattributed
+        ],
+        tech_hosts=["acme.io"],
+        declared_hosts=["https://declared.acme.io"],
+        scope_hosts=["acme.io"],
+    )
+    # universe = union of every source, deduped
+    assert [r.host for r in view.hosts] == [
+        "acme.io",
+        "api.acme.io",
+        "cdn.evil.com",
+        "declared.acme.io",
+    ]
+    assert view.count == 4
+    assert view.in_scope == 3  # acme.io, api.acme.io, declared.acme.io (subdomains)
+    assert view.endpoints_unattributed == 1  # h3
+
+    acme = _row(view, "acme.io")
+    assert (acme.assets, acme.endpoints, acme.techs) == (1, 0, 1)
+    assert acme.in_scope and not acme.declared
+
+    api = _row(view, "api.acme.io")
+    assert (api.assets, api.endpoints, api.techs) == (2, 1, 0)
+    assert api.in_scope
+
+    evil = _row(view, "cdn.evil.com")
+    assert (evil.assets, evil.endpoints, evil.techs) == (0, 1, 0)
+    assert not evil.in_scope
+
+    declared = _row(view, "declared.acme.io")
+    assert declared.declared and declared.in_scope
+    assert (declared.assets, declared.endpoints, declared.techs) == (0, 0, 0)
+
+
+def test_empty_run_is_zeroed_not_errored():
+    view = _agg()
+    assert view.count == 0 and view.in_scope == 0
+    assert view.endpoints_unattributed == 0 and view.hosts == []
+
+
+def test_normalizes_case_and_trailing_dot_and_drops_non_hosts():
+    # "ACME.io." (upper + FQDN root dot) folds with "acme.io" into ONE host; an
+    # empty source and a non-web-scheme capture asset (a vm://<hash> eval'd script,
+    # DEBT D24) each contribute NO host row (no per-script pseudo-host flood).
+    view = _agg(
+        asset_urls=[
+            "https://ACME.io./x.js",
+            "",
+            "vm://0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ],
+        tech_hosts=["acme.io"],
+        endpoint_occurrences=[("", "h1")],
+    )
+    assert [r.host for r in view.hosts] == ["acme.io"]
+    acme = _row(view, "acme.io")
+    assert acme.assets == 1 and acme.techs == 1
+    # the "" occurrence host resolves to no host -> h1 is an unattributed endpoint
+    assert acme.endpoints == 0 and view.endpoints_unattributed == 1
+
+
+def test_endpoint_on_two_hosts_counts_under_each():
+    # One distinct finding (h1) seen on two hosts: per-host counts intentionally
+    # sum to 2 (it IS on both), while it is a single attributed endpoint.
+    view = _agg(
+        endpoint_occurrences=[("a.acme.io", "h1"), ("b.acme.io", "h1")],
+        scope_hosts=["acme.io"],
+    )
+    assert _row(view, "a.acme.io").endpoints == 1
+    assert _row(view, "b.acme.io").endpoints == 1
+    assert view.endpoints_unattributed == 0
+
+
+def test_out_of_scope_lookalike_is_not_in_scope():
+    # "evil-acme.io" shares no dot boundary with "acme.io" -> out of scope
+    # (mirrors egress.host_in_scope's anti-suffix-spoof rule).
+    view = _agg(asset_urls=["https://evil-acme.io/x.js"], scope_hosts=["acme.io"])
+    assert view.count == 1 and view.in_scope == 0
+    assert not _row(view, "evil-acme.io").in_scope

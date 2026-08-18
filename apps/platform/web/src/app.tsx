@@ -9,6 +9,7 @@ import { SourcesPage } from "./features/sources/SourcesPage";
 import { ApiSpecPage } from "./features/apispec/ApiSpecPage";
 import { ProbePanel } from "./features/probe/ProbePanel";
 import { TechPage } from "./features/tech/TechPage";
+import { HostsPage } from "./features/hosts/HostsPage";
 import { OverviewPanel } from "./features/overview/OverviewPanel";
 import { DiscoveryEmpty } from "./features/discovery/DiscoveryEmpty";
 import { Shell } from "./shell/Shell";
@@ -44,11 +45,11 @@ function NotReady({ title, body }: { title: string; body: string }) {
 }
 
 export function OverviewRoute() {
-  const { findings, technologies, state, failureCategory, failureReason, failureHost } = useRunData();
+  const { findings, technologies, hosts, state, failureCategory, failureReason, failureHost } = useRunData();
   const { id } = useParams();
   return (
     <>
-      {findings && <OverviewPanel data={findings} technologies={technologies} />}
+      {findings && <OverviewPanel data={findings} technologies={technologies} hosts={hosts} />}
       <RunProgress />
       <DiscoveryEmpty
         runId={id!}
@@ -93,6 +94,13 @@ export function TechRoute() {
   if (!loaded) return <NotReady title="Loading…" body="Fetching this run's technologies." />;
   if (!technologies) return <NotReady title="No tech stack yet" body="Technologies appear here once analysis has run." />;
   return <TechPage data={technologies} />;
+}
+
+export function HostsRoute() {
+  const { hosts, loaded } = useRunData();
+  if (!loaded) return <NotReady title="Loading…" body="Fetching this run's hosts." />;
+  if (!hosts) return <NotReady title="No hosts yet" body="Discovered hosts appear here once analysis has run." />;
+  return <HostsPage data={hosts} />;
 }
 
 export function ApiSpecRoute() {
