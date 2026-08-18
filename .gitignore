@@ -14,3 +14,7 @@ build/
 # Local-only, per-developer / per-session artifacts (not shared)
 .claude/settings.local.json
 HANDOFF-*.md
+HANDOFF.md
+.superpowers/
+apps/platform/docker-compose.override.yml
+apps/platform/docs/*.pdf

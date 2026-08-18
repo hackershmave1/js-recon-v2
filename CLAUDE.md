@@ -13,19 +13,40 @@ secrets, and emits an OpenAPI spec + a recon report. No active traffic against
 targets — analysis is static; the fetch stage is SSRF-guarded (in-scope public
 hosts only).
 
+## Where truth lives (documentation map)
+
+One source of truth per fact — read the doc that matches your need; don't infer it from code or
+restate it elsewhere. (Each `AGENTS.md` is a pointer-stub to the `CLAUDE.md` beside it.)
+
+| Need | Read |
+|------|------|
+| Repo standards — layout, run/test, CI gates, conventions | **this file** (`CLAUDE.md`) |
+| System *what* — components, async spine, engines, ingest contract, auth | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| *Why* a load-bearing decision was made — MADR trail, each cites its code | [`docs/adr/`](docs/adr/README.md) |
+| The 41 `REQ-*` capability/invariant IDs the ADRs cite | [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) |
+| Known, deliberate tech debt (effort + status) — before "why isn't X done" | [`DEBT.md`](DEBT.md) |
+| Backend — run, test, migrations, async-pipeline detail | [`apps/platform/README.md`](apps/platform/README.md) |
+| Web workspace (React/Vite SPA) | [`apps/platform/web/README.md`](apps/platform/web/README.md) |
+| Finding-identity / hash-normalization spec | [`apps/platform/docs/req-d3-finding-hash-normalization.md`](apps/platform/docs/req-d3-finding-hash-normalization.md) |
+| Per-slice design specs + plans (enrichment, tech-detection) | [`apps/platform/docs/superpowers/`](apps/platform/docs/superpowers/) |
+| Capture extension — what it is, how to run it, MV3 invariants | [`apps/capture/CLAUDE.md`](apps/capture/CLAUDE.md) · [`apps/capture/README.md`](apps/capture/README.md) |
+| Score the capture→platform pipeline vs an answer key | [`test-targets/recon-range/README.md`](test-targets/recon-range/README.md) |
+
+CI is **two** tracked workflows: `.github/workflows/ci.yml` (the four lanes in "CI gates" below) and
+`.github/workflows/security.yml` (gitleaks + pip-audit + npm-audit; advisory, per DEBT D6).
+
 ## Layout (monorepo)
 
 ```
-docs/                   ARCHITECTURE.md (the "what") + adr/ (MADR decision trail, the "why")
-                        + REQUIREMENTS.md (the 41 REQ-* IDs)
+docs/                   architecture, decision records (adr/), requirements  (routed by the map above)
 apps/platform/          the product
   src/recon/            Python backend — FastAPI + Redis Streams queue + Postgres
                         (RLS, multi-tenant) + S3/MinIO blobs + a worker
   web/                  React/Vite SPA (the Recon Workspace)
-  docs/                 req-d3-finding-hash-normalization.md (the finding-identity spec)
+  docs/                 platform design specs (finding-identity, enrichment, tech-detection)
 apps/capture/
   chrome-extension/     MV3 extension: captures runtime (post-auth) JS -> the platform
-DEBT.md                 tracked tech debt (owners + effort) — read before "why isn't X done"
+DEBT.md                 tracked tech debt — read before "why isn't X done"
 ```
 
 Engines: **Vespasian** (in-process tree-sitter — endpoints/params, engine tag

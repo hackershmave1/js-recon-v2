@@ -27,7 +27,7 @@ apps/
 ## The platform (`js-recon-v2`)
 
 The platform is the sole backend **and** the workspace UI. It is a requirements-driven rewrite
-(the 40 `REQ-*` IDs in [`REQUIREMENTS.md`](REQUIREMENTS.md)).
+(the 41 `REQ-*` IDs in [`REQUIREMENTS.md`](REQUIREMENTS.md)).
 
 **Async spine.** The API is a thin accept/validate/enqueue/read tier (`api/app.py` — "no route
 does crawl/fetch/parse/LLM/probe work"): `POST /runs` persists a run and enqueues, returning in
