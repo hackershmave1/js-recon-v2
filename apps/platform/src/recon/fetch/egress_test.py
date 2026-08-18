@@ -164,6 +164,46 @@ def test_host_of_extracts_host_from_domain_or_url():
     assert egress.host_of("   ") == ""
 
 
+def test_attributed_host_recovers_real_absolute_hosts():
+    # DEBT D24: the unconfirmed lanes keep the raw URL literal, so an absolute http(s)
+    # host is recoverable for the Findings host facet — host only, no scheme/port/path.
+    assert egress.attributed_host("https://api.nhle.com/stats/rest/en") == "api.nhle.com"
+    assert egress.attributed_host("http://api-web.nhle.com") == "api-web.nhle.com"
+    assert egress.attributed_host("https://assets.nhle.com/mugs/EXPR/:triCode") == "assets.nhle.com"
+    assert egress.attributed_host("https://api.acme.com:8443/x?y=1") == "api.acme.com"
+    assert egress.attributed_host("https://user:pw@api.acme.com/x") == "api.acme.com"  # userinfo
+    assert egress.attributed_host("https://API.ACME.COM./x") == "api.acme.com"  # case + FQDN dot
+    assert egress.attributed_host("https://github.com/ungap/url") == "github.com"
+    # EXPR only rejects the uppercase sentinel — a real host with an "expr" run still passes.
+    assert egress.attributed_host("https://express.acme.com/x") == "express.acme.com"
+    assert (
+        egress.attributed_host("https://api.acme.com/EXPR/path") == "api.acme.com"
+    )  # EXPR in path
+
+
+def test_attributed_host_rejects_junk_and_never_crashes():
+    # A host is attributed ONLY for a real, non-templated hostname — everything else
+    # stays None rather than invent a host (honesty bias), and NOTHING raises.
+    for junk in [
+        None,
+        "",
+        "/api/relative",  # relative path (no scheme)
+        "EXPR",  # bare extractor placeholder
+        ":downloadUrl",  # a :holder placeholder -> no host
+        "https://${window.location.host}/play",  # template literal
+        "https://EXPR.api.acme.com/x",  # F2: EXPR as a whole host label
+        "https://api-EXPR.acme.com/x",  # F2: EXPR glued into a host label
+        "vm://deadbeefcafe",  # non-web scheme (an eval'd-script asset id)
+        "wss://rt.acme.io/socket",  # non-http(s) scheme (unconfirmed lane is conservative)
+        "https://1.2.3.4/api",  # F3: IP literal -> dropped here (confirmed path keeps it)
+        "https://github.io/x",  # a public suffix -> not an authorizable/attributable host
+        "https://localhost/x",  # single-label internal name
+        "https://[fe80::1/admin",  # F1: malformed IPv6 -> urlsplit .hostname raises ValueError
+        "https://[bad/ws",  # F1: another malformed-IPv6 shape
+    ]:
+        assert egress.attributed_host(junk) is None, junk
+
+
 def test_validate_target_allows_in_scope_public(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("93.184.216.34"))
     target = egress.validate_target("https://acme.io/app.js", _SCOPE)

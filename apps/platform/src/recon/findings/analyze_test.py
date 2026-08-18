@@ -186,6 +186,44 @@ def test_page_route_surfaced_as_distinct_type_excluded_from_endpoints(redis, aut
     assert reqs is not None and len(reqs) == 1
 
 
+def test_unconfirmed_lane_attributes_host_from_absolute_url(redis, authorized_session):
+    """DEBT D24: an unconfirmed-lane finding (generic / page_route) whose value is an absolute
+    URL literal now carries that URL's host on its occurrence, so the Findings host facet can
+    pivot on the backend/asset hosts capture recovers — while a relative/host-less literal in the
+    SAME lane stays ``host=None``. The host is occurrence-only: ``value`` (which keeps the raw URL
+    for the analyst) and thus ``finding_hash`` are unchanged (no REQ-D3/D5 churn)."""
+    from recon.findings import queries as findings_queries
+
+    tenant, session_id = authorized_session
+    js = (
+        'apiClient.get("https://api.nhle.com/stats/rest/en");'  # generic, absolute -> host lifted
+        'apiClient.get("/api/relative");'  # generic, relative -> stays host-less
+        'var nav = {href:"https://assets.nhle.com/mugs/latest"};'  # page_route, absolute -> host
+        'fetch("/api/real");'  # a confirmed endpoint so the run has real coverage too
+    )
+    view = coordinator.start_run_with_input(
+        redis, tenant_id=tenant, session_id=session_id, js_source=js, target="acme.io"
+    )
+    assert _drive(redis, view.id, tenant) == RunState.DONE.value
+
+    by_value = {f.value: f for f in findings_queries.list_findings(tenant, view.id).findings}
+
+    generic_abs = by_value["GET https://api.nhle.com/stats/rest/en"]
+    assert generic_abs.type == "endpoint_generic"
+    assert {o.host for o in generic_abs.occurrences} == {"api.nhle.com"}  # host lifted from literal
+    assert "api.nhle.com" in generic_abs.value  # value NOT host-stripped (identity unchanged)
+
+    generic_rel = by_value["GET /api/relative"]
+    assert generic_rel.type == "endpoint_generic"
+    assert {o.host for o in generic_rel.occurrences} == {None}  # relative literal -> host-less
+
+    # All three unconfirmed lanes share one write path, so page_route gets the same treatment
+    # (the type chip disambiguates a nav host from a backend one in the facet).
+    route_abs = by_value["https://assets.nhle.com/mugs/latest"]
+    assert route_abs.type == "page_route"
+    assert {o.host for o in route_abs.occurrences} == {"assets.nhle.com"}
+
+
 def test_param_findings_carry_risk_tags(redis, authorized_session):
     """Enrichment A: a risk-relevant param name is tagged in the finding's attributes, and an
     untagged param carries no risk_tags key (honest silence, kept clean)."""
