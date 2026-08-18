@@ -12,6 +12,7 @@ import { TechPage } from "./features/tech/TechPage";
 import { OverviewPanel } from "./features/overview/OverviewPanel";
 import { DiscoveryEmpty } from "./features/discovery/DiscoveryEmpty";
 import { Shell } from "./shell/Shell";
+import { ErrorBoundary } from "./shell/ErrorBoundary";
 import { useTenant } from "./tenant/TenantContext";
 import { TERMINAL_STATES, type SourceJump } from "./api/types";
 
@@ -21,11 +22,16 @@ import { TERMINAL_STATES, type SourceJump } from "./api/types";
 // between a run's pages never tears the live stream down or refetches findings.
 export function RunWorkspace() {
   const { id } = useParams();
+  const location = useLocation();
   if (!id) return null;
   return (
     <RunDataProvider key={id} runId={id}>
       <Shell runId={id}>
-        <Outlet />
+        {/* Contain a page crash (and log it) instead of blanking the workspace;
+            keyed by route so it resets when you navigate to another page. */}
+        <ErrorBoundary key={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </Shell>
     </RunDataProvider>
   );
