@@ -122,21 +122,22 @@ describe("NewRunPanel", () => {
   });
 });
 
-describe("addScopeHost (scope normalization made visible)", () => {
-  it("drops a wildcard that a bare host already covers", () => {
+describe("addScopeHost (mirrors the backend's *.host -> host fold)", () => {
+  it("folds a wildcard to its bare host — equivalent scope, and what the backend stores", () => {
+    expect(addScopeHost([], "*.acme.io")).toEqual(["acme.io"]);
+  });
+
+  it("drops a wildcard whose bare host is already in scope", () => {
     expect(addScopeHost(["acme.io"], "*.acme.io")).toEqual(["acme.io"]);
-  });
-
-  it("replaces a wildcard when its bare host is added", () => {
-    expect(addScopeHost(["*.acme.io"], "acme.io")).toEqual(["acme.io"]);
-  });
-
-  it("keeps a lone wildcard as typed (collapsing it would widen scope to the apex)", () => {
-    expect(addScopeHost([], "*.acme.io")).toEqual(["*.acme.io"]);
   });
 
   it("keeps distinct hosts and ignores exact duplicates", () => {
     expect(addScopeHost(["cdn.acme.io"], "static.acme.io")).toEqual(["cdn.acme.io", "static.acme.io"]);
     expect(addScopeHost(["acme.io"], "acme.io")).toEqual(["acme.io"]);
+  });
+
+  it("drops empty / lone-'*.' input instead of adding a junk chip", () => {
+    expect(addScopeHost(["acme.io"], "   ")).toEqual(["acme.io"]);
+    expect(addScopeHost(["acme.io"], "*.")).toEqual(["acme.io"]);
   });
 });

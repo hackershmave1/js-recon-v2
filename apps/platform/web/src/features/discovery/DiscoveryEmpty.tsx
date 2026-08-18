@@ -27,6 +27,12 @@ function failureTitle(category: string, host: string | null): string {
     case "server_error":
     case "http_error":
       return "The target returned an error";
+    case "not_authorized":
+      return "This session isn't authorized for recon";
+    case "too_large":
+      return "The target response was too large";
+    case "engine_error":
+      return "An analysis engine failed";
     default:
       return "The recon run failed";
   }
@@ -59,9 +65,11 @@ export function DiscoveryEmpty({
   const failed = terminal && failureCategory != null && failureReason != null;
 
   useEffect(() => {
-    // Only shape (b) needs the manifest's domain; a classified failure (a) has its
-    // own message, so skip the fetch there.
-    if (!tenantId || !terminal || failed) return;
+    // Only shape (b) — a clean `done` crawl that found nothing — needs the manifest.
+    // A failed/partial/cancelled run is explained by (a) or the pipeline, not here,
+    // so gating on `done` also avoids a manifest fetch (and a wrong-message flash)
+    // in the tick where a live run flips to `failed` before its reason arrives.
+    if (!tenantId || state !== "done") return;
     let cancelled = false;
     getAssets(tenantId, runId)
       .then((m) => {
@@ -73,7 +81,7 @@ export function DiscoveryEmpty({
     return () => {
       cancelled = true;
     };
-  }, [tenantId, runId, terminal, failed]);
+  }, [tenantId, runId, state]);
 
   if (!terminal) return null;
 
@@ -90,8 +98,11 @@ export function DiscoveryEmpty({
     );
   }
 
-  // (b) empty crawl — finished with zero in-scope assets.
-  if (!manifest || manifest.domain == null || manifest.assets.length > 0) return null;
+  // (b) empty crawl — only a clean `done` crawl that discovered zero in-scope assets
+  // (partial/cancelled are explained by the pipeline, not mislabelled "no JS found").
+  if (state !== "done" || !manifest || manifest.domain == null || manifest.assets.length > 0) {
+    return null;
+  }
   return (
     <div className="card de">
       <div className="de-title">

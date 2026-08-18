@@ -72,6 +72,15 @@ describe("DiscoveryEmpty", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("does not show the empty-crawl card for a non-done terminal run", () => {
+    // Card (b) is done-only: a partial/cancelled crawl is explained by the pipeline,
+    // not mislabelled "no in-scope JavaScript discovered".
+    const spy = vi.spyOn(api, "getAssets").mockResolvedValue(CRAWL_EMPTY);
+    const { container } = renderEmpty("partial");
+    expect(container).toBeEmptyDOMElement();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("shows the classified reason for a failed run without fetching the manifest", () => {
     const spy = vi.spyOn(api, "getAssets").mockResolvedValue(CRAWL_EMPTY);
     renderEmpty("failed", {

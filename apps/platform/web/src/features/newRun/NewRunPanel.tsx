@@ -23,17 +23,15 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-// A bare host already covers its subdomains server-side, so `host` + `*.host` is
-// redundant — keep the wider bare form, matching what the backend stores, so the
-// chips shown equal the scope saved (no silent server-side normalization). A LONE
-// wildcard is preserved as typed: collapsing it to the apex would WIDEN scope,
-// which this tool must never do silently.
+// A bare host already authorizes its subdomains, so `*.host` and `host` are
+// equivalent in scope — the backend (egress.normalize_scope_entry) folds `*.host`
+// down to `host`. Mirror that fold here so the chips the user sees equal the scope
+// that gets stored (no silent server-side normalization). A lone `*.` is dropped.
 export function addScopeHost(hosts: string[], raw: string): string[] {
   const host = raw.trim();
-  if (host === "" || hosts.includes(host)) return hosts;
   const bare = host.startsWith("*.") ? host.slice(2) : host;
-  if (host === bare) return [...hosts.filter((h) => h !== `*.${bare}`), bare];
-  return hosts.includes(bare) ? hosts : [...hosts, host];
+  if (bare === "") return hosts; // empty / a bare "*." is not a usable host
+  return hosts.includes(bare) ? hosts : [...hosts, bare];
 }
 
 export function NewRunPanel() {
