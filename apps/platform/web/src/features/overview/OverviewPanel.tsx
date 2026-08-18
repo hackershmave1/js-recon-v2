@@ -1,5 +1,5 @@
 import { useNavigate, useParams } from "react-router";
-import type { FindingsResponse, Finding, TechnologiesResponse } from "../../api/types";
+import type { FindingsResponse, Finding, HostsResponse, TechnologiesResponse } from "../../api/types";
 import { typeLabel } from "../../api/findingLabels";
 import "./overview.css";
 
@@ -20,7 +20,9 @@ function priorityRank(f: Finding): number {
 }
 
 export function OverviewPanel(
-  { data, technologies }: { data: FindingsResponse; technologies?: TechnologiesResponse | null },
+  { data, technologies, hosts }: {
+    data: FindingsResponse; technologies?: TechnologiesResponse | null; hosts?: HostsResponse | null;
+  },
 ) {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -37,6 +39,8 @@ export function OverviewPanel(
   const techTop = technologies
     ? Object.values(technologies.hosts).flat().slice(0, 3).map((t) => t.name).join(", ")
     : null;
+  const hostCount = hosts ? hosts.count : null;
+  const hostsOut = hosts ? hosts.count - hosts.in_scope : null;
 
   const metrics = [
     { key: "files", label: "Files", section: "sources",
@@ -45,6 +49,9 @@ export function OverviewPanel(
     { key: "endpoints", label: "Endpoints", section: "findings",
       value: String(endpoints),
       sub: data.spec ? `${data.spec.shadow} shadow` : "API surface" },
+    { key: "hosts", label: "Hosts", section: "hosts",
+      value: hostCount == null ? DASH : String(hostCount),
+      sub: hosts ? `${hosts.in_scope} in scope · ${hostsOut} out` : "attack surface" },
     { key: "secrets", label: "Secrets", section: "findings",
       value: String(secrets),
       sub: c?.secrets_engine ? `secrets engine ${c.secrets_engine}` : "hardcoded values" },

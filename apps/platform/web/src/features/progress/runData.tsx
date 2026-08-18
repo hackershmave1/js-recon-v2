@@ -1,10 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTenant } from "../../tenant/TenantContext";
 import { streamRunEvents, type SseEvent } from "../../api/sseClient";
-import { getAssets, getFindings, getStatus, getTechnologies, ApiError } from "../../api/apiClient";
+import { getAssets, getFindings, getHosts, getStatus, getTechnologies, ApiError } from "../../api/apiClient";
 import {
-  TERMINAL_STATES, type AssetsManifest, type FindingsResponse, type RunControlResult,
-  type TechnologiesResponse,
+  TERMINAL_STATES, type AssetsManifest, type FindingsResponse, type HostsResponse,
+  type RunControlResult, type TechnologiesResponse,
 } from "../../api/types";
 
 // A run's active state equals its stage and the state machine only advances
@@ -71,6 +71,7 @@ export interface RunData {
   cancelRequested: boolean;
   captureStatus: CaptureStatus | null;
   technologies: TechnologiesResponse | null;
+  hosts: HostsResponse | null;
   // Classified failure on a FAILED run (safe subset; see recon.runs.failure).
   failureCategory: string | null;
   failureReason: string | null;
@@ -115,6 +116,7 @@ function useRunStream(runId: string): RunData {
   const [cancelRequested, setCancelRequested] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null);
   const [technologies, setTechnologies] = useState<TechnologiesResponse | null>(null);
+  const [hosts, setHosts] = useState<HostsResponse | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [failureCategory, setFailureCategory] = useState<string | null>(null);
   const [failureReason, setFailureReason] = useState<string | null>(null);
@@ -183,6 +185,12 @@ function useRunStream(runId: string): RunData {
           const techs = await getTechnologies(tenantId, runId);
           if (!controller.signal.aborted) setTechnologies(techs);
         } catch { /* ignore — technologies are best-effort enrichment */ }
+        // The discovered-host inventory (DEBT D26) is likewise best-effort
+        // enrichment: a failure here must never break the status/findings panel.
+        try {
+          const h = await getHosts(tenantId, runId);
+          if (!controller.signal.aborted) setHosts(h);
+        } catch { /* ignore — hosts inventory is best-effort enrichment */ }
       } catch (e) {
         if (controller.signal.aborted) return;
         setError(e instanceof ApiError ? e.message : "Failed to load run");
@@ -282,7 +290,7 @@ function useRunStream(runId: string): RunData {
 
   return {
     runId, sessionId, state, stage, pct, done, total, eta, error, assets, events, findings, loaded,
-    pauseRequested, cancelRequested, captureStatus, technologies,
+    pauseRequested, cancelRequested, captureStatus, technologies, hosts,
     failureCategory, failureReason, failureHost, handleControlResult,
   };
 }

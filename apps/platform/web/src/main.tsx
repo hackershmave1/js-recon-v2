@@ -5,7 +5,7 @@ import { RouterProvider } from "react-router/dom";
 import { TenantProvider } from "./tenant/TenantContext";
 import { AuthProvider } from "./auth/AuthProvider";
 import { AuthGate } from "./auth/AuthGate";
-import { Home, RunWorkspace, OverviewRoute, SourcesRoute, FindingsRoute, ApiSpecRoute, ProbeRoute, TechRoute } from "./app";
+import { Home, RunWorkspace, OverviewRoute, SourcesRoute, FindingsRoute, ApiSpecRoute, ProbeRoute, TechRoute, HostsRoute } from "./app";
 import { SessionsView } from "./features/sessions/SessionsView";
 // Self-hosted fonts (a recon tool shouldn't phone home to a font CDN). Imported
 // before styles.css so the @font-face rules are registered when the design tokens
@@ -31,6 +31,7 @@ const router = createBrowserRouter([
       { path: "api-spec", Component: ApiSpecRoute },
       { path: "probe", Component: ProbeRoute },
       { path: "tech", Component: TechRoute },
+      { path: "hosts", Component: HostsRoute },
     ],
   },
 ]);

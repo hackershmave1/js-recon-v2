@@ -38,6 +38,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "api-spec", label: "API Spec", icon: "code" },
   { id: "probe", label: "Probe", icon: "target" },
   { id: "tech", label: "Tech stack", icon: "layers" },
+  { id: "hosts", label: "Hosts", icon: "globe" },
   { id: "threat-model", label: "Threat Model", icon: "shield", soon: true },
   { id: "sources", label: "Sources", icon: "folder" },
 ];

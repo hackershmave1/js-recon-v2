@@ -1,0 +1,63 @@
+/* Hosts page (DEBT D26): the discovered-host inventory — every host recon
+   surfaced (assets · resolved-host endpoints · tech · declared base-URLs),
+   classified in/out of the session's declared scope by the canonical egress
+   guard (server-computed). Real data only; the per-host "Endpoints" count is
+   endpoints whose host resolved (relative paths have none — the host-less total
+   is surfaced in the summary). Tokens come from styles.css. */
+
+.hosts-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+.hosts-sub { margin: 0; font-size: 12.5px; }
+.hosts-note { color: var(--warn, var(--muted)); }
+
+.hosts-controls {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 12px; flex-wrap: wrap;
+}
+.hosts-scope {
+  display: inline-flex; border: 1px solid var(--border);
+  border-radius: var(--r-sm); overflow: hidden;
+}
+.hosts-seg {
+  background: none; border: none; border-right: 1px solid var(--border);
+  color: var(--muted); font-size: 12px; font-weight: 600; padding: 6px 12px; cursor: pointer;
+}
+.hosts-seg:last-child { border-right: none; }
+.hosts-seg.is-active { background: var(--surface); color: var(--accent); }
+.hosts-seg:hover:not(.is-active) { color: var(--text-2); }
+.hosts-filter {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--text); font-size: 12.5px; padding: 6px 10px; min-width: 180px;
+}
+.hosts-filter:focus { outline: none; border-color: var(--border-strong); }
+
+.hosts-empty { padding: 14px 2px; margin: 0; }
+
+.hosts-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.hosts-table th {
+  text-align: left; font-size: 10.5px; font-weight: 700; letter-spacing: .5px;
+  text-transform: uppercase; color: var(--faint); padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.hosts-table td {
+  padding: 9px 10px; border-bottom: 1px solid var(--surface);
+  color: var(--text-2); vertical-align: middle;
+}
+.hosts-table tr:last-child td { border-bottom: none; }
+.hosts-num { text-align: right; font-variant-numeric: tabular-nums; }
+.hosts-sortbtn {
+  background: none; border: none; color: inherit; font: inherit;
+  letter-spacing: inherit; text-transform: inherit; cursor: pointer; padding: 0;
+}
+.hosts-sortbtn:hover { color: var(--text); }
+
+.hosts-host { color: var(--text); font-weight: 600; }
+.hosts-host-name { font-family: var(--font-mono); }
+.hosts-declared {
+  margin-left: 8px; font-size: 9.5px; font-weight: 700; letter-spacing: .5px;
+  text-transform: uppercase; color: var(--purple);
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm); padding: 1px 6px;
+}
+
+.hosts-scope-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; }
+.hosts-scope-badge.is-in { color: var(--accent); }
+.hosts-scope-badge.is-out { color: var(--muted); }
