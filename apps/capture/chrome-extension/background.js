@@ -771,6 +771,7 @@ class JSExtractor {
       'authToken',
       'authUser',
       'authTenantName',
+      'authTenantId',
       'muteNoise',
       'outOfScopeMode',
       'maxAssetMb',
@@ -799,6 +800,7 @@ class JSExtractor {
       authToken: result.authToken || '',
       authUser: result.authUser || '',
       authTenantName: result.authTenantName || '',
+      authTenantId: result.authTenantId || '',
       muteNoise: result.muteNoise !== false,
       outOfScopeMode: result.outOfScopeMode || 'tag',
       // Clamp to the 10 MB backend ceiling so a legacy stored value (from the old
@@ -976,10 +978,26 @@ class JSExtractor {
     try {
       const result = await this.workspaceClient.login(username, password);
       if (result && result.success) {
+        const prevTenantId = this.settings.authTenantId || '';
+        const nextTenantId = (result.tenant && result.tenant.id) || '';
+        // Signing in as a DIFFERENT tenant must not stamp/flush the previous tenant's captures
+        // under the new tenant's token. The server binding is immutable per session, so the only
+        // correct unbind is a fresh Standalone session. Do this reset BEFORE installing the new
+        // token: resetCaptureSession awaits storage I/O (it yields the event loop), so if the new
+        // token were already live a timer / alarm / in-flight-retry flush could send tenant-A's
+        // queued files under tenant B. Clearing the token first means any stray flush during the
+        // reset goes out unauthenticated (shared tenant), never as another named tenant; clearOutbox
+        // (epoch-bumped) then drops A's files, including any in-flight batch that later re-queues.
+        // Same-tenant re-login (token refresh) is left intact.
+        if (prevTenantId && nextTenantId && prevTenantId !== nextTenantId) {
+          this.batchUploader.setAuthToken('');
+          await this.resetCaptureSession({ stopCapturing: false, dropOutbox: true });
+        }
         Object.assign(this.settings, {
           authToken: result.token || '',
           authUser: result.user || username || '',
-          authTenantName: (result.tenant && result.tenant.name) || ''
+          authTenantName: (result.tenant && result.tenant.name) || '',
+          authTenantId: nextTenantId
         });
         await chrome.storage.local.set(this.settings);
         this.batchUploader.setAuthToken(this.settings.authToken);
@@ -997,7 +1015,9 @@ class JSExtractor {
   // fail-closed backend, or routed to the shared tenant when anon capture is allowed).
   async logout(sendResponse) {
     // Clear the in-memory token FIRST so uploads stop routing even if the persist fails;
-    // then best-effort persist so a respawn doesn't rehydrate the old token.
+    // then best-effort persist so a respawn doesn't rehydrate the old token. authTenantId is
+    // deliberately KEPT so a subsequent login as a DIFFERENT tenant is still detected (and its
+    // outbox dropped) — logging back into the SAME tenant then resumes any pending outbox.
     Object.assign(this.settings, { authToken: '', authUser: '', authTenantName: '' });
     this.batchUploader.setAuthToken('');
     try {
@@ -1005,7 +1025,55 @@ class JSExtractor {
     } catch (e) {
       // Persist is best-effort; the in-memory clear already took effect.
     }
+    // Stop capturing and reset to a fresh Standalone session: capture must not keep running
+    // behind the sign-in gate, and the next sign-in must start clean (no old-tenant binding). The
+    // outbox is kept (it cannot leak without a token; a same-tenant re-login resumes it).
+    await this.resetCaptureSession({ stopCapturing: true });
     sendResponse({ success: true });
+  }
+
+  // Rotate to a fresh, UNBOUND (Standalone) capture session and drop the previous session's
+  // captured state + engagement binding. Used on logout and on a tenant-changing login. The
+  // server binds engagement immutably at session-create (keyed by external_id), so clearing the
+  // uploader config alone is not enough — a new session id is the only correct "unbind". Mirrors
+  // the state-clearing half of newSession; the outbox is intentionally left intact (unsent files
+  // keep their own old per-file session id).
+  async resetCaptureSession({ stopCapturing = false, dropOutbox = false } = {}) {
+    if (stopCapturing) {
+      this.isCapturing = false;
+      this.persistCaptureState(false);
+    }
+    this.processingQueue = [];
+    this.sessionId = await this.sessionStore.rotate();
+    this.capturedFiles.clear();
+    this.clearCapturedFilesMeta();
+    this.capturedHashes.clear();
+    this.dedupStore.clear().catch(() => {});
+    this.authTracker.clear();
+    this.totalCapturedBytes = 0;
+    // Reset failure counters too (parity with newSession) so a logout / tenant switch doesn't
+    // leave stale failure state visible in getStatus.
+    this.processingStats = {
+      processedFiles: 0,
+      failedFiles: 0,
+      lastFailureReason: null,
+      lastFailureUrl: null,
+      lastFailureMessage: null
+    };
+    // Drop the engagement binding: clear the live uploader config AND the persisted snapshot so a
+    // respawn can't re-bind the fresh session to the old engagement.
+    this.batchUploader.setConfig(null);
+    try {
+      await chrome.storage.local.remove('pendingSessionConfig');
+    } catch (e) {
+      // best-effort; the in-memory setConfig(null) already unbound the live uploader.
+    }
+    // Tenant change only: drop any unsent captures too. The durable outbox drains under whatever
+    // token is CURRENT, so a previous tenant's queued JS would otherwise flush under the new
+    // tenant's token — a cross-tenant leak. Losing a few unsent files is the safe trade.
+    if (dropOutbox) {
+      await this.batchUploader.clearOutbox();
+    }
   }
 
   async newSession(request, sendResponse) {
@@ -1135,6 +1203,10 @@ class JSExtractor {
       if (f.hasSourceMap) mapsCount += 1;
       secretCount += f.secretCount || 0;
     }
+    // Surface the active engagement so the popup can show + restore it on every open. The
+    // projectId is the uploader's live in-memory binding (restored on cold start via
+    // pendingSessionConfig, initialize()), so this stays synchronous — no storage await.
+    const uploaderStats = this.batchUploader.getStats();
     sendResponse({
       isCapturing: this.isCapturing,
       sessionId: this.sessionId,
@@ -1143,7 +1215,9 @@ class JSExtractor {
       secretCount,
       queueLength: this.processingQueue.length,
       processingStats: this.processingStats,
-      uploader: this.batchUploader.getStats(),
+      uploader: uploaderStats,
+      projectId: uploaderStats.projectId || null,
+      standalone: !uploaderStats.projectId,
       settings: this.settings
     });
   }

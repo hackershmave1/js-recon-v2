@@ -27,16 +27,19 @@ platform.
    the build step (`npm run watch` rebuilds on change).
 3. Load it: open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and
    select `apps/capture/chrome-extension`.
-4. **Sign in (required).** The default backend is `http://localhost:8000` — point the popup's
-   **Connection** setting at a different workspace URL if needed (it is the single source of truth
-   for uploads, health, and analyze). The default stack ships auth **on**, so open the popup →
-   **Settings → CONNECTION** and sign in with your platform username/password (dev default
-   `admin`/`admin`). Capture won't start until you're signed in; once signed in, captured JS routes
-   into your own tenant's run → analyze pipeline.
+4. **Sign in, then pick an engagement.** A signed-out popup opens straight to a **sign-in screen**
+   (the gate) — set the **Workspace URL** there if it isn't the default `http://localhost:8000` (it
+   is the single source of truth for uploads, health, and analyze), then sign in with your platform
+   username/password (dev default `admin`/`admin`; the default stack ships auth **on**). Once signed
+   in you land on **Home**, where an always-visible **Engagement** selector routes captures into a
+   chosen engagement (project) — or **Solo · standalone** for an independent session. Capture won't
+   start until you're signed in; the current engagement shows on the capture card, and switching
+   engagement starts a fresh session (the platform binds a session to one engagement for its life).
 
 ## How it works
 
-With the extension signed in, browse an authenticated app with capture on → the service worker
+With the extension signed in and an engagement (or Solo) selected, browse an authenticated app with
+capture on → the service worker
 intercepts script responses (`webRequest` + a `document_start` content script), hashes and
 de-dupes them, fetches any `//# sourceMappingURL` maps, and batches everything to
 `POST /api/save-files`. Analysis is decoupled: bulk uploads are a fast store, and the popup's

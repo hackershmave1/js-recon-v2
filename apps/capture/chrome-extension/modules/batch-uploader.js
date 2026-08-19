@@ -17,6 +17,10 @@ export class BatchUploader {
     // stamped onto save-files metadata so the backend binds it on session create (mirrors
     // this.scope / scopeMetadata). null keeps today's payload (no project keys).
     this.config = null;
+    // Monotonic epoch, bumped by clearOutbox() (a tenant switch). A batch spliced for upload under
+    // one epoch must NOT be re-queued after a clear bumped it — otherwise a previous tenant's
+    // in-flight files would resurface and flush under the new tenant's token.
+    this.epoch = 0;
     this.isUploading = false;
     this.isFlushing = false;
     // Durable outbox (IndexedDB) so queued uploads survive a service-worker respawn.
@@ -80,6 +84,19 @@ export class BatchUploader {
   }
 
   setStore(store) { this.store = store || null; }
+
+  // Drop ALL pending work — the in-memory queue AND the durable store — so one tenant's unsent
+  // captures can never flush under another tenant's token after a tenant switch. The outbox drains
+  // under whatever token is current, so this is the tenant-isolation guard for a tenant change.
+  async clearOutbox() {
+    // Bump the epoch FIRST so any batch already spliced for upload (in flight) is treated as stale
+    // and dropped instead of re-queued when it fails — closing the in-flight-retry leak path.
+    this.epoch += 1;
+    this.pendingQueue = [];
+    if (this.store && typeof this.store.clear === 'function') {
+      try { await this.store.clear(); } catch (e) { /* best-effort; the in-memory queue is already dropped */ }
+    }
+  }
   setOnDrained(fn) { this.onDrained = typeof fn === 'function' ? fn : null; }
 
   // Reload any persisted-but-unsent files after a service-worker respawn and resume
@@ -119,6 +136,9 @@ export class BatchUploader {
     this.uploadTimer = null;
 
     const batch = this.pendingQueue.splice(0, this.batchSize);
+    // Snapshot the epoch this batch belongs to; if clearOutbox() bumps it while we're in flight
+    // (a tenant switch), a transient failure below must DROP the batch, not re-queue it.
+    const batchEpoch = this.epoch;
 
     try {
       await this.upload(batch);
@@ -147,6 +167,13 @@ export class BatchUploader {
           title: 'Upload Rejected',
           message: `${batch.length} file(s) rejected by the server (${error.status || 'error'}) and skipped.`
         });
+      } else if (batchEpoch !== this.epoch) {
+        // The outbox was cleared while this batch was in flight (a tenant switch bumped the
+        // epoch). Re-queueing would resurface a previous tenant's files and flush them under the
+        // new tenant's token — the exact cross-tenant leak we guard against. Drop, don't retry.
+        console.warn('Dropping stale-epoch batch after outbox clear (tenant switch)');
+        this.stats.droppedFiles += batch.length;
+        await this.forget(batch);
       } else {
         // Transient failure (network / 5xx / 429): put the batch back and retry.
         console.error('Batch upload failed (will retry):', error);
@@ -361,7 +388,11 @@ export class BatchUploader {
       pendingQueueLength: this.pendingQueue.length,
       endpoint: this.apiEndpoint,
       isUploading: this.isUploading,
-      paired: this.lastPaired
+      paired: this.lastPaired,
+      // The engagement the current session is bound to (null => Standalone). Surfaced so the
+      // popup's Active-engagement display reflects the REAL binding the uploader stamps, not a
+      // separate copy that could drift. Mirrors configMetadata()'s projectId source.
+      projectId: (this.config && this.config.projectId) || null
     };
   }
 }

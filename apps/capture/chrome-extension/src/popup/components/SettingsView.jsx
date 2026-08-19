@@ -1,7 +1,7 @@
 // SettingsView.jsx — inline settings screen (replaces the old options.html page).
 // Sections: Connection, Capture rules, Noise denylist, About. Mirrors the
-// "RECON Capture" prototype SETTINGS view.
-import { useState } from 'preact/hooks';
+// "RECON Capture" prototype SETTINGS view. Sign-IN lives in LoginView (the gate); Settings only
+// shows the signed-in account summary, since it is reachable only when already signed in.
 import { C, F, TAG_COLOR } from '../theme.js';
 import { Switch } from './ui.jsx';
 import {
@@ -57,62 +57,25 @@ function PairedHint({ token, paired }) {
   );
 }
 
-// Central-login section: sign in with username/password so captures route to your tenant.
-// The session token comes from a real login and is held by the service worker (not typed
-// here). Signed-in state shows the identity + paired indicator.
-function AuthSection({ vm }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  if (vm.signedIn) {
-    return (
-      <div>
-        <Label>Signed in <span style={{ color: C.faint }}>(captures route to your tenant)</span></Label>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '12.5px', color: C.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {vm.authUser || 'user'}{vm.authTenantName ? ` · ${vm.authTenantName}` : ''}
-            </div>
-            <PairedHint token="x" paired={vm.paired} />
-          </div>
-          <button onClick={vm.signOut} style={{
-            flex: '0 0 auto', padding: '8px 12px', borderRadius: '8px', border: `1px solid ${C.lineStrong}`,
-            background: C.control, color: C.textSoft, cursor: 'pointer', fontSize: '12px', fontWeight: 600
-          }}>Log out</button>
-        </div>
-      </div>
-    );
-  }
-
-  const submit = async () => {
-    if (!username.trim() || !password || busy) return;
-    setBusy(true); setError('');
-    const res = await vm.signIn(username.trim(), password);
-    setBusy(false);
-    if (res && res.success) { setUsername(''); setPassword(''); }
-    else {
-      setError(res?.status === 401 ? 'Invalid username or password'
-        : res?.status === 503 ? 'Auth is not configured on the server'
-        : (res?.error || 'Sign in failed'));
-    }
-  };
-
+// Signed-in account summary. Sign-IN itself lives in LoginView (the gate); Settings is reachable
+// only when signed in, so this always shows the identity + paired indicator + Log out. The session
+// token is held by the service worker (never typed/stored here).
+function AccountSection({ vm }) {
   return (
     <div>
-      <Label>Sign in <span style={{ color: C.faint }}>(routes captures to your tenant)</span></Label>
-      <input value={username} onInput={(e) => setUsername(e.target.value)} placeholder="username"
-             autocomplete="username" spellcheck={false} style={{ ...inputStyle, marginBottom: '8px' }} />
-      <input type="password" value={password} onInput={(e) => setPassword(e.target.value)}
-             onKeyDown={(e) => { if (e.key === 'Enter') submit(); }} placeholder="password"
-             autocomplete="current-password" style={inputStyle} />
-      {error && <div style={{ color: C.pink, fontSize: '10.5px', marginTop: '8px' }}>{error}</div>}
-      <button onClick={submit} disabled={busy} style={{
-        width: '100%', marginTop: '10px', padding: '9px', borderRadius: '9px', border: 'none',
-        background: C.lime, color: C.onLime, cursor: busy ? 'default' : 'pointer',
-        fontSize: '12.5px', fontWeight: 700, opacity: busy ? 0.7 : 1
-      }}>{busy ? 'Signing in…' : 'Sign in'}</button>
+      <Label>Signed in <span style={{ color: C.faint }}>(captures route to your tenant)</span></Label>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: '12.5px', color: C.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {vm.authUser || 'user'}{vm.authTenantName ? ` · ${vm.authTenantName}` : ''}
+          </div>
+          <PairedHint token="x" paired={vm.paired} />
+        </div>
+        <button onClick={vm.signOut} style={{
+          flex: '0 0 auto', padding: '8px 12px', borderRadius: '8px', border: `1px solid ${C.lineStrong}`,
+          background: C.control, color: C.textSoft, cursor: 'pointer', fontSize: '12px', fontWeight: 600
+        }}>Log out</button>
+      </div>
     </div>
   );
 }
@@ -166,7 +129,7 @@ export function SettingsView({ vm }) {
             {vm.connState === 'testing' ? 'Testing…' : 'Test connection'}
           </button>
           <div style={{ borderTop: `1px solid ${C.line}`, margin: '14px 0 12px' }} />
-          <AuthSection vm={vm} />
+          <AccountSection vm={vm} />
         </Card>
 
         {/* CAPTURE RULES */}

@@ -59,4 +59,18 @@ await uploader.upload(testFiles);
 assert.equal(capturedPayloads[1].metadata.performAnalysis, true);
 assert.equal(capturedPayloads[1].metadata.disableAnalysis, false);
 
+// getStats() surfaces the bound engagement projectId (drives the popup's Active-engagement
+// display) — null when Standalone, the id when bound. Mirrors configMetadata()'s source.
+assert.equal(uploader.getStats().projectId, null, 'no config => standalone (projectId null)');
+uploader.setConfig({ projectId: 'eng-1' });
+assert.equal(uploader.getStats().projectId, 'eng-1', 'setConfig surfaces projectId via getStats');
+uploader.setConfig(null);
+assert.equal(uploader.getStats().projectId, null, 'setConfig(null) reverts to standalone');
+
+// clearOutbox() drops all pending work (tenant-isolation guard on a tenant switch).
+uploader.pendingQueue.push({ url: 'https://x/y.js', contentHash: 'h', sessionId: 's' });
+assert.ok(uploader.getStats().pendingQueueLength > 0, 'has pending work before clear');
+await uploader.clearOutbox();
+assert.equal(uploader.getStats().pendingQueueLength, 0, 'clearOutbox empties the pending queue');
+
 console.log('test_t007_batch_uploader_payload: ok');

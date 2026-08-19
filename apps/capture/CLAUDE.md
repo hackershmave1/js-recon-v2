@@ -38,5 +38,15 @@ aggressively. Preserve these when editing `background.js` / `modules/*`:
 ## Conventions
 
 Match the existing style; prefer small, verifiable changes over broad rewrites. The popup is Preact
-+ esbuild. Settings are intentionally minimal (Connection / Capture Rules / Noise Denylist) — the
-workspace URL is the single source of truth for uploads, health, and analyze.
++ esbuild. It is a **funnel**: signed-out → a first-class sign-in **gate** (`LoginView`, workspace
+URL + credentials); signed-in → **Home** with an always-visible **Engagement** selector (the
+session's engagement/project binding, or Solo · standalone) + capture. Settings keep the signed-in
+**Account** summary, Connection, Capture Rules, and Noise Denylist. The workspace URL is the single
+source of truth for uploads, health, and analyze.
+
+Two load-bearing rules the funnel added (don't regress): the sign-in gate must key off REAL
+worker-provided settings (never a fallback), so a slow cold worker shows "Loading…" not a wrong
+screen; and a **tenant change** (logout, or login as a different tenant) must reset the capture
+session — rotate the id, drop the engagement binding, and drop the outbox — so one tenant's captures
+can never stamp/flush under another's token. Switching engagement rotates the session because the
+platform binds a session to one engagement immutably.

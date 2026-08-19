@@ -5,25 +5,12 @@ import { C } from './theme.js';
 import { Toast } from './components/ui.jsx';
 import { HomeView } from './components/HomeView.jsx';
 import { SettingsView } from './components/SettingsView.jsx';
+import { LoginView } from './components/LoginView.jsx';
 import * as api from './api.js';
 import { resolveEffectiveConfig, splitEffective, configFromSettings } from '../../modules/project-config.js';
+import { reconcileActiveProject, activeProjectName } from '../../modules/active-engagement.js';
 
 const NOISE = new Set(['lib', 'cms', 'tracker']);
-
-// Fallback settings so the popup still renders if the service worker is slow or
-// unavailable (e.g. opened outside an extension context). Mirrors background defaults.
-const FALLBACK_SETTINGS = {
-  includeSubdomains: true, muteNoise: true, outOfScopeMode: 'tag', maxAssetMb: 8,
-  denyDefaultProfile: true, performAnalysisOnUpload: false, captureAuthContext: true,
-  workspaceUrl: '', domainScopes: [], useDomainScope: false, captureEverything: false,
-  denyRules: [
-    { tag: 'CMS', pattern: '/wp-content/plugins/*' },
-    { tag: 'CMS', pattern: '/wp-includes/*' },
-    { tag: 'TRACK', pattern: '*.google-analytics.com' },
-    { tag: 'TRACK', pattern: '*.doubleclick.net' },
-    { tag: 'LIB', pattern: '*/jquery*.min.js' }
-  ]
-};
 
 function basename(url) {
   try {
@@ -70,10 +57,14 @@ export function App() {
   const [projectId, setProjectId] = useState(null);
   const [overrides, setOverrides] = useState({});
   const toastTimer = useRef(null);
+  const seededProjectRef = useRef(false);
 
   // Local settings is the edit source of truth once loaded; polling refreshes only
-  // live status/files so it never clobbers an in-progress text edit.
-  function adoptSettings(s) { setSettings((prev) => prev || s || {}); }
+  // live status/files so it never clobbers an in-progress text edit. `settings` is null until
+  // the worker answers with REAL settings — there is no fallback object, so `settings != null`
+  // means "signed-in state is known" and the sign-in gate can trust `settings.authToken` (a slow
+  // cold worker shows "Loading…", never a wrong gate). Adopt-once so later polls don't clobber edits.
+  function adoptSettings(s) { setSettings((prev) => prev || s); }
 
   async function refresh() {
     const [st, fl] = await Promise.all([api.getStatus(), api.getFiles()]);
@@ -93,13 +84,21 @@ export function App() {
       if (inFlight > 0) setAnalysis({ status: 'running', counts: c, files: res.job.files || [] });
       else if ((c.completed || 0) > 0 || (c.failed || 0) > 0) setAnalysis({ status: 'done', counts: c, files: res.job.files || [] });
     });
-    // Load engagements for the New-Session picker (cached in the worker; refreshed on open).
+    // Load engagements for the picker (cached in the worker; refreshed on open).
     api.listProjects().then((res) => { if (res && Array.isArray(res.projects)) setProjects(res.projects); });
     const id = setInterval(refresh, 2000);
-    // If the worker never answers with settings, fall back so the UI still renders.
-    const fb = setTimeout(() => adoptSettings(FALLBACK_SETTINGS), 1000);
-    return () => { clearInterval(id); clearTimeout(fb); };
+    return () => { clearInterval(id); };
   }, []);
+
+  // Seed the staged engagement pick from the session's REAL binding (worker getStatus) once it's
+  // known, so the picker shows the active engagement instead of defaulting to Solo. Adopt-once
+  // (a ref guard) so a later user pick / switch isn't clobbered by polling.
+  useEffect(() => {
+    if (!seededProjectRef.current && status.projectId) {
+      setProjectId(status.projectId);
+      seededProjectRef.current = true;
+    }
+  }, [status.projectId]);
 
   // While an analysis job is running, poll per-file progress and stop when nothing is
   // left queued/analyzing.
@@ -161,14 +160,24 @@ export function App() {
         authUser: res.user || username,
         authTenantName: (res.tenant && res.tenant.name) || ''
       }));
+      // Engagements are tenant-scoped: re-fetch under the new identity (a prior tenant's list
+      // would be wrong). Land on Home so the funnel is sign-in -> pick engagement -> capture.
+      setProjectId(null);
+      api.listProjects().then((r) => { if (r && Array.isArray(r.projects)) setProjects(r.projects); });
+      setView('home');
       showToast(`Signed in${res.tenant?.name ? ` · ${res.tenant.name}` : ''}`);
     }
     return res || { success: false };
   }
 
   async function signOut() {
+    // The worker's logout stops capture AND resets to a fresh Standalone session (so nothing
+    // keeps stamping the old tenant); here we just clear the local identity + stale picker state.
     await api.logout();
     setSettings((prev) => ({ ...(prev || {}), authToken: '', authUser: '', authTenantName: '' }));
+    setProjects([]);
+    setProjectId(null);
+    setOverrides({});
     showToast('Signed out');
   }
 
@@ -183,6 +192,10 @@ export function App() {
     // send that snapshot. The background applies it to the capture gate and stamps it onto
     // uploads (spec §7/§8.5); it does not re-resolve.
     const selected = projectId ? projects.find((p) => p.id === projectId) : null;
+    // Guard: a staged project id that isn't in the loaded list yet (engagements still loading, or
+    // a stale / other-tenant id) would silently resolve as Standalone and bind the session to the
+    // WRONG engagement. Don't commit until the list has loaded and the id resolves.
+    if (projectId && !selected) { showToast('Loading engagements…'); return; }
     let defaults = selected ? selected.defaults : configFromSettings(settings || {});
     let ovr = overrides;
     if (!selected) {
@@ -285,6 +298,29 @@ export function App() {
     return <div style={{ padding: '40px', textAlign: 'center', color: C.faint, fontSize: '12px' }}>Loading…</div>;
   }
 
+  // ---- sign-in gate ----
+  // Signed-out users get the dedicated login screen, never the capture UI. Gated on the REAL,
+  // worker-provided settings.authToken (there is no fallback settings object), so a slow cold
+  // worker shows "Loading…" above rather than misfiring the gate for a signed-in user.
+  const loginVm = {
+    wsUrl: settings.workspaceUrl || '',
+    setWsUrl: (v) => patchSettings({ workspaceUrl: v }),
+    connState, latency, testConnection,
+    signIn,
+    version: api.extensionVersion()
+  };
+  if (!settings.authToken) {
+    return (
+      <div class="pp" style={{
+        width: '384px', background: C.card, border: `1px solid ${C.lineStrong}`,
+        borderRadius: '0', overflow: 'hidden', color: C.text, position: 'relative'
+      }}>
+        <LoginView vm={loginVm} />
+        <Toast message={toast} />
+      </div>
+    );
+  }
+
   // ---- view-models ----
   // Honest, tri-state scope label. It reflects what the CAPTURE GATE (isInScope) will
   // actually do — never the active tab, which is what made the scope look like it
@@ -323,6 +359,10 @@ export function App() {
   const mutedCount = allCaptures.filter(isHidden).length;
   const captures = allCaptures.filter((c) => !isHidden(c)).slice().reverse();
 
+  // The engagement the current session is ACTUALLY bound to (worker getStatus), reconciled
+  // against the fetched list so a deleted / different-tenant id renders as Solo, not a phantom.
+  const activeProjectId = reconcileActiveProject(status.projectId, projects);
+
   const homeVm = {
     capturing: status.isCapturing,
     connectionLabel: connState === 'fail' ? 'workspace unreachable' : 'connected to workspace',
@@ -336,6 +376,9 @@ export function App() {
     // Project-scoped capture: engagement picker + override editor state.
     projects,
     projectId,
+    // Active engagement = the current session's real binding (surfaced always, on Home).
+    activeProjectId,
+    activeProjectName: activeProjectName(activeProjectId, projects),
     selectProject: (id) => { setProjectId(id || null); setOverrides({}); },
     overrides,
     setOverride: (section, key, value) =>
@@ -388,13 +431,11 @@ export function App() {
     wsUrl: settings.workspaceUrl || '',
     setWsUrl: (v) => patchSettings({ workspaceUrl: v }),
     testConnection,
-    // Central login: sign in so captures route into the operator's own tenant. `paired` is
-    // the last save-files ack (via the uploader stats) so the UI can confirm the login token
+    // Signed-in account summary (sign-in itself is the gate, LoginView). `paired` is the last
+    // save-files ack (via the uploader stats) so the Account block can confirm the login token
     // actually routed instead of failing silently; undefined until the first upload.
-    signedIn: !!settings.authToken,
     authUser: settings.authUser || '',
     authTenantName: settings.authTenantName || '',
-    signIn,
     signOut,
     paired: status?.uploader?.paired,
     defScope: (settings.domainScopes || []).join(', '),
