@@ -38,6 +38,7 @@ def get_run_hosts(
                 "assets": row.assets,
                 "endpoints": row.endpoints,
                 "suspected": row.suspected,
+                "routes": row.routes,
                 "techs": row.techs,
             }
             for row in result.hosts

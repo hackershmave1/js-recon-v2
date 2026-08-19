@@ -30,10 +30,15 @@ Suspected-backend lanes (DEBT D24/D26 follow-up): the unconfirmed lanes
 into a SEPARATE ``suspected`` per-host count — never the confirmed ``endpoints``
 count — so the confirmed-endpoint reconciliation with the Overview "Endpoints"
 card is unaffected and the confirmed vs suspected surfaces stay distinguishable.
-``page_route`` is deliberately excluded: a client-nav / doc-link target
-(``mui.com``, ``github.com``) is not a backend the client talks to. (WebSocket
-sinks ride ``endpoint_unresolved`` but their ``ws(s)://`` host is not attributed
-by ``egress.attributed_host``, so they surface under ``suspected_unattributed``.)
+``page_route`` targets (client-nav / doc-link hosts like ``about.example.com``,
+``github.com``) are NOT backends the client calls, so they roll up into their OWN
+SEPARATE ``routes`` per-host count — never ``endpoints`` or ``suspected``. But the
+host IS listed: this page is the full discovered-host inventory (every host recon
+surfaced, matching the Findings host facet), not a backend-only view (DEBT D26 /
+Starbucks QA #5). A route with no resolved host (a relative ``/about``) is
+same-origin nav, not an unknown host, so it is dropped rather than counted.
+(WebSocket sinks ride ``endpoint_unresolved`` but their ``ws(s)://`` host is not
+attributed by ``egress.attributed_host``, so they surface under ``suspected_unattributed``.)
 """
 
 from __future__ import annotations
@@ -72,6 +77,10 @@ class HostRow:
     # resolved to this host — a SUSPECTED custom client / unresolved sink, kept as a
     # count SEPARATE from the confirmed ``endpoints`` above (DEBT D24/D26 follow-up).
     suspected: int
+    # Client-navigation / referenced hosts (``page_route`` findings) whose host resolved —
+    # NOT a backend the client calls, so kept as its own count separate from ``endpoints``
+    # and ``suspected`` (Starbucks QA #5): the host is inventoried without diluting either.
+    routes: int
     techs: int
 
 
@@ -128,6 +137,7 @@ def _aggregate_hosts(
     asset_urls: list[str],
     endpoint_occurrences: list[tuple[str | None, str]],
     suspected_occurrences: list[tuple[str | None, str]],
+    route_occurrences: list[tuple[str | None, str]],
     tech_hosts: list[str],
     declared_hosts: list[str],
     scope_hosts: list[str],
@@ -135,10 +145,10 @@ def _aggregate_hosts(
     allow_local: bool,
 ) -> HostsView:
     """Pure roll-up (no DB/network) so the host-universe + scope logic is unit
-    testable. ``endpoint_occurrences`` / ``suspected_occurrences`` are each
-    ``(host, finding_hash)`` per occurrence — confirmed endpoints and suspected
-    backend calls respectively, counted by the same rules but tallied into
-    separate per-host columns so the confirmed reconciliation is never diluted."""
+    testable. ``endpoint_occurrences`` / ``suspected_occurrences`` / ``route_occurrences``
+    are each ``(host, finding_hash)`` per occurrence — confirmed endpoints, suspected
+    backend calls, and client-nav page routes respectively, counted by the same rules but
+    tallied into separate per-host columns so the confirmed reconciliation is never diluted."""
     assets_by_host: dict[str, int] = defaultdict[str, int](int)
     for url in asset_urls:
         # Only a real http(s) asset carries a network host. Capture stores eval'd /
@@ -165,6 +175,11 @@ def _aggregate_hosts(
     # "Endpoints" card, and the suspected lane never dilutes it.
     endpoints_by_host, endpoints_unattributed = _group_occurrences_by_host(endpoint_occurrences)
     suspected_by_host, suspected_unattributed = _group_occurrences_by_host(suspected_occurrences)
+    # page_route targets are client-nav / doc-link hosts (not backends): counted into
+    # their OWN per-host column, disjoint from the two lanes above. A route with no
+    # resolved host is a relative same-origin path, not an unknown host, so its
+    # unattributed tally is intentionally dropped (a host inventory has no row for it).
+    routes_by_host, _routes_unattributed = _group_occurrences_by_host(route_occurrences)
 
     declared: set[str] = set()
     for raw_declared in declared_hosts:
@@ -177,6 +192,7 @@ def _aggregate_hosts(
         | set(tech_by_host)
         | set(endpoints_by_host)
         | set(suspected_by_host)
+        | set(routes_by_host)
         | declared
     )
     rows = [
@@ -187,6 +203,7 @@ def _aggregate_hosts(
             assets=assets_by_host.get(h, 0),
             endpoints=endpoints_by_host.get(h, 0),
             suspected=suspected_by_host.get(h, 0),
+            routes=routes_by_host.get(h, 0),
             techs=tech_by_host.get(h, 0),
         )
         for h in sorted(universe)
@@ -253,6 +270,21 @@ def list_hosts(tenant_id: str, run_id: str) -> HostsView | None:
                 )
             ).all()
         ]
+        # Client-navigation / doc-link targets (page routes): their own lane so the
+        # host is inventoried without touching the confirmed or suspected counts. Same
+        # Finding⋈FindingOccurrence shape; page_route occurrences carry an attributed
+        # host only for absolute-URL routes (analyze._record_unresolved_endpoint).
+        route_occurrences: list[tuple[str | None, str]] = [
+            (row[0], row[1])
+            for row in session.execute(
+                select(FindingOccurrence.host, Finding.finding_hash)
+                .join(Finding, Finding.id == FindingOccurrence.finding_id)
+                .where(
+                    Finding.run_id == str(run_id),
+                    Finding.type == FindingType.PAGE_ROUTE.value,
+                )
+            ).all()
+        ]
         tech_hosts = list(
             session.scalars(
                 select(RunTechnology.host).where(RunTechnology.run_id == str(run_id))
@@ -268,6 +300,7 @@ def list_hosts(tenant_id: str, run_id: str) -> HostsView | None:
         asset_urls,
         endpoint_occurrences,
         suspected_occurrences,
+        route_occurrences,
         tech_hosts,
         declared_hosts,
         list(scope_hosts),

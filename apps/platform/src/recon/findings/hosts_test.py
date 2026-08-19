@@ -15,6 +15,7 @@ def _agg(
     asset_urls: list[str] | None = None,
     endpoint_occurrences: list[tuple[str | None, str]] | None = None,
     suspected_occurrences: list[tuple[str | None, str]] | None = None,
+    route_occurrences: list[tuple[str | None, str]] | None = None,
     tech_hosts: list[str] | None = None,
     declared_hosts: list[str] | None = None,
     scope_hosts: list[str] | None = None,
@@ -25,6 +26,7 @@ def _agg(
         asset_urls or [],
         endpoint_occurrences or [],
         suspected_occurrences or [],
+        route_occurrences or [],
         tech_hosts or [],
         declared_hosts or [],
         scope_hosts or [],
@@ -109,6 +111,36 @@ def test_suspected_lane_rolls_up_separately_from_confirmed():
     guess = _row(view, "guess.acme.io")
     assert guess.suspected == 1 and guess.endpoints == 0  # suspected-only host
     assert view.suspected_unattributed == 1  # s3
+
+
+def test_route_lane_rolls_up_separately_and_adds_route_only_hosts():
+    # page_route (client-nav / doc-link) hosts get their OWN column and DO enter the
+    # universe — the Hosts page shows EVERY discovered host (Starbucks QA #5) — but never
+    # touch the confirmed `endpoints` or `suspected` counts. A host-less route (a relative
+    # /path) is same-origin nav, not an unknown host, so it adds no row and no counter.
+    view = _agg(
+        endpoint_occurrences=[("api.acme.io", "e1")],
+        route_occurrences=[
+            ("about.acme.io", "r1"),  # route-only in-scope host -> its own row
+            ("api.acme.io", "r2"),  # a host that also has a confirmed endpoint
+            ("github.com", "r3"),  # out-of-scope referenced host is still listed
+            (None, "r4"),  # relative route -> dropped, no phantom row
+        ],
+        scope_hosts=["acme.io"],
+    )
+    # The confirmed + suspected lanes are untouched by the routes.
+    assert _row(view, "api.acme.io").endpoints == 1
+    assert _row(view, "api.acme.io").suspected == 0
+    assert view.endpoints_unattributed == 0
+    # Routes are tallied on their own column, per host.
+    assert _row(view, "api.acme.io").routes == 1
+    about = _row(view, "about.acme.io")
+    assert (about.routes, about.endpoints, about.suspected) == (1, 0, 0)
+    assert about.in_scope
+    gh = _row(view, "github.com")
+    assert gh.routes == 1 and not gh.in_scope
+    # The host-less route added no row (a host inventory has no entry for same-origin nav).
+    assert [r.host for r in view.hosts] == ["about.acme.io", "api.acme.io", "github.com"]
 
 
 def test_suspected_only_host_enters_the_universe():

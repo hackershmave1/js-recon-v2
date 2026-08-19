@@ -3,17 +3,18 @@ import type { HostsResponse, HostRow } from "../../api/types";
 import { Icon } from "../../shell/icons";
 import "./hosts.css";
 
-// The discovered-host inventory (DEBT D26): every host recon surfaced — from
-// fetched assets, resolved-host endpoints, suspected-backend calls, tech detection,
-// and declared base-URL rules — with an in/out-of-scope badge (the canonical egress
-// classification the server computed) and per-host roll-up counts. Filterable by
-// scope and by name, sortable by any count. Honesty (design §5): "Endpoints" counts
-// only CONFIRMED endpoints whose host resolved; "Suspected" is a SEPARATE column for
-// generic/unresolved-lane calls (DEBT D24/D26) so the two never blur — and each
+// The discovered-host inventory (DEBT D26): EVERY host recon surfaced — from fetched
+// assets, resolved-host endpoints, suspected-backend calls, client-navigation page
+// routes, tech detection, and declared base-URL rules — with an in/out-of-scope badge
+// (the canonical egress classification the server computed) and per-host roll-up counts.
+// Filterable by scope and by name, sortable by any count. Honesty (design §5):
+// "Endpoints" counts only CONFIRMED endpoints whose host resolved; "Suspected" (generic
+// /unresolved lanes, DEBT D24/D26) and "Routes" (page_route client-nav targets, QA #5)
+// are SEPARATE columns so backend and non-backend hosts never blur — and each endpoint
 // lane's host-less total is surfaced in the summary rather than hidden.
 
 type ScopeFilter = "all" | "in" | "out";
-type SortKey = "host" | "assets" | "endpoints" | "suspected" | "techs";
+type SortKey = "host" | "assets" | "endpoints" | "suspected" | "routes" | "techs";
 
 const SCOPE_LABEL: Record<ScopeFilter, string> = { all: "All", in: "In scope", out: "Out of scope" };
 
@@ -129,6 +130,11 @@ export function HostsPage({ data }: { data: HostsResponse }) {
                 "Suspected",
                 "Suspected-backend calls (generic / unresolved) whose host resolved — not a confirmed endpoint",
               )}
+              {numHead(
+                "routes",
+                "Routes",
+                "Client-navigation / referenced hosts (page routes) — not a backend the client calls",
+              )}
               {numHead("techs", "Tech")}
             </tr>
           </thead>
@@ -169,6 +175,7 @@ function HostTableRow({ row }: { row: HostRow }) {
           row.suspected
         )}
       </td>
+      <td className="hosts-num">{row.routes}</td>
       <td className="hosts-num">{row.techs}</td>
     </tr>
   );
