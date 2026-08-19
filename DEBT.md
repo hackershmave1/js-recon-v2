@@ -22,10 +22,22 @@ nothing is lost in the regrouping. Nothing is currently parked.
 
 Visible in results today, on the real targets you point the tool at. Fix these first.
 
-#### D22 · Tech detection is Phase-1 only (no JS-runtime surface) + curated header allowlist [M]  ·  correctness
-The fingerprint matcher (`findings/techdetect/match.py`) implements only the Phase-1 signal
-surfaces — response headers, cookie names, `scriptSrc` URLs, `scripts` (JS source text), and
-`<meta generator>`. It does NOT implement enthec's `js` (window-global), `html`, or `dom`
+#### D22 · Tech detection JS-runtime + header-allowlist gaps [M] — ⏳ PARTIAL 2026-08-19 (js surface shipped)  ·  correctness
+- ✅ **RESOLVED 2026-08-19 — the `js` (window-global) surface now fires (PR #85).** Bundled
+  SPAs (Next.js `__NEXT_DATA__`, Nuxt `$nuxt`, React) were invisible; the matcher now
+  presence-matches enthec's `js` global names in stored bundle source via one RE2 `Set`
+  (`compile.compile_js_surface`; the naive per-pattern loop measured ~50s/host, the Set ~0.01s).
+  Static source has no runtime value, so `version` is `None` and each tech's js contribution is
+  capped (`match._JS_SURFACE_CEILING`) so a js-only detection reads "suspected", never "certain".
+  A distinctiveness filter (`_keep_js_key`) drops the false-positive band (<4 chars, bare words
+  <8). Both §4 gates passed. **html/dom stay unimplemented** (they need raw HTML / rendered DOM
+  the allowlist signal omits) and the **header-allowlist review is still open** (below).
+- ⏳ **Still open — the curated header allowlist.** `fetch.py::_HEADER_ALLOWLIST` keeps only ~14
+  fingerprint headers (a T1 privacy control), so header-keyed techs outside that set never fire.
+
+The fingerprint matcher (`findings/techdetect/match.py`) originally implemented only the Phase-1
+signal surfaces — response headers, cookie names, `scriptSrc` URLs, `scripts` (JS source text), and
+`<meta generator>` — and NOT enthec's `js` (window-global; now shipped above), `html`, or `dom`
 surfaces. Consequence after the full-dataset re-pin (`techdetect_data/commit.txt` =
 `1b9eee8…`, 7586 techs): ~25% of the dataset (≈1900 techs) has *zero* Phase-1-matchable
 surface, and detection that relies on runtime globals/markup misses on bundled SPAs — e.g.
@@ -35,10 +47,10 @@ does not fire at all. Separately, `fetch.py::_HEADER_ALLOWLIST` keeps only ~14 f
 headers (a T1 privacy control), so header-keyed techs outside that set never fire. **Why
 deferred:** the re-pin already resolves the reported "0 techs on modern sites" bug (vercel.com
 0 → Next.js + Vercel); the `js`/`html` surface (Phase 2) and any allowlist widening are
-separate, larger slices each needing their own privacy/perf review. **Still owed:** (a) a
-Phase-2 `js`-global surface so bundled SPA frameworks fire; (b) a data-driven review of the
-header allowlist against the full dataset's header keys. **Trigger:** if "site X still shows
-no `<framework>`" becomes a recurring operator complaint. **Detection note:** the
+separate, larger slices each needing their own privacy/perf review. **Still owed:** ~~(a) a
+Phase-2 `js`-global surface so bundled SPA frameworks fire~~ (shipped, PR #85); (b) a data-driven
+review of the header allowlist against the full dataset's header keys. **Trigger:** if "site X
+still shows no `<framework>`" becomes a recurring operator complaint. **Detection note:** the
 `analyze.technologies` event carries per-host detection counts + `skipped_patterns`, so a
 widening blind spot is observable, not silent.
 

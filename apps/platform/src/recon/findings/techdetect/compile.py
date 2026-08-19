@@ -34,6 +34,17 @@ class Re2Pattern(Protocol):
     def search(self, text: str, /) -> Re2Match | None: ...
 
 
+class Re2Set(Protocol):
+    """The subset of ``google-re2``'s ``Set`` we use: add N patterns, compile once,
+    then one linear pass returns the indices that matched (or ``None`` on no match)."""
+
+    def Add(self, pattern: str, /) -> int: ...
+    # google-re2's wrapper returns None and RAISES on a compile failure, so a Set that
+    # overflows RE2's budget on a future dataset re-pin fails CLOSED at load time.
+    def Compile(self) -> None: ...
+    def Match(self, text: str, /) -> list[int] | None: ...
+
+
 def compile_pattern(source: str, *, case_insensitive: bool = True) -> Re2Pattern:
     """Compile one pattern under RE2, case-insensitive by default. May raise
     ``re2.error`` on a pattern RE2 rejects — callers use ``try_compile`` instead."""
@@ -78,12 +89,38 @@ class CompiledTech:
     patterns: tuple[CompiledPattern, ...]
 
 
+@dataclass(frozen=True)
+class JsPattern:
+    """One presence-matchable enthec ``js`` global name, index-aligned with its slot in
+    a compiled ``JsSurface`` Set. Presence-only: static bundle source can't read the
+    global's RUNTIME value, so there is no version template - only the tech it maps to
+    and the confidence its presence contributes."""
+
+    tech: str
+    key: str
+    categories: tuple[int, ...]
+    confidence: int
+
+
+@dataclass(frozen=True)
+class JsSurface:
+    """The compiled ``js`` (window-global) surface: one RE2 ``Set`` of every DISTINCTIVE
+    global name plus an index-aligned lookup back to the technology each pattern came
+    from. Matched in one linear pass per bundle (``matcher.Match`` -> indices)."""
+
+    matcher: Re2Set
+    patterns: tuple[JsPattern, ...]
+
+
 def compile_all(
     raw_techs: dict[str, dataset.RawTechnology],
 ) -> tuple[list[CompiledTech], int]:
     """Compile every fingerprint field of every technology into CompiledPatterns,
-    skipping (and counting) RE2-rejected patterns (T4). Only the Phase-1 surfaces are
-    compiled — headers, cookies, scriptSrc, scripts, meta; ``js``/``html`` are Phase 2."""
+    skipping (and counting) RE2-rejected patterns (T4). Compiles the per-pattern
+    surfaces — headers, cookies, scriptSrc, scripts, meta; the ``js`` (window-global)
+    surface compiles into a single Set via :func:`compile_js_surface` instead (one
+    linear pass beats looping thousands of patterns), and ``html``/``dom`` stay
+    unimplemented (they need raw HTML / rendered DOM the allowlist signal omits)."""
     compiled: list[CompiledTech] = []
     skipped = 0
     for name, tech in raw_techs.items():
@@ -149,3 +186,86 @@ def _compile_list(out: list[CompiledPattern], surface: str, values: list[str] | 
             )
         )
     return skipped
+
+
+_JS_MIN_KEY_LEN = 4  # anything shorter collides constantly as a token in minified source
+_JS_BARE_ALPHA_MIN_LEN = 8  # a bare [A-Za-z] word (no sigil) must be at least this long
+
+
+def _is_word_char(char: str) -> bool:
+    return char.isascii() and (char.isalnum() or char == "_")
+
+
+def _keep_js_key(key: str) -> bool:
+    """Whether an enthec ``js`` global name is DISTINCTIVE enough to presence-match in
+    minified bundle source without systematic false positives.
+
+    Two drops (both design exclusions — the key never enters the Set — NOT T4 RE2
+    rejects): (1) anything under 4 chars (``va``, ``Vue``, ``Ext`` fire on incidental
+    tokens); (2) a bare ASCII word with no ``_``/``$``/``.`` sigil under 8 chars
+    (``core``, ``Chart``, ``Alpine`` — ordinary identifiers/English words that a bundle
+    ships or mentions in passing). Distinctive markers (``__NEXT_DATA__``, ``$nuxt``,
+    ``React.version``, long names) all pass; measured against the vendored dataset this
+    keeps 5020/5642 keys and only strips the false-positive band."""
+    if len(key) < _JS_MIN_KEY_LEN:
+        return False
+    # A bare ASCII word (no _/$/. sigil) under 8 chars is an ordinary identifier.
+    return not (key.isascii() and key.isalpha() and len(key) < _JS_BARE_ALPHA_MIN_LEN)
+
+
+def _js_word_bounded(key: str) -> str:
+    """An RE2 source that presence-matches a js global name at a token boundary. ``\\b``
+    is added only on an end that is itself a word char — RE2 has no lookaround, and a
+    ``\\b`` against ``$nuxt``'s leading ``$`` or ``.version``'s leading ``.`` would
+    mis-anchor. The name itself is ``re2.escape``d so ``.`` stays literal."""
+    source = cast("str", re2.escape(key))
+    if _is_word_char(key[0]):
+        source = r"\b" + source
+    if _is_word_char(key[-1]):
+        source = source + r"\b"
+    return source
+
+
+def compile_js_surface(
+    raw_techs: dict[str, dataset.RawTechnology],
+) -> tuple[JsSurface, int]:
+    """Compile every DISTINCTIVE enthec ``js`` global name (see :func:`_keep_js_key`)
+    into ONE RE2 ``Set`` for a single linear presence-pass over bundle source.
+
+    Looping the ~5.6k js patterns individually measured ~50s over a 2 MB blob (past the
+    job lease); the Set matches the same blob in ~0.01s. The Set gets its OWN Options:
+    ``case_sensitive`` (js identifiers are case-sensitive — matching insensitively
+    inflates false positives) and ``log_errors`` off (RE2 writes parse failures to
+    native stderr otherwise, mirroring :func:`compile_pattern`). Every ``Add`` is
+    guarded so one RE2-rejected pattern skips + counts rather than aborting the load
+    (T4); the list is appended only on a successful ``Add`` so ``patterns[i]`` stays
+    aligned with Set index ``i`` (``Add`` returns sequential indices). Returns
+    ``(surface, RE2-reject-count)`` — deliberate non-distinctive drops are NOT counted."""
+    options = re2.Options()
+    options.case_sensitive = True
+    options.log_errors = False
+    matcher = cast("Re2Set", re2.Set.SearchSet(options))
+    patterns: list[JsPattern] = []
+    skipped = 0
+    for name, tech in raw_techs.items():
+        js = tech.get("js")
+        if not js:
+            continue
+        categories = tuple(tech.get("cats", []))
+        for key, raw in js.items():
+            if not _keep_js_key(key):
+                continue
+            # Only the enthec confidence tag matters here; the value regex targets the
+            # global's RUNTIME value, which static source can't supply, so it is dropped.
+            _regex, tags = version.parse_field_value(raw or "")
+            try:
+                matcher.Add(_js_word_bounded(key))
+            except re2.error:
+                skipped += 1
+                log.debug("techdetect.js_pattern_skipped", key=key)
+                continue
+            patterns.append(
+                JsPattern(tech=name, key=key, categories=categories, confidence=tags.confidence)
+            )
+    matcher.Compile()
+    return JsSurface(matcher=matcher, patterns=tuple(patterns)), skipped
