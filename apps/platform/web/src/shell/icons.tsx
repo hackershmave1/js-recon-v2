@@ -24,6 +24,8 @@ const PATHS: Record<string, ReactNode> = {
   trash: (<path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V6" />),
   switch: (<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" />),
   chevron: (<path d="m6 9 6 6 6-6" />),
+  // Collapse / show a side rail (a panel with a divider).
+  panel: (<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></>),
   "arrow-right": (<><path d="M5 12h14" /><path d="M13 6l6 6-6 6" /></>),
   x: (<><path d="M18 6 6 18" /><path d="M6 6l12 12" /></>),
 };

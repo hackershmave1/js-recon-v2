@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import { getSources, getSourceContent, ApiError } from "../../api/apiClient";
 import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump } from "../../api/types";
 import { CodeViewer } from "./CodeViewer";
-import { useResizableRail } from "./useResizableRail";
+import { useResizableRail } from "../../shell/useResizableRail";
 import { measureSync } from "../../shell/observability";
 import "./sources.css";
 

@@ -98,4 +98,16 @@ describe("ApiSpecPage", () => {
     mount([req({})]);
     expect(await screen.findByRole("button", { name: /export spec/i })).toBeInTheDocument();
   });
+
+  it("collapses and expands the operations rail (request #1)", async () => {
+    localStorage.removeItem("recon.apispecRailCollapsed"); // start expanded regardless of prior state
+    mount([req({})]);
+    await screen.findByText("/api");
+    const rail = () => document.querySelector(".as-rail") as HTMLElement;
+    expect(rail()).not.toHaveClass("as-rail-collapsed");
+    await userEvent.click(screen.getByRole("button", { name: /collapse operations/i }));
+    expect(rail()).toHaveClass("as-rail-collapsed");
+    await userEvent.click(screen.getByRole("button", { name: /show operations/i }));
+    expect(rail()).not.toHaveClass("as-rail-collapsed");
+  });
 });

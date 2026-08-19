@@ -7,6 +7,13 @@
 
 /* filter rail */
 .fp-rail { width: 232px; flex: 0 0 232px; border-right: 1px solid var(--border); padding: 2px 14px 20px; }
+.fp-rail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.fp-rail-collapsed { width: 0 !important; flex-basis: 0 !important; border-right: none; overflow: hidden; padding: 0 !important; }
+.fp-rail-toggle { flex: 0 0 auto; display: inline-flex; padding: 4px; background: transparent; border: 1px solid transparent; color: var(--faint); border-radius: var(--r-sm); cursor: pointer; }
+.fp-rail-toggle:hover { color: var(--text-2); background: var(--surface); border-color: var(--border); }
+.fp-resizer { flex: 0 0 6px; align-self: stretch; cursor: col-resize; position: relative; background: transparent; touch-action: none; }
+.fp-resizer::before { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; border-radius: 2px; background: transparent; transition: background .12s ease; }
+.fp-resizer:hover::before, .fp-resizer:active::before { background: var(--accent-line); }
 .fp-rail-title { font-family: var(--font-display); font-weight: 700; font-size: 18px; margin: 0 0 2px; }
 .fp-count { font-size: 12px; color: var(--faint); margin-bottom: 12px; }
 .fp-count b { color: var(--accent); font-family: var(--font-mono); font-weight: 500; }
@@ -22,8 +29,8 @@
 
 /* list */
 .fp-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.fp-search { padding: 10px 2px 12px; }
-.fp-search input { width: 100%; font-family: var(--font-mono); }
+.fp-search { padding: 10px 2px 12px; display: flex; align-items: center; gap: 8px; }
+.fp-search input { flex: 1; min-width: 0; font-family: var(--font-mono); }
 .fp-list { list-style: none; margin: 0; padding: 0; }
 .fp-rowbtn { width: 100%; display: flex; align-items: center; gap: 10px; padding: 12px 12px; border: none; border-bottom: 1px solid var(--surface); border-left: 3px solid transparent; background: transparent; cursor: pointer; text-align: left; }
 .fp-rowbtn:hover { background: var(--surface); }
