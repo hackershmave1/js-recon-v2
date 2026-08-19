@@ -47,7 +47,7 @@ def test_reveal_slices_the_occurrences_asset_blob(redis, authorized_session):
             ),
             attributes={"rule": "aws-access-key-id"},
         )
-        fh = normalize.finding_hash(FindingType.SECRET.value, value, "input.js")
+        fh = normalize.finding_hash(FindingType.SECRET.value, value)
 
     outcome = reveal.reveal_secret(tenant, run_id, fh)
     assert outcome is not None and outcome.revealed and outcome.value == token
@@ -90,7 +90,7 @@ def test_reveal_asset_routed_integrity_mismatch_is_409(redis, authorized_session
             ),
             attributes={"rule": "aws-access-key-id"},
         )
-        fh = normalize.finding_hash(FindingType.SECRET.value, wrong_value, "input.js")
+        fh = normalize.finding_hash(FindingType.SECRET.value, wrong_value)
 
     outcome = reveal.reveal_secret(tenant, run_id, fh)
     assert outcome is not None
@@ -162,7 +162,7 @@ def test_reveal_skips_a_pending_sibling_asset_to_reveal_from_the_fetched_one(
             ),
             attributes={"rule": "aws-access-key-id"},
         )
-        fh = normalize.finding_hash(FindingType.SECRET.value, value, "input.js")
+        fh = normalize.finding_hash(FindingType.SECRET.value, value)
 
     outcome = reveal.reveal_secret(tenant, run_id, fh)
     assert outcome is not None and outcome.revealed and outcome.value == token

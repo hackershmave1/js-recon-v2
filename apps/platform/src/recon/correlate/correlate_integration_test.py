@@ -55,7 +55,7 @@ def _seed_capture_run(tenant, session_id, *, value, path, observed):
 
 
 def _capture_occurrences(tenant, value, path):
-    finding_hash_value = finding_hash("endpoint", value, path)
+    finding_hash_value = finding_hash("endpoint", value)
     with tenant_session(tenant) as session:
         finding = session.query(models.Finding).filter_by(finding_hash=finding_hash_value).one()
         return [(o.host, o.raw_url) for o in finding.occurrences if o.engine == "capture"]

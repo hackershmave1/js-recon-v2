@@ -112,7 +112,32 @@ def test_reextract_preserves_native_hashes_and_adds_wrapper(redis, authorized_se
     assert after - before == {"GET /w"}
     # The native finding_hash is exactly the pre-wrapper identity (path input.js).
     native = _endpoint_findings(tenant, run_id)["GET /native"]
-    assert native.finding_hash == finding_hash("endpoint", "GET /native", "input.js")
+    assert native.finding_hash == finding_hash("endpoint", "GET /native")
+
+
+def test_reextract_refuses_run_with_older_version_findings(redis, authorized_session):
+    # New-runs-only rollout guard: a run whose stored finding hash does not equal
+    # finding_hash(type, value) was analyzed under an older identity version. An
+    # in-place re-extract is additive (ON CONFLICT on run_id+finding_hash), so it
+    # would write the current-version hash beside the stale row — a duplicate. The
+    # guard raises so the caller can tell the user to re-run the target instead.
+    tenant, session_id = authorized_session
+    run_id = _seed_single(redis, tenant, session_id, b"fetch('/x')")
+    with tenant_session(tenant) as session:
+        session.add(
+            models.Finding(
+                tenant_id=tenant,
+                run_id=run_id,
+                finding_hash="1" * 64,  # deliberately NOT the v2 hash of ("endpoint","GET /x")
+                type="endpoint",
+                value="GET /x",
+                path="input.js",
+                first_stage="analyzing",
+                attributes={},
+            )
+        )
+    with pytest.raises(reextract.StaleFindingIdentity):
+        reextract.reextract_run(tenant, run_id, [WrapperRule("api")])
 
 
 def test_reextract_is_idempotent(redis, authorized_session):
@@ -189,7 +214,7 @@ def test_reextract_multi_asset_preserves_capture_map_path(redis, authorized_sess
     found = _endpoint_findings(tenant, view.id)
     assert "GET /w" in found
     assert found["GET /w"].path == "app/src/api.js"  # recovered path, NOT input.js
-    assert found["GET /w"].finding_hash == finding_hash("endpoint", "GET /w", "app/src/api.js")
+    assert found["GET /w"].finding_hash == finding_hash("endpoint", "GET /w")
 
 
 def test_reextract_unknown_run_is_none(redis, authorized_session):

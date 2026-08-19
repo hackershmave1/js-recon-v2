@@ -71,7 +71,7 @@ def test_post_selection_rule_documents_the_endpoint(client, authorized_session):
     run_id = _seed_relative(tenant, session_id)
     client.post(f"/runs/{run_id}/spec", headers=_headers(tenant), content=_SPEC)
 
-    h = finding_hash("endpoint", "GET /address/search", "app.js")
+    h = finding_hash("endpoint", "GET /address/search")
     resp = client.post(
         f"/runs/{run_id}/base-url",
         headers=_headers(tenant),

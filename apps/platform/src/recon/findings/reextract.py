@@ -19,12 +19,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from botocore.exceptions import ClientError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from recon import storage
 from recon.db.base import tenant_session
-from recon.db.models import Run
+from recon.db.models import Finding, Run
 from recon.domain import AssetStatus
+from recon.findings import normalize
 from recon.findings.analyze import _extract_endpoints
 from recon.findings.wrappers import WrapperRule
 from recon.runs import assets as run_assets
@@ -32,6 +34,14 @@ from recon.runs import assets as run_assets
 
 class SourceBlobMissing(Exception):
     """A run's stored source blob is gone — re-extract cannot proceed (spec §12 Minor 9)."""
+
+
+class StaleFindingIdentity(Exception):
+    """The run's findings were hashed under an older finding-identity version, so an
+    additive re-extract (ON CONFLICT on run_id+finding_hash) would write a current-version
+    hash beside the old-version row for the same logical finding — a duplicate. New-runs-only
+    rollout (normalize.FINDING_HASH_VERSION): re-run the target to re-extract under the
+    current version instead of re-extracting in place."""
 
 
 def reextract_run(tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]) -> int | None:
@@ -47,6 +57,18 @@ def reextract_run(tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]) 
             return None
         input_ref = run.input_ref
         source_map_ref = run.source_map_ref
+        # Refuse an in-place re-extract onto a run whose findings predate the current
+        # identity version — the additive write would duplicate them (see
+        # StaleFindingIdentity). A current-version finding's stored hash equals
+        # finding_hash(type, value); an older one won't. The run is version-uniform
+        # (analyzed once, and old runs never reach this write path), so one row decides.
+        sample = session.execute(
+            select(Finding.type, Finding.value, Finding.finding_hash)
+            .where(Finding.run_id == str(run_id))
+            .limit(1)
+        ).first()
+        if sample is not None and normalize.finding_hash(sample[0], sample[1]) != sample[2]:
+            raise StaleFindingIdentity(str(run_id))
 
     rows = run_assets.list_for_run(tenant_id, run_id)
     written = 0

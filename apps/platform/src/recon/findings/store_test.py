@@ -184,3 +184,39 @@ def test_findings_are_tenant_isolated(authorized_session):
         # RLS filters tenant A's findings out entirely under tenant B's GUC.
         assert _count(models.Finding)(s) == 0
         assert _count(models.FindingOccurrence)(s) == 0
+
+
+def test_v2_merges_same_value_across_paths_and_unions_auth(authorized_session):
+    # v2 (Starbucks-QA dedup): the SAME endpoint value seen in two different source
+    # files is ONE finding (path is no longer hashed) with TWO occurrences — and the
+    # second file's observed auth header is unioned in, never dropped (REQ-C2 honesty).
+    tenant, session_id = authorized_session
+    run_id = _make_run(tenant, session_id)
+    for src, header in (
+        ("src/a.js", {"name": "Authorization", "scheme": "bearer"}),
+        ("src/b.js", {"name": "X-Api-Key", "scheme": None}),
+    ):
+        with tenant_session(tenant) as s:
+            record_finding(
+                s,
+                tenant_id=tenant,
+                run_id=run_id,
+                finding_type=FindingType.ENDPOINT,
+                value="POST /login",
+                path=src,
+                occurrence=Occurrence(source_path=src),
+                attributes={"auth": [header], "kind": "fetch"},
+                first_stage="analyzing",
+            )
+
+    with tenant_session(tenant) as s:
+        findings = list(
+            s.execute(select(models.Finding).where(models.Finding.run_id == run_id)).scalars()
+        )
+        assert len(findings) == 1  # merged across the two files (v2)
+        merged = findings[0]
+        assert merged.finding_hash == normalize.finding_hash(
+            FindingType.ENDPOINT.value, "POST /login"
+        )
+        assert {h["name"] for h in merged.attributes["auth"]} == {"Authorization", "X-Api-Key"}
+        assert _count(models.FindingOccurrence, finding_id=merged.id)(s) == 2  # every sighting kept

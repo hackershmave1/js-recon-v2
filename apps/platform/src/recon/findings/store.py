@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -66,6 +66,47 @@ class RecordResult:
     occurrence_created: bool
 
 
+def _merge_attributes(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    """Union the two findings' attributes when a normalization merge (v2: same
+    type+value, different source file) collapses them onto one row.
+
+    Load-bearing for REQ-C2 honesty: the finding row is inserted ``ON CONFLICT DO
+    NOTHING``, so without this the second sighting's ``attributes`` are discarded
+    and an observed ``auth`` header (attack surface) or ``risk_tag`` would vanish.
+    Security-relevant lists are unioned; ``kind`` degrades to ``None`` when two
+    sightings disagree (so the reconstructor never asserts a wrong Content-Type
+    for an operation seen via, say, both ``fetch`` JSON and jQuery form-encoding);
+    ``wrapper`` keeps the first non-null. Pure + order-independent so an
+    at-least-once retry re-merging identical inputs is a no-op."""
+    merged = dict(existing)
+    # auth: list of {name, scheme} — append the not-yet-present entries (the
+    # reconstructor re-dedupes by name at read time, so exact-dict union suffices).
+    incoming_auth = incoming.get("auth") or []
+    if incoming_auth:
+        combined = list(existing.get("auth") or [])
+        for header in incoming_auth:
+            if header not in combined:
+                combined.append(header)
+        merged["auth"] = combined
+    # risk_tags: set-union of string tags.
+    incoming_tags = incoming.get("risk_tags") or []
+    if incoming_tags:
+        merged["risk_tags"] = sorted(set(existing.get("risk_tags") or []) | set(incoming_tags))
+    # kind: agree -> keep; disagree -> None (ambiguous, assert nothing).
+    if "kind" in incoming:
+        if "kind" not in existing:
+            merged["kind"] = incoming["kind"]
+        elif existing.get("kind") != incoming.get("kind"):
+            merged["kind"] = None
+    # wrapper (and any other scalar): first non-null wins; fill only if absent.
+    for key, val in incoming.items():
+        if key in ("auth", "risk_tags", "kind"):
+            continue
+        if merged.get(key) is None and val is not None:
+            merged[key] = val
+    return merged
+
+
 def record_finding(
     session: Session,
     *,
@@ -84,7 +125,7 @@ def record_finding(
     ``value``/``path`` must already be normalized (see ``recon.findings.normalize``).
     Returns which rows were newly created so a caller can count real additions.
     """
-    finding_hash = normalize.finding_hash(finding_type, value, path)
+    finding_hash = normalize.finding_hash(finding_type, value)
 
     insert_finding = (
         pg_insert(models.Finding)
@@ -105,12 +146,25 @@ def record_finding(
     finding_id = session.execute(insert_finding).scalar()
     finding_created = finding_id is not None
     if finding_id is None:  # already present (retry or a normalization merge)
-        finding_id = session.execute(
-            select(models.Finding.id).where(
+        existing_id, existing_attrs = session.execute(
+            select(models.Finding.id, models.Finding.attributes).where(
                 models.Finding.run_id == str(run_id),
                 models.Finding.finding_hash == finding_hash,
             )
-        ).scalar_one()
+        ).one()
+        finding_id = existing_id
+        # A v2 merge collapses two findings that used to differ only by source path
+        # onto this one row. The insert above did nothing, so union the incoming
+        # attributes into the stored ones — otherwise the first writer's auth headers
+        # win and a later sighting's observed header (attack surface) is silently lost
+        # (REQ-C2). Write only on an actual change so an A3 retry stays a no-op.
+        merged_attrs = _merge_attributes(existing_attrs or {}, attributes or {})
+        if merged_attrs != (existing_attrs or {}):
+            session.execute(
+                update(models.Finding)
+                .where(models.Finding.id == existing_id)
+                .values(attributes=merged_attrs)
+            )
 
     occurrence_hash = normalize.occurrence_hash(**occurrence._identity())
     insert_occurrence = (
