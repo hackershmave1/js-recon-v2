@@ -70,6 +70,18 @@ describe("SourcesPage", () => {
     expect(await screen.findByText(/no source captured/i)).toBeInTheDocument();
   });
 
+  it("labels sources by kind, not all 'fetched from the target' (Starbucks QA #3)", async () => {
+    const asset: SourceFile = { path: "https://acme.io/app.js", kind: "asset", fetch_status: "ok", asset_url: null };
+    const pending: SourceFile = { path: "https://acme.io/late.js", kind: "asset", fetch_status: "pending", asset_url: null };
+    const recovered: SourceFile = { path: "webpack:/src/api.js", kind: "source", fetch_status: "ok", asset_url: "https://acme.io/app.js" };
+    mount([asset, pending, recovered], null);
+    await screen.findByText("acme.io");
+    // The pending asset is NOT counted as fetched, and the recovered original is not
+    // called "fetched": every file falls in exactly one honest bucket.
+    expect(screen.getByText("3 files · 1 fetched · 1 not fetched · 1 recovered")).toBeInTheDocument();
+    expect(screen.queryByText(/fetched from the target/i)).not.toBeInTheDocument();
+  });
+
   it("auto pretty-prints a minified source and toggles back to raw", async () => {
     // One giant line (the minified-bundle shape) -> auto-formatted into many lines.
     const MIN = "(function(){var a=1;function foo(){return a+2}return foo()})();" + "0;".repeat(300);
