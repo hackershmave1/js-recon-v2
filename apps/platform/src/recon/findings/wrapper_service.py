@@ -55,6 +55,9 @@ def add_rule(
         row = session.scalars(stmt).one()
         rule = _as_dict(row)
         rules = queries.wrapper_rules_in_session(session, session_id)
+    # The rule is already committed above; a StaleFindingIdentity (v1 run) then
+    # propagates here as a 409. That is intentional — the saved rule applies when the
+    # user re-runs the target per the 409's guidance (same shape as SourceBlobMissing).
     recovered = reextract.reextract_run(tenant_id, run_id, rules)  # own transaction(s)
     return {"rule": rule, "recovered": recovered or 0}
 

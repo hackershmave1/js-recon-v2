@@ -4,19 +4,32 @@
 > REQ-D3 (finding identity), REQ-D5 (partial-aware diff), and REQ-C2 (honest
 > coverage). Requirements: `docs/REQUIREMENTS.md`.
 >
-> **Status:** design gate PASSED. This revision incorporates the adversarial design
-> review (2026-07-20): host removed from hashed identity (C1), occurrences added so
-> merges are never silently dropped (C2), path normalization hardened (H2/H3), secret
+> **Status:** design gate PASSED (v1, 2026-07-20). This revision incorporates the
+> adversarial design review: host removed from hashed identity (C1), occurrences added
+> so merges are never silently dropped (C2), path normalization hardened (H2/H3), secret
 > token/provider stabilized (M1/M2), evidence idempotency defined (M3), query dedup
 > (L1). `UNIQUE(run_id, finding_hash)` confirmed correct (cross-run uniqueness would
 > break D5).
+>
+> **v2 (2026-08-19, `FINDING_HASH_VERSION = 2`): source path removed from hashed
+> identity.** The same logical finding seen in several source files is now ONE finding
+> with several occurrences — the C1 treatment (host) applied to path. A version tag is
+> hashed into every id, so v2 hashes are disjoint from v1; rollout is **new-runs-only**
+> (no backfill — runs analyzed under v1 keep their stored hashes, and an in-place
+> out-of-band re-extract onto a v1 run is refused rather than duplicating it). Rationale:
+> users saw the same call in 3 bundles as 3 rows; and path-in-identity actually *broke*
+> D5 rebuild-survival (a bundle re-chunk that moves a call between files churned its
+> hash). Every distinct source path survives as `occurrence.source_path` (REQ-C2 honesty
+> unchanged). Design review verdict: PROCEED-WITH-CHANGES — the two required fixes
+> (union finding-level `attributes` on merge so no observed auth header is dropped; the
+> new-runs-only re-extract guard) landed with this change.
 
 ## 1. Why this exists
 
 REQ-D3 (MUST): *"Findings are content-addressed over stable fields only
-(type + value + normalized path), excluding volatile col/evidence, so a retry with
-slightly different evidence yields the same hash. This hash keys the exactly-once
-outbox write (REQ-A3)."*
+(identity-version + type + value), excluding volatile per-sighting detail (host,
+source path, col/evidence), so a retry — or the same finding in another source file —
+yields the same hash. This hash keys the exactly-once outbox write (REQ-A3)."*
 
 - **REQ-A3** — a stage stages findings in one transaction keyed by `finding_hash`;
   partial-commit-then-retry re-emits the *same* hash ⇒ idempotent.
@@ -32,21 +45,24 @@ mutable, per-sighting detail; they are tracked (never dropped) so a merge is vis
 
 ```
 Finding (one row per run_id + finding_hash)
-├─ HARD IDENTITY  → finding_hash = sha256(canonical {type, value, path})
+├─ HARD IDENTITY  → finding_hash = sha256(canonical {v, type, value})   # v = FINDING_HASH_VERSION
+│    v      identity-algorithm version (2) — disjoint hash space per bump
 │    type   "endpoint" | "secret" | "param"
-│    value  normalized, per-type (§4) — NO host for endpoints
-│    path   normalized source path (§3), best-effort stable
+│    value  normalized, per-type (§4) — NO host, NO path for endpoints
 │
 └─ OCCURRENCES (1..N child rows, keyed (finding_hash, occurrence_hash))
-     host, raw_url / raw_value, source_path_variant, offset_start/end,
+     host, source_path, raw_url / raw_value, offset_start/end,
      line, col, evidence/snippet, engine, confidence, verified
 ```
 
 Locked decisions:
 - **Host → occurrence, not hashed** (C1). Endpoint identity is re-resolution-proof:
   REQ-C2's set-base-URL can change host without churning the hash.
-- **Source path → hashed** (best-effort D5). Honors REQ-D3's literal "normalized
-  path"; occurrences prevent silent loss when a path variant differs.
+- **Source path → occurrence, not hashed** (v2, the C1 treatment applied to path).
+  The same finding across bundles is one row + many occurrences; each distinct
+  `occurrence.source_path` is preserved (no silent loss), and a bundle re-chunk no
+  longer churns D5. `normalize_source_path` (§3) still runs — its output is the
+  stored `occurrence.source_path`, just not a hash input.
 - **Balanced, entropy-aware templating**; **query keys only**, sorted + de-duped.
 
 ## 3. Source-path normalization (all types)
@@ -113,8 +129,10 @@ Example: `POST https://API.acme.io:443/users/4821/orders/f47ac10b-58cc-4372-a567
   occurrence. The token itself is never stored in the hash input in cleartext.
 - **provider**: mapped from the engine's rule id via a table **pinned to the engine
   version** (M1 — Kingfisher has 950+ evolving rules); lowercased slug.
-- Path stays in identity (locked). Same secret twice in one file ⇒ one finding, two
-  occurrences (distinct offsets) — not a drop (M1).
+- Path is NOT in identity (v2). The same secret in two files ⇒ one finding, two
+  occurrences; twice in one file ⇒ one finding, two occurrences (distinct offsets) —
+  never a drop (M1). Cross-asset distinctness is preserved by `asset_url` in the
+  occurrence identity, not by path.
 
 ### 4.3 param
 `value` = `operation + " " + location + ":" + name`.
@@ -126,14 +144,15 @@ Example: `POST https://API.acme.io:443/users/4821/orders/f47ac10b-58cc-4372-a567
 ## 5. Hash construction
 
 ```
-tuple = {"type": <type>, "value": <value>, "path": <normalized path>}
+tuple = {"v": FINDING_HASH_VERSION, "type": <type>, "value": <value>}
 finding_hash = sha256(json.dumps(tuple, sort_keys=True,
                                  separators=(",", ":")).encode("utf-8")).hexdigest()
 occurrence_hash = sha256 over the occurrence's identifying volatile fields
-                  (raw_url/value, host, source_path_variant, offset_start, offset_end)
+                  (raw_url/value, host, source_path, offset_start, offset_end, line, col, asset_url)
 ```
 
-- `value`/`path` are Unicode **NFC-normalized** before serialization, so two builds differing only in composition form don't churn the D5 diff (review LOW-5).
+- `value` is Unicode **NFC-normalized** before serialization, so two builds differing only in composition form don't churn the D5 diff (review LOW-5).
+- `v` (`FINDING_HASH_VERSION`) ⇒ a future identity change bumps it, giving a disjoint hash space and a clean new-runs-only rollout (no false "all removed + all added" against older runs).
 - Canonical JSON (sorted keys, no whitespace, UTF-8) ⇒ deterministic bytes.
 - `type` in the tuple ⇒ no cross-type collisions.
 - 64-char lowercase hex.

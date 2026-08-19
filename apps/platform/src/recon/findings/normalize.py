@@ -1,15 +1,22 @@
 """REQ-D3 finding-hash normalization — the stable identity of a finding.
 
 Turns a raw extracted finding into a canonical ``finding_hash`` computed over
-*stable fields only* (``type + value + normalized path``), so a retry with
-slightly different evidence yields the same hash (REQ-D3). That hash keys the
-exactly-once outbox write (REQ-A3) and the partial-aware diff (REQ-D5).
+*stable fields only* (``version + type + value``), so a retry with slightly
+different evidence yields the same hash (REQ-D3). That hash keys the exactly-once
+outbox write (REQ-A3) and the partial-aware diff (REQ-D5).
+
+Source ``path`` is NOT hashed (v2): the same logical finding (e.g. ``GET :url``)
+seen in several source files is ONE finding with several occurrences, not one row
+per file — the same treatment already given to ``host`` (identity decision C1).
+Every distinct source path still survives as an ``occurrence.source_path`` (REQ-C2
+honesty: a merge is visible, never silently dropped), and dropping path IMPROVES
+D5 rebuild-survival (a bundle re-chunk that moves a call between files no longer
+churns its identity). See ``FINDING_HASH_VERSION`` for the versioned rollout.
 
 Everything here is pure and dependency-free (stdlib only) so it is trivially
 testable and safe to call inside a staging transaction. Mutable per-sighting
-detail (host, offsets, line/col, evidence) is deliberately NOT hashed — it lives
-on occurrence rows so a normalization merge is visible, never silently dropped
-(REQ-C2 honesty). Full rationale + the design review outcome:
+detail (host, path, offsets, line/col, evidence) is deliberately NOT hashed — it
+lives on occurrence rows. Full rationale + the design review outcome:
 ``docs/req-d3-finding-hash-normalization.md``.
 """
 
@@ -309,17 +316,29 @@ def _canonical(obj: dict[str, object]) -> bytes:
     ).encode("utf-8")
 
 
-def finding_hash(finding_type: str, value: str, path: str) -> str:
-    """The stable REQ-D3 identity: sha256 over canonical {type, value, path}.
+# The identity-algorithm version, hashed INTO every finding_hash so a change to
+# the algorithm produces a disjoint hash space from prior runs. v1 hashed
+# {type, value, path}; v2 drops path (it moved to occurrences — Starbucks-QA dedup,
+# the C1 treatment applied to path). Bumping this is the rollout lever: new runs
+# hash under the current version and dedupe; runs analyzed under an older version
+# keep their stored hashes untouched (no backfill — new-runs-only). ``record_finding``
+# uses this to refuse an out-of-band re-extract onto an older-version run, whose
+# additive write would otherwise land a divergent hash (a duplicate finding).
+FINDING_HASH_VERSION = 2
 
-    ``value``/``path`` are NFC-normalized so two builds differing only in Unicode
-    composition form do not churn in the D5 diff (review LOW-5)."""
+
+def finding_hash(finding_type: str, value: str) -> str:
+    """The stable REQ-D3 identity: sha256 over canonical {v, type, value}.
+
+    ``value`` is NFC-normalized so two builds differing only in Unicode
+    composition form do not churn in the D5 diff (review LOW-5). Source ``path``
+    is intentionally absent (v2) — it lives on occurrences (see module docstring)."""
     return hashlib.sha256(
         _canonical(
             {
+                "v": FINDING_HASH_VERSION,
                 "type": finding_type,
                 "value": unicodedata.normalize("NFC", value),
-                "path": unicodedata.normalize("NFC", path),
             }
         )
     ).hexdigest()

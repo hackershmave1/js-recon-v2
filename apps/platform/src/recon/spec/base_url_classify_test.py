@@ -38,7 +38,7 @@ def _run_with_relative_endpoint(tenant, session_id):
 def _status(tenant, session_id, value="GET /address/search"):
     from recon.findings.normalize import finding_hash
 
-    h = finding_hash("endpoint", value, "app.js")
+    h = finding_hash("endpoint", value)
     with tenant_session(tenant) as session:
         row = (
             session.query(models.FindingSpecStatus)
@@ -154,8 +154,8 @@ def test_mixed_relative_absolute_op_not_rebased_matches_reconstruct(authorized_s
 
     from recon.findings.normalize import finding_hash
 
-    h_rel = finding_hash("endpoint", "GET /address/search", "a.js")
-    h_abs = finding_hash("endpoint", "GET /address/search", "b.js")
+    h_rel = finding_hash("endpoint", "GET /address/search")
+    h_abs = finding_hash("endpoint", "GET /address/search")
     with tenant_session(tenant) as session:
         status = {
             r.finding_hash: r.status
@@ -206,7 +206,7 @@ def test_selection_rule_on_relative_hash_overridden_when_op_seen_absolute(author
 
     from recon.findings.normalize import finding_hash
 
-    h_rel = finding_hash("endpoint", "GET /address/search", "a.js")
+    h_rel = finding_hash("endpoint", "GET /address/search")
     with tenant_session(tenant) as session:
         session.add(
             models.SessionBaseUrl(

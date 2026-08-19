@@ -42,6 +42,12 @@ async def add_wrapper_rule(
         raise HTTPException(status_code=422, detail=f"invalid callee: {exc}") from exc
     except reextract.SourceBlobMissing as exc:
         raise HTTPException(status_code=409, detail="run source is no longer available") from exc
+    except reextract.StaleFindingIdentity as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="this run's findings predate the current finding-identity version; "
+            "re-run the target to teach wrappers under it",
+        ) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="run not found")
     return result

@@ -183,23 +183,27 @@ def test_secret_does_not_strip_token_legal_chars():
 
 
 def test_finding_hash_ignores_volatile_fields_by_construction():
-    # Only (type, value, path) are inputs, so two sightings differing solely in
-    # col/evidence produce the same hash (REQ-D3 retry idempotency).
-    h1 = nz.finding_hash("endpoint", "GET /users/{id}", "app/src/api.js")
-    h2 = nz.finding_hash("endpoint", "GET /users/{id}", "app/src/api.js")
+    # Only (version, type, value) are inputs, so two sightings differing solely in
+    # col/evidence/path produce the same hash (REQ-D3 retry idempotency).
+    h1 = nz.finding_hash("endpoint", "GET /users/{id}")
+    h2 = nz.finding_hash("endpoint", "GET /users/{id}")
     assert h1 == h2
     assert len(h1) == 64 and int(h1, 16) >= 0  # 64-char hex
 
 
 def test_finding_hash_no_cross_type_collision():
     same_value = "stripe:deadbeef"
-    assert nz.finding_hash("secret", same_value, "p") != nz.finding_hash("param", same_value, "p")
+    assert nz.finding_hash("secret", same_value) != nz.finding_hash("param", same_value)
 
 
-def test_finding_hash_changes_with_path_when_scoped():
-    a = nz.finding_hash("secret", "stripe:x", "app/a.js")
-    b = nz.finding_hash("secret", "stripe:x", "app/b.js")
-    assert a != b  # path-scoped identity (locked decision)
+def test_finding_hash_is_path_independent_v2():
+    # v2 (Starbucks-QA dedup): source path is NOT in identity — the same logical
+    # finding seen in different files is ONE finding (path lives on occurrences,
+    # the C1 treatment applied to path). Was the inverse under v1.
+    assert nz.finding_hash("secret", "stripe:x") == nz.finding_hash("secret", "stripe:x")
+    assert nz.finding_hash("endpoint", "GET /users/{id}") == nz.finding_hash(
+        "endpoint", "GET /users/{id}"
+    )
 
 
 def test_occurrence_hash_is_deterministic_and_offset_sensitive():
@@ -252,9 +256,11 @@ def test_endpoint_drops_fragment_and_empty_query_key():  # review LOW-6
 
 
 def test_finding_hash_golden_vector_locks_cross_process_stability():
-    # Hardcoded digest — any change to the canonical form or algorithm breaks this.
-    assert nz.finding_hash("endpoint", "GET /users/{id}", "app/src/api.js") == (
-        "f47b2e5c384f0deeeafb61cfa39210339c7e237ef99ed002b527fe5fa9788046"
+    # Hardcoded digest — any change to the canonical form or algorithm (incl. a
+    # FINDING_HASH_VERSION bump) breaks this by design. v2 = sha256 over
+    # {"type":"endpoint","v":2,"value":"GET /users/{id}"}.
+    assert nz.finding_hash("endpoint", "GET /users/{id}") == (
+        "e6bca99690ea97c2e4cfd62d8a47aedb5ca624acb193385c23220ffa5f3f6fa7"
     )
 
 
