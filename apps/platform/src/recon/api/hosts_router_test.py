@@ -220,7 +220,13 @@ def test_get_hosts_aggregates_and_classifies_scope(client, authorized_session):
     by_host = {h["host"]: h for h in body["hosts"]}
     # guess.acme.io joins via the suspected lane; cdn.mui.com via the page_route lane —
     # every discovered host is listed (Starbucks QA #5), sorted.
-    assert list(by_host) == ["acme.io", "api.acme.io", "cdn.evil.com", "cdn.mui.com", "guess.acme.io"]
+    assert list(by_host) == [
+        "acme.io",
+        "api.acme.io",
+        "cdn.evil.com",
+        "cdn.mui.com",
+        "guess.acme.io",
+    ]
     # The page_route host rolls up into its OWN `routes` column, out of scope, and never
     # dilutes the confirmed endpoints or suspected counts.
     assert by_host["cdn.mui.com"]["routes"] == 1

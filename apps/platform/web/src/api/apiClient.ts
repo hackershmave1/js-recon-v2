@@ -266,8 +266,12 @@ export function deleteWrapperRule(tenantId: string, runId: string, ruleId: strin
   );
 }
 
-export function getRequests(tenantId: string, runId: string): Promise<RequestsResponse> {
-  return request(`/runs/${encodeURIComponent(runId)}/requests`, {}, tenantId);
+// `host` (optional, Starbucks QA #2) resolves host-less relative requests against a
+// chosen host at probe time — the server re-serializes the curl/raw-HTTP through its
+// hardened serializer, so the host is never assembled into a shell string client-side.
+export function getRequests(tenantId: string, runId: string, host?: string): Promise<RequestsResponse> {
+  const query = host ? `?host=${encodeURIComponent(host)}` : "";
+  return request(`/runs/${encodeURIComponent(runId)}/requests${query}`, {}, tenantId);
 }
 
 export function pauseRun(tenantId: string, runId: string): Promise<RunControlResult> {

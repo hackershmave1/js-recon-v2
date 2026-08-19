@@ -29,10 +29,15 @@ class RevealRequest(BaseModel):
 
 
 @router.get("/runs/{run_id}/requests")
-def get_run_requests(run_id: str, tenant_id: str = Depends(get_tenant_id)) -> dict:
+def get_run_requests(
+    run_id: str, host: str | None = None, tenant_id: str = Depends(get_tenant_id)
+) -> dict:
+    # ``host`` (optional) resolves host-less relative requests against an operator-picked
+    # host at probe time (QA #2) — a convenience overlay; the stored findings are unchanged.
     requests = reconstruct.reconstruct_run(tenant_id, run_id)
     if requests is None:
         raise HTTPException(status_code=404, detail="run not found")
+    requests = reconstruct.apply_probe_host(requests, host)
     return {
         "run_id": run_id,
         "count": len(requests),
