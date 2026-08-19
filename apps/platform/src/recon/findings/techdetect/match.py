@@ -13,10 +13,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from recon.findings.techdetect import version as version_mod
-from recon.findings.techdetect.compile import CompiledPattern, CompiledTech, Re2Match
+from recon.findings.techdetect.compile import CompiledPattern, CompiledTech, JsSurface, Re2Match
 
 _EVIDENCE_MAX = 200  # a bounded marker snippet - never a full body (T1)
 _SCRIPTS_ZERO_WIDTH_PLACEHOLDER = "<scripts match>"  # never the raw JS body (T1)
+# The js (window-global) surface is matched against static bundle SOURCE, not a live
+# runtime, so a presence hit is weaker evidence than enthec's runtime-calibrated
+# confidences imply. Cap each tech's TOTAL js contribution here so a js-only detection
+# reads as "suspected" and can never reach a "certain" 100 on static source alone -
+# only Phase-1 corroboration (headers/scripts/...) crosses the ceiling.
+_JS_SURFACE_CEILING = 50
 
 
 @dataclass(frozen=True)
@@ -34,6 +40,7 @@ class _Accumulator:
 
     categories: tuple[int, ...] = ()
     confidence: int = 0
+    js_confidence: int = 0  # js-surface contribution, capped separately (see match())
     version: str | None = None
     version_confidence: int = -1  # the individual pattern-confidence behind `version`
     evidence: list[str] = field(default_factory=list)
@@ -45,6 +52,7 @@ def match(
     host: str,
     signal: dict[str, Any],
     js_texts: list[str],
+    js_surface: JsSurface,
 ) -> list[Detection]:
     from recon.findings.techdetect.dataset import category_names
 
@@ -57,16 +65,45 @@ def match(
                     continue
                 acc = accs.setdefault(tech.name, _Accumulator(categories=tech.categories))
                 _record(acc, pattern, found, value)
+    _match_js_surface(accs, js_surface, js_texts)
     return [
         Detection(
             name=name,
             categories=category_names(list(acc.categories), categories),
             version=acc.version,
-            confidence=min(acc.confidence, 100),
+            # The js contribution is capped BEFORE summing with Phase-1, so a js-only
+            # tech tops out at the ceiling ("suspected") and only real Phase-1 evidence
+            # can push a technology to a "certain" 100.
+            confidence=min(acc.confidence + min(acc.js_confidence, _JS_SURFACE_CEILING), 100),
             evidence=acc.evidence,
         )
         for name, acc in sorted(accs.items())
     ]
+
+
+def _match_js_surface(
+    accs: dict[str, _Accumulator], js_surface: JsSurface, js_texts: list[str]
+) -> None:
+    """Fold the presence-only ``js`` runtime-global surface into the per-tech tally.
+
+    One RE2 ``Set`` pass per stored JS text; ``Set.Match`` returns the matched indices,
+    or ``None`` on the (common) no-match — guard it. A global name is ONE signal however
+    many assets carry it, so dedup by Set index. Its confidence lands in the separate
+    ``js_confidence`` bucket the caller caps (OBJ-2). Evidence is the enthec key literal
+    only — ``Set.Match`` yields no offsets, so unlike ``scripts`` no neighbouring source
+    byte can leak into evidence (T1)."""
+    if not js_texts:
+        return
+    seen: set[int] = set()
+    for text in js_texts:
+        for index in js_surface.matcher.Match(text) or ():
+            if index in seen:
+                continue
+            seen.add(index)
+            js_pattern = js_surface.patterns[index]
+            acc = accs.setdefault(js_pattern.tech, _Accumulator(categories=js_pattern.categories))
+            acc.js_confidence += js_pattern.confidence
+            acc.evidence.append(_bounded(f"js: {js_pattern.key}"))
 
 
 def _surface_values(
