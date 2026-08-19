@@ -7,6 +7,8 @@ import type {
 import { ExportSpecButton } from "../export/ExportSpecButton";
 import { SpecUpload } from "../findings/SpecUpload";
 import { FindingDrawer } from "../findings/FindingDrawer";
+import { useResizableRail } from "../../shell/useResizableRail";
+import { Icon } from "../../shell/icons";
 import "./apispec.css";
 
 type SpecClass = SpecStatus["status"] | "unclassified";
@@ -130,6 +132,7 @@ export function ApiSpecPage({ data, runId }: { data: FindingsResponse | null; ru
   const [selOp, setSelOp] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [drawer, setDrawer] = useState<Finding | null>(null);
+  const { width: railWidth, collapsed: railCollapsed, toggleCollapsed: toggleRail, resizerProps } = useResizableRail("apispec");
 
   useEffect(() => {
     if (!tenantId) return;
@@ -172,9 +175,14 @@ export function ApiSpecPage({ data, runId }: { data: FindingsResponse | null; ru
   return (
     <div>
       <div className="as">
-        <aside className="as-rail">
+        <aside className={"as-rail" + (railCollapsed ? " as-rail-collapsed" : "")}
+          style={railCollapsed ? undefined : { width: railWidth, flexBasis: railWidth }}>
           <div className="as-rail-head">
-            <h2 className="as-rail-title">API Spec <span className="as-badge">vespasian</span></h2>
+            <div className="as-rail-titlerow">
+              <h2 className="as-rail-title">API Spec <span className="as-badge">vespasian</span></h2>
+              <button type="button" className="as-rail-toggle" onClick={toggleRail}
+                title="Collapse operations" aria-label="Collapse operations panel"><Icon name="panel" size={15} /></button>
+            </div>
             <div className="as-rail-sub">
               Reconstructed statically from client JS{requests ? ` · ${requests.count} operations` : ""}
             </div>
@@ -202,8 +210,17 @@ export function ApiSpecPage({ data, runId }: { data: FindingsResponse | null; ru
           </div>
         </aside>
 
+        {!railCollapsed && (
+          <div className="as-resizer" role="separator" aria-orientation="vertical"
+            aria-label="Resize operations panel" title="Drag to resize" {...resizerProps} />
+        )}
+
         <div className="as-detail">
           <div className="as-detail-head">
+            {railCollapsed && (
+              <button type="button" className="as-rail-toggle" onClick={toggleRail}
+                title="Show operations" aria-label="Show operations panel"><Icon name="panel" size={15} /></button>
+            )}
             <span className="as-detail-meta">{ops.length} operations · reconstructed</span>
             <span style={{ flex: 1 }} />
             <ExportSpecButton runId={runId} />

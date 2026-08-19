@@ -38,6 +38,17 @@ describe("FindingsPage", () => {
     expect(rail()).toHaveTextContent("4 of 4 shown");
   });
 
+  it("collapses and expands the filter rail (request #1)", async () => {
+    localStorage.removeItem("recon.findingsRailCollapsed"); // start expanded regardless of prior state
+    view();
+    expect(rail()).not.toHaveClass("fp-rail-collapsed");
+    await userEvent.click(screen.getByRole("button", { name: /collapse filters/i }));
+    expect(rail()).toHaveClass("fp-rail-collapsed");
+    // an expand affordance appears outside the now-hidden rail
+    await userEvent.click(screen.getByRole("button", { name: /show filters/i }));
+    expect(rail()).not.toHaveClass("fp-rail-collapsed");
+  });
+
   it("labels the unconfirmed lane (endpoint_unresolved) as 'unconfirmed'", () => {
     const d: FindingsResponse = {
       run_id: "r", count: 1, coverage: null, spec: null,

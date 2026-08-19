@@ -5,6 +5,8 @@ import { FindingDrawer } from "./FindingDrawer";
 import { SpecUpload } from "./SpecUpload";
 import { BaseUrlPanel } from "./BaseUrlPanel";
 import { WrapperPanel } from "./WrapperPanel";
+import { useResizableRail } from "../../shell/useResizableRail";
+import { Icon } from "../../shell/icons";
 import "./findings.css";
 
 // Real-field facets only. The design also offers Severity / Scope / Detection-engine /
@@ -52,6 +54,7 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
   const [sel, setSel] = useState<Record<string, Set<string>>>({});
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Finding | null>(null);
+  const { width: railWidth, collapsed: railCollapsed, toggleCollapsed: toggleRail, resizerProps } = useResizableRail("findings");
 
   const facets = useMemo(() =>
     FACET_KEYS.map((key) => {
@@ -90,8 +93,13 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
   return (
     <div>
       <div className="fp">
-        <aside className="fp-rail">
-          <h2 className="fp-rail-title">Findings</h2>
+        <aside className={"fp-rail" + (railCollapsed ? " fp-rail-collapsed" : "")}
+          style={railCollapsed ? undefined : { width: railWidth, flexBasis: railWidth }}>
+          <div className="fp-rail-head">
+            <h2 className="fp-rail-title">Findings</h2>
+            <button type="button" className="fp-rail-toggle" onClick={toggleRail}
+              title="Collapse filters" aria-label="Collapse filters panel"><Icon name="panel" size={15} /></button>
+          </div>
           <div className="fp-count"><b>{visible.length}</b> of {data.findings.length} shown</div>
           {facets.map((facet) => (
             <div key={facet.key}>
@@ -112,8 +120,17 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
           {anyFilter && <button type="button" className="fp-clear" onClick={clearAll}>Clear filters</button>}
         </aside>
 
+        {!railCollapsed && (
+          <div className="fp-resizer" role="separator" aria-orientation="vertical"
+            aria-label="Resize filters panel" title="Drag to resize" {...resizerProps} />
+        )}
+
         <div className="fp-main">
           <div className="fp-search">
+            {railCollapsed && (
+              <button type="button" className="fp-rail-toggle" onClick={toggleRail}
+                title="Show filters" aria-label="Show filters panel"><Icon name="panel" size={15} /></button>
+            )}
             <input value={query} onChange={(e) => setQuery(e.target.value)}
               placeholder="Search value, path, host…" aria-label="Search findings" />
           </div>
