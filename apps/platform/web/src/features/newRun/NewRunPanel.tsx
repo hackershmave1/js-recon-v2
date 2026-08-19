@@ -4,6 +4,7 @@ import { useNavigate } from "react-router";
 import { useTenant } from "../../tenant/TenantContext";
 import { createSession, startRun, uploadRun } from "../../api/apiClient";
 import { ApiError } from "../../api/apiClient";
+import { ENGAGEMENT_STORAGE_KEY } from "../sessions/engagementFilter";
 import "./newRun.css";
 
 const UploadIcon = () => (
@@ -84,7 +85,7 @@ export function NewRunPanel() {
       // Attach the active engagement (picked in the Sessions engagement switcher) so a
       // new run's session rolls up under it. A blank scope + a crawl target lets the
       // backend seed scope from the domain (S3), so scope can be left empty.
-      const engagementId = localStorage.getItem("recon.engagementId");
+      const engagementId = localStorage.getItem(ENGAGEMENT_STORAGE_KEY);
       const session = await createSession(tenantId, {
         scope_hosts: hosts,
         authorized_by: authorizedBy.trim(),

@@ -138,7 +138,8 @@ def _seed_run(tenant, session_id) -> str:
         # (Tier 5) and an unresolved sink (Tier 4) each carry a resolved host that
         # rolls up into `suspected` (SEPARATE from confirmed endpoints). A host-less
         # unresolved sink is a suspected_unattributed, never an endpoints_unattributed.
-        # A page_route (client-nav target) must be EXCLUDED entirely.
+        # A page_route (client-nav target) rolls up into its OWN `routes` column and IS
+        # listed as a discovered host (Starbucks QA #5) — never into endpoints/suspected.
         generic = models.Finding(
             tenant_id=tenant,
             run_id=run_id,
@@ -211,15 +212,26 @@ def test_get_hosts_aggregates_and_classifies_scope(client, authorized_session):
     assert resp.status_code == 200
     body = resp.json()
     assert body["run_id"] == run_id
-    assert body["count"] == 4  # acme.io, api.acme.io, cdn.evil.com, guess.acme.io
-    assert body["in_scope"] == 3  # + guess.acme.io (subdomain of the scope)
+    assert body["count"] == 5  # + cdn.mui.com (page_route target, now listed)
+    assert body["in_scope"] == 3  # guess.acme.io in; cdn.evil.com + cdn.mui.com out
     assert body["endpoints_unattributed"] == 1  # only h2; the host-less sink is suspected
     assert body["suspected_unattributed"] == 1  # u2 (host-less unresolved), NOT the host-less param
 
     by_host = {h["host"]: h for h in body["hosts"]}
-    # guess.acme.io joins the universe (suspected-only); cdn.mui.com (page_route) does not.
-    assert list(by_host) == ["acme.io", "api.acme.io", "cdn.evil.com", "guess.acme.io"]
-    assert "cdn.mui.com" not in by_host  # page_route target excluded by the allowlist
+    # guess.acme.io joins via the suspected lane; cdn.mui.com via the page_route lane —
+    # every discovered host is listed (Starbucks QA #5), sorted.
+    assert list(by_host) == [
+        "acme.io",
+        "api.acme.io",
+        "cdn.evil.com",
+        "cdn.mui.com",
+        "guess.acme.io",
+    ]
+    # The page_route host rolls up into its OWN `routes` column, out of scope, and never
+    # dilutes the confirmed endpoints or suspected counts.
+    assert by_host["cdn.mui.com"]["routes"] == 1
+    assert by_host["cdn.mui.com"]["in_scope"] is False
+    assert (by_host["cdn.mui.com"]["endpoints"], by_host["cdn.mui.com"]["suspected"]) == (0, 0)
 
     assert by_host["acme.io"]["in_scope"] is True
     assert (by_host["acme.io"]["assets"], by_host["acme.io"]["techs"]) == (1, 1)

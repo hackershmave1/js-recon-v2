@@ -17,6 +17,28 @@ function matchFile(o: Occurrence, file: SourceFile): boolean {
   return o.source_path === "input.js" && o.asset_url == null;
 }
 
+// Honest per-kind label for the Sources rail (Starbucks QA #3). The tree is a MIX:
+// crawl assets (kind "asset" — only fetch_status "ok" actually fetched bytes), the
+// uploaded bundle (kind "upload"), and source-map-recovered originals that carry
+// findings (kind "source"). The old subheading called all of them "fetched from the
+// target", which mislabeled the recovered and the non-ok assets. Every file is in
+// exactly one bucket, so the parts sum to files.length. This is the BROWSABLE set —
+// the Overview "Files" tile counts every analyzed file (incl. recovered originals with
+// no findings, which are not enumerated here), so the two totals legitimately differ.
+function sourcesSubtitle(files: SourceFile[]): string {
+  const fetched = files.filter((file) => file.kind === "asset" && file.fetch_status === "ok").length;
+  const notFetched = files.filter((file) => file.kind === "asset" && file.fetch_status !== "ok").length;
+  const uploaded = files.filter((file) => file.kind === "upload").length;
+  const recovered = files.filter((file) => file.kind === "source").length;
+  const parts: string[] = [];
+  if (fetched) parts.push(`${fetched} fetched`);
+  if (notFetched) parts.push(`${notFetched} not fetched`);
+  if (uploaded) parts.push(`${uploaded} uploaded`);
+  if (recovered) parts.push(`${recovered} recovered`);
+  const total = `${files.length} file${files.length === 1 ? "" : "s"}`;
+  return parts.length ? `${total} · ${parts.join(" · ")}` : total;
+}
+
 // Resolve a jump (from a finding occurrence) to a stored file's `path`:
 // a source-map file (matched by path + owning asset, else path only), else the
 // owning asset, else the legacy "input.js" bundle.
@@ -446,7 +468,7 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
           <div className="sv-rail-titlerow">
             <div className="sv-rail-titles">
               <h2 className="sv-rail-title">Sources</h2>
-              <div className="sv-rail-sub">{files.length} file{files.length === 1 ? "" : "s"} · fetched from the target</div>
+              <div className="sv-rail-sub">{sourcesSubtitle(files)}</div>
             </div>
             <button type="button" className="sv-rail-toggle" onClick={toggleRail}
               title="Collapse sources" aria-label="Collapse sources panel"><PanelIcon /></button>

@@ -183,11 +183,14 @@ export interface TechnologiesResponse {
 // == the total endpoint findings the Overview "Endpoints" card shows. `suspected` is
 // the SEPARATE roll-up of suspected-backend calls (the generic + unresolved lanes,
 // DEBT D24/D26) whose host resolved — never mixed into the confirmed count — with
-// `suspected_unattributed` its host-less counterpart. `declared` = an operator
-// base-URL host (REQ-C2) that may have no directly-attributed asset/endpoint/tech.
+// `suspected_unattributed` its host-less counterpart. `routes` is another SEPARATE
+// count: client-navigation / referenced hosts (page_route findings, e.g. a doc link
+// or SPA route to about.example.com) — not a backend the client calls, so the host is
+// inventoried without diluting endpoints/suspected (Starbucks QA #5). `declared` = an
+// operator base-URL host (REQ-C2) that may have no directly-attributed asset/endpoint/tech.
 export interface HostRow {
   host: string; in_scope: boolean; declared: boolean;
-  assets: number; endpoints: number; suspected: number; techs: number;
+  assets: number; endpoints: number; suspected: number; routes: number; techs: number;
 }
 export interface HostsResponse {
   run_id: string; count: number; in_scope: number;

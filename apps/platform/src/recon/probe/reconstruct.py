@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from urllib.parse import parse_qsl, urlsplit
 
+from recon.fetch import egress
 from recon.findings import base_url, normalize, queries
 
 # WebSocket "endpoints" are not HTTP requests, so curl/raw-HTTP do not apply.
@@ -235,3 +236,29 @@ def reconstruct_run(tenant_id: str, run_id: str) -> list[ReconstructedRequest] |
         return None
     rules = queries.list_base_url_rules(tenant_id, run_id)
     return build_requests(view.findings, rules)
+
+
+def apply_probe_host(
+    requests: list[ReconstructedRequest], host: str | None
+) -> list[ReconstructedRequest]:
+    """Resolve host-less (relative) requests against a probe-time chosen host (QA #2).
+
+    Only requests with NO resolved host are rewritten — one that already carries an
+    occurrence host or a manual base-URL rule (REQ-C2, applied earlier in
+    :func:`build_requests`) keeps its real host, so the persisted rules always win and
+    the honest attribution elsewhere is untouched. ``host`` is operator-supplied (picked
+    from the discovered-host list or free-typed in the probe panel), so it is normalized
+    to a bare host here and, exactly like any occurrence host, is shell/header-sanitized
+    by the serializer downstream — never trusted raw. An empty/unparseable host (no
+    extractable hostname) is a no-op, keeping the ``{{base_url}}`` placeholder; a
+    nonempty-but-odd host is passed through literally — it only ever renders a curl /
+    raw-HTTP string for the operator (never an egress fetch), so there is no scope/SSRF
+    surface to validate it against.
+    """
+    clean = egress._normalize_host(egress.host_of(host)) if host else ""
+    if not clean:
+        return requests
+    return [
+        replace(request, hosts=(clean,)) if request.probeable and not request.hosts else request
+        for request in requests
+    ]

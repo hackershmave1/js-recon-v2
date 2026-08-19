@@ -52,6 +52,47 @@ def test_get_requests_returns_artifacts(client, authorized_session):
     assert request["artifacts"]["http"].startswith("POST /api/users/42 HTTP/1.1")
 
 
+def _seed_relative(tenant, session_id) -> str:
+    """A run whose only endpoint is RELATIVE (host-less) — the case the probe
+    host-selector resolves (QA #2)."""
+    with tenant_session(tenant) as session:
+        run = models.Run(tenant_id=tenant, session_id=session_id, state="done")
+        session.add(run)
+        session.flush()
+        run_id = str(run.id)
+        store.record_finding(
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_type=FindingType.ENDPOINT,
+            value="GET /api/rel",
+            path="input.js",
+            occurrence=store.Occurrence(host=None, raw_url="/api/rel"),
+            attributes={"method": "GET", "kind": "fetch"},
+            first_stage="analyzing",
+        )
+        return run_id
+
+
+def test_get_requests_host_param_resolves_relative_endpoint(client, authorized_session):
+    # QA #2: a relative (host-less) request shows a {{base_url}} placeholder by default;
+    # ?host= resolves its curl + raw-HTTP against the operator-picked host at probe time.
+    tenant, session_id = authorized_session
+    run_id = _seed_relative(tenant, session_id)
+
+    default = client.get(f"/runs/{run_id}/requests", headers=_headers(tenant)).json()
+    assert default["requests"][0]["hosts"] == []
+    assert "{{base_url}}" in default["requests"][0]["artifacts"]["curl"]
+
+    picked = client.get(
+        f"/runs/{run_id}/requests?host=chosen.example.com", headers=_headers(tenant)
+    ).json()
+    req = picked["requests"][0]
+    assert req["hosts"] == ["chosen.example.com"]
+    assert "https://chosen.example.com/api/rel" in req["artifacts"]["curl"]
+    assert "Host: chosen.example.com" in req["artifacts"]["http"]
+
+
 def test_get_requests_for_run_with_no_findings_is_empty_200(client, authorized_session):
     tenant, session_id = authorized_session
     with tenant_session(tenant) as session:

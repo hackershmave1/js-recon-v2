@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createMemoryRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
-import { TenantProvider } from "./tenant/TenantContext";
+import { AppProviders } from "./AppProviders";
 import { AuthProvider } from "./auth/AuthProvider";
+import { ENGAGEMENT_STORAGE_KEY } from "./features/sessions/engagementFilter";
 import { Home, RunWorkspace, OverviewRoute, SourcesRoute, FindingsRoute, ApiSpecRoute, ProbeRoute } from "./app";
 import * as api from "./api/apiClient";
 import * as sse from "./api/sseClient";
@@ -17,8 +19,15 @@ const FINDINGS = {
   findings: [{ finding_hash: "h1", type: "endpoint", value: "/api/x", path: null, severity: null, attributes: {}, first_stage: "analyze", revealable: false, triage: null, spec_status: null, occurrences: [] }],
 };
 
+const ENGAGEMENT = {
+  engagement_id: "eng-1", name: "Starbucks Security Review",
+  in_scope_domains: ["starbucks.com"], out_of_scope_domains: [],
+  created_at: "2026-08-19T00:00:00Z", updated_at: "2026-08-19T00:00:00Z",
+};
+
 beforeEach(() => {
   vi.restoreAllMocks();
+  localStorage.clear();
   localStorage.setItem("recon.tenantId", "123e4567-e89b-12d3-a456-426614174000");
   vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => { h.onOpen?.(); });
   vi.spyOn(api, "getStatus").mockResolvedValue(DONE_STATUS);
@@ -26,6 +35,7 @@ beforeEach(() => {
   vi.spyOn(api, "getAssets").mockResolvedValue({ domain: null, status: "pending", assets: [] });
   vi.spyOn(api, "getRequests").mockResolvedValue({ run_id: "r1", count: 0, requests: [] });
   vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r1", count: 0, sources: [] });
+  vi.spyOn(api, "listEngagements").mockResolvedValue({ count: 0, engagements: [] });
 });
 
 const ROUTES = [
@@ -45,9 +55,9 @@ function renderAt(path: string) {
   const router = createMemoryRouter(ROUTES, { initialEntries: [path] });
   render(
     <AuthProvider>
-      <TenantProvider>
+      <AppProviders>
         <RouterProvider router={router} />
-      </TenantProvider>
+      </AppProviders>
     </AuthProvider>,
   );
 }
@@ -56,6 +66,17 @@ describe("app routes", () => {
   it("renders the new-run panel at /", () => {
     renderAt("/");
     expect(screen.getByText(/new recon run/i)).toBeInTheDocument();
+  });
+
+  it("keeps the engagement switcher live at the landing route (Starbucks QA #1)", async () => {
+    vi.spyOn(api, "listEngagements").mockResolvedValue({ count: 1, engagements: [ENGAGEMENT] });
+    renderAt("/");
+    // A pick from the sidebar switcher on `/` must persist so a run started here
+    // attaches to it. This renders the REAL app-root stack (AppProviders), so removing
+    // EngagementFilterProvider from it (reintroducing the bug) fails HERE, not silently.
+    await userEvent.click(await screen.findByRole("button", { name: /all engagements/i }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /starbucks security review/i }));
+    expect(localStorage.getItem(ENGAGEMENT_STORAGE_KEY)).toBe("eng-1");
   });
 
   it("renders the run overview (metrics + live pipeline) at the index route", async () => {

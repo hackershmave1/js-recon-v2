@@ -2,7 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
-import { TenantProvider } from "./tenant/TenantContext";
+import { AppProviders } from "./AppProviders";
 import { AuthProvider } from "./auth/AuthProvider";
 import { AuthGate } from "./auth/AuthGate";
 import { Home, RunWorkspace, OverviewRoute, SourcesRoute, FindingsRoute, ApiSpecRoute, ProbeRoute, TechRoute, HostsRoute } from "./app";
@@ -44,9 +44,9 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <AuthProvider>
       <AuthGate>
-        <TenantProvider>
+        <AppProviders>
           <RouterProvider router={router} />
-        </TenantProvider>
+        </AppProviders>
       </AuthGate>
     </AuthProvider>
   </StrictMode>,
