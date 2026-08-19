@@ -5,8 +5,10 @@ Pure unit tests — parse JS strings, assert the reconstructed calls. No infra.
 
 from __future__ import annotations
 
+import statistics
 import sys
 import time
+from collections.abc import Callable
 
 import pytest
 
@@ -674,18 +676,52 @@ def _nested_sink_chain(depth: int) -> str:
     return "x=" + "new WebSocket(" * depth + '"/x"' + ")" * depth + ";"
 
 
-def _extract_seconds(source: str, reps: int = 3) -> float:
-    """Best (min) wall-clock over ``reps`` extract() runs. extract() is deterministic, so
-    the fastest run is the one least perturbed by GC / CPU-steal / cache misses. Timing a
-    perf guard exactly ONCE (as this did originally) let a single unlucky sample on a
-    shared CI runner flake the scaling-ratio assertion below; a real O(n^2) regression is
-    slow on EVERY run, so the min still trips the guard."""
-    best = float("inf")
+def _time_extract(source: str) -> float:
+    """Wall-clock for a single ``extract(source)`` run."""
+    start = time.perf_counter()
+    extract(source)
+    return time.perf_counter() - start
+
+
+def _min_extract_seconds(build_chain: Callable[[int], str], depth: int, reps: int) -> float:
+    """Fastest (min) wall-clock over ``reps`` extract() runs at one depth. The min is the
+    least-perturbed sample (extract() is deterministic), so it is the noise-robust value for
+    the cheap-depth fast-fail ceiling below."""
+    return min(_time_extract(build_chain(depth)) for _ in range(reps))
+
+
+def _interleaved_median_ratio(
+    build_chain: Callable[[int], str], anchor_depth: int, big_depth: int, reps: int = 3
+) -> tuple[float, float]:
+    """Interleave the anchor and big depths (a, b, a, b, …) over ``reps`` rounds and return
+    ``(min_big, median_ratio)``: the fastest big (for the absolute depth-16000 ceiling in the
+    test) and the MEDIAN of the per-round ``big / anchor`` quotients (each from ONE round, both
+    depths timed back-to-back under the same conditions).
+
+    Interleaving + a per-round median is the de-flake. The prior probe timed every anchor round
+    BEFORE every big round and divided the two mins, so a shared-CI contention burst that began
+    during the (later) big phase inflated ``big`` while the already-recorded anchors stayed
+    clean — a phase mismatch that spiked the ratio on purely linear code (both recorded flakes:
+    a clean ~56ms anchor vs a contended ~700ms big → ~10-13x, over the 12x line). A per-depth
+    min could not undo it: the burst covered the whole contiguous big phase, so every big
+    sample was slow. Interleaving exposes the two depths to the SAME contention windows, so a
+    per-round ratio cancels contention that spans a whole round (a burst slowing a round's big
+    also slows its adjacent anchor). The only rounds a single burst can still distort are the two
+    whose anchor/big straddle an EDGE — one HIGH (anchor clean, big slowed) at the rising edge,
+    one LOW (anchor slowed, big clean) at the falling edge — and since those land on OPPOSITE
+    sides, the median of 3 lands on the clean round between them. (``reps`` is odd; bump it to 5
+    only if two *overlapping* bursts ever recur — untested, never observed.) A real O(n^2) is
+    slow in EVERY round, so the median still trips the guard. (A swept-burst simulation puts the
+    linear-flake rate at 0% here across all burst positions, vs ~3% for the old min-of-mins,
+    while never masking a 16x quadratic — see the commit.)"""
+    min_big = float("inf")
+    ratios: list[float] = []
     for _ in range(reps):
-        start = time.perf_counter()
-        extract(source)
-        best = min(best, time.perf_counter() - start)
-    return best
+        anchor = _time_extract(build_chain(anchor_depth))
+        big = _time_extract(build_chain(big_depth))
+        min_big = min(min_big, big)
+        ratios.append(big / anchor)  # same round: both depths timed under the same conditions
+    return min_big, statistics.median(ratios)
 
 
 @pytest.mark.parametrize(
@@ -699,26 +735,36 @@ def test_extract_stays_linear_on_deep_split_chain_no_dos(build_chain):
 
     Three assertions, deliberately layered so the guard is both flake-proof and fast to
     fail on a real regression:
-      * anchor ceiling at depth 4000 (~0.1-0.4s linear depending on chain, several-x
-        headroom under the 3.0s ceiling so runner jitter can't trip it) — a reintroduced
-        O(n^2) is ~16s per run here (so ~45s across the min-of-N reps) and trips this
-        FIRST, well under a minute, instead of dragging the 282s depth-16000 case through;
-      * a scaling ratio with generous headroom (min-of-N timings; when linear, 4x the
-        input is a few-x the work — runner-dependent constant factors put it ~3-8x here —
-        vs ~16x when quadratic) — catches a partial regression an absolute bound alone
-        would miss, while transient runner noise can no longer trip it;
-      * an absolute ceiling at depth 16000 (the brief's wall-clock bound), only reached
-        once the walk already looks linear."""
+      * a fast-fail anchor ceiling at depth 4000 (~0.05-0.25s linear, ~15-40x headroom under
+        the 3.0s ceiling so runner jitter can't trip it), checked BEFORE the expensive depth is
+        ever run — a reintroduced O(n^2) is ~16s here and trips this FIRST, well under a minute,
+        instead of dragging the 282s depth-16000 case through;
+      * a scaling ratio with generous headroom (when linear, 4x the input is ~3-4x the work;
+        ~16x when quadratic), measured by interleaving the two depths and taking the per-round
+        MEDIAN so shared-CI contention cancels (see `_interleaved_median_ratio` — this is the
+        de-flake; the prior all-anchors-then-all-bigs order divided two mins from different
+        phases, letting a burst in the big phase spike the ratio to ~10-13x on linear code).
+        NOTE: a 4x step vs a 12x line resolves scaling exponents above ~1.8; a milder
+        super-linear residual that stays under the ceilings is the absolute ceilings' job to
+        catch, not the ratio's (widening the depth gap to sharpen the ratio would re-introduce
+        the flake — the linear ratio itself rises toward the line);
+      * an absolute ceiling at depth 16000 (the brief's wall-clock bound), only reached once
+        the walk already looks linear."""
     extract('fetch("/warmup");')  # steady state: exclude one-time import/parse warmup
-    anchor = _extract_seconds(build_chain(4000))
+    # 1) Fast-fail a gross O(n^2) on the CHEAP anchor depth alone, BEFORE running the expensive
+    #    depth-16000 case: min-of-3 is noise-robust and the ceiling's ~15-40x headroom means a
+    #    linear spike can't trip it, while a reintroduced O(n^2) (~16s) fails here in seconds.
+    anchor = _min_extract_seconds(build_chain, 4000, reps=3)
     assert anchor < 3.0, (
         f"extract() at depth 4000 took {anchor:.2f}s (linear ~0.05s; pre-fix O(n^2) 15.7s) — "
         f"DoS regression"
     )
-    big = _extract_seconds(build_chain(16000))  # 4x the input
-    assert big < anchor * 12, (  # min-of-N: linear ~3-8x (runner-dependent), quadratic ~16x
-        f"extract() scaled {big / anchor:.1f}x for 4x deeper input "
-        f"(anchor={anchor * 1000:.0f}ms, big={big * 1000:.0f}ms) — looks quadratic, DoS regression"
+    # 2) Depth 4000 is fast -> measure the scaling ratio robustly (interleaved per-round median).
+    big, ratio = _interleaved_median_ratio(build_chain, 4000, 16000)  # big = 4x the input
+    assert ratio < 12, (  # interleaved per-round median: linear ~3-4x, quadratic ~16x
+        f"extract() median-scaled {ratio:.1f}x for 4x deeper input "
+        f"(depth-4000 {anchor * 1000:.0f}ms, fastest depth-16000 {big * 1000:.0f}ms) — "
+        f"looks quadratic, DoS regression"
     )
     assert big < 5.0, (
         f"extract() at depth 16000 took {big:.2f}s (linear ~0.3s; pre-fix O(n^2) 282s) — "
