@@ -123,3 +123,29 @@ def test_build_export_index_is_best_effort_on_recovery_error(monkeypatch):
     assert analyze.build_export_index(rows) == {
         "src/api/base.js": {"API_BASE": "https://api.acme.com", "ORDERS_PATH": "/api/v3/orders"}
     }
+
+
+# --- no-map / minified-ESM path (2a) ------------------------------------------ #
+
+
+def test_build_export_index_nomap_keys_by_url_path(monkeypatch):
+    # No source_map_ref and no inline map -> the asset is a bundle unit, so its
+    # exports are harvested straight from the minified source and keyed by the URL
+    # path (the same key `_extract_endpoints` uses for a bundle unit).
+    entry = b'const S="https://api.acme.com",T="/api/v3/orders";export{S as A,T as O};'
+    monkeypatch.setattr(storage, "get_blob", lambda ref: entry)
+    rows = [_row(source_map_ref=None, url="http://h:4175/assets/index-abc.js")]
+    assert analyze.build_export_index(rows) == {
+        "/assets/index-abc.js": {"A": "https://api.acme.com", "O": "/api/v3/orders"}
+    }
+
+
+def test_nomap_resolution_via_url_key():
+    # An orders bundle unit resolves its imports against the URL-keyed index: the
+    # specifier "./index-abc.js" resolves relative to the importer URL path.
+    index = {"/assets/index-abc.js": {"A": "https://api.acme.com", "O": "/api/v3/orders"}}
+    orders = 'import{A as a,O as o}from"./index-abc.js";fetch(a+o)'
+    assert analyze._resolve_cross_module("/assets/orders-xyz.js", orders, index) == {
+        "a": "https://api.acme.com",
+        "o": "/api/v3/orders",
+    }

@@ -24,9 +24,11 @@ from __future__ import annotations
 import posixpath
 import re
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from tree_sitter import Node
 
+from recon.findings._base_env import _declared_names
 from recon.findings._jsast import _MAX_URL_SPAN, _PARSER, _string_value, _text, _walk
 
 # A scheme://authority prefix (e.g. `webpack://recon-range`) that a recovered
@@ -51,35 +53,92 @@ class ImportBinding:
 
 
 def collect_module_exports(root: Node) -> dict[str, str]:
-    """Map each ``export const/let/var NAME = "<string literal>"`` to its value.
+    """Map each exported name to its statically-certain string-literal value.
 
-    Only statically-certain string literals are returned (honesty). Re-exports
-    (``export { X } from "./y"``) and non-literal export values are intentionally
-    omitted from this increment — they would need graph traversal / data-flow and
-    are absent rather than guessed.
+    Two shapes cross the boundary (honesty: only string literals, never guessed):
+    - ``export const/let/var NAME = "<literal>"`` — the direct form (original source).
+    - ``const LOCAL = "<literal>"; export { LOCAL as NAME }`` — the re-alias form a
+      minifier emits (rollup/esbuild rename the const and list exports separately).
+    A ``export { X } from "./y"`` re-export (has a ``source``) needs graph traversal
+    and is skipped; a non-literal value is absent, not guessed.
     """
     exports: dict[str, str] = {}
     for node in _walk(root):
         if node.type != "export_statement":
             continue
         decl = node.child_by_field_name("declaration")
-        # A re-export (`export { X } from "..."`) has no `declaration` field; skip.
-        if decl is None or decl.type not in ("lexical_declaration", "variable_declaration"):
-            continue
-        for child in decl.named_children:
-            if child.type != "variable_declarator":
-                continue
-            name = child.child_by_field_name("name")
-            value = child.child_by_field_name("value")
-            if name is None or name.type != "identifier" or value is None:
-                continue
-            # Bail before an O(span) decode of a pathological giant literal (DoS).
-            if value.end_byte - value.start_byte > _MAX_URL_SPAN:
-                continue
-            lit = _string_value(value)
-            if lit is not None:
-                exports[_text(name)] = lit
+        if decl is not None and decl.type in ("lexical_declaration", "variable_declaration"):
+            for child in decl.named_children:
+                _add_string_export(child, exports)
+    # Re-alias form: resolve `export { local as Name }` against the module's local
+    # string consts. Deferred to a second pass so it only runs when such a clause
+    # exists (the common original-source module has none).
+    aliases = _reexport_aliases(root)
+    if aliases:
+        local_consts = _local_string_consts(root)
+        for local, exported in aliases:
+            if local in local_consts:
+                exports[exported] = local_consts[local]
     return exports
+
+
+def _add_string_export(declarator: Node, exports: dict[str, str]) -> None:
+    """Record ``NAME = "<literal>"`` from an ``export const`` declarator."""
+    if declarator.type != "variable_declarator":
+        return
+    name = declarator.child_by_field_name("name")
+    value = declarator.child_by_field_name("value")
+    if name is None or name.type != "identifier" or value is None:
+        return
+    if value.end_byte - value.start_byte > _MAX_URL_SPAN:
+        return  # bail before an O(span) decode of a pathological giant literal (DoS)
+    lit = _string_value(value)
+    if lit is not None:
+        exports[_text(name)] = lit
+
+
+def _reexport_aliases(root: Node) -> list[tuple[str, str]]:
+    """``export { local as Name }`` bindings (local, exported), skipping re-exports
+    that pull ``from "./other"`` (those need graph traversal — a later increment)."""
+    out: list[tuple[str, str]] = []
+    for node in _walk(root):
+        if node.type != "export_statement" or node.child_by_field_name("source") is not None:
+            continue
+        for spec in _walk(node):
+            if spec.type != "export_specifier":
+                continue
+            local = spec.child_by_field_name("name")
+            if local is None:
+                continue
+            alias = spec.child_by_field_name("alias")
+            exported = _text(alias) if alias is not None else _text(local)
+            out.append((_text(local), exported))
+    return out
+
+
+def _local_string_consts(root: Node) -> dict[str, str]:
+    """Module-scope ``const/let/var NAME = "<literal>"`` values, POISON-SAFE: a name
+    bound or reassigned more than once (shadowed, redeclared) is excluded rather
+    than resolved to a possibly-wrong value — same discipline as
+    :func:`recon.findings._base_env.collect_base_env` (REQ-C2 honesty). Only used to
+    back an ``export { local as Name }`` re-alias, so a wrong value can never be
+    presented as a cross-chunk URL."""
+    poisoned = _declared_names(root)
+    consts: dict[str, str] = {}
+    for node in _walk(root):
+        if node.type != "variable_declarator":
+            continue
+        name = node.child_by_field_name("name")
+        value = node.child_by_field_name("value")
+        if name is None or name.type != "identifier" or value is None:
+            continue
+        text = _text(name)
+        if text in poisoned or value.end_byte - value.start_byte > _MAX_URL_SPAN:
+            continue
+        lit = _string_value(value)
+        if lit is not None:
+            consts[text] = lit
+    return consts
 
 
 def collect_named_imports(root: Node) -> list[ImportBinding]:
@@ -127,6 +186,21 @@ def resolve_relative_specifier(importer_path: str, specifier: str) -> str | None
     prefix, path = _split_scheme_prefix(importer_path)
     joined = posixpath.normpath(posixpath.join(posixpath.dirname(path), specifier))
     return prefix + joined
+
+
+def url_module_key(url: str) -> str:
+    """Module-identity key for a NO-MAP chunk: the URL's path portion.
+
+    Used when a chunk ships no source map, so its module identity is the served
+    URL rather than a recovered ``f.path``. The leading ``/`` is deliberately kept
+    so a URL key (``/assets/index-abc.js``) can never collide with a mapped
+    module's relative ``f.path`` (``src/api/base.js``) in the shared export index.
+    The SAME derivation keys the index and the importer side, and a relative
+    specifier resolves path-only (no scheme to re-attach), so the two match — the
+    hash in ``index-BLBrOdfO.js`` is preserved verbatim (never hash-collapsed like
+    a normalized finding path would be, which would break the match).
+    """
+    return urlsplit(url).path or url
 
 
 def build_cross_module_consts(

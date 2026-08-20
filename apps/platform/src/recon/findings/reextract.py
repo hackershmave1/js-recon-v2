@@ -27,7 +27,7 @@ from recon.db.base import tenant_session
 from recon.db.models import Finding, Run
 from recon.domain import AssetStatus
 from recon.findings import normalize
-from recon.findings.analyze import _extract_endpoints, _harvest_map_exports, build_export_index
+from recon.findings.analyze import _extract_endpoints, _harvest_asset_exports, build_export_index
 from recon.findings.wrappers import WrapperRule
 from recon.runs import assets as run_assets
 
@@ -104,7 +104,7 @@ def reextract_run(tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]) 
         elif input_ref:  # legacy single-blob run (with its own source map, if any)
             legacy_index: dict[str, dict[str, str]] = {}
             try:
-                _harvest_map_exports(input_ref, source_map_ref, "uploaded", legacy_index)
+                _harvest_asset_exports(input_ref, source_map_ref, None, "uploaded", legacy_index)
             except Exception:  # noqa: BLE001 - best-effort; no cross-module on failure
                 legacy_index = {}
             with tenant_session(tenant_id) as session:
