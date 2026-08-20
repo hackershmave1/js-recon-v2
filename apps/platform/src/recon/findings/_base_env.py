@@ -261,6 +261,61 @@ def _fold_const_prefix(node: Node, env: BaseEnv) -> str | None:
     return prefix + remainder  # pure template concatenation, no inserted slash
 
 
+# A `+` chain deeper than this is left unresolved rather than recursed into — a
+# crafted `"a"+"b"+…` splitting chain (the exact static-analysis-evasion this
+# product targets) could otherwise overflow the Python stack (DoS). The span cap
+# below bounds size too; this bounds depth for a chain that stays under the cap.
+_MAX_CONCAT_DEPTH = 40
+
+
+def _resolve_concat_operand(node: Node | None, env: BaseEnv, depth: int) -> str | None:
+    """Resolve one operand of a URL `+` chain to a string, or ``None``.
+
+    Resolvable operands are string literals and CROSS-MODULE const imports
+    (`env.cross_module_consts`) only — deliberately NOT `env.const_prefixes`
+    (local consts). That scope is load-bearing: it lets a cross-chunk
+    `API_BASE + ORDERS_PATH` (both imported) fold while a same-file
+    `"/api/v1/" + resource` (a local const) stays honestly unattributed, so the
+    honesty counter / coverage calibration is unchanged (REQ-C2).
+    """
+    if node is None or depth > _MAX_CONCAT_DEPTH:
+        return None
+    if node.type == "identifier":
+        return env.cross_module_consts.get(_text(node))
+    if node.type == "binary_expression":
+        operator = node.child_by_field_name("operator")
+        if operator is None or _text(operator) != "+":
+            return None
+        left = _resolve_concat_operand(node.child_by_field_name("left"), env, depth + 1)
+        if left is None:
+            return None
+        right = _resolve_concat_operand(node.child_by_field_name("right"), env, depth + 1)
+        if right is None:
+            return None
+        return left + right  # pure concatenation (mirrors _collapse_url), never _join_base
+    if node.type == "parenthesized_expression":
+        inner = node.named_children
+        return _resolve_concat_operand(inner[0], env, depth + 1) if len(inner) == 1 else None
+    return _string_value(node)  # string literal / no-substitution template
+
+
+def _fold_cross_module(node: Node, env: BaseEnv) -> str | None:
+    """Fold a bare cross-module const (`fetch(API_BASE)`) or a `+` chain built from
+    literals + cross-module consts (`fetch(API_BASE + ORDERS_PATH)`) to a full URL.
+
+    Returns ``None`` unless something cross-module is actually in scope, so with no
+    cross-module index this is a no-op and behavior is byte-for-byte unchanged.
+    All-operands-or-``None`` — a partial resolution never yields a guessed URL.
+    """
+    if not env.cross_module_consts:
+        return None
+    if node.type not in ("identifier", "binary_expression"):
+        return None
+    if node.end_byte - node.start_byte > _MAX_URL_SPAN:
+        return None  # over-cap expression — bail before the O(span) walk (DoS)
+    return _resolve_concat_operand(node, env, 0)
+
+
 def _resolve_url(node: Node | None, env: BaseEnv, base: str) -> str | None:
     """Resolve a sink's URL-argument node to a base-joined, prefix-folded string.
 
@@ -272,6 +327,8 @@ def _resolve_url(node: Node | None, env: BaseEnv, base: str) -> str | None:
     if node is None:
         return None
     folded = _fold_const_prefix(node, env)
+    if folded is None:
+        folded = _fold_cross_module(node, env)  # cross-chunk const / `+` chain (P1/P2)
     url = folded if folded is not None else _string_value(node)
     if url is None:
         return None

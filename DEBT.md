@@ -205,6 +205,20 @@ flipped silently.
 Developer-facing hygiene - it keeps contributors fast and the trunk healthy, but a user
 never sees it directly.
 
+#### D28 · Cross-chunk export index double-recovers source maps [S]  ·  performance
+The cross-module endpoint resolver (`findings/analyze.py::build_export_index`) runs a
+run-level pre-pass that recovers each mapped asset's source map to harvest its exported
+string consts, then the existing per-asset extract loop recovers the SAME maps again for
+full extraction — so a mapped crawl pays **2× sourcemapper subprocess spawns per asset**.
+Chosen deliberately: it keeps the pre-pass memory-bounded (only the small export index
+persists, not recovered source) and guarantees the index keys match the loop's recovered
+`f.path` by construction (they come from the identical `recover_sources` call), which is
+what makes cross-chunk resolution correct at all. The extra spawns are idempotent-safe
+bounded work, not corruption, and the pre-pass heartbeats per asset so it can't lose the
+lease. Follow-up: cache the recovered units for reuse across the two passes, or fold the
+export harvest into the main loop with deferred (post-loop) resolution. Extends the
+recovery/stall note in `_analysis_units`. `# NOTE(DEBT)` marks the site.
+
 #### D9 · Test-pyramid inversion [L, ongoing]  ·  maintainability
 42/75 backend test files need live PG/Redis/MinIO; the fast hermetic layer is the
 minority, so the heavy lane catches most real bugs. Grow the small-test layer.

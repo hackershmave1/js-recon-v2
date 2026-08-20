@@ -27,7 +27,7 @@ from recon.db.base import tenant_session
 from recon.db.models import Finding, Run
 from recon.domain import AssetStatus
 from recon.findings import normalize
-from recon.findings.analyze import _extract_endpoints
+from recon.findings.analyze import _extract_endpoints, _harvest_map_exports, build_export_index
 from recon.findings.wrappers import WrapperRule
 from recon.runs import assets as run_assets
 
@@ -74,6 +74,11 @@ def reextract_run(tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]) 
     written = 0
     try:
         if rows:  # multi-asset run: one blob per fetched asset (each may carry a capture map)
+            # Same cross-chunk export index the analyze stage built, so a re-extract of
+            # `fetch(API_BASE + PATH)` resolves to the IDENTICAL endpoint the analyze
+            # pass wrote — never a contradictory ENDPOINT_UNRESOLVED skeleton beside it
+            # (best-effort; a bad asset just yields no cross-module exports).
+            export_index = build_export_index(rows, source_map_origin="capture")
             for asset in rows:
                 if asset.fetch_status != AssetStatus.OK.value or not asset.input_ref:
                     continue
@@ -94,8 +99,14 @@ def reextract_run(tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]) 
                         run_asset_id=asset.id,
                         asset_url=asset.url,
                         wrappers=wrappers,
+                        export_index=export_index,
                     )
         elif input_ref:  # legacy single-blob run (with its own source map, if any)
+            legacy_index: dict[str, dict[str, str]] = {}
+            try:
+                _harvest_map_exports(input_ref, source_map_ref, "uploaded", legacy_index)
+            except Exception:  # noqa: BLE001 - best-effort; no cross-module on failure
+                legacy_index = {}
             with tenant_session(tenant_id) as session:
                 written += _reextract_blob(
                     session,
@@ -106,6 +117,7 @@ def reextract_run(tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]) 
                     run_asset_id=None,
                     asset_url=None,
                     wrappers=wrappers,
+                    export_index=legacy_index,
                 )
     except ClientError as exc:  # storage.get_blob on a vanished blob (§12 Minor 9)
         raise SourceBlobMissing(str(exc)) from exc
@@ -123,6 +135,7 @@ def _reextract_blob(
     run_asset_id: str | None,
     asset_url: str | None,
     wrappers: Sequence[WrapperRule],
+    export_index: dict[str, dict[str, str]] | None = None,
 ) -> int:
     raw = storage.get_blob(input_ref)
     source = raw.decode("utf-8", "replace")
@@ -136,4 +149,5 @@ def _reextract_blob(
         run_asset_id=run_asset_id,
         asset_url=asset_url,
         wrappers=wrappers,
+        export_index=export_index,
     ).written

@@ -100,6 +100,65 @@ def test_deeply_nested_concatenation_is_capped_not_a_recursion_error():
     assert len(r.unresolved) == 1  # surfaced cleanly, no RecursionError
 
 
+# --- cross-module / cross-chunk const resolution (P1/P2) ---------------------- #
+# A URL built from consts IMPORTED from another chunk is unresolvable per-file today
+# and counts as `unattributed` (bs-crosschunk). Given the resolved import values
+# (recon.findings._modulegraph supplies them from a run-level export index) the sink
+# folds them to a full URL. The fold consults ONLY cross-module consts + literals,
+# never local consts, so the honesty calibration is preserved.
+
+_ORDERS = {"API_BASE": "https://api.acme.com", "ORDERS_PATH": "/api/v3/orders"}
+
+
+def test_cross_module_concat_resolves_to_full_url():
+    r = extract("fetch(API_BASE + ORDERS_PATH)", cross_module_consts=_ORDERS)
+    assert r.unattributed == 0 and r.unresolved == []
+    assert [(e.method, e.url) for e in r.endpoints] == [
+        ("GET", "https://api.acme.com/api/v3/orders")
+    ]
+
+
+def test_cross_module_bare_const_resolves():
+    r = extract("fetch(API_BASE)", cross_module_consts={"API_BASE": "https://api.acme.com/x"})
+    assert [(e.method, e.url) for e in r.endpoints] == [("GET", "https://api.acme.com/x")]
+    assert r.unattributed == 0
+
+
+def test_cross_module_fold_ignores_local_const_bs_concat_stays_unattributed():
+    # THE calibration guard (adversary finding 1): bs-concat's `resource` is a LOCAL
+    # const, which lands in const_prefixes — the +-folder must NOT read it, or
+    # recon-range's min_unattributed floor breaks. Even with a cross-module index in
+    # scope, a local-const concatenation must stay unattributed.
+    r = extract(
+        'const resource = "widgets"; fetch("/api/v1/" + resource)', cross_module_consts=_ORDERS
+    )
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_cross_module_partial_operand_is_not_guessed():
+    # One operand is a cross-module const, the other a local var: all-or-none, so the
+    # call stays honestly unattributed rather than emitting a half-guessed URL (finding 2).
+    r = extract(
+        'const p = "/x"; fetch(API_BASE + p)',
+        cross_module_consts={"API_BASE": "https://api.acme.com"},
+    )
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_cross_module_absent_scope_is_unchanged():
+    # No index in scope -> byte-for-byte today's behavior (backward compatible).
+    r = extract("fetch(API_BASE + ORDERS_PATH)")
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_cross_module_deep_chain_capped_not_recursion_error():
+    # Deep +-chain WITH a cross-module index in scope must still degrade via the span/
+    # depth cap, never blow the stack.
+    src = "fetch(API_BASE" + "".join(['+"x"'] * 2000) + ")"
+    r = extract(src, cross_module_consts={"API_BASE": "https://api.acme.com"})
+    assert len(r.unresolved) == 1 and r.endpoints == []
+
+
 # --- .concat() reconstruction + value-holder tokens --------------------------- #
 # `.concat()` is reconstructed exactly like `+`; a readable non-constant leaf renders as
 # a `:holder` token (its source identifier) so an analyst sees WHICH value fills a
