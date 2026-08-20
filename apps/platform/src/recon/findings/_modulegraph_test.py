@@ -12,10 +12,21 @@ from recon.findings._modulegraph import (
     build_cross_module_consts,
     collect_module_exports,
     collect_named_imports,
+    collect_webpack_modules,
+    collect_webpack_requires,
     parse,
     resolve_relative_specifier,
     url_module_key,
+    webpack_build_id,
 )
+
+
+def _wp_modules(src: str) -> dict[str, dict[str, str]]:
+    return collect_webpack_modules(parse(src))
+
+
+def _wp_requires(src: str) -> dict[str, str]:
+    return collect_webpack_requires(parse(src))
 
 
 def _exports(src: str) -> dict[str, str]:
@@ -102,6 +113,57 @@ def test_url_module_key_leading_slash_avoids_mapped_fpath_collision():
     # a URL key starts with "/", a mapped f.path does not -> disjoint key spaces
     assert url_module_key("http://h/src/api/base.js").startswith("/")
     assert not resolve_relative_specifier("src/api/orders.js", "./base.js").startswith("/")
+
+
+# --- webpack module graph (2b) ------------------------------------------------ #
+
+
+def test_webpack_modules_array_value_form():
+    # the real recon-range shape: n.d(exports, ["M", 0, r, "t", 0, o]) (stride-3 value)
+    src = 'var e={389(a,t,n){const o="https://api.acme.com",r="/api/v3/orders";n.d(t,["M",0,r,"t",0,o])}};'
+    assert _wp_modules(src) == {"389": {"M": "/api/v3/orders", "t": "https://api.acme.com"}}
+
+
+def test_webpack_modules_array_getter_form_variable_stride():
+    # adversary F3: a getter-form entry is stride-2 (["A", ()=>v]); mixed with a
+    # stride-3 value entry must still pair correctly.
+    src = 'var e={7(a,t,n){const v="https://h";n.d(t,["M",0,v,"A",()=>v])}};'
+    assert _wp_modules(src) == {"7": {"M": "https://h", "A": "https://h"}}
+
+
+def test_webpack_modules_object_form():
+    src = 'var e={5(a,t,n){const v="/p";n.d(t,{P:()=>v,Q:()=>"/lit"})}};'
+    assert _wp_modules(src) == {"5": {"P": "/p", "Q": "/lit"}}
+
+
+def test_webpack_modules_requires_the_d_gate():
+    # a numeric-keyed method with no `require.d(...)` export call is not a module
+    assert _wp_modules("var e={9(a,t,n){return fetch(1)}};") == {}
+    # non-string export values are omitted (getter returns a function/number)
+    assert _wp_modules("var e={9(a,t,n){n.d(t,{f:()=>()=>1})}};") == {}
+
+
+def test_webpack_requires_alias():
+    assert _wp_requires("var e={489(e,a,n){var r=n(389);fetch(r.t)}};") == {"r": "389"}
+
+
+def test_webpack_requires_poison_shadowed_alias():
+    # `r` is both the require alias AND a param of a nested fn -> bound >1 -> excluded
+    src = "var e={489(e,a,n){var r=n(389);function f(r){return fetch(r.t)}}};"
+    assert _wp_requires(src) == {}
+
+
+def test_webpack_requires_ambiguous_alias_across_modules_excluded():
+    # `r` binds to 389 in one module and 500 in another -> ambiguous -> excluded
+    src = "var e={1(e,a,n){var r=n(389)},2(e,a,n){var r=n(500)}};"
+    assert _wp_requires(src) == {}
+
+
+def test_webpack_build_id():
+    assert webpack_build_id("self.webpackChunkrecon_range=self.webpackChunkrecon_range||[]") == (
+        "recon_range"
+    )
+    assert webpack_build_id('const x = "no webpack here";') is None
 
 
 # --- collect_named_imports ---------------------------------------------------- #

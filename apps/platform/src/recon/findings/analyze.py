@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from botocore.exceptions import ClientError
@@ -59,6 +59,26 @@ log = get_logger("recon.findings.analyze")
 # Fallback source path when no source map recovers the real per-file paths — the
 # whole bundle is one logical source. Sourcemapper replaces this with real paths.
 _SOURCE_NAME = "input.js"
+
+
+@dataclass(frozen=True)
+class CrossModuleIndex:
+    """Run-level index the cross-chunk resolver consults, built once per run by
+    `build_export_index`. Two disjoint sub-indexes for the two module systems:
+
+    - ``exports``: ESM — module key (recovered ``f.path`` or no-map ``url_module_key``)
+      -> {exported name: string value} (Increments 1 + 2a).
+    - ``webpack``: minified webpack — build id (`webpack_build_id`, so ids from two
+      different builds in one run never cross-wire) -> module id -> {export: value} (2b).
+
+    Frozen, but the dicts are mutated in place during the build then read-only after.
+    """
+
+    exports: dict[str, dict[str, str]] = field(default_factory=dict)
+    webpack: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
+
+    def __bool__(self) -> bool:
+        return bool(self.exports or self.webpack)
 
 
 @dataclass(frozen=True)
@@ -152,13 +172,14 @@ def _analyze_legacy(
         return Coverage(0, 0, 0)
 
     # Cross-chunk pre-pass: a monolithic bundle's map can recover several original
-    # modules that import one another, so build the export index from this blob too
-    # (best-effort — a failure just means no cross-module resolution, never a failed run).
-    export_index: dict[str, dict[str, str]] = {}
+    # modules that import one another (or a webpack bundle registers several modules
+    # in one blob), so build the index from this blob too (best-effort — a failure
+    # just means no cross-module resolution, never a failed run).
+    cross_index = CrossModuleIndex()
     try:
-        # asset_url=None: a legacy single blob has no sibling chunk to cross-reference,
-        # so only its own source-map-recovered modules (if any) contribute.
-        _harvest_asset_exports(input_ref, source_map_ref, None, "uploaded", export_index)
+        # asset_url=None: a legacy single blob has no sibling chunk to cross-reference
+        # by URL, so only its source-map-recovered modules / in-blob webpack modules contribute.
+        _harvest_asset_exports(input_ref, source_map_ref, None, "uploaded", cross_index)
     except Exception as exc:  # noqa: BLE001 - best-effort enrichment
         log.warning("analyze.export_index_legacy_failed", run_id=run_id, error=str(exc))
 
@@ -172,7 +193,7 @@ def _analyze_legacy(
             run_asset_id=None,
             asset_url=None,
             wrappers=wrappers,
-            export_index=export_index,
+            cross_index=cross_index,
         )
     publish(redis, coverage_event)
     log.info(
@@ -277,7 +298,7 @@ def _analyze_assets(
                 emit_event=False,  # lease renewal only — no progress event during the pre-pass
             )
 
-    export_index = build_export_index(rows, heartbeat=_phase_a_heartbeat)
+    cross_index = build_export_index(rows, heartbeat=_phase_a_heartbeat)
 
     for asset in rows:
         if asset.fetch_status != AssetStatus.OK.value or asset.analyze_status in terminal:
@@ -310,7 +331,7 @@ def _analyze_assets(
                     run_asset_id=asset.id,
                     asset_url=asset.url,
                     wrappers=wrappers,
-                    export_index=export_index,
+                    cross_index=cross_index,
                 )
                 run_assets.set_analyze_ok(session, asset.id)
         except (ClientError, SQLAlchemyError):
@@ -355,22 +376,38 @@ class _EndpointExtraction:
 
 
 def _resolve_cross_module(
-    importer_key: str | None, unit_text: str, export_index: dict[str, dict[str, str]] | None
-) -> dict[str, str] | None:
-    """Resolve this unit's named cross-module imports to their exporters' string
-    literals, for `extract()`. ``importer_key`` is the unit's module identity in the
-    export index — a recovered ``f.path`` (source-map path), or a no-map chunk's
-    ``url_module_key``. Returns ``None`` when there is nothing to resolve (no index,
-    no importer key, or the unit imports nothing), keeping `extract()` on its
-    unchanged per-file path. `_modulegraph.build_cross_module_consts` is
-    import-filtered, so only names THIS unit imports resolve — a same-named local
-    const in an unrelated module can never leak in and fabricate a value (REQ-C2)."""
-    if not export_index or importer_key is None:
-        return None
-    imports = _modulegraph.collect_named_imports(_modulegraph.parse(unit_text))
-    if not imports:
-        return None
-    return _modulegraph.build_cross_module_consts(importer_key, imports, export_index) or None
+    importer_key: str | None, unit_text: str, cross_index: CrossModuleIndex | None
+) -> tuple[dict[str, str] | None, dict[str, dict[str, str]] | None]:
+    """Resolve this unit's cross-chunk references, returning
+    ``(cross_module_consts, webpack_members)`` for `extract()` — either/both ``None``
+    when nothing resolves (keeping `extract()` on its unchanged per-file path).
+
+    ESM: a unit's named imports resolved against the export index, keyed by
+    ``importer_key`` (recovered ``f.path`` or a no-map chunk's ``url_module_key``).
+    Webpack: a unit's ``require`` aliases resolved against its OWN build's modules
+    (`webpack_build_id`), so ids from a different build never cross-wire. Both are
+    import/require-filtered upstream, so an unrelated module can never leak a value
+    in and fabricate a URL (REQ-C2). The unit is parsed once here for both."""
+    if not cross_index:
+        return None, None
+    tree = _modulegraph.parse(unit_text)
+    consts: dict[str, str] | None = None
+    if cross_index.exports and importer_key is not None:
+        imports = _modulegraph.collect_named_imports(tree)
+        if imports:
+            consts = (
+                _modulegraph.build_cross_module_consts(importer_key, imports, cross_index.exports)
+                or None
+            )
+    members: dict[str, dict[str, str]] | None = None
+    if cross_index.webpack:
+        build_id = _modulegraph.webpack_build_id(unit_text)
+        modules = cross_index.webpack.get(build_id) if build_id is not None else None
+        if modules:
+            requires = _modulegraph.collect_webpack_requires(tree)
+            resolved = {a: modules[m] for a, m in requires.items() if m in modules}
+            members = resolved or None
+    return consts, members
 
 
 def _extract_endpoints(
@@ -384,7 +421,7 @@ def _extract_endpoints(
     run_asset_id: str | None,
     asset_url: str | None,
     wrappers: Sequence[WrapperRule] = (),
-    export_index: dict[str, dict[str, str]] | None = None,
+    cross_index: CrossModuleIndex | None = None,
 ) -> _EndpointExtraction:
     """Extract + record ONLY endpoint/param findings for one blob.
 
@@ -397,11 +434,11 @@ def _extract_endpoints(
     endpoint keeps its source-map-recovered path and thus its stable
     `finding_hash` (§12 Imp 4).
 
-    ``export_index`` is the run-level map of every module's exported string consts
-    (`build_export_index`); when supplied, each unit's cross-module imports are
-    resolved against it so a cross-chunk `fetch(API_BASE + PATH)` attributes. BOTH
-    callers pass the SAME index so the re-extract writes the identical resolved
-    endpoint the analyze pass did — never a contradictory unresolved skeleton."""
+    ``cross_index`` is the run-level cross-module index (`build_export_index`); when
+    supplied, each unit's ESM imports / webpack requires are resolved against it so a
+    cross-chunk `fetch(API_BASE + PATH)` / `fetch(r.t + r.M)` attributes. BOTH callers
+    pass the SAME index so the re-extract writes the identical resolved endpoint the
+    analyze pass did — never a contradictory unresolved skeleton."""
     units, source_map_status, sources_recovered = _analysis_units(
         source_map_ref, source, source_map_origin
     )
@@ -421,10 +458,17 @@ def _extract_endpoints(
             if is_bundle and asset_url is not None
             else source_name
         )
-        # cross-module imports resolve against `build_export_index`'s entries under
-        # that same key (recovered `f.path`, or no-map `url_module_key`).
-        cross_module_consts = _resolve_cross_module(importer_key, unit_text, export_index)
-        extraction = extract(unit_text, wrappers=wrappers, cross_module_consts=cross_module_consts)
+        # cross-module refs resolve against the index under that same key (recovered
+        # `f.path`, or no-map `url_module_key`) for ESM, and per-build for webpack.
+        cross_module_consts, webpack_members = _resolve_cross_module(
+            importer_key, unit_text, cross_index
+        )
+        extraction = extract(
+            unit_text,
+            wrappers=wrappers,
+            cross_module_consts=cross_module_consts,
+            webpack_members=webpack_members,
+        )
         path = normalize.normalize_source_path(source_name)
         attributed += len(extraction.endpoints)
         unattributed += extraction.unattributed
@@ -515,7 +559,7 @@ def _analyze_blob(
     run_asset_id: str | None,
     asset_url: str | None,
     wrappers: Sequence[WrapperRule] = (),
-    export_index: dict[str, dict[str, str]] | None = None,
+    cross_index: CrossModuleIndex | None = None,
 ) -> tuple[Coverage, RecordedEvent]:
     """Analyze one blob — the legacy single input OR one crawled asset — and
     persist its findings inside the caller's OPEN ``session``.
@@ -546,7 +590,7 @@ def _analyze_blob(
         run_asset_id=run_asset_id,
         asset_url=asset_url,
         wrappers=wrappers,
-        export_index=export_index,
+        cross_index=cross_index,
     )
     written = endpoints.written
 
@@ -710,10 +754,27 @@ def _resolve_source_map(
     return None, "none"
 
 
-def _merge_module_exports(index: dict[str, dict[str, str]], key: str, content: bytes) -> None:
-    exports = _modulegraph.collect_module_exports(_modulegraph.parse(content))
-    if exports:
-        index.setdefault(key, {}).update(exports)
+def _merge_module_exports(exports: dict[str, dict[str, str]], key: str, content: bytes) -> None:
+    module_exports = _modulegraph.collect_module_exports(_modulegraph.parse(content))
+    if module_exports:
+        exports.setdefault(key, {}).update(module_exports)
+
+
+def _harvest_minified(source: str, asset_url: str | None, index: CrossModuleIndex) -> None:
+    """No-map chunk: parse the minified source ONCE and harvest BOTH webpack modules
+    (keyed per build id, `webpack_build_id`) and minified-ESM exports (keyed by URL
+    path). A chunk is one bundler or the other, so the wrong-bundler branch simply
+    finds nothing — no double parse (folds the webpack harvest into the ESM pass, F6)."""
+    tree = _modulegraph.parse(source)
+    build_id = _modulegraph.webpack_build_id(source)
+    if build_id is not None:
+        modules = _modulegraph.collect_webpack_modules(tree)
+        if modules:
+            index.webpack.setdefault(build_id, {}).update(modules)
+    if asset_url:
+        esm_exports = _modulegraph.collect_module_exports(tree)
+        if esm_exports:
+            index.exports.setdefault(_modulegraph.url_module_key(asset_url), {}).update(esm_exports)
 
 
 def _harvest_asset_exports(
@@ -721,16 +782,16 @@ def _harvest_asset_exports(
     source_map_ref: str | None,
     asset_url: str | None,
     source_map_origin: str,
-    index: dict[str, dict[str, str]],
+    index: CrossModuleIndex,
 ) -> None:
-    """Merge one asset's exported string consts into ``index``, keyed to MIRROR the
+    """Merge one asset's cross-module exports into ``index``, keyed to MIRROR the
     module identity the per-asset extract loop will use (`_analysis_units`):
 
-    - a source map that recovers original files -> keyed by each recovered ``f.path``;
+    - a source map that recovers original files -> ESM exports keyed by each recovered
+      ``f.path``;
     - otherwise (no map, unavailable, or nothing recovered -> the loop analyzes the
-      asset as one ``input.js`` bundle unit) -> keyed by the served URL's path
-      (`url_module_key`), parsed straight from the minified source. This is the
-      no-map cross-chunk case (minified-ESM `export{local as Name}`).
+      asset as one ``input.js`` bundle unit) -> `_harvest_minified`: webpack modules
+      keyed per build id, and minified-ESM `export{local as Name}` keyed by URL path.
     """
     if source_map_ref:
         map_bytes, origin = _resolve_source_map(source_map_ref, "", source_map_origin)
@@ -749,16 +810,13 @@ def _harvest_asset_exports(
             recovered = None
         if recovered is not None and recovered.status == "ok" and recovered.files:
             for recovered_file in recovered.files:
-                _merge_module_exports(index, recovered_file.path, recovered_file.content)
-            return  # recovered -> f.path keys (matches _analysis_units's recovered branch)
-    # No usable map: the loop will analyze this asset as one bundle unit whose
-    # identity is the served URL, so key its exports there too. Legacy single-blob
-    # (no asset_url) has no sibling chunk to cross-reference -> nothing to add.
-    if not asset_url:
-        return
+                _merge_module_exports(index.exports, recovered_file.path, recovered_file.content)
+            return  # recovered -> f.path ESM keys (matches _analysis_units's recovered branch)
+    # No usable map: the loop analyzes this asset as one bundle unit. Harvest webpack
+    # modules (by build id — cross-chunk sibling) and/or minified-ESM exports (by URL).
     if source is None:
         source = storage.get_blob(input_ref).decode("utf-8", "replace")
-    _merge_module_exports(index, _modulegraph.url_module_key(asset_url), source.encode("utf-8"))
+    _harvest_minified(source, asset_url, index)
 
 
 def build_export_index(
@@ -766,30 +824,30 @@ def build_export_index(
     *,
     source_map_origin: str = "capture",
     heartbeat: Callable[[], None] | None = None,
-) -> dict[str, dict[str, str]]:
-    """Run-level index of every recovered module's exported string consts so the
-    per-asset extract loop can resolve a cross-chunk `fetch(API_BASE + PATH)` whose
-    operands are imported from another chunk (recon.findings._modulegraph).
+) -> CrossModuleIndex:
+    """Run-level `CrossModuleIndex` so the per-asset extract loop can resolve a
+    cross-chunk `fetch(API_BASE + PATH)` (ESM) or `fetch(r.t + r.M)` (webpack) whose
+    operands live in a sibling chunk (recon.findings._modulegraph).
 
     Best-effort enrichment, exactly like the fingerprint pass: a per-asset failure
-    contributes no exports and NEVER fails the run; only a cooperative control
-    interrupt (raised by ``heartbeat``) propagates. ``heartbeat`` is called once
-    per processed asset to renew the worker lease + honor REQ-A4 (the crawl-analyze
-    caller supplies it; the synchronous re-extract caller passes ``None``).
+    contributes nothing and NEVER fails the run; only a cooperative control interrupt
+    (raised by ``heartbeat``) propagates. ``heartbeat`` is called once per processed
+    asset to renew the worker lease + honor REQ-A4 (the crawl-analyze caller supplies
+    it; the synchronous re-extract caller passes ``None``).
 
-    Handles both the source-map path (keys by recovered ``f.path``) and the no-map
-    path (keys by ``url_module_key`` from the minified source) — see
-    ``_harvest_asset_exports``.
+    Covers the source-map path (ESM exports by ``f.path``), the no-map minified-ESM
+    path (ESM exports by ``url_module_key``), and the no-map webpack path (modules per
+    build id) — see ``_harvest_asset_exports`` / ``_harvest_minified``.
 
     NOTE(DEBT D28): for a mapped asset this recovers the source map a SECOND time —
-    the per-asset extract loop recovers it again for full extraction, so a large
-    crawl pays 2x sourcemapper subprocess spawns per mapped asset; a no-map asset is
-    likewise parsed here AND again in the loop. Correct and memory-bounded (only the
-    small export index persists, not recovered/source text); follow-up is to cache
-    recovered units for reuse or fold the harvest into the main loop with deferred
-    resolution (extends the recovery/stall note in ``_analysis_units``).
+    the per-asset extract loop recovers it again for full extraction, so a large crawl
+    pays 2x sourcemapper subprocess spawns per mapped asset; a no-map asset is likewise
+    tree-sitter-parsed here AND again in the loop. Correct and memory-bounded (only the
+    small index persists, not recovered/source text); follow-up is to cache recovered
+    units or fold the harvest into the main loop with deferred resolution (extends the
+    recovery/stall note in ``_analysis_units``).
     """
-    index: dict[str, dict[str, str]] = {}
+    index = CrossModuleIndex()
     for asset in rows:
         if asset.fetch_status != AssetStatus.OK.value or not asset.input_ref:
             continue
@@ -799,7 +857,7 @@ def build_export_index(
             _harvest_asset_exports(
                 asset.input_ref, asset.source_map_ref, asset.url, source_map_origin, index
             )
-        except Exception as exc:  # noqa: BLE001 - best-effort; a bad asset just yields no exports
+        except Exception as exc:  # noqa: BLE001 - best-effort; a bad asset just yields nothing
             log.warning("analyze.export_index_asset_failed", url=asset.url, error=str(exc))
     return index
 

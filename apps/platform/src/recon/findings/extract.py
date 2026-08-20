@@ -83,6 +83,7 @@ def extract(
     wrappers: Sequence[WrapperRule] = (),
     *,
     cross_module_consts: Mapping[str, str] | None = None,
+    webpack_members: Mapping[str, Mapping[str, str]] | None = None,
 ) -> Extraction:
     """Extract network endpoints from JavaScript source.
 
@@ -92,14 +93,19 @@ def extract(
     `cross_module_consts` maps a name this unit IMPORTS from another module to that
     exporter's string literal (built by recon.findings._modulegraph from a run-level
     export index). It lets the sink resolver fold a cross-chunk `fetch(API_BASE +
-    ORDERS_PATH)` whose operands live in a sibling chunk; empty/None = today's
-    per-file behavior, unchanged.
+    ORDERS_PATH)` whose operands live in a sibling chunk.
+
+    `webpack_members` is the minified-webpack analogue (2b): a `var r = require(id)`
+    alias -> that module's exported string consts, so `fetch(r.t + r.M)` folds. Both
+    empty/None = today's per-file behavior, unchanged.
     """
     data = source.encode("utf-8") if isinstance(source, str) else source
     tree = _PARSER.parse(data)
     env = collect_base_env(tree.root_node, data)
     if cross_module_consts:
         env = replace(env, cross_module_consts=dict(cross_module_consts))
+    if webpack_members:
+        env = replace(env, webpack_members={k: dict(v) for k, v in webpack_members.items()})
     callees = wrapper_callees(wrappers)
     result = Extraction()
     for node in _walk(tree.root_node):

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -239,3 +240,186 @@ def parse(source: str | bytes) -> Node:
     """Parse a unit's source to a tree-sitter root node (shared parser)."""
     data = source.encode("utf-8") if isinstance(source, str) else source
     return _PARSER.parse(data).root_node
+
+
+# --- minified webpack module graph (Increment 2b) ---------------------------- #
+#
+# A no-map webpack chunk is a registry of numeric-keyed modules
+# ``{389(module,exports,require){ ... require.d(exports, DEFN) ... }, ...}``; a
+# consumer does ``var r = require(389); fetch(r.t + r.M)``. We resolve a cross-chunk
+# member sink by: (1) indexing every module's statically-known string exports by
+# module id, SCOPED per webpack build (`webpack_build_id`) because ids are unique
+# only within one build; (2) mapping a consumer's ``var X = require(id)`` aliases to
+# that build's modules; (3) folding ``X.prop`` at the sink. Honesty is preserved
+# throughout: only string-resolvable exports are kept, ambiguous aliases are dropped.
+
+# The jsonp global `webpackChunk<uniqueName>` webpack itself uses to keep separate
+# builds apart — our per-build index key, so a third-party webpack widget's module
+# `389` can never cross-wire into the first-party bundle's `389` (adversary F4).
+_WEBPACK_CHUNK_RE = re.compile(r"webpackChunk([A-Za-z0-9_$]+)")
+
+# Bound getter-arrow recursion (`() => () => …`) — a crafted deep chain would else
+# overflow the stack (DoS); real export getters are `() => localConst`, depth 1.
+_MAX_GETTER_DEPTH = 12
+
+
+def webpack_build_id(source: str) -> str | None:
+    """The webpack build's uniqueName (from its `webpackChunk<name>` jsonp global),
+    or ``None`` if the source isn't a webpack chunk. Used to scope the module index
+    per build. A false match only mis-scopes (→ no resolution), never mis-resolves."""
+    match = _WEBPACK_CHUNK_RE.search(source)
+    return match.group(1) if match else None
+
+
+def _resolve_getter(node: Node | None, consts: dict[str, str], depth: int = 0) -> str | None:
+    """Resolve a webpack export getter slot to a string: a local-const identifier, an
+    arrow ``() => X`` (recurse into its body), a parenthesized wrapper, or a literal.
+    Anything else (a function body, a computed expression) -> ``None`` (honest)."""
+    if node is None or depth > _MAX_GETTER_DEPTH:
+        return None
+    if node.end_byte - node.start_byte > _MAX_URL_SPAN:
+        return None  # bail before an O(span) decode of a pathological giant node (DoS)
+    if node.type == "identifier":
+        return consts.get(_text(node))
+    if node.type == "arrow_function":
+        return _resolve_getter(node.child_by_field_name("body"), consts, depth + 1)
+    if node.type == "parenthesized_expression":
+        inner = node.named_children
+        return _resolve_getter(inner[0], consts, depth + 1) if len(inner) == 1 else None
+    return _string_value(node)
+
+
+def _decode_nd(defn: Node, consts: dict[str, str]) -> dict[str, str]:
+    """Decode ``require.d(exports, DEFN)``'s DEFN to ``{export_name: string value}``.
+
+    DEFN is either an OBJECT ``{name: () => getter}`` or the webpack-5 production
+    ARRAY form, whose stride is VARIABLE (adversary F3): reading name then the next
+    slot, a numeric ``0`` flag means a 3-slot value entry (``["M", 0, r]``) while any
+    other slot IS the 2-slot getter (``["name", () => v]``) — mirroring webpack's own
+    `d` runtime. Only string-resolvable exports are kept."""
+    out: dict[str, str] = {}
+    if defn.type == "array":
+        elems = defn.named_children
+        i = 0
+        while i < len(elems):
+            name = _string_value(elems[i])
+            if name is None or i + 1 >= len(elems):
+                break  # malformed / truncated -> stop rather than mis-pair
+            flag = elems[i + 1]
+            if flag.type == "number" and _text(flag) == "0":  # value entry, stride 3
+                if i + 2 >= len(elems):
+                    break
+                value = _resolve_getter(elems[i + 2], consts)
+                i += 3
+            else:  # the slot itself is the getter, stride 2
+                value = _resolve_getter(flag, consts)
+                i += 2
+            if value is not None:
+                out[name] = value
+    elif defn.type == "object":
+        for pair in defn.named_children:
+            if pair.type != "pair":
+                continue  # skip spread / method shorthand
+            key = pair.child_by_field_name("key")
+            value_node = pair.child_by_field_name("value")
+            if key is None or value_node is None:
+                continue
+            if key.type == "string":
+                name = _string_value(key)
+            elif key.type in ("property_identifier", "identifier"):
+                name = _text(key)
+            else:
+                continue  # computed key -> not statically known
+            value = _resolve_getter(value_node, consts)
+            if name is not None and value is not None:
+                out[name] = value
+    return out
+
+
+def _webpack_require_param(method: Node) -> str | None:
+    """The 3rd formal parameter of a webpack module fn — its ``__webpack_require__``."""
+    params = method.child_by_field_name("parameters")
+    if params is None or len(params.named_children) < 3:
+        return None
+    require = params.named_children[2]
+    return _text(require) if require.type == "identifier" else None
+
+
+def _webpack_module_defs(root: Node) -> Iterator[tuple[str, str, Node]]:
+    """Yield ``(module_id, require_name, body)`` for each numeric-keyed
+    ``method_definition`` module in the chunk that binds a require param."""
+    for node in _walk(root):
+        if node.type != "method_definition":
+            continue
+        name = node.child_by_field_name("name")
+        body = node.child_by_field_name("body")
+        require = _webpack_require_param(node)
+        if name is not None and name.type == "number" and body is not None and require is not None:
+            yield _text(name), require, body
+
+
+def collect_webpack_modules(root: Node) -> dict[str, dict[str, str]]:
+    """Index a chunk's webpack modules -> ``{module_id: {export_name: string value}}``.
+
+    Scope (adversary F5): the webpack-5 method-shorthand object registry only
+    (``{389(e,t,n){…}}``). Older ``{389: function(e,t,n){}}`` / sparse-array / bare
+    function-expression registries are out of scope — they yield no modules (lossy,
+    never a wrong value). A stray numeric-keyed method with no ``require.d`` export
+    call contributes nothing, so the ``.d``-gate keeps false positives inert."""
+    modules: dict[str, dict[str, str]] = {}
+    for module_id, require_name, body in _webpack_module_defs(root):
+        consts = _local_string_consts(body)
+        exports: dict[str, str] = {}
+        for call in _walk(body):
+            if call.type != "call_expression":
+                continue
+            fn = call.child_by_field_name("function")
+            if fn is None or fn.type != "member_expression":
+                continue
+            obj = fn.child_by_field_name("object")
+            prop = fn.child_by_field_name("property")
+            if obj is None or prop is None or _text(prop) != "d" or _text(obj) != require_name:
+                continue  # require.d(exports, DEFN) only
+            args = call.child_by_field_name("arguments")
+            if args is not None and len(args.named_children) >= 2:
+                exports.update(_decode_nd(args.named_children[1], consts))
+        if exports:
+            modules[module_id] = exports
+    return modules
+
+
+def collect_webpack_requires(root: Node) -> dict[str, str]:
+    """Map a chunk's ``var X = require(id)`` aliases -> ``{alias: module_id}``.
+
+    Poison-safe (adversary F1): an alias whose name is bound/reassigned/shadowed more
+    than once anywhere in the chunk (via `_declared_names`) OR that binds to more than
+    one distinct module id is EXCLUDED — a flat chunk-level map must never mis-resolve
+    a param-shadowed or reassigned name to a require it isn't (lossy but honest)."""
+    poisoned = _declared_names(root)
+    aliases: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for _module_id, require_name, body in _webpack_module_defs(root):
+        for decl in _walk(body):
+            if decl.type != "variable_declarator":
+                continue
+            lhs = decl.child_by_field_name("name")
+            rhs = decl.child_by_field_name("value")
+            if (
+                lhs is None
+                or lhs.type != "identifier"
+                or rhs is None
+                or rhs.type != "call_expression"
+            ):
+                continue
+            fn = rhs.child_by_field_name("function")
+            if fn is None or fn.type != "identifier" or _text(fn) != require_name:
+                continue  # X = require(...)
+            args = rhs.child_by_field_name("arguments")
+            arg = args.named_children[0] if args is not None and args.named_children else None
+            if arg is None or arg.type != "number":
+                continue
+            alias, module_id = _text(lhs), _text(arg)
+            if alias in aliases and aliases[alias] != module_id:
+                ambiguous.add(alias)
+            aliases[alias] = module_id
+    return {a: m for a, m in aliases.items() if a not in poisoned and a not in ambiguous}
