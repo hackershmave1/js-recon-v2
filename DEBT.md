@@ -221,6 +221,37 @@ lease. Follow-up: cache the recovered units for reuse across the two passes, or 
 export harvest into the main loop with deferred (post-loop) resolution. Extends the
 recovery/stall note in `_analysis_units`. `# NOTE(DEBT)` marks the site.
 
+#### D29 · Deferred SES/Node exec engine for webpack chunk-URL enumeration [L]  ·  supply-chain/security
+The static cross-chunk resolver (Increments 1/2a/2b, main @ `93d2fd8`) resolves fetch/axios
+URLs split across chunks, but does NOT yet **enumerate lazy-chunk URLs** by executing the
+bundle's own `__webpack_require__.u` builder — the recall edge `js-recon` gets via `ses`/`lockdown`.
+The user approved that execution as a **posture change** (static-only → local sandboxed execution
+of target code), but we **sequenced it behind** a pure-Python static-template-emulation slice
+(covers the standard `"static/chunks/"+id+"."+map[id]+".js"` form with zero new attack surface,
+no posture change). The exec engine (executing *arbitrary/obfuscated* builders in a Node sandbox)
+is deferred to its own hardening slice. Design spec:
+`apps/platform/docs/superpowers/p4-ses-chunk-enumeration-design.md`.
+**§4 adversarial security review (2026-08-20) = PROCEED-WITH-CHANGES.** These six are a hard
+security contract that gates ANY exec-path code (SES `lockdown` is a JavaScript boundary only —
+if V8/SES is escaped the process has ambient OS authority):
+1. **Network namespace, no interfaces** — the real "no traffic" guarantee. `engines.py:15-20`
+   documents that the `subprocess.run` timeout kills only the DIRECT child, not grandchildren,
+   so escaped code could fork a detached grandchild that outlives the kill and does network I/O.
+2. **Kill the whole process tree** — `start_new_session=True` + `os.killpg`, or let nsjail reap.
+3. **Explicit minimal env** — `run_engine`'s `env` defaults to `None` → `subprocess.run` inherits
+   the worker's secret-bearing environment (auth signing key, S3, DB creds). Never inherit; test it.
+4. **Memory + pids caps** — `node --max-old-space-size` + `ulimit -v`/cgroup + `pids_limit`. SES
+   by its own docs "does not protect availability"; `run_engine`'s output cap is post-hoc
+   (`engines.py:111-117` bounds what we *process*, not peak RAM).
+5. **Cap enumerated URL count + length** before seeding — the builder output is attacker-controlled.
+6. **Pin the whole `@endo` tree with integrity**; treat SES as defense-in-depth, never the sole boundary.
+Also requires an ADR-0006 posture amendment (local sandboxed execution of extracted target code, no-network
+sandbox) + an ADR-0005 note, and its own §4 gates. **Already safe (no work owed):** enumerated
+(content-derived) URLs cannot widen egress — every fetch hop re-runs `egress.validate_target`
+(out-of-scope host / `data:`+`file:` scheme / userinfo all rejected; `scope_hosts` never populated
+from content), so the static slice and any future engine both inherit that guard by routing URLs
+exclusively through the seed→fetch path.
+
 #### D9 · Test-pyramid inversion [L, ongoing]  ·  maintainability
 42/75 backend test files need live PG/Redis/MinIO; the fast hermetic layer is the
 minority, so the heavy lane catches most real bugs. Grow the small-test layer.
