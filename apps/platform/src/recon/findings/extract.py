@@ -30,7 +30,7 @@ are re-exported here (see ``__all__``) because downstream modules
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from tree_sitter import Node
@@ -78,15 +78,28 @@ __all__ = [
 ]
 
 
-def extract(source: str | bytes, wrappers: Sequence[WrapperRule] = ()) -> Extraction:
+def extract(
+    source: str | bytes,
+    wrappers: Sequence[WrapperRule] = (),
+    *,
+    cross_module_consts: Mapping[str, str] | None = None,
+) -> Extraction:
     """Extract network endpoints from JavaScript source.
 
     `wrappers` names custom HTTP-client callees (`api`, `apiClient`) whose member
     calls are recognized via the axios path (spec §4); empty = today's fixed set only.
+
+    `cross_module_consts` maps a name this unit IMPORTS from another module to that
+    exporter's string literal (built by recon.findings._modulegraph from a run-level
+    export index). It lets the sink resolver fold a cross-chunk `fetch(API_BASE +
+    ORDERS_PATH)` whose operands live in a sibling chunk; empty/None = today's
+    per-file behavior, unchanged.
     """
     data = source.encode("utf-8") if isinstance(source, str) else source
     tree = _PARSER.parse(data)
     env = collect_base_env(tree.root_node, data)
+    if cross_module_consts:
+        env = replace(env, cross_module_consts=dict(cross_module_consts))
     callees = wrapper_callees(wrappers)
     result = Extraction()
     for node in _walk(tree.root_node):

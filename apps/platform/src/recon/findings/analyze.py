@@ -17,7 +17,7 @@ unit, unchanged. Both paths share the per-blob work via ``_analyze_blob``.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -33,6 +33,7 @@ from recon.domain import AssetStatus, FindingType
 from recon.events.log import RecordedEvent, publish, record_event
 from recon.fetch import egress
 from recon.findings import (
+    _modulegraph,
     deobfuscate,
     engines,
     graphql_ops,
@@ -150,6 +151,15 @@ def _analyze_legacy(
     if not input_ref:
         return Coverage(0, 0, 0)
 
+    # Cross-chunk pre-pass: a monolithic bundle's map can recover several original
+    # modules that import one another, so build the export index from this blob too
+    # (best-effort — a failure just means no cross-module resolution, never a failed run).
+    export_index: dict[str, dict[str, str]] = {}
+    try:
+        _harvest_map_exports(input_ref, source_map_ref, "uploaded", export_index)
+    except Exception as exc:  # noqa: BLE001 - best-effort enrichment
+        log.warning("analyze.export_index_legacy_failed", run_id=run_id, error=str(exc))
+
     with tenant_session(tenant_id) as session:  # one REQ-A3 staging transaction
         coverage, coverage_event = _analyze_blob(
             session,
@@ -160,6 +170,7 @@ def _analyze_legacy(
             run_asset_id=None,
             asset_url=None,
             wrappers=wrappers,
+            export_index=export_index,
         )
     publish(redis, coverage_event)
     log.info(
@@ -245,6 +256,27 @@ def _analyze_assets(
     terminal = (AssetStatus.OK.value, AssetStatus.FAILED.value)
     done = 0
     agg = Coverage(0, 0, 0)
+
+    # Phase A (cross-chunk pre-pass): a run-level index of every module's exported
+    # string consts so the per-asset loop below can resolve a `fetch(API_BASE +
+    # PATH)` whose operands are imported from ANOTHER chunk. Renews the lease +
+    # honors a control interrupt per asset (REQ-A4) so this extra pass can't go
+    # unheartbeated long enough for a peer worker to reclaim the job.
+    def _phase_a_heartbeat() -> None:
+        run_queries.raise_if_control_requested(tenant_id, run_id)
+        if job_id:
+            progress.beat(
+                redis,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                job_id=job_id,
+                done=0,
+                total=total,
+                emit_event=False,  # lease renewal only — no progress event during the pre-pass
+            )
+
+    export_index = build_export_index(rows, heartbeat=_phase_a_heartbeat)
+
     for asset in rows:
         if asset.fetch_status != AssetStatus.OK.value or asset.analyze_status in terminal:
             continue  # not fetched yet, or already analyze-terminal (idempotent skip)
@@ -276,6 +308,7 @@ def _analyze_assets(
                     run_asset_id=asset.id,
                     asset_url=asset.url,
                     wrappers=wrappers,
+                    export_index=export_index,
                 )
                 run_assets.set_analyze_ok(session, asset.id)
         except (ClientError, SQLAlchemyError):
@@ -319,6 +352,23 @@ class _EndpointExtraction:
     files: tuple[FileCoverage, ...]
 
 
+def _resolve_cross_module(
+    source_name: str, unit_text: str, export_index: dict[str, dict[str, str]] | None
+) -> dict[str, str] | None:
+    """Resolve this unit's named cross-module imports to their exporters' string
+    literals, for `extract()`. Returns ``None`` when there is nothing to resolve
+    (no index, or the unit imports nothing), keeping `extract()` on its unchanged
+    per-file path. `_modulegraph.build_cross_module_consts` is import-filtered, so
+    only names THIS unit imports resolve — a same-named local const in an unrelated
+    module can never leak in and fabricate a value (REQ-C2 honesty)."""
+    if not export_index:
+        return None
+    imports = _modulegraph.collect_named_imports(_modulegraph.parse(unit_text))
+    if not imports:
+        return None
+    return _modulegraph.build_cross_module_consts(source_name, imports, export_index) or None
+
+
 def _extract_endpoints(
     session: Session,
     *,
@@ -330,6 +380,7 @@ def _extract_endpoints(
     run_asset_id: str | None,
     asset_url: str | None,
     wrappers: Sequence[WrapperRule] = (),
+    export_index: dict[str, dict[str, str]] | None = None,
 ) -> _EndpointExtraction:
     """Extract + record ONLY endpoint/param findings for one blob.
 
@@ -340,7 +391,13 @@ def _extract_endpoints(
     §2.6/§12 Blocker 1 — and WITHOUT the Kingfisher subprocess — §12 Blocker 2).
     Retains `_analysis_units(source_map_ref, source)` so a re-emitted native
     endpoint keeps its source-map-recovered path and thus its stable
-    `finding_hash` (§12 Imp 4)."""
+    `finding_hash` (§12 Imp 4).
+
+    ``export_index`` is the run-level map of every module's exported string consts
+    (`build_export_index`); when supplied, each unit's cross-module imports are
+    resolved against it so a cross-chunk `fetch(API_BASE + PATH)` attributes. BOTH
+    callers pass the SAME index so the re-extract writes the identical resolved
+    endpoint the analyze pass did — never a contradictory unresolved skeleton."""
     units, source_map_status, sources_recovered = _analysis_units(
         source_map_ref, source, source_map_origin
     )
@@ -349,7 +406,10 @@ def _extract_endpoints(
     written = 0
     per_file: dict[str, list[int]] = {}
     for source_name, unit_text in units:
-        extraction = extract(unit_text, wrappers=wrappers)
+        # `source_name` is the recovered `f.path` — the SAME key `build_export_index`
+        # stores exports under — so cross-module imports resolve by that identity.
+        cross_module_consts = _resolve_cross_module(source_name, unit_text, export_index)
+        extraction = extract(unit_text, wrappers=wrappers, cross_module_consts=cross_module_consts)
         path = normalize.normalize_source_path(source_name)
         attributed += len(extraction.endpoints)
         unattributed += extraction.unattributed
@@ -440,6 +500,7 @@ def _analyze_blob(
     run_asset_id: str | None,
     asset_url: str | None,
     wrappers: Sequence[WrapperRule] = (),
+    export_index: dict[str, dict[str, str]] | None = None,
 ) -> tuple[Coverage, RecordedEvent]:
     """Analyze one blob — the legacy single input OR one crawled asset — and
     persist its findings inside the caller's OPEN ``session``.
@@ -470,6 +531,7 @@ def _analyze_blob(
         run_asset_id=run_asset_id,
         asset_url=asset_url,
         wrappers=wrappers,
+        export_index=export_index,
     )
     written = endpoints.written
 
@@ -631,6 +693,69 @@ def _resolve_source_map(
     if inline:
         return inline, "inline"
     return None, "none"
+
+
+def _harvest_map_exports(
+    input_ref: str,
+    source_map_ref: str | None,
+    source_map_origin: str,
+    index: dict[str, dict[str, str]],
+) -> None:
+    """Recover one asset's original sources from its map and merge every module's
+    exported string consts into ``index``, keyed by the SAME recovered ``f.path``
+    the per-asset extract loop uses (`_analysis_units`) so a consuming module's
+    import resolves by that identical key."""
+    if source_map_ref:
+        map_bytes, origin = _resolve_source_map(source_map_ref, "", source_map_origin)
+    else:  # no stored ref -> only an inline `data:` map can contribute (read the blob)
+        source = storage.get_blob(input_ref).decode("utf-8", "replace")
+        map_bytes, origin = _resolve_source_map(None, source, source_map_origin)
+    if not map_bytes:
+        return
+    recovered = sourcemapper.recover_sources(map_bytes, origin=origin)
+    if recovered.status != "ok":
+        return
+    for recovered_file in recovered.files:
+        exports = _modulegraph.collect_module_exports(_modulegraph.parse(recovered_file.content))
+        if exports:
+            index.setdefault(recovered_file.path, {}).update(exports)
+
+
+def build_export_index(
+    rows: Sequence[run_assets.AssetRow],
+    *,
+    source_map_origin: str = "capture",
+    heartbeat: Callable[[], None] | None = None,
+) -> dict[str, dict[str, str]]:
+    """Run-level index of every recovered module's exported string consts so the
+    per-asset extract loop can resolve a cross-chunk `fetch(API_BASE + PATH)` whose
+    operands are imported from another chunk (recon.findings._modulegraph).
+
+    Best-effort enrichment, exactly like the fingerprint pass: a per-asset failure
+    contributes no exports and NEVER fails the run; only a cooperative control
+    interrupt (raised by ``heartbeat``) propagates. ``heartbeat`` is called once
+    per processed asset to renew the worker lease + honor REQ-A4 (the crawl-analyze
+    caller supplies it; the synchronous re-extract caller passes ``None``).
+
+    NOTE(DEBT): this recovers each mapped asset's source map a SECOND time — the
+    per-asset extract loop recovers it again for full extraction, so a large crawl
+    pays 2x sourcemapper subprocess spawns per mapped asset. Correct and
+    memory-bounded (only the small export index persists, not recovered source);
+    follow-up is to cache recovered units for reuse or fold the harvest into the
+    main loop with deferred resolution (extends the recovery/stall note in
+    ``_analysis_units``).
+    """
+    index: dict[str, dict[str, str]] = {}
+    for asset in rows:
+        if asset.fetch_status != AssetStatus.OK.value or not asset.input_ref:
+            continue
+        if heartbeat is not None:
+            heartbeat()  # lease renew + REQ-A4 control-check (may raise ControlInterrupt)
+        try:
+            _harvest_map_exports(asset.input_ref, asset.source_map_ref, source_map_origin, index)
+        except Exception as exc:  # noqa: BLE001 - best-effort; a bad asset just yields no exports
+            log.warning("analyze.export_index_asset_failed", url=asset.url, error=str(exc))
+    return index
 
 
 def _record_endpoint(

@@ -23,7 +23,8 @@
     { "id": "bs-concat", "src": "src/api/blindspots.js", "expect": "unattributed" },
     { "id": "bs-variable", "src": "src/api/blindspots.js", "expect": "unattributed" },
     { "id": "bs-wrapper", "src": "src/api/blindspots.js", "expect": "no_trace", "probe": "/api/v1/hidden" },
-    { "id": "bs-headers", "src": "src/api/secure.js", "expect": "headers_invisible", "endpoint": "ep-secure" }
+    { "id": "bs-headers", "src": "src/api/secure.js", "expect": "headers_invisible", "endpoint": "ep-secure" },
+    { "id": "bs-crosschunk", "src": "src/api/orders.js", "expect": "unattributed" }
   ],
   "secrets": { "must": { "stripe": 2, "aws": 1 }, "info": [ "github", "slack", "hmac" ] },
   "coverage_asserts": { "min_unattributed": 2, "source_map_ok": [ "capture", "inline" ], "require_sources_recovered": true }

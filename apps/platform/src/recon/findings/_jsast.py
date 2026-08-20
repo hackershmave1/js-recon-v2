@@ -177,7 +177,12 @@ class Extraction:
 class BaseEnv:
     instances: dict[str, str | None]  # axios.create var -> base literal, or None if dynamic
     default_base: str | None  # axios.defaults.baseURL literal
-    const_prefixes: dict[str, str]  # const name -> string literal (for `${NAME}` prefixes)
+    const_prefixes: dict[str, str]  # LOCAL const name -> string literal (for `${NAME}` prefixes)
+    # Names imported from ANOTHER module resolved to their exporter's string literal
+    # (recon.findings._modulegraph). Kept SEPARATE from const_prefixes on purpose: the
+    # `+`-folder consults only this map + literals, never local consts, so a same-file
+    # `"/api/" + localConst` concatenation stays honestly unattributed (REQ-C2).
+    cross_module_consts: dict[str, str] = field(default_factory=dict)
 
 
 # --- tree helpers ------------------------------------------------------------
