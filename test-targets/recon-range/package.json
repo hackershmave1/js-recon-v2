@@ -5,10 +5,14 @@
   "engines": { "node": ">=18" },
   "scripts": {
     "build:vite": "vite build",
+    "build:vite:nomap": "vite build --sourcemap false --outDir dist/vite-nomap",
     "build:webpack": "webpack --config webpack.config.js && node scripts/write-index.mjs dist/webpack",
-    "build": "npm run build:vite && npm run build:webpack",
+    "build:webpack:nomap": "webpack --config webpack.config.js --no-devtool --output-path dist/webpack-nomap && node scripts/write-index.mjs dist/webpack-nomap",
+    "build": "npm run build:vite && npm run build:vite:nomap && npm run build:webpack && npm run build:webpack:nomap",
     "serve:vite": "node scripts/serve.mjs dist/vite 4173",
+    "serve:vite:nomap": "node scripts/serve.mjs dist/vite-nomap 4175",
     "serve:webpack": "node scripts/serve.mjs dist/webpack 4174",
+    "serve:webpack:nomap": "node scripts/serve.mjs dist/webpack-nomap 4176",
     "score": "node scripts/score-cli.mjs",
     "test": "npm run build && node --test scripts/*.test.mjs"
   },

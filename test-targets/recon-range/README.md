@@ -33,15 +33,27 @@ assets:
 
 | Bundler | Build | Serve | Origin |
 |---|---|---|---|
-| Vite    | `npm run build:vite`    | `npm run serve:vite`    | `http://localhost:4173` |
-| Webpack | `npm run build:webpack` | `npm run serve:webpack` | `http://localhost:4174` |
+| Vite          | `npm run build:vite`         | `npm run serve:vite`         | `http://localhost:4173` |
+| Webpack       | `npm run build:webpack`      | `npm run serve:webpack`      | `http://localhost:4174` |
+| Vite (no-map) | `npm run build:vite:nomap`   | `npm run serve:vite:nomap`   | `http://localhost:4175` |
+| Webpack (no-map) | `npm run build:webpack:nomap` | `npm run serve:webpack:nomap` | `http://localhost:4176` |
 
-(`npm run build` runs both builds back to back; there's no combined serve script, since the
+(`npm run build` runs all four builds back to back; there's no combined serve script, since the
 capture/score walkthrough below is done one origin at a time.)
 
-Each build emits an entry chunk plus 3 lazy chunks (`import()`-loaded), each with a
-`//# sourceMappingURL=` comment and a same-origin `.map` carrying non-empty `sourcesContent`. If
-a build is missing chunks or maps, `npm test`'s `build-invariants` check will catch it (run `npm test`).
+Each build emits an entry chunk plus 4 lazy chunks (`import()`-loaded). The two default builds ship
+a `//# sourceMappingURL=` comment and a same-origin `.map` carrying non-empty `sourcesContent`. If a
+build is missing chunks or maps, `npm test`'s `build-invariants` check will catch it (run `npm test`).
+
+**Why the two no-map variants exist.** When a captured chunk ships a `.map` with `sourcesContent`,
+the pipeline recovers and analyzes the *original* source — so a cross-module construct like
+`bs-crosschunk` (`orders.js` builds its URL from consts that live in `base.js`) is read from the
+readable original, and the *minified* cross-chunk output the resolver actually has to handle
+(`fetch(a+o)` under Vite, `fetch(r.t+r.M)` under Webpack) is never exercised. The `-nomap` builds
+strip maps so the pipeline is forced onto the minified path. A `build-invariants` check also asserts
+the base URL literal lives in a *different* chunk from the `orders` module in every build (i.e. the
+bundler emitted a real cross-chunk edge instead of inlining it) — without that, the fixture wouldn't
+be testing cross-chunk resolution at all.
 
 ## 3. Capture with the real extension (real Chrome only)
 
@@ -58,11 +70,12 @@ rest of the runbook (build, score) is automatable; this step is not.
    - **Capture scope**: add `localhost` (the extension is fail-closed by registrable domain — a
      host not in scope is silently dropped, so this step is required, not optional).
 3. Click **Start** capture.
-4. Load the target page (`http://localhost:4173`, or `:4174` for the Webpack run) and **scroll to
-   the bottom**. The 3 lazy chunks (`inventory.js`, `social.js`, `live.js`) only load — and
-   therefore only get captured — when their scroll sentinel becomes visible via
-   `IntersectionObserver`. Scrolling past all three is required to capture the full surface;
-   stopping early under-counts chunks and will read as missed endpoints later, not a capture bug.
+4. Load the target page (`http://localhost:4173`, or `:4174` for the Webpack run — or the matching
+   `:4175`/`:4176` no-map origin) and **scroll to the bottom**. The 4 lazy chunks (`inventory.js`,
+   `social.js`, `live.js`, `orders.js`) only load — and therefore only get captured — when their
+   scroll sentinel becomes visible via `IntersectionObserver`. Scrolling past all four is required
+   to capture the full surface; stopping early under-counts chunks and will read as missed endpoints
+   later, not a capture bug.
 5. Click **Stop** capture.
 
 ## 4. Trigger analysis
@@ -154,11 +167,20 @@ design spec's grounded-constraints section), not to an aspirational ideal. Keep 
 reading a score:
 
 - **Blind spots are expected-missing, not bugs.** `known_blind_spots` in the answer key
-  (`bs-eventsource`, `bs-concat`, `bs-variable`, `bs-wrapper`, `bs-headers`) are planted
-  specifically to prove documented limits: `EventSource` calls, concatenated/variable URLs,
+  (`bs-eventsource`, `bs-concat`, `bs-variable`, `bs-wrapper`, `bs-headers`, `bs-crosschunk`) are
+  planted specifically to prove documented limits: `EventSource` calls, concatenated/variable URLs,
   untaught custom HTTP wrappers, and request headers (auth/signature) are all invisible to the
   extractor by design. Their absence from `should_find` results is correct behavior, not something
   to chase.
+- **`bs-crosschunk` is the calibration target for the cross-module resolver.** `orders.js` builds
+  its request URL entirely from consts imported from another module (`base.js`), so the per-file
+  extractor sees `fetch(API_BASE + ORDERS_PATH)` — two unresolvable cross-module identifiers — and
+  counts the call `unattributed` rather than guessing (`expect: "unattributed"`). It is deliberately
+  *not* in `should_find` today. When the cross-module/cross-chunk resolver lands, this construct
+  should flip to a resolved `GET https://api.acme.com/api/v3/orders`, at which point it moves into
+  `should_find` (GREEN). Note the resolver must stay scoped to cross-module const operands: folding
+  `bs-concat`'s `"/api/v1/" + resource` (a *local* const) would drop `unattributed` below the
+  `min_unattributed: 2` floor and read as a regression.
 - **GitHub, Slack, and HMAC secret classes are informational, not gating.** Only Stripe (×2,
   including the one hidden in a preserved `/*! … */` legal comment) and AWS are *verified*
   Kingfisher rule classes in this repo; `secrets.must` only requires those. GitHub/Slack/HMAC
@@ -174,10 +196,14 @@ reading a score:
 
 | Script | What it does |
 |---|---|
-| `npm run build:vite` | Build the Vite bundle to `dist/vite/` |
-| `npm run build:webpack` | Build the Webpack bundle to `dist/webpack/` |
-| `npm run build` | Run both builds |
+| `npm run build:vite` | Build the Vite bundle (with maps) to `dist/vite/` |
+| `npm run build:vite:nomap` | Build the Vite bundle (no maps) to `dist/vite-nomap/` |
+| `npm run build:webpack` | Build the Webpack bundle (with maps) to `dist/webpack/` |
+| `npm run build:webpack:nomap` | Build the Webpack bundle (no maps) to `dist/webpack-nomap/` |
+| `npm run build` | Run all four builds |
 | `npm run serve:vite` | Serve `dist/vite/` on `:4173` |
+| `npm run serve:vite:nomap` | Serve `dist/vite-nomap/` on `:4175` |
 | `npm run serve:webpack` | Serve `dist/webpack/` on `:4174` |
+| `npm run serve:webpack:nomap` | Serve `dist/webpack-nomap/` on `:4176` |
 | `npm run score -- --run <id>` | Score a run's findings against `answer-key.json` (logs in as `admin`/`admin`; see §6) |
-| `npm test` | Build both bundlers, then run every `scripts/*.test.mjs` (build invariants, answer-key consistency, planted-surface presence, scoring logic) |
+| `npm test` | Build all four bundles, then run every `scripts/*.test.mjs` (build invariants, answer-key consistency, planted-surface presence, scoring logic) |
