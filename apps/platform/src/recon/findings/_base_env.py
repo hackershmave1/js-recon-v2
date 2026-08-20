@@ -271,17 +271,26 @@ _MAX_CONCAT_DEPTH = 40
 def _resolve_concat_operand(node: Node | None, env: BaseEnv, depth: int) -> str | None:
     """Resolve one operand of a URL `+` chain to a string, or ``None``.
 
-    Resolvable operands are string literals and CROSS-MODULE const imports
-    (`env.cross_module_consts`) only — deliberately NOT `env.const_prefixes`
-    (local consts). That scope is load-bearing: it lets a cross-chunk
-    `API_BASE + ORDERS_PATH` (both imported) fold while a same-file
-    `"/api/v1/" + resource` (a local const) stays honestly unattributed, so the
-    honesty counter / coverage calibration is unchanged (REQ-C2).
+    Resolvable operands are string literals, CROSS-MODULE const imports
+    (`env.cross_module_consts`, ESM), and a webpack require-alias member
+    (`env.webpack_members[alias][export]`, e.g. `r.t` where `var r = require(389)`) —
+    deliberately NOT `env.const_prefixes` (local consts). That scope is load-bearing:
+    it lets a cross-chunk `API_BASE + ORDERS_PATH` or `r.t + r.M` (all cross-module)
+    fold while a same-file `"/api/v1/" + resource` (a local const) stays honestly
+    unattributed, so the honesty counter / coverage calibration is unchanged (REQ-C2).
     """
     if node is None or depth > _MAX_CONCAT_DEPTH:
         return None
     if node.type == "identifier":
         return env.cross_module_consts.get(_text(node))
+    if node.type == "member_expression":
+        # `alias.export` where `alias` was bound to `require(id)` (webpack, 2b). Only a
+        # simple `identifier.property` resolves; a deeper/computed receiver -> None.
+        obj = node.child_by_field_name("object")
+        prop = node.child_by_field_name("property")
+        if obj is not None and prop is not None and obj.type == "identifier":
+            return env.webpack_members.get(_text(obj), {}).get(_text(prop))
+        return None
     if node.type == "binary_expression":
         operator = node.child_by_field_name("operator")
         if operator is None or _text(operator) != "+":
@@ -300,16 +309,17 @@ def _resolve_concat_operand(node: Node | None, env: BaseEnv, depth: int) -> str 
 
 
 def _fold_cross_module(node: Node, env: BaseEnv) -> str | None:
-    """Fold a bare cross-module const (`fetch(API_BASE)`) or a `+` chain built from
-    literals + cross-module consts (`fetch(API_BASE + ORDERS_PATH)`) to a full URL.
+    """Fold a cross-module operand or a `+` chain of them to a full URL:
+    ESM `fetch(API_BASE)` / `fetch(API_BASE + ORDERS_PATH)`, or webpack
+    `fetch(r.t)` / `fetch(r.t + r.M)`.
 
-    Returns ``None`` unless something cross-module is actually in scope, so with no
-    cross-module index this is a no-op and behavior is byte-for-byte unchanged.
-    All-operands-or-``None`` — a partial resolution never yields a guessed URL.
+    Returns ``None`` unless a cross-module index (ESM consts OR webpack members) is
+    actually in scope, so with neither this is a no-op and behavior is byte-for-byte
+    unchanged. All-operands-or-``None`` — a partial resolution never yields a guess.
     """
-    if not env.cross_module_consts:
+    if not env.cross_module_consts and not env.webpack_members:
         return None
-    if node.type not in ("identifier", "binary_expression"):
+    if node.type not in ("identifier", "member_expression", "binary_expression"):
         return None
     if node.end_byte - node.start_byte > _MAX_URL_SPAN:
         return None  # over-cap expression — bail before the O(span) walk (DoS)

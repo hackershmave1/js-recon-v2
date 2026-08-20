@@ -183,6 +183,11 @@ class BaseEnv:
     # `+`-folder consults only this map + literals, never local consts, so a same-file
     # `"/api/" + localConst` concatenation stays honestly unattributed (REQ-C2).
     cross_module_consts: dict[str, str] = field(default_factory=dict)
+    # Minified-webpack cross-chunk (2b): a `var r = __webpack_require__(id)` alias ->
+    # the required module's exported string consts, so a `r.prop` member operand at a
+    # sink folds to a value. Alias -> {export_name: value}; build-scoped + poison-safe
+    # upstream (recon.findings._modulegraph), so a wrong module can never leak in.
+    webpack_members: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 # --- tree helpers ------------------------------------------------------------

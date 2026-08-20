@@ -159,6 +159,53 @@ def test_cross_module_deep_chain_capped_not_recursion_error():
     assert len(r.unresolved) == 1 and r.endpoints == []
 
 
+# --- webpack require-alias member resolution (2b) ----------------------------- #
+# `var r = __webpack_require__(389); fetch(r.t + r.M)` — the sink operands are member
+# expressions on a require-alias, resolved via env.webpack_members[alias][export].
+
+_WM = {"r": {"t": "https://api.acme.com", "M": "/api/v3/orders"}}
+
+
+def test_webpack_member_concat_resolves():
+    r = extract("fetch(r.t + r.M)", webpack_members=_WM)
+    assert r.unattributed == 0
+    assert [(e.method, e.url) for e in r.endpoints] == [
+        ("GET", "https://api.acme.com/api/v3/orders")
+    ]
+
+
+def test_webpack_bare_member_resolves():
+    r = extract("fetch(r.t)", webpack_members={"r": {"t": "https://api.acme.com/x"}})
+    assert [(e.method, e.url) for e in r.endpoints] == [("GET", "https://api.acme.com/x")]
+
+
+def test_webpack_member_on_non_alias_is_unattributed():
+    # receiver not a require-alias -> never fold (honesty)
+    r = extract("fetch(x.y)", webpack_members=_WM)
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_webpack_member_unknown_export_is_unattributed():
+    r = extract("fetch(r.NOPE)", webpack_members=_WM)
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_webpack_partial_member_plus_local_is_not_guessed():
+    r = extract('const p = "/z"; fetch(r.t + p)', webpack_members=_WM)
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_webpack_deep_member_chain_is_unattributed():
+    # only a simple `alias.export` folds; `r.t.deep` (nested member) stays unattributed
+    r = extract("fetch(r.t.deep)", webpack_members=_WM)
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_webpack_absent_members_unchanged():
+    r = extract("fetch(r.t + r.M)")
+    assert r.endpoints == [] and r.unattributed == 1
+
+
 # --- .concat() reconstruction + value-holder tokens --------------------------- #
 # `.concat()` is reconstructed exactly like `+`; a readable non-constant leaf renders as
 # a `:holder` token (its source identifier) so an analyst sees WHICH value fills a
