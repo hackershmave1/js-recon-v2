@@ -14,6 +14,7 @@ from recon.findings._modulegraph import (
     collect_named_imports,
     parse,
     resolve_relative_specifier,
+    url_module_key,
 )
 
 
@@ -53,6 +54,54 @@ def test_non_literal_export_is_omitted_not_guessed():
 
 def test_reexport_is_skipped_this_increment():
     assert _exports('export { X } from "./other.js";') == {}
+
+
+# --- minified re-alias form: `const LOCAL="lit"; export{LOCAL as Name}` -------- #
+
+
+def test_exports_realias_from_local_const():
+    # the shape a minifier (rollup/esbuild) emits for `export const API_BASE=...`
+    assert _exports('const S = "https://api.acme.com"; export { S as A };') == {
+        "A": "https://api.acme.com"
+    }
+
+
+def test_exports_realias_mixed_with_direct_and_multiple():
+    src = 'const S="a",T="b"; export const C="c"; export { S as A, T as O };'
+    assert _exports(src) == {"C": "c", "A": "a", "O": "b"}
+
+
+def test_exports_realias_without_alias():
+    assert _exports('const X = "/p"; export { X };') == {"X": "/p"}
+
+
+def test_exports_realias_is_poison_safe():
+    # `S` is bound twice -> ambiguous -> excluded, so the re-export resolves to
+    # nothing rather than a possibly-wrong value (REQ-C2 honesty).
+    src = 'const S = "one"; function f(){ const S = "two"; } export { S as A };'
+    assert _exports(src) == {}
+
+
+def test_exports_realias_skips_reexport_with_source():
+    # `export {X as A} from "./y"` (has a source) needs graph traversal -> skipped
+    assert _exports('export { X as A } from "./y.js";') == {}
+
+
+# --- url_module_key (no-map chunk identity) ----------------------------------- #
+
+
+def test_url_module_key_keeps_path_and_leading_slash():
+    assert url_module_key("http://localhost:4175/assets/index-BLBrOdfO.js") == (
+        "/assets/index-BLBrOdfO.js"
+    )
+    # query is dropped; the hash in the filename is preserved (never collapsed)
+    assert url_module_key("https://cdn.example.com/a/b/c-9f8e.js?v=2") == "/a/b/c-9f8e.js"
+
+
+def test_url_module_key_leading_slash_avoids_mapped_fpath_collision():
+    # a URL key starts with "/", a mapped f.path does not -> disjoint key spaces
+    assert url_module_key("http://h/src/api/base.js").startswith("/")
+    assert not resolve_relative_specifier("src/api/orders.js", "./base.js").startswith("/")
 
 
 # --- collect_named_imports ---------------------------------------------------- #

@@ -156,7 +156,9 @@ def _analyze_legacy(
     # (best-effort — a failure just means no cross-module resolution, never a failed run).
     export_index: dict[str, dict[str, str]] = {}
     try:
-        _harvest_map_exports(input_ref, source_map_ref, "uploaded", export_index)
+        # asset_url=None: a legacy single blob has no sibling chunk to cross-reference,
+        # so only its own source-map-recovered modules (if any) contribute.
+        _harvest_asset_exports(input_ref, source_map_ref, None, "uploaded", export_index)
     except Exception as exc:  # noqa: BLE001 - best-effort enrichment
         log.warning("analyze.export_index_legacy_failed", run_id=run_id, error=str(exc))
 
@@ -353,20 +355,22 @@ class _EndpointExtraction:
 
 
 def _resolve_cross_module(
-    source_name: str, unit_text: str, export_index: dict[str, dict[str, str]] | None
+    importer_key: str | None, unit_text: str, export_index: dict[str, dict[str, str]] | None
 ) -> dict[str, str] | None:
     """Resolve this unit's named cross-module imports to their exporters' string
-    literals, for `extract()`. Returns ``None`` when there is nothing to resolve
-    (no index, or the unit imports nothing), keeping `extract()` on its unchanged
-    per-file path. `_modulegraph.build_cross_module_consts` is import-filtered, so
-    only names THIS unit imports resolve — a same-named local const in an unrelated
-    module can never leak in and fabricate a value (REQ-C2 honesty)."""
-    if not export_index:
+    literals, for `extract()`. ``importer_key`` is the unit's module identity in the
+    export index — a recovered ``f.path`` (source-map path), or a no-map chunk's
+    ``url_module_key``. Returns ``None`` when there is nothing to resolve (no index,
+    no importer key, or the unit imports nothing), keeping `extract()` on its
+    unchanged per-file path. `_modulegraph.build_cross_module_consts` is
+    import-filtered, so only names THIS unit imports resolve — a same-named local
+    const in an unrelated module can never leak in and fabricate a value (REQ-C2)."""
+    if not export_index or importer_key is None:
         return None
     imports = _modulegraph.collect_named_imports(_modulegraph.parse(unit_text))
     if not imports:
         return None
-    return _modulegraph.build_cross_module_consts(source_name, imports, export_index) or None
+    return _modulegraph.build_cross_module_consts(importer_key, imports, export_index) or None
 
 
 def _extract_endpoints(
@@ -405,10 +409,21 @@ def _extract_endpoints(
     unattributed = 0
     written = 0
     per_file: dict[str, list[int]] = {}
+    # A recovered asset yields >=1 units keyed by `f.path`; a no-map asset yields the
+    # single "input.js" bundle unit (sources_recovered == 0) whose module identity is
+    # the served URL, not a per-module path. Route on that explicit signal, not the
+    # sentinel string (a map's author-controlled `sources[]` could name a real file
+    # "input.js" and be mis-routed).
+    is_bundle = sources_recovered == 0
     for source_name, unit_text in units:
-        # `source_name` is the recovered `f.path` — the SAME key `build_export_index`
-        # stores exports under — so cross-module imports resolve by that identity.
-        cross_module_consts = _resolve_cross_module(source_name, unit_text, export_index)
+        importer_key = (
+            _modulegraph.url_module_key(asset_url)
+            if is_bundle and asset_url is not None
+            else source_name
+        )
+        # cross-module imports resolve against `build_export_index`'s entries under
+        # that same key (recovered `f.path`, or no-map `url_module_key`).
+        cross_module_consts = _resolve_cross_module(importer_key, unit_text, export_index)
         extraction = extract(unit_text, wrappers=wrappers, cross_module_consts=cross_module_consts)
         path = normalize.normalize_source_path(source_name)
         attributed += len(extraction.endpoints)
@@ -695,30 +710,55 @@ def _resolve_source_map(
     return None, "none"
 
 
-def _harvest_map_exports(
+def _merge_module_exports(index: dict[str, dict[str, str]], key: str, content: bytes) -> None:
+    exports = _modulegraph.collect_module_exports(_modulegraph.parse(content))
+    if exports:
+        index.setdefault(key, {}).update(exports)
+
+
+def _harvest_asset_exports(
     input_ref: str,
     source_map_ref: str | None,
+    asset_url: str | None,
     source_map_origin: str,
     index: dict[str, dict[str, str]],
 ) -> None:
-    """Recover one asset's original sources from its map and merge every module's
-    exported string consts into ``index``, keyed by the SAME recovered ``f.path``
-    the per-asset extract loop uses (`_analysis_units`) so a consuming module's
-    import resolves by that identical key."""
+    """Merge one asset's exported string consts into ``index``, keyed to MIRROR the
+    module identity the per-asset extract loop will use (`_analysis_units`):
+
+    - a source map that recovers original files -> keyed by each recovered ``f.path``;
+    - otherwise (no map, unavailable, or nothing recovered -> the loop analyzes the
+      asset as one ``input.js`` bundle unit) -> keyed by the served URL's path
+      (`url_module_key`), parsed straight from the minified source. This is the
+      no-map cross-chunk case (minified-ESM `export{local as Name}`).
+    """
     if source_map_ref:
         map_bytes, origin = _resolve_source_map(source_map_ref, "", source_map_origin)
-    else:  # no stored ref -> only an inline `data:` map can contribute (read the blob)
+        source: str | None = None
+    else:  # no stored ref -> read the blob (an inline `data:` map may still contribute)
         source = storage.get_blob(input_ref).decode("utf-8", "replace")
         map_bytes, origin = _resolve_source_map(None, source, source_map_origin)
-    if not map_bytes:
+    if map_bytes:
+        try:
+            recovered = sourcemapper.recover_sources(map_bytes, origin=origin)
+        except engines.EngineError:
+            # A malformed map: `_analysis_units` falls back to BUNDLE analysis for an
+            # inline/capture map (so the loop keys this asset by its URL — populate that
+            # below); an uploaded/legacy map has no asset_url, so the URL branch no-ops
+            # and the extract loop fails the asset anyway. Either way, fall through.
+            recovered = None
+        if recovered is not None and recovered.status == "ok" and recovered.files:
+            for recovered_file in recovered.files:
+                _merge_module_exports(index, recovered_file.path, recovered_file.content)
+            return  # recovered -> f.path keys (matches _analysis_units's recovered branch)
+    # No usable map: the loop will analyze this asset as one bundle unit whose
+    # identity is the served URL, so key its exports there too. Legacy single-blob
+    # (no asset_url) has no sibling chunk to cross-reference -> nothing to add.
+    if not asset_url:
         return
-    recovered = sourcemapper.recover_sources(map_bytes, origin=origin)
-    if recovered.status != "ok":
-        return
-    for recovered_file in recovered.files:
-        exports = _modulegraph.collect_module_exports(_modulegraph.parse(recovered_file.content))
-        if exports:
-            index.setdefault(recovered_file.path, {}).update(exports)
+    if source is None:
+        source = storage.get_blob(input_ref).decode("utf-8", "replace")
+    _merge_module_exports(index, _modulegraph.url_module_key(asset_url), source.encode("utf-8"))
 
 
 def build_export_index(
@@ -737,13 +777,17 @@ def build_export_index(
     per processed asset to renew the worker lease + honor REQ-A4 (the crawl-analyze
     caller supplies it; the synchronous re-extract caller passes ``None``).
 
-    NOTE(DEBT): this recovers each mapped asset's source map a SECOND time — the
-    per-asset extract loop recovers it again for full extraction, so a large crawl
-    pays 2x sourcemapper subprocess spawns per mapped asset. Correct and
-    memory-bounded (only the small export index persists, not recovered source);
-    follow-up is to cache recovered units for reuse or fold the harvest into the
-    main loop with deferred resolution (extends the recovery/stall note in
-    ``_analysis_units``).
+    Handles both the source-map path (keys by recovered ``f.path``) and the no-map
+    path (keys by ``url_module_key`` from the minified source) — see
+    ``_harvest_asset_exports``.
+
+    NOTE(DEBT D28): for a mapped asset this recovers the source map a SECOND time —
+    the per-asset extract loop recovers it again for full extraction, so a large
+    crawl pays 2x sourcemapper subprocess spawns per mapped asset; a no-map asset is
+    likewise parsed here AND again in the loop. Correct and memory-bounded (only the
+    small export index persists, not recovered/source text); follow-up is to cache
+    recovered units for reuse or fold the harvest into the main loop with deferred
+    resolution (extends the recovery/stall note in ``_analysis_units``).
     """
     index: dict[str, dict[str, str]] = {}
     for asset in rows:
@@ -752,7 +796,9 @@ def build_export_index(
         if heartbeat is not None:
             heartbeat()  # lease renew + REQ-A4 control-check (may raise ControlInterrupt)
         try:
-            _harvest_map_exports(asset.input_ref, asset.source_map_ref, source_map_origin, index)
+            _harvest_asset_exports(
+                asset.input_ref, asset.source_map_ref, asset.url, source_map_origin, index
+            )
         except Exception as exc:  # noqa: BLE001 - best-effort; a bad asset just yields no exports
             log.warning("analyze.export_index_asset_failed", url=asset.url, error=str(exc))
     return index
