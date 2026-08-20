@@ -739,8 +739,15 @@ def _harvest_asset_exports(
         source = storage.get_blob(input_ref).decode("utf-8", "replace")
         map_bytes, origin = _resolve_source_map(None, source, source_map_origin)
     if map_bytes:
-        recovered = sourcemapper.recover_sources(map_bytes, origin=origin)
-        if recovered.status == "ok" and recovered.files:
+        try:
+            recovered = sourcemapper.recover_sources(map_bytes, origin=origin)
+        except engines.EngineError:
+            # A malformed map: `_analysis_units` falls back to BUNDLE analysis for an
+            # inline/capture map (so the loop keys this asset by its URL — populate that
+            # below); an uploaded/legacy map has no asset_url, so the URL branch no-ops
+            # and the extract loop fails the asset anyway. Either way, fall through.
+            recovered = None
+        if recovered is not None and recovered.status == "ok" and recovered.files:
             for recovered_file in recovered.files:
                 _merge_module_exports(index, recovered_file.path, recovered_file.content)
             return  # recovered -> f.path keys (matches _analysis_units's recovered branch)
