@@ -149,3 +149,20 @@ def test_nomap_resolution_via_url_key():
         "a": "https://api.acme.com",
         "o": "/api/v3/orders",
     }
+
+
+def test_build_export_index_bad_capture_map_falls_back_to_url_key(monkeypatch):
+    # A present-but-malformed inline/capture map raises EngineError; mirroring
+    # `_analysis_units` (which falls back to bundle analysis for inline/capture), the
+    # harvest falls through to the URL-key branch so importers still resolve (LOW-1).
+    entry = b'const S="https://api.acme.com",T="/api/v3/orders";export{S as A,T as O};'
+    monkeypatch.setattr(storage, "get_blob", lambda ref: entry)
+
+    def _boom(map_bytes, **kw):
+        raise sourcemapper.engines.EngineError("bad map")
+
+    monkeypatch.setattr(sourcemapper, "recover_sources", _boom)
+    rows = [_row(source_map_ref="cap", url="http://h/assets/index-abc.js")]
+    assert analyze.build_export_index(rows, source_map_origin="capture") == {
+        "/assets/index-abc.js": {"A": "https://api.acme.com", "O": "/api/v3/orders"}
+    }
