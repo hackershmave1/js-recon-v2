@@ -673,7 +673,12 @@ def _enumerate_and_seed_chunks(
             host = (urlsplit(chunk_url).hostname or "").lower()
             if host:
                 _await_host_slot(
-                    redis, host, tenant_id=tenant_id, run_id=run_id, job_id=job_id, settings=settings
+                    redis,
+                    host,
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    job_id=job_id,
+                    settings=settings,
                 )
             try:
                 chunk_bytes = fetch_url(

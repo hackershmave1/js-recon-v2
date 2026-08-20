@@ -42,8 +42,14 @@ def wired(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         )
 
     monkeypatch.setattr(fetch, "_fetch_hops", fake_hops)
-    monkeypatch.setattr(fetch.storage, "put_blob", lambda t, r, kind, data: f"blob:{kind}:{len(data)}")
-    monkeypatch.setattr(fetch.run_assets, "seed_captured", lambda s, *, tenant_id, run_id, rows: rec.seeded.extend(rows))
+    monkeypatch.setattr(
+        fetch.storage, "put_blob", lambda t, r, kind, data: f"blob:{kind}:{len(data)}"
+    )
+    monkeypatch.setattr(
+        fetch.run_assets,
+        "seed_captured",
+        lambda s, *, tenant_id, run_id, rows: rec.seeded.extend(rows),
+    )
     monkeypatch.setattr(fetch.run_assets, "list_for_run", lambda t, r: [])
     monkeypatch.setattr(fetch.progress, "beat", lambda *a, **k: None)
     monkeypatch.setattr(fetch, "_await_host_slot", lambda *a, **k: None)
@@ -103,14 +109,15 @@ def test_already_known_chunk_is_not_refetched(
     assert "https://acme.test/static/1.chunk.js" not in wired.fetched
 
 
-def test_run_cap_reapplied_at_seed_site(
-    wired: _Recorder, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_cap_reapplied_at_seed_site(wired: _Recorder, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(
         fetch.run_assets,
         "list_for_run",
-        lambda t, r: [SimpleNamespace(url=f"https://acme.test/x{i}.js") for i in range(settings.crawl_max_assets)],
+        lambda t, r: [
+            SimpleNamespace(url=f"https://acme.test/x{i}.js")
+            for i in range(settings.crawl_max_assets)
+        ],
     )
     assert _call(_BUNDLE) == 0
     assert wired.seeded == []

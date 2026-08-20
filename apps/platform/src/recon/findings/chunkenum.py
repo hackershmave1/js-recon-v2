@@ -193,9 +193,9 @@ def _fold_into(node: Node | None, param: str, parts: list[_Part], keys: list[str
         operator = node.child_by_field_name("operator")
         if operator is None or _text(operator) != "+":
             return False
-        return _fold_into(
-            node.child_by_field_name("left"), param, parts, keys
-        ) and _fold_into(node.child_by_field_name("right"), param, parts, keys)
+        return _fold_into(node.child_by_field_name("left"), param, parts, keys) and _fold_into(
+            node.child_by_field_name("right"), param, parts, keys
+        )
     if node.type == "subscript_expression":
         obj = node.child_by_field_name("object")
         index = node.child_by_field_name("index")
