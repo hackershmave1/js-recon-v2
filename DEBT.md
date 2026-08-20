@@ -209,7 +209,9 @@ never sees it directly.
 The cross-module endpoint resolver (`findings/analyze.py::build_export_index`) runs a
 run-level pre-pass that recovers each mapped asset's source map to harvest its exported
 string consts, then the existing per-asset extract loop recovers the SAME maps again for
-full extraction — so a mapped crawl pays **2× sourcemapper subprocess spawns per asset**.
+full extraction — so a mapped crawl pays **2× sourcemapper subprocess spawns per asset**
+(and a no-map asset is likewise tree-sitter-parsed twice: once to harvest exports, once
+in the loop to extract).
 Chosen deliberately: it keeps the pre-pass memory-bounded (only the small export index
 persists, not recovered source) and guarantees the index keys match the loop's recovered
 `f.path` by construction (they come from the identical `recover_sources` call), which is
