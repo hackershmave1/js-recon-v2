@@ -38,23 +38,33 @@ path in `r.p` and chunk ids also visible at `r.e(<id>)` call sites. Statically:
 Exact minified shapes are pinned against the real recon-range webpack-nomap runtime chunk during
 TDD (the fixture already ships a lazy `orders.js` chunk).
 
-### Files
-- **New** `findings/chunkenum.py` — static extraction + substitution (pure; no I/O, no exec).
-- **New** `findings/chunkenum_test.py` — colocated fast-lane tests.
-- **Touched** `findings/analyze.py` — invoke chunkenum during the bundle pass; hand enumerated
-  URLs to the discovery seed path.
-- **Touched** discovery seed path (`discover/`) — accept a new "chunk-enum" URL source, capped,
-  routed through the same `egress.validate_target` re-validation as katana-discovered URLs.
+### Files (AS BUILT)
+- **New** `findings/chunkenum.py` — pure static extraction + substitution (no I/O, no exec).
+- **New** `findings/chunkenum_test.py` — colocated fast-lane unit tests (12).
+- **Touched** `fetch/fetch.py` — the hook is the **FETCH stage**, not analyze (corrected: stages
+  are linear discover→fetch→analyze, so seeding at analyze would strand rows unfetched and force
+  the run PARTIAL). `_enumerate_and_seed_chunks` runs in `_fetch_assets`' JS-success path, adjacent
+  to `_fetch_and_store_source_map`, which is the only point holding the bundle source, its URL, the
+  SSRF-guarded fetch primitive, and live scope. It fetches each chunk inline and `seed_captured`s it
+  as an already-OK asset; analyze then absorbs the new rows unchanged (no analyze edit needed).
+- **New** `fetch/fetch_chunkenum_test.py` — hermetic wiring tests (5): guard-routing + drop, run
+  cap, non-webpack gate, dedupe.
+- **Touched** `config.py` — `crawl_enumerate_chunks: bool = True` kill-switch (symmetric with -jc /
+  source-maps).
+- **Touched** `runs/assets.py` — reuse `seed_captured` (already-fetched OK rows); no change needed.
 
 ### Security / honesty invariants (carry over from the §4 review — they apply to static too)
-- **Route enumerated URLs exclusively through `seed_pending → _fetch_assets → _fetch_hops`**, so
+- **Route enumerated URLs exclusively through the guarded fetch (`fetch_url → _fetch_hops`)**, so
   every hop re-runs `egress.validate_target` (ADR-0005). Content-derived URLs therefore cannot
-  widen scope, and `data:`/`file:`/userinfo are rejected. Never fetch a chunk URL directly.
-- **Cap enumerated count + per-URL length before seeding.** The inline chunk map is
-  content-derived; a hostile/huge map must not flood the fetch queue. Reuse the crawl asset
-  ceiling (`crawl_max_assets`) or a dedicated cap.
+  widen scope, and `data:`/`file:`/userinfo are rejected; an out-of-scope chunk raises
+  `EgressBlocked` and is DROPPED (mirrors the crawl's `_revalidate`). Never fetch a chunk directly.
+- **Cap enumerated count + per-URL length.** `enumerate_chunk_urls` bounds a single bundle
+  (`max_urls`/`max_url_len`); the fetch hook RE-APPLIES the run-level `crawl_max_assets` ceiling at
+  the seed site, because the discover-time cap does not cover fetch-time seeding.
 - **Fail-safe:** an unrecognized / computed / non-foldable builder enumerates **nothing** — no
-  invented URLs. An out-of-scope enumerated URL is dropped by the guard, not fetched.
+  invented URLs. The whole helper never raises (a bad chunk can't fail the parent JS asset).
+- **Polite:** each extra GET renews the lease (`progress.beat`) + takes a host slot, preserving the
+  per-asset heartbeat invariant (no peer double-fetch).
 
 ### Tests
 - Fast-lane unit: extractor on representative minified `.u` shapes (with/without `r.p`, CSS

@@ -41,7 +41,7 @@ from recon.db.models import Run
 from recon.domain import AssetStatus
 from recon.events.log import record_event
 from recon.fetch import egress, politeness
-from recon.findings import sourcemapper
+from recon.findings import chunkenum, sourcemapper
 from recon.observability import get_logger
 from recon.progress import heartbeat as progress
 from recon.queue import retry
@@ -491,12 +491,33 @@ def _fetch_assets(
             run_assets.set_fetch_ok(s, asset.id, key)  # per-asset commit
             if map_key:
                 run_assets.set_source_map_ref(s, asset.id, map_key)
+        # Best-effort webpack lazy-chunk enumeration (P4). Runs AFTER the parent asset is
+        # committed fetch_ok, in its own non-re-raising helper, so a bad/blocked chunk can
+        # never fail the parent JS asset (same invariant as the .map recovery above).
+        chunks = (
+            _enumerate_and_seed_chunks(
+                redis,
+                js=content,
+                asset_url=asset.url,
+                scope_hosts=engagement.scope_hosts,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                job_id=job_id,
+                done=i,
+                total=total,
+                settings=settings,
+                max_bytes=cap,
+            )
+            if settings.crawl_enumerate_chunks
+            else 0
+        )
         log.info(
             "fetch.asset_done",
             run_id=run_id,
             url=asset.url,
             bytes=len(content),
             source_map=bool(map_key),
+            chunks=chunks,
         )
     _write_fingerprint_signal(redis, tenant_id=tenant_id, run_id=run_id, signal=signal)
 
@@ -592,6 +613,89 @@ def _fetch_and_store_source_map(
     except Exception as exc:  # noqa: BLE001 — soft miss; a bad map must never fail the asset
         log.info("fetch.source_map_skipped", run_id=run_id, url=asset_url, error=str(exc))
         return None
+
+
+def _enumerate_and_seed_chunks(
+    redis: Redis,
+    *,
+    js: bytes,
+    asset_url: str,
+    scope_hosts: list[str],
+    tenant_id: str,
+    run_id: str,
+    job_id: str | None,
+    done: int,
+    total: int,
+    settings: Settings,
+    max_bytes: int,
+) -> int:
+    """Best-effort: statically enumerate a webpack bundle's lazy-chunk URLs from ``js``
+    (the ``__webpack_require__.u`` builder — NO execution, ``recon.findings.chunkenum``),
+    fetch each THROUGH THE EGRESS GUARD, and seed it as an already-fetched (OK) asset so
+    the analyze stage recovers its endpoints. Returns the number of chunks seeded.
+
+    NEVER raises: like the source-map path, a bad/blocked/oversized chunk is a soft miss
+    that must not reach the caller's outer handler (which would mark the PARENT asset
+    fetch_failed and drop its JS finding). Security posture:
+    - Content-derived, therefore UNTRUSTED: each chunk URL is fetched only via
+      ``fetch_url`` (``egress.validate_target`` on every hop), so an out-of-scope chunk
+      raises ``EgressBlocked`` and is DROPPED — scope is never widened (mirrors the
+      crawl's ``_revalidate``).
+    - Capped: the discover-time ``crawl_max_assets`` ceiling does not cover fetch-time
+      seeding, so it is RE-APPLIED here against the live ``run_asset`` count — a hostile
+      or huge chunk map cannot flood the run.
+    - Polite: each extra GET renews the job lease (``progress.beat``) and takes a host
+      slot BEFORE the request, preserving the per-asset heartbeat invariant so a peer
+      cannot reclaim the stream and double-fetch (see the ``_fetch_assets`` docstring)."""
+    if b"webpack" not in js:
+        return 0  # cheap gate: skip the tree-sitter parse for non-webpack JS assets
+    try:
+        chunk_urls = chunkenum.enumerate_chunk_urls(
+            js.decode("utf-8", "replace"), max_urls=settings.crawl_max_assets
+        )
+        if not chunk_urls:
+            return 0
+        existing = {row.url for row in run_assets.list_for_run(tenant_id, run_id)}
+        remaining = settings.crawl_max_assets - len(existing)
+        if remaining <= 0:
+            return 0
+        seeded: list[dict[str, str]] = []
+        for ref in chunk_urls:
+            if len(seeded) >= remaining:
+                break
+            chunk_url = urljoin(asset_url, ref)
+            if chunk_url == asset_url or chunk_url in existing:
+                continue  # self or already known -> no duplicate fetch
+            if job_id:
+                progress.beat(
+                    redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, done=done, total=total
+                )
+            host = (urlsplit(chunk_url).hostname or "").lower()
+            if host:
+                _await_host_slot(
+                    redis, host, tenant_id=tenant_id, run_id=run_id, job_id=job_id, settings=settings
+                )
+            try:
+                chunk_bytes = fetch_url(
+                    chunk_url,
+                    scope_hosts,
+                    timeout_s=settings.fetch_timeout_seconds,
+                    max_bytes=max_bytes,
+                    allow_local=settings.allow_local_egress,
+                )
+            except (egress.EgressBlocked, retry.FatalError, retry.RetryableError) as exc:
+                log.info("fetch.chunk_skipped", run_id=run_id, url=chunk_url, error=str(exc))
+                continue
+            chunk_key = storage.put_blob(tenant_id, run_id, "input", chunk_bytes)
+            seeded.append({"url": chunk_url, "input_ref": chunk_key})
+            existing.add(chunk_url)
+        if seeded:
+            with tenant_session(tenant_id) as s:
+                run_assets.seed_captured(s, tenant_id=tenant_id, run_id=run_id, rows=seeded)
+        return len(seeded)
+    except Exception as exc:  # noqa: BLE001 — soft miss; enumeration must never fail the asset
+        log.info("fetch.chunk_enum_skipped", run_id=run_id, url=asset_url, error=str(exc))
+        return 0
 
 
 def _authorized_engagement(

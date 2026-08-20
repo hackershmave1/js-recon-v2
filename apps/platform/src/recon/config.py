@@ -97,6 +97,14 @@ class Settings(BaseSettings):
     # analyze recovers original per-file sources. Best-effort — a bad/blocked map is
     # a soft miss, never fails the asset. Default on; kill-switch symmetric with -jc.
     crawl_fetch_source_maps: bool = True  # env: RECON_CRAWL_FETCH_SOURCE_MAPS
+    # P4: on the fetch path, statically enumerate a webpack bundle's lazy-chunk URLs
+    # (__webpack_require__.u builder, NO execution) and fetch each through the egress
+    # guard so its endpoints are recovered — the runtime-computed chunk URLs katana's
+    # -jc can't see. Best-effort + capped at crawl_max_assets; content-derived URLs go
+    # through egress.validate_target so scope is never widened. Kill-switch symmetric
+    # with -jc / source-maps. The sandboxed-exec engine for obfuscated builders is
+    # deferred (DEBT D29).
+    crawl_enumerate_chunks: bool = True  # env: RECON_CRAWL_ENUMERATE_CHUNKS
     crawl_depth: int = 3
     crawl_duration_seconds: float = 120.0
     crawl_max_assets: int = 500
