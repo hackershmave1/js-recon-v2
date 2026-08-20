@@ -646,9 +646,15 @@ def _enumerate_and_seed_chunks(
       or huge chunk map cannot flood the run.
     - Polite: each extra GET renews the job lease (``progress.beat``) and takes a host
       slot BEFORE the request, preserving the per-asset heartbeat invariant so a peer
-      cannot reclaim the stream and double-fetch (see the ``_fetch_assets`` docstring)."""
+      cannot reclaim the stream and double-fetch (see the ``_fetch_assets`` docstring).
+    - Interruptible (REQ-A4): a pause/cancel is honored BEFORE each chunk fetch
+      (``raise_if_control_requested``) and the resulting ``ControlInterrupt`` is re-raised
+      past the soft-miss guard; the ``finally`` seeds whatever was already fetched so an
+      interrupt mid-burst never orphans a blob (mirrors the main loop's per-asset commit
+      before its per-asset control check)."""
     if b"webpack" not in js:
         return 0  # cheap gate: skip the tree-sitter parse for non-webpack JS assets
+    seeded: list[dict[str, str]] = []
     try:
         chunk_urls = chunkenum.enumerate_chunk_urls(
             js.decode("utf-8", "replace"), max_urls=settings.crawl_max_assets
@@ -659,48 +665,57 @@ def _enumerate_and_seed_chunks(
         remaining = settings.crawl_max_assets - len(existing)
         if remaining <= 0:
             return 0
-        seeded: list[dict[str, str]] = []
-        for ref in chunk_urls:
-            if len(seeded) >= remaining:
-                break
-            chunk_url = urljoin(asset_url, ref)
-            if chunk_url == asset_url or chunk_url in existing:
-                continue  # self or already known -> no duplicate fetch
-            if job_id:
-                progress.beat(
-                    redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, done=done, total=total
-                )
-            host = (urlsplit(chunk_url).hostname or "").lower()
-            if host:
-                _await_host_slot(
-                    redis,
-                    host,
-                    tenant_id=tenant_id,
-                    run_id=run_id,
-                    job_id=job_id,
-                    settings=settings,
-                )
-            try:
-                chunk_bytes = fetch_url(
-                    chunk_url,
-                    scope_hosts,
-                    timeout_s=settings.fetch_timeout_seconds,
-                    max_bytes=max_bytes,
-                    allow_local=settings.allow_local_egress,
-                )
-            except (egress.EgressBlocked, retry.FatalError, retry.RetryableError) as exc:
-                log.info("fetch.chunk_skipped", run_id=run_id, url=chunk_url, error=str(exc))
-                continue
-            chunk_key = storage.put_blob(tenant_id, run_id, "input", chunk_bytes)
-            seeded.append({"url": chunk_url, "input_ref": chunk_key})
-            existing.add(chunk_url)
-        if seeded:
-            with tenant_session(tenant_id) as s:
-                run_assets.seed_captured(s, tenant_id=tenant_id, run_id=run_id, rows=seeded)
+        try:
+            for ref in chunk_urls:
+                run_queries.raise_if_control_requested(tenant_id, run_id)  # REQ-A4
+                if len(seeded) >= remaining:
+                    break
+                chunk_url = urljoin(asset_url, ref)
+                if chunk_url == asset_url or chunk_url in existing:
+                    continue  # self or already known -> no duplicate fetch
+                if job_id:
+                    progress.beat(
+                        redis,
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        job_id=job_id,
+                        done=done,
+                        total=total,
+                    )
+                host = (urlsplit(chunk_url).hostname or "").lower()
+                if host:
+                    _await_host_slot(
+                        redis,
+                        host,
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        job_id=job_id,
+                        settings=settings,
+                    )
+                try:
+                    chunk_bytes = fetch_url(
+                        chunk_url,
+                        scope_hosts,
+                        timeout_s=settings.fetch_timeout_seconds,
+                        max_bytes=max_bytes,
+                        allow_local=settings.allow_local_egress,
+                    )
+                except (egress.EgressBlocked, retry.FatalError, retry.RetryableError) as exc:
+                    log.info("fetch.chunk_skipped", run_id=run_id, url=chunk_url, error=str(exc))
+                    continue
+                chunk_key = storage.put_blob(tenant_id, run_id, "input", chunk_bytes)
+                seeded.append({"url": chunk_url, "input_ref": chunk_key})
+                existing.add(chunk_url)
+        finally:
+            if seeded:  # persist fetched-so-far on EVERY exit (normal / interrupt / soft-miss)
+                with tenant_session(tenant_id) as s:
+                    run_assets.seed_captured(s, tenant_id=tenant_id, run_id=run_id, rows=seeded)
         return len(seeded)
+    except retry.ControlInterrupt:
+        raise  # REQ-A4: pause/cancel must propagate, never be eaten by the soft-miss guard below
     except Exception as exc:  # noqa: BLE001 — soft miss; enumeration must never fail the asset
         log.info("fetch.chunk_enum_skipped", run_id=run_id, url=asset_url, error=str(exc))
-        return 0
+        return len(seeded)
 
 
 def _authorized_engagement(

@@ -73,3 +73,20 @@ def test_over_long_url_is_dropped() -> None:
     long_segment = "x" * 5000
     src = f'n.u=e=>"{long_segment}"+e+".chunk.js";n.e(1);'
     assert enumerate_chunk_urls(src, max_url_len=2048) == []
+
+
+def test_deep_concat_chain_fails_safe_without_crashing() -> None:
+    # A pathologically deep +-chain must degrade to non-foldable, never RecursionError
+    # (the module's "never raises" contract holds independent of any caller's try/except).
+    body = "e" + '+"a"' * 200
+    assert enumerate_chunk_urls(f"n.u=e=>{body};n.e(1);") == []
+
+
+def test_template_literal_with_substitution_is_non_foldable() -> None:
+    # `static/${e}.js` must NOT fold ${e} verbatim into a literal (a bogus URL); it's dynamic.
+    assert enumerate_chunk_urls("n.u=e=>`static/${e}.js`;n.e(1);") == []
+
+
+def test_plain_backtick_template_without_substitution_still_folds() -> None:
+    # A backtick string with no ${...} is a plain literal and folds normally.
+    assert enumerate_chunk_urls('n.u=e=>`c/`+e+".js";n.e(3);') == ["c/3.js"]

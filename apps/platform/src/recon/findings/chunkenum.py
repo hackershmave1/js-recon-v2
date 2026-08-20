@@ -45,6 +45,13 @@ from recon.findings._jsast import (
 _DEFAULT_MAX_URLS = 512
 _DEFAULT_MAX_URL_LEN = 2048
 
+# Recursion bound for the +-chain fold. A real chunk-URL template is a handful of operands;
+# a pathologically deep ``"a"+"a"+…`` chain (a static-analysis-evasion shape) must degrade to
+# "non-foldable" rather than raise RecursionError — so this module keeps its "never raises /
+# non-foldable -> nothing" contract independent of any caller's try/except. Well under CPython's
+# ~1000 default and far beyond any real template. (DoS / contract hardening.)
+_MAX_FOLD_DEPTH = 64
+
 
 @dataclass(frozen=True)
 class _Part:
@@ -175,13 +182,15 @@ def _fold_body(node: Node, param: str) -> tuple[list[_Part], list[str]] | None:
     return parts, keys
 
 
-def _fold_into(node: Node | None, param: str, parts: list[_Part], keys: list[str]) -> bool:
-    if node is None:
-        return False
+def _fold_into(
+    node: Node | None, param: str, parts: list[_Part], keys: list[str], _depth: int = 0
+) -> bool:
+    if node is None or _depth >= _MAX_FOLD_DEPTH:
+        return False  # None, or a pathologically deep +-chain -> non-foldable (never crash)
     if node.type in ("string", "template_string"):
         value = _string_value(node)
-        if value is None:
-            return False
+        if value is None or (node.type == "template_string" and "${" in value):
+            return False  # a dynamic ${...} template -> non-foldable; never fold the param as a literal
         parts.append(_Part("lit", literal=value))
         return True
     if node.type == "identifier":
@@ -193,9 +202,9 @@ def _fold_into(node: Node | None, param: str, parts: list[_Part], keys: list[str
         operator = node.child_by_field_name("operator")
         if operator is None or _text(operator) != "+":
             return False
-        return _fold_into(node.child_by_field_name("left"), param, parts, keys) and _fold_into(
-            node.child_by_field_name("right"), param, parts, keys
-        )
+        return _fold_into(
+            node.child_by_field_name("left"), param, parts, keys, _depth + 1
+        ) and _fold_into(node.child_by_field_name("right"), param, parts, keys, _depth + 1)
     if node.type == "subscript_expression":
         obj = node.child_by_field_name("object")
         index = node.child_by_field_name("index")
@@ -213,7 +222,7 @@ def _fold_into(node: Node | None, param: str, parts: list[_Part], keys: list[str
         return False
     if node.type == "parenthesized_expression":
         inner = node.named_children
-        return len(inner) == 1 and _fold_into(inner[0], param, parts, keys)
+        return len(inner) == 1 and _fold_into(inner[0], param, parts, keys, _depth + 1)
     return False
 
 

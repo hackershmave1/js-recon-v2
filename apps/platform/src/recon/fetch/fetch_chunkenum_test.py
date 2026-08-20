@@ -10,12 +10,14 @@ a parse, and already-known chunks are not re-fetched.
 from __future__ import annotations
 
 import contextlib
+import itertools
 from types import SimpleNamespace
 
 import pytest
 
 from recon.config import get_settings
 from recon.fetch import egress, fetch
+from recon.queue import retry
 
 # A minimal webpack runtime: the chunk-load global (the b"webpack" gate), the .u builder,
 # and two ensure-calls -> chunk ids 1 and 2.
@@ -51,6 +53,7 @@ def wired(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         lambda s, *, tenant_id, run_id, rows: rec.seeded.extend(rows),
     )
     monkeypatch.setattr(fetch.run_assets, "list_for_run", lambda t, r: [])
+    monkeypatch.setattr(fetch.run_queries, "raise_if_control_requested", lambda t, r: None)
     monkeypatch.setattr(fetch.progress, "beat", lambda *a, **k: None)
     monkeypatch.setattr(fetch, "_await_host_slot", lambda *a, **k: None)
     monkeypatch.setattr(fetch, "tenant_session", lambda t: contextlib.nullcontext(None))
@@ -122,3 +125,20 @@ def test_run_cap_reapplied_at_seed_site(wired: _Recorder, monkeypatch: pytest.Mo
     assert _call(_BUNDLE) == 0
     assert wired.seeded == []
     assert wired.fetched == []
+
+
+def test_control_interrupt_propagates_and_persists_fetched(
+    wired: _Recorder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # REQ-A4: a pause/cancel raised before the 2nd chunk must PROPAGATE (not be swallowed by
+    # the soft-miss guard), and the 1st chunk (already fetched) must still be persisted.
+    checks = itertools.count()
+
+    def fake_control(tenant_id: str, run_id: str) -> None:
+        if next(checks) >= 1:
+            raise retry.ControlInterrupt("cancel")
+
+    monkeypatch.setattr(fetch.run_queries, "raise_if_control_requested", fake_control)
+    with pytest.raises(retry.ControlInterrupt):
+        _call(_BUNDLE)
+    assert [r["url"] for r in wired.seeded] == ["https://acme.test/static/1.chunk.js"]
