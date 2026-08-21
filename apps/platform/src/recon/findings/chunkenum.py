@@ -52,6 +52,18 @@ _DEFAULT_MAX_URL_LEN = 2048
 # ~1000 default and far beyond any real template. (DoS / contract hardening.)
 _MAX_FOLD_DEPTH = 64
 
+# Max arms to walk in a conditional (ternary / if-chain) `.u` builder. Real builders have
+# tens-to-low-hundreds of arms; a pathological chain is bounded here. The chain walk is
+# iterative, so recursion depth is unaffected by arm count.
+_MAX_COND_ARMS = 8192
+
+# Body-span cap for a conditional `.u` builder. Unlike the template builder (a small
+# template reused per id), a ternary/if-chain builder is one arm PER lazy chunk, so its
+# body is legitimately large (Asana's is ~13 KB) — the small `_MAX_URL_SPAN` template cap
+# would reject it. The walk is O(body) once and arm-capped, so a generous 1 MiB bound is
+# safe while still rejecting a truly pathological builder.
+_MAX_COND_BODY_SPAN = 1_048_576
+
 
 @dataclass(frozen=True)
 class _Part:
@@ -87,7 +99,10 @@ def enumerate_chunk_urls(
     root = _PARSER.parse(source.encode("utf-8")).root_node
     builder = _find_u_builder(root)
     if builder is None:
-        return []
+        # No template-form builder — try the conditional form real Next.js/webpack emit:
+        # a `.u` written as a ternary chain `id===e?"url":…` or a block-body if-chain
+        # `(e)=>{if(id===e)return"url";…}`. Same fail-safe contract (unrecognised → nothing).
+        return _enumerate_conditional(root, max_urls=max_urls, max_url_len=max_url_len)
 
     prefix = _find_public_path(root, builder.obj)
     parts = (_Part("lit", literal=prefix), *builder.parts) if prefix else builder.parts
@@ -147,6 +162,19 @@ def _as_builder_fn(node: Node | None) -> tuple[str, Node] | None:
     if body is None:
         return None
     if body.type == "statement_block":
+        # Collapse to the return ONLY when the block is exactly `{ return <expr>; }` — one named
+        # child that is a `return_statement`. ANY other block (an `if`/`switch`/`try`/nested or
+        # labeled block, a temp assignment before the return, …) BRANCHES or computes, so its
+        # trailing `return "<template>"` is a DEFAULT/partial arm, not THE url: folding it against
+        # real `.e(id)` sites would apply one arm's format to every id, inventing a URL for ids a
+        # branch actually matches (a "guessed URL", §4 honesty violation). Refuse the collapse so
+        # `enumerate_chunk_urls` routes to `_enumerate_conditional`, which folds only recognised
+        # `id===` arms (block if-chain / ternary) and drops everything else — honest, never
+        # invented. Keying on the single-return SHAPE (not on `if_statement` specifically) closes
+        # the whole branching-wrapper class, not just the flat if-chain (§4 gate-2 follow-up).
+        named = body.named_children
+        if len(named) != 1 or named[0].type != "return_statement":
+            return None
         body = _return_expr(body)
     return (param, body) if body is not None else None
 
@@ -311,3 +339,159 @@ def _find_public_path(root: Node, require_alias: str) -> str:
         if value is not None:
             return value
     return ""
+
+
+# --- conditional (ternary / if-chain) `.u` builders -------------------------- #
+#
+# Real Next.js/webpack rarely emit the subscript-map builder above; they emit the chunk
+# URL as a ternary chain (`id===e?"url":…`) or a block-body if-chain
+# (`(e)=>{if(id===e)return"url";…}`). js-recon reaches these by EXECUTING the arrow in a
+# sandbox per scraped integer — we fold them statically instead (more precise: only ids
+# with an explicit `id===e` test fold; the trailing default/`||e` catch-all arm is NOT
+# tied to a specific id and is dropped, upholding the "never a guessed URL" contract).
+
+
+def _enumerate_conditional(root: Node, *, max_urls: int, max_url_len: int) -> list[str]:
+    """Enumerate a conditional-form `.u` builder (ternary chain or block-body if-chain)."""
+    found = _find_u_fn_raw(root)
+    if found is None:
+        return []
+    param, body, obj = found
+    if body.end_byte - body.start_byte > _MAX_COND_BODY_SPAN:
+        return []  # oversized builder -> not statically foldable (DoS bound)
+    if body.type == "ternary_expression":
+        id_urls = _fold_conditional_chain(body, param)
+    elif body.type == "statement_block":
+        id_urls = _fold_if_chain(body, param)
+        if not id_urls:  # a block-body arrow that `return`s a ternary
+            returned = _return_expr(body)
+            if returned is not None and returned.type == "ternary_expression":
+                id_urls = _fold_conditional_chain(returned, param)
+    else:
+        return []
+    if not id_urls:
+        return []
+
+    prefix = _find_public_path(root, obj)
+    urls: list[str] = []
+    seen: set[str] = set()
+    for _chunk_id, raw in id_urls:
+        if len(urls) >= max_urls:
+            break
+        url = prefix + raw if prefix else raw
+        if len(url) > max_url_len or url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+    return urls
+
+
+def _find_u_fn_raw(root: Node) -> tuple[str, Node, str] | None:
+    """Locate ``<obj>.u = <fn>`` and return ``(param, fn_body, obj)`` WITHOUT collapsing a
+    block body to its return expr (unlike `_as_builder_fn`) — the if-chain form needs the
+    raw block. ``None`` if absent / not a single-parameter function."""
+    for node in _walk(root):
+        if node.type != "assignment_expression":
+            continue
+        left = node.child_by_field_name("left")
+        if left is None or left.type != "member_expression":
+            continue
+        if _text_if_short(left.child_by_field_name("property")) != "u":
+            continue
+        obj = _text_if_short(left.child_by_field_name("object"))
+        if not obj:
+            continue
+        fn = node.child_by_field_name("right")
+        if fn is None or fn.type not in ("arrow_function", "function_expression", "function"):
+            continue
+        param = _single_param(fn)
+        if param is None:
+            continue
+        body = fn.child_by_field_name("body")
+        if body is not None:
+            return param, body, obj
+    return None
+
+
+def _fold_conditional_chain(node: Node | None, param: str) -> list[tuple[str, str]]:
+    """Fold a ternary chain ``id===e ? <url> : <next>`` into ordered ``(id, url)`` pairs,
+    walking the ``alternative`` iteratively (no recursion regardless of chain length). The
+    final non-ternary ``alternative`` is the default arm and is dropped."""
+    id_urls: list[tuple[str, str]] = []
+    arms = 0
+    while node is not None and node.type == "ternary_expression" and arms < _MAX_COND_ARMS:
+        arms += 1
+        chunk_id = _eq_test_id(node.child_by_field_name("condition"), param)
+        consequence = node.child_by_field_name("consequence")
+        if chunk_id is not None and consequence is not None:
+            url = _fold_url_expr(consequence, param, chunk_id)
+            if url is not None:
+                id_urls.append((chunk_id, url))
+        node = node.child_by_field_name("alternative")
+    return id_urls
+
+
+def _fold_if_chain(block: Node, param: str) -> list[tuple[str, str]]:
+    """Fold a block-body if-chain ``{ if(id===e) return "url"; … }`` into ``(id, url)``
+    pairs. A bare trailing ``return e+".js"`` (no ``id===e`` test) is the default and skipped."""
+    id_urls: list[tuple[str, str]] = []
+    arms = 0
+    for stmt in block.named_children:
+        if arms >= _MAX_COND_ARMS:
+            break
+        if stmt.type != "if_statement":
+            continue
+        arms += 1
+        chunk_id = _eq_test_id(stmt.child_by_field_name("condition"), param)
+        if chunk_id is None:
+            continue
+        returned = _return_arg(stmt.child_by_field_name("consequence"))
+        if returned is None:
+            continue
+        url = _fold_url_expr(returned, param, chunk_id)
+        if url is not None:
+            id_urls.append((chunk_id, url))
+    return id_urls
+
+
+def _eq_test_id(condition: Node | None, param: str) -> str | None:
+    """The chunk-id literal from a ``<param> === <literal>`` / ``<literal> === <param>``
+    strict-equality test (unwrapping a parenthesized `if` condition), else ``None``."""
+    while condition is not None and condition.type == "parenthesized_expression":
+        inner = condition.named_children
+        condition = inner[0] if len(inner) == 1 else None
+    if condition is None or condition.type != "binary_expression":
+        return None
+    operator = condition.child_by_field_name("operator")
+    if operator is None or _text(operator) not in ("===", "=="):
+        return None
+    left = condition.child_by_field_name("left")
+    right = condition.child_by_field_name("right")
+    if left is not None and left.type == "identifier" and _text_if_short(left) == param:
+        return _literal_id(right)
+    if right is not None and right.type == "identifier" and _text_if_short(right) == param:
+        return _literal_id(left)
+    return None
+
+
+def _return_arg(node: Node | None) -> Node | None:
+    """The returned expression of an `if` consequence — a ``return_statement`` directly, or
+    the first ``return`` inside a ``{ … }`` consequence block."""
+    if node is None:
+        return None
+    if node.type == "return_statement":
+        returned = node.named_children
+        return returned[0] if returned else None
+    if node.type == "statement_block":
+        return _return_expr(node)
+    return None
+
+
+def _fold_url_expr(node: Node, param: str, chunk_id: str) -> str | None:
+    """Fold one conditional arm's URL expression (a ``+``-concat of literals / the param /
+    a ``{id:hash}[param]`` map) to a concrete URL for ``chunk_id``, or ``None``."""
+    folded = _fold_body(node, param)
+    if folded is None:
+        return None
+    parts, _keys = folded
+    return _fold(tuple(parts), chunk_id)

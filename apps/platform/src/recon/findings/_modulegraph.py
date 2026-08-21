@@ -346,14 +346,28 @@ def _webpack_require_param(method: Node) -> str | None:
 
 
 def _webpack_module_defs(root: Node) -> Iterator[tuple[str, str, Node]]:
-    """Yield ``(module_id, require_name, body)`` for each numeric-keyed
-    ``method_definition`` module in the chunk that binds a require param."""
+    """Yield ``(module_id, require_name, body)`` for each numeric-keyed webpack module in
+    the chunk that binds a require param. Covers the three real registry forms: a
+    ``method_definition`` (``{389(e,t,n){…}}``) and a ``pair`` whose value is an
+    ``arrow_function`` (``{389:(e,t,n)=>{…}}``) or a ``function_expression``
+    (``{389:function(e,t,n){…}}``). Webpack 5 PRODUCTION emits the latter two (the
+    method-shorthand alone was a fixture artifact); the ``require.d`` export gate in
+    `collect_webpack_modules` + the poison-safe alias rules keep a non-module numeric-keyed
+    function inert, so widening the accepted declaration form adds no false positives."""
     for node in _walk(root):
-        if node.type != "method_definition":
+        if node.type == "method_definition":
+            name = node.child_by_field_name("name")
+            fn = node
+        elif node.type == "pair":
+            value = node.child_by_field_name("value")
+            if value is None or value.type not in ("arrow_function", "function_expression"):
+                continue
+            name = node.child_by_field_name("key")
+            fn = value
+        else:
             continue
-        name = node.child_by_field_name("name")
-        body = node.child_by_field_name("body")
-        require = _webpack_require_param(node)
+        body = fn.child_by_field_name("body")
+        require = _webpack_require_param(fn)
         if name is not None and name.type == "number" and body is not None and require is not None:
             yield _text(name), require, body
 
@@ -361,11 +375,13 @@ def _webpack_module_defs(root: Node) -> Iterator[tuple[str, str, Node]]:
 def collect_webpack_modules(root: Node) -> dict[str, dict[str, str]]:
     """Index a chunk's webpack modules -> ``{module_id: {export_name: string value}}``.
 
-    Scope (adversary F5): the webpack-5 method-shorthand object registry only
-    (``{389(e,t,n){…}}``). Older ``{389: function(e,t,n){}}`` / sparse-array / bare
-    function-expression registries are out of scope — they yield no modules (lossy,
-    never a wrong value). A stray numeric-keyed method with no ``require.d`` export
-    call contributes nothing, so the ``.d``-gate keeps false positives inert."""
+    Scope: the numeric-keyed registry forms `_webpack_module_defs` accepts — a
+    ``method_definition`` (``{389(e,t,n){…}}``) plus a ``pair`` whose value is an
+    ``arrow_function`` (``{389:(e,t,n)=>{…}}``) or ``function_expression``
+    (``{389:function(e,t,n){…}}``), the forms webpack 5 production emits. A sparse-array
+    registry stays out of scope (lossy, never a wrong value). A stray numeric-keyed function
+    with no ``require.d`` export call contributes nothing, so the ``.d``-gate keeps false
+    positives inert."""
     modules: dict[str, dict[str, str]] = {}
     for module_id, require_name, body in _webpack_module_defs(root):
         consts = _local_string_consts(body)

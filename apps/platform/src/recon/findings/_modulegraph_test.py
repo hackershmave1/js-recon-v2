@@ -143,8 +143,31 @@ def test_webpack_modules_requires_the_d_gate():
     assert _wp_modules("var e={9(a,t,n){n.d(t,{f:()=>()=>1})}};") == {}
 
 
+def test_webpack_modules_arrow_property_form():
+    # Real webpack 5 PRODUCTION shape (Asana/Figma): the module value is an ARROW
+    # property, not a method-shorthand. The `require.d` object form is unchanged.
+    src = 'var e={584:(a,t,n)=>{const v="/p";n.d(t,{P:()=>v})}};'
+    assert _wp_modules(src) == {"584": {"P": "/p"}}
+
+
+def test_webpack_modules_function_expression_property_form():
+    # Real webpack 5 shape (Stripe): the module value is a function expression.
+    src = 'var e={584:function(a,t,n){const v="/p";n.d(t,{P:()=>v})}};'
+    assert _wp_modules(src) == {"584": {"P": "/p"}}
+
+
+def test_webpack_modules_arrow_form_still_honors_the_d_gate():
+    # A numeric-keyed arrow with no `require.d(...)` is not a module (FP guard, form-agnostic)
+    assert _wp_modules("var e={9:(a,t,n)=>{return fetch(1)}};") == {}
+
+
 def test_webpack_requires_alias():
     assert _wp_requires("var e={489(e,a,n){var r=n(389);fetch(r.t)}};") == {"r": "389"}
+
+
+def test_webpack_requires_alias_arrow_module():
+    # require-alias resolution must work inside arrow-form modules too (real webpack 5).
+    assert _wp_requires("var e={489:(e,a,n)=>{var r=n(389);fetch(r.t)}};") == {"r": "389"}
 
 
 def test_webpack_requires_poison_shadowed_alias():
