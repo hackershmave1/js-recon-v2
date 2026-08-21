@@ -16,11 +16,11 @@
     { "id": "ep-ws", "src": "src/api/live.js", "method": "WSS", "operation": "/ws/live", "value": "WSS /ws/live", "params": [] },
     { "id": "ep-ga", "src": "src/api/thirdparty.js", "method": "GET", "host": "www.google-analytics.com", "params": [] },
     { "id": "ep-stripe", "src": "src/api/thirdparty.js", "method": "POST", "host": "api.stripe.com", "operation": "/v1/tokens", "params": [] },
-    { "id": "ep-sentry", "src": "src/api/thirdparty.js", "method": "POST", "host": "o0.ingest.sentry.io", "params": [] }
+    { "id": "ep-sentry", "src": "src/api/thirdparty.js", "method": "POST", "host": "o0.ingest.sentry.io", "params": [] },
+    { "id": "bs-concat", "src": "src/api/blindspots.js", "method": "GET", "operation": "/api/v1/widgets", "value": "GET /api/v1/widgets", "params": [], "note": "graduated from blind spot: single-unshadowed local const `resource` now folds (Phase 2, Option B)" }
   ],
   "known_blind_spots": [
     { "id": "bs-eventsource", "src": "src/api/blindspots.js", "expect": "no_finding", "probe": "/api/v1/stream" },
-    { "id": "bs-concat", "src": "src/api/blindspots.js", "expect": "unattributed" },
     { "id": "bs-variable", "src": "src/api/blindspots.js", "expect": "unattributed" },
     { "id": "bs-wrapper", "src": "src/api/blindspots.js", "expect": "no_trace", "probe": "/api/v1/hidden" },
     { "id": "bs-headers", "src": "src/api/secure.js", "expect": "headers_invisible", "endpoint": "ep-secure" },

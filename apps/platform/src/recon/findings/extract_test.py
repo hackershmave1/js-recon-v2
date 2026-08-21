@@ -124,24 +124,23 @@ def test_cross_module_bare_const_resolves():
     assert r.unattributed == 0
 
 
-def test_cross_module_fold_ignores_local_const_bs_concat_stays_unattributed():
-    # THE calibration guard (adversary finding 1): bs-concat's `resource` is a LOCAL
-    # const, which lands in const_prefixes — the +-folder must NOT read it, or
-    # recon-range's min_unattributed floor breaks. Even with a cross-module index in
-    # scope, a local-const concatenation must stay unattributed.
+def test_local_const_folds_even_with_cross_module_index_in_scope():
+    # Phase 2 (Option B) REVERSES the cross-chunk slice's local-const exclusion. `resource` is a
+    # single-unshadowed local const, so `"/api/v1/" + resource` folds to a certain value — the
+    # poison set makes it 0-FP (see `test_local_const_operand_resolves_bs_concat` for the
+    # no-index case). An unrelated cross-module index in scope does not change that.
     r = extract(
         'const resource = "widgets"; fetch("/api/v1/" + resource)', cross_module_consts=_ORDERS
     )
-    assert r.endpoints == [] and r.unattributed == 1
+    assert r.unattributed == 0
+    assert [(e.method, e.url) for e in r.endpoints] == [("GET", "/api/v1/widgets")]
 
 
-def test_cross_module_partial_operand_is_not_guessed():
-    # One operand is a cross-module const, the other a local var: all-or-none, so the
-    # call stays honestly unattributed rather than emitting a half-guessed URL (finding 2).
-    r = extract(
-        'const p = "/x"; fetch(API_BASE + p)',
-        cross_module_consts={"API_BASE": "https://api.acme.com"},
-    )
+def test_cross_module_plus_unresolvable_operand_is_not_guessed():
+    # all-or-none STILL holds for a GENUINELY unresolvable operand (finding 2): `p` is undeclared
+    # (not a local const, not cross-module), so the whole chain stays honestly unattributed
+    # rather than emitting a half-guessed URL.
+    r = extract("fetch(API_BASE + p)", cross_module_consts={"API_BASE": "https://api.acme.com"})
     assert r.endpoints == [] and r.unattributed == 1
 
 
@@ -190,8 +189,10 @@ def test_webpack_member_unknown_export_is_unattributed():
     assert r.endpoints == [] and r.unattributed == 1
 
 
-def test_webpack_partial_member_plus_local_is_not_guessed():
-    r = extract('const p = "/z"; fetch(r.t + p)', webpack_members=_WM)
+def test_webpack_member_plus_unresolvable_operand_is_not_guessed():
+    # `p` is undeclared -> the `r.t + p` chain stays unattributed (all-or-none honesty). A LOCAL
+    # const operand WOULD now fold (Phase 2) — see `test_local_const_base_plus_path_resolves`.
+    r = extract("fetch(r.t + p)", webpack_members=_WM)
     assert r.endpoints == [] and r.unattributed == 1
 
 
@@ -203,6 +204,158 @@ def test_webpack_deep_member_chain_is_unattributed():
 
 def test_webpack_absent_members_unchanged():
     r = extract("fetch(r.t + r.M)")
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+# --- Phase 2: single-unshadowed LOCAL const propagation (Option B) ------------ #
+# `_declared_names` poisons any name bound/shadowed/reassigned more than once anywhere in the
+# file, so `const_prefixes` holds only names bound EXACTLY once — folding one is CERTAIN, not a
+# guess, so it is 0-FP (the value cannot differ at the sink). Phase 2 resolves such a local const
+# at a BARE sink argument AND as a `+`/concat operand, reversing the cross-chunk slice's
+# deliberate local-const exclusion (a scoped choice, not a safety one). Ambiguous bindings stay
+# `unattributed` — honesty (REQ-C2) is preserved by the poison set, not by refusing to resolve.
+
+
+def test_local_const_bare_url_resolves():
+    r = extract('const u = "https://api.acme.com/orders"; fetch(u)')
+    assert r.unattributed == 0 and r.unresolved == []
+    assert [(e.method, e.url) for e in r.endpoints] == [("GET", "https://api.acme.com/orders")]
+
+
+def test_local_const_operand_resolves_bs_concat():
+    # recon-range `bs-concat`: a local literal const in a `+` chain now folds (Option B). The
+    # cross-chunk slice deliberately left this `unattributed`; the poison set makes folding safe.
+    r = extract('const resource = "widgets"; fetch("/api/v1/" + resource)')
+    assert r.unattributed == 0 and r.unresolved == []
+    assert [(e.method, e.url) for e in r.endpoints] == [("GET", "/api/v1/widgets")]
+
+
+def test_local_const_base_plus_path_resolves():
+    r = extract('const BASE = "https://api.acme.com"; fetch(BASE + "/api/v3/orders")')
+    assert [(e.method, e.url) for e in r.endpoints] == [
+        ("GET", "https://api.acme.com/api/v3/orders")
+    ]
+
+
+def test_local_const_axios_member_resolves():
+    r = extract('const u = "https://api.acme.com/x"; axios.get(u)')
+    assert [(e.method, e.url) for e in r.endpoints] == [("GET", "https://api.acme.com/x")]
+
+
+def test_local_const_and_cross_module_operand_both_resolve():
+    # a local const + a cross-module const in one chain — both lanes fold now (Option B).
+    r = extract(
+        'const p = "/x"; fetch(API_BASE + p)',
+        cross_module_consts={"API_BASE": "https://api.acme.com"},
+    )
+    assert [(e.method, e.url) for e in r.endpoints] == [("GET", "https://api.acme.com/x")]
+
+
+# --- Phase 2 shape (b): expression-valued bindings propagate (recon.findings._dataflow) -----
+# A URL BUILT from local consts/literals and held in a local const, then fetched: the binding's
+# VALUE is a `+` chain, not a bare literal, so it is resolved once by `collect_local_consts`
+# (memoized, cycle- + depth-capped) and lands in `const_prefixes` like any other local const.
+
+
+def test_expression_binding_resolves_base_plus_path():
+    r = extract('const base = "https://api.acme.com"; const url = base + "/v3/orders"; fetch(url)')
+    assert r.unattributed == 0
+    assert [(e.method, e.url) for e in r.endpoints] == [("GET", "https://api.acme.com/v3/orders")]
+
+
+def test_expression_binding_of_two_literals_resolves():
+    r = extract('const u = "https://api.acme.com" + "/x"; axios.get(u)')
+    assert [(e.method, e.url) for e in r.endpoints] == [("GET", "https://api.acme.com/x")]
+
+
+def test_expression_binding_with_unresolvable_operand_stays_unattributed():
+    # the built value references a CALL result -> unresolvable operand -> honest miss (all-or-none).
+    r = extract('const url = base() + "/x"; fetch(url)')
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_expression_binding_reference_cycle_is_safe():
+    # `const a = b + "/x"; const b = a + "/y"` -> a reference cycle: both stay unresolved (the
+    # `active` set breaks it), no hang, no guess.
+    r = extract('const a = b + "/x"; const b = a + "/y"; fetch(a)')
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+# --- Phase 2 honesty: ambiguous bindings stay unattributed (0-FP) ------------- #
+
+
+def test_reassigned_local_is_poisoned_not_resolved():
+    # `let u` reassigned -> `_declared_names` count 2 -> poisoned -> never folded (could be either).
+    r = extract('let u = "/a"; u = "/b"; fetch(u)')
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_param_shadowed_local_is_poisoned_not_resolved():
+    # the outer const is shadowed by a same-name arrow param -> poisoned -> honest miss.
+    r = extract('const r = "/a"; [1].forEach((r) => fetch("/api/" + r))')
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_non_literal_local_binding_stays_unattributed_bs_variable():
+    # recon-range `bs-variable`: `const u = pickUrl(); fetch(u)` — the value is a CALL, not a
+    # string literal, so `u` never enters `const_prefixes`; honest miss, never a guessed URL.
+    r = extract('function pickUrl(){return "/api/v1/dynamic"} const u = pickUrl(); fetch(u)')
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_undeclared_bare_var_stays_unattributed():
+    r = extract("fetch(u)")  # `u` is never declared -> not a local const -> unattributed
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+# --- Phase 2 honesty: IN-PLACE mutation poisons the const (§4 gate-2 CONFIRMED 0-FP fix) ------ #
+# A name bound once but MUTATED (`+=`, `||=`, `++`, a `for (x of …)` loop target) has a value at
+# the sink that differs from its declared literal. `_declared_names` must poison these or the fold
+# emits the STALE value as an attributed endpoint — a false positive on ordinary string-building
+# code. (The higher-model review caught this: the poison walk had omitted the mutation node types.)
+
+
+def test_compound_assignment_poisons_local_not_resolved():
+    r = extract('let path = "/api/v1"; path += "/users"; fetch(path)')
+    assert r.endpoints == [] and r.unattributed == 1  # would fold to the stale `/api/v1` pre-fix
+
+
+def test_compound_assignment_operand_poisons_local_not_resolved():
+    r = extract('let base = "https://api.acme.com"; base += "/v2"; fetch(base + "/orders")')
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_logical_assignment_poisons_local_not_resolved():
+    r = extract('let u = ""; u ||= "/real/admin"; fetch(u)')
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_update_expression_poisons_local_not_resolved():
+    r = extract('let p = "/a"; p++; fetch(p)')
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_for_of_reassigned_local_poisons_not_resolved():
+    # `for (url of arr)` reassigns the bare outer `url` each pass -> poisoned -> honest miss.
+    r = extract('let url = "/a"; for (url of arr) fetch(url)')
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_parenthesized_assignment_target_poisons_local():
+    # §4 gate-2 CONFIRMED 0-FP: `(x) = v` / `(x) += v` is a legal assignment target that wraps the
+    # name in a `parenthesized_expression`; the poison walk must descend it or the STALE const
+    # folds at the sink. Nested parens `((x)) = v` too.
+    r = extract('let u = "/a"; (u) = "/b"; fetch(u)')
+    assert r.endpoints == [] and r.unattributed == 1
+    assert extract('let u = "/a"; (u) += "/b"; fetch(u + "/x")').endpoints == []
+    assert extract('let u = "/a"; ((u)) = "/b"; fetch(u)').endpoints == []
+
+
+def test_with_statement_drops_all_local_consts():
+    # §4 gate-2 LOW: `with (obj)` rebinds free names inside against obj at runtime, so a local
+    # const could differ at the sink. Poison the whole file (`with` is a SyntaxError in ESM/strict
+    # -> ~0 real recall lost) -> honest miss, never the stale value.
+    r = extract('const api = "/stale"; with (cfg) { fetch(api); }')
     assert r.endpoints == [] and r.unattributed == 1
 
 

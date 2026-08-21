@@ -13,6 +13,7 @@ import re
 
 from tree_sitter import Node
 
+from recon.findings._dataflow import resolve_local_consts
 from recon.findings._jsast import (
     _MAX_URL_SPAN,
     BaseEnv,
@@ -39,8 +40,9 @@ def _declared_names(root: Node) -> set[str]:
     """Every identifier bound — or reassigned — anywhere in the tree.
 
     This pass has no real lexical scoping, so a name touched more than once
-    (redeclared in a nested scope, shadowed by a parameter, or reassigned) is
-    ambiguous and must not resolve. That's the whole point of the param-
+    (redeclared in a nested scope, shadowed by a parameter, or reassigned — by
+    `=`, a compound `+=`/`||=`, an `++`/`--` update, or a `for (x of …)` loop
+    target) is ambiguous and must not resolve. That's the whole point of the param-
     shadowing test: `items.forEach((loc) => ...)` re-binds `loc`, poisoning
     any outer `loc` even though the two are in different scopes. The same
     holds when the shadow arrives via destructuring/default/rest instead of
@@ -97,6 +99,14 @@ def _declared_names(root: Node) -> set[str]:
                 stack.append(node.child_by_field_name("left"))  # `x = default`; default is a read
             elif node.type in ("object_pattern", "array_pattern", "rest_pattern"):
                 stack.extend(node.named_children)
+            elif node.type == "parenthesized_expression":
+                # A parenthesized assignment TARGET — `(x) = v`, `(x) += v`, `((x)) = v` (all
+                # legal simple-assignment targets, even in strict mode) — wraps the bound name.
+                # Descend so the mutation still poisons `x` (§4 gate-2: this missing case let
+                # `let u="/a"; (u)="/b"; fetch(u)` fold the stale `/a` at the sink — a 0-FP).
+                inner = node.named_children
+                if len(inner) == 1:
+                    stack.append(inner[0])
 
     for node in _walk(root):
         if node.type in ("variable_declarator", "function_declaration"):
@@ -120,6 +130,20 @@ def _declared_names(root: Node) -> set[str]:
                 mark(child)  # any param shape: plain/destructured/default/rest
         elif node.type == "assignment_expression":
             mark(node.child_by_field_name("left"))  # plain reassignment: `loc = other`
+        elif node.type == "augmented_assignment_expression":
+            # In-place mutation `path += "/x"`, `u ||= v`, `n -= 1` — the name's value AFTER this
+            # differs from its declared literal, so it must poison (§4 gate: this omission let a
+            # `let p="/a"; p+="/b"; fetch(p)` fold to the stale `/a` — a 0-FP). Field is `left`.
+            mark(node.child_by_field_name("left"))
+        elif node.type == "update_expression":
+            mark(node.child_by_field_name("argument"))  # `u++` / `--u` in-place mutation
+        elif node.type == "for_in_statement":
+            # `for (x of y)` / `for (x in y)` reassigns its loop target each pass. For a BARE
+            # target (`for (x of y)`) `left` IS the `identifier`, which `mark` poisons directly —
+            # the vector this closes. For `for (const x of y)` `left` is a declaration whose inner
+            # `variable_declarator` is already marked above and `mark` no-ops on the wrapper, so
+            # either form is handled; `mark` also recurses a destructuring target (`for ([a,b] of y)`).
+            mark(node.child_by_field_name("left"))
     return {name for name, count in seen.items() if count > 1}
 
 
@@ -129,22 +153,33 @@ def collect_base_env(root: Node, data: bytes) -> BaseEnv:
     poisoned = _declared_names(root)
     instances: dict[str, str | None] = {}
     default_base: str | None = None
-    const_prefixes: dict[str, str] = {}
+    # Candidate LOCAL consts (single-unshadowed name -> value node) collected in THIS single walk,
+    # then resolved once below (Phase 2). Collecting here — rather than in a second full-tree pass
+    # inside _dataflow — means Phase 2 adds NO new walk (the base-env walks are the extractor's
+    # unbounded worst case; see DEBT D21). An `axios.create(...)` binding goes to `instances`, not
+    # here (its value is a call, so it would not resolve to a string anyway — no collision).
+    raw_consts: dict[str, Node] = {}
+    # `with (obj) { … }` rebinds every free name inside the block against `obj` at runtime, which
+    # static analysis cannot follow — so a local const referenced in the block could differ at the
+    # sink. `with` is a SyntaxError in strict mode / ES modules (absent from any real bundle), so
+    # dropping ALL local consts when it appears costs ~0 real recall and closes the 0-FP (§4
+    # gate-2 LOW). Flagged here, applied after the walk.
+    has_with = False
     for node in _walk(root):
-        if node.type == "variable_declarator":
+        if node.type == "with_statement":
+            has_with = True
+        elif node.type == "variable_declarator":
             name_node = node.child_by_field_name("name")
             value = node.child_by_field_name("value")
             if name_node is None or name_node.type != "identifier" or value is None:
                 continue
             name = _text(name_node)
             if name in poisoned:
-                continue
+                continue  # bound/reassigned/shadowed >once -> ambiguous, never resolved (0-FP)
             if _is_axios_create(value):
                 instances[name] = _base_url_arg(value)
-            else:
-                lit = _string_value(value)
-                if lit is not None:
-                    const_prefixes[name] = lit
+            elif name not in raw_consts:
+                raw_consts[name] = value
         elif node.type == "assignment_expression":
             # `_text_if_short`, not `_text`: a left-nested member-target assignment
             # (`((a.x=1).x=1).x=1…`) makes each LHS a member expression that CONTAINS every
@@ -154,6 +189,11 @@ def collect_base_env(root: Node, data: bytes) -> BaseEnv:
             left = _text_if_short(node.child_by_field_name("left"))
             if left in ("axios.defaults.baseURL",):
                 default_base = _string_value(node.child_by_field_name("right"))
+    # Resolve the collected local consts once — literals AND values built from other local consts
+    # (`const url = base + "/x"`). Poison-filtered above, so every entry is a value that cannot
+    # differ at the sink (0-FP); the sink resolver then folds by an O(1) `const_prefixes` lookup.
+    # A `with` anywhere drops them all (see above) — its dynamic scope defeats the certainty.
+    const_prefixes = {} if has_with else resolve_local_consts(raw_consts)
     return BaseEnv(instances=instances, default_base=default_base, const_prefixes=const_prefixes)
 
 
@@ -271,18 +311,26 @@ _MAX_CONCAT_DEPTH = 40
 def _resolve_concat_operand(node: Node | None, env: BaseEnv, depth: int) -> str | None:
     """Resolve one operand of a URL `+` chain to a string, or ``None``.
 
-    Resolvable operands are string literals, CROSS-MODULE const imports
-    (`env.cross_module_consts`, ESM), and a webpack require-alias member
-    (`env.webpack_members[alias][export]`, e.g. `r.t` where `var r = require(389)`) —
-    deliberately NOT `env.const_prefixes` (local consts). That scope is load-bearing:
-    it lets a cross-chunk `API_BASE + ORDERS_PATH` or `r.t + r.M` (all cross-module)
-    fold while a same-file `"/api/v1/" + resource` (a local const) stays honestly
-    unattributed, so the honesty counter / coverage calibration is unchanged (REQ-C2).
+    Resolvable operands are string literals, a single-unshadowed LOCAL const
+    (`env.const_prefixes`, Phase 2), a CROSS-MODULE const import (`env.cross_module_consts`,
+    ESM), and a webpack require-alias member (`env.webpack_members[alias][export]`, e.g.
+    `r.t` where `var r = require(389)`).
+
+    Folding a LOCAL const is Phase 2 (Option B) and REVERSES the cross-chunk slice's
+    deliberate exclusion. It is 0-FP, not a guess: `const_prefixes` holds only names bound
+    EXACTLY once anywhere in the file (poison-filtered upstream by `_declared_names`), so a
+    same-file `"/api/v1/" + resource` folds to a value that cannot differ at the sink — the
+    name is provably not reassigned or shadowed (REQ-C2 honesty is preserved by the poison
+    set, not by refusing to resolve). A cross-module value wins on the rare import/local name
+    clash — the module-boundary export is the source of truth there.
     """
     if node is None or depth > _MAX_CONCAT_DEPTH:
         return None
     if node.type == "identifier":
-        return env.cross_module_consts.get(_text(node))
+        name = _text(node)
+        if name in env.cross_module_consts:
+            return env.cross_module_consts[name]
+        return env.const_prefixes.get(name)
     if node.type == "member_expression":
         # `alias.export` where `alias` was bound to `require(id)` (webpack, 2b). Only a
         # simple `identifier.property` resolves; a deeper/computed receiver -> None.
@@ -308,16 +356,17 @@ def _resolve_concat_operand(node: Node | None, env: BaseEnv, depth: int) -> str 
     return _string_value(node)  # string literal / no-substitution template
 
 
-def _fold_cross_module(node: Node, env: BaseEnv) -> str | None:
-    """Fold a cross-module operand or a `+` chain of them to a full URL:
-    ESM `fetch(API_BASE)` / `fetch(API_BASE + ORDERS_PATH)`, or webpack
-    `fetch(r.t)` / `fetch(r.t + r.M)`.
+def _fold_indirect(node: Node, env: BaseEnv) -> str | None:
+    """Fold an INDIRECT URL argument — a bare name/member, or a `+`/concat chain of them —
+    to a full URL string: a single-unshadowed LOCAL const (`const u="…"; fetch(u)` /
+    `fetch(u + "/x")`, Phase 2), a cross-module ESM import (`fetch(API_BASE + ORDERS_PATH)`),
+    or a webpack require-alias member (`fetch(r.t + r.M)`).
 
-    Returns ``None`` unless a cross-module index (ESM consts OR webpack members) is
-    actually in scope, so with neither this is a no-op and behavior is byte-for-byte
-    unchanged. All-operands-or-``None`` — a partial resolution never yields a guess.
+    Returns ``None`` unless SOME const source is in scope (local / cross-module / webpack), so
+    a file with no resolvable consts is a no-op and behavior is byte-for-byte unchanged.
+    All-operands-or-``None`` — a partial resolution never yields a guess (REQ-C2).
     """
-    if not env.cross_module_consts and not env.webpack_members:
+    if not env.const_prefixes and not env.cross_module_consts and not env.webpack_members:
         return None
     if node.type not in ("identifier", "member_expression", "binary_expression"):
         return None
@@ -338,7 +387,7 @@ def _resolve_url(node: Node | None, env: BaseEnv, base: str) -> str | None:
         return None
     folded = _fold_const_prefix(node, env)
     if folded is None:
-        folded = _fold_cross_module(node, env)  # cross-chunk const / `+` chain (P1/P2)
+        folded = _fold_indirect(node, env)  # local / cross-module const, bare or `+` chain
     url = folded if folded is not None else _string_value(node)
     if url is None:
         return None
