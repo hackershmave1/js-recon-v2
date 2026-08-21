@@ -88,6 +88,22 @@ tags, observed request-auth headers become `components.securitySchemes` + per-op
 embedded GraphQL operations surface as an `x-recon-graphql-operations` root extension — never as
 HTTP paths or findings.
 
+**Cross-chunk resolution + lazy-chunk enumeration.** Vespasian's base extractor resolves a URL
+per file, so a bundler that splits a `fetch`/`axios` call from the string constants it is built
+from (a base URL in one chunk, a path in another) would leave it *unattributed*. A static ESM
+module graph (`findings/_modulegraph.py`) plus a run-level cross-module index
+(`analyze.py::CrossModuleIndex`) fold those cross-chunk operands back together across all three
+bundle shapes — source-map-recovered ESM, minified ESM (vite), and minified webpack (`require.d`
+export registries + `n(id).member` require-aliases) — still honestly (only a statically-certain
+string literal crosses a module boundary; anything dynamic stays unattributed). Separately, a
+webpack bundle's lazy chunks have URLs *computed at runtime* by its `__webpack_require__.u`
+builder, invisible to both the static pass and katana; `findings/chunkenum.py` reconstructs those
+URLs **statically** (folding the `.u` template + inline chunk→hash map, no execution) and the
+FETCH stage fetches each through the egress guard so its endpoints are recovered — content-derived
+URLs never widen scope, the `crawl_max_assets` cap is re-applied at the seed site, and out-of-scope
+chunks are dropped. Executing *arbitrary/obfuscated* chunk-builders in a JS sandbox is a deliberate
+future posture change, deferred with its security contract (DEBT D29).
+
 **API surface + frontend.** The API mounts routers for sessions, engagements, runs, findings,
 manual-probe, sources, the OpenAPI spec + diff, export, base-URL overlay, wrapper-teaching,
 per-host tech detection, and a discovered-hosts inventory (`api/app.py`) — driven day-to-day at `localhost:8000/sessions`, `/runs`, `/runs/{id}/findings`,
