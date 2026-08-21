@@ -155,22 +155,6 @@ RLS). **Detection note:** CI catches a broken migration because api/worker `depe
 migrate: service_completed_successfully`; `docker compose up -d migrate` alone swallows the
 exit code. (Migrated 2026-08-15 from the retired `slice2-deferred-debt.md`.)
 
-#### D21 · Extractor: linear-but-unbounded worst case on pathological input [S]  ·  correctness
-The crafted-input DoS **class is closed** (PR #71, 2026-08-17): the extractor's per-node
-full-text decodes are span-capped and its two unbounded recursions are iterative, so a
-deeply-nested single expression (the `.concat()`/`+`/nested-sink obfuscation this tool
-targets) can no longer drive `extract()` O(n²) or crash it — 9 vectors fixed, verified
-linear. **Residual:** the walk is now LINEAR, not *bounded* — a maximally-pathological
-~10 MB in-cap bundle (hundreds of thousands of nested sinks) still takes linear-minutes,
-which can exceed the analyze job's 30 s heartbeat (cf. D20 "Analyze mid-scan heartbeat").
-**Why safe now:** real bundles are nowhere near this shape; total time is bounded by the
-10 MB ingest cap; the actual DoS (O(n²)/crash) is gone. **Still owed (defense-in-depth):**
-a one-time AST node-count / total-work budget checked once in `extract()` that curtails a
-pathological input, instead of the current per-decode-site caps. **Trigger:** before
-exposing analyze to untrusted multi-tenant load at scale. The fixes + the shared
-bounded-decode primitives (`_text_if_short`, `_source_snippet`, span-cap constants) live in
-`recon.findings._jsast`; DoS guards in `findings/extract_test.py`.
-
 #### D23 · Per-asset cumulative beautify has no budget/heartbeat [S]  ·  correctness
 `findings/analyze._analysis_units` beautifies each source-map-recovered *minified* file before
 extraction (`deobfuscate.beautify_if_minified`, per-file 1 MiB cap) so its findings land on
@@ -504,6 +488,32 @@ WITH NITS — the precedence test was strengthened to assert the *effective* ten
 just unclobbered storage). Frontend lane green (oxlint + tsc-strict + vitest 136 + build). NOTE: the `TenantGate`
 UI this entry describes was later removed — superseded by central login (PR #57);
 `TenantContext` + `VITE_DEFAULT_TENANT_ID` remain.
+
+### D21 · Extractor DoS: harvest O(n²) + one-shot work budget [S] — ✅ RESOLVED 2026-08-21  ·  correctness
+PR #71 was thought to have closed the crafted-input DoS class (per-decode span caps + iterative
+recursions kill the deep-single-expression O(n²)/crash). Landing the "still-owed" work budget
+surfaced a SECOND, live O(n²) the deep-chain guard could not catch: `findings/extract.py`'s
+off-sink harvest pass tested each builder node for containment in the recorded-sink `claimed`
+list with an `any(...)` scan — O(claimed) per node, so O(n²) once a bundle has many sinks (~5 s
+at 8k flat sinks, ~34 s at 20k — a <1 MB crafted input, well under the 10 MB ingest cap). The
+existing harvest guard only exercised a deep SINGLE chain, where the result (and thus `claimed`)
+stays empty, so it never saw this dimension. **Fixed algorithmically:** `_merge_spans` collapses
+the claimed spans once, and `_harvest_routes` probes them with a single forward pointer over the
+preorder walk (whose node start-bytes are non-decreasing), plus a scalar `last_harvest_end` for
+nested-sub-expression dedup — O(n log n), full recall preserved (byte-identical findings on real
+inputs; the 417-test findings lane stays green). **Plus the requested one-shot budget:**
+`_MAX_AST_NODES` (2 M nodes ≈ 6–8 MB of source — above any real single file) checked once via
+`Node.descendant_count` (O(1)); over it, `extract()` caps its two EXPENSIVE passes (the sink walk
++ harvest) to a prefix via `_walk(limit=…)` — on a measured 10 MB nested-concat input this cut
+end-to-end from ~40 s to ~25 s. The budget does NOT bound `collect_base_env`'s poison/const
+pre-pass (the dominant residual, ~17 s of full-tree walks on that input): it must see the WHOLE
+tree or a name shadowed past the prefix could resolve wrongly (a false positive), so soundness
+beats the time. Net: worst-case wall-clock is ~linear and can APPROACH — not sit well under — the
+30 s heartbeat on a crafted oversize input, acceptable under the 10 MB ingest cap; the curtailment
+only ever drops tail recall, never invents a URL. (§4 code-review gate = SHIP-WITH-NITS; this
+softened wording + the `_walk(limit<=0)` guard are the folded nits.) Guards (both in
+`findings/extract_test.py`): `test_harvest_stays_linear_on_many_flat_sinks_no_dos` (the
+orthogonal many-claimed dimension) + `test_node_budget_curtails_pathological_tree_dos_guard`.
 
 ### D24 · Runtime-capture / unconfirmed-lane findings lose host attribution [M] — ✅ RESOLVED 2026-08-19  ·  correctness
 Host is now lifted from a finding's absolute-URL literal on the unconfirmed lanes
