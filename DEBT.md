@@ -252,6 +252,28 @@ sandbox) + an ADR-0005 note, and its own §4 gates. **Already safe (no work owed
 from content), so the static slice and any future engine both inherit that guard by routing URLs
 exclusively through the seed→fetch path.
 
+#### D30 · Deferred interprocedural param-URL resolution (static recall ceiling) [L]  ·  correctness
+The static extractor resolves a sink URL held in / built from a single-unshadowed local binding
+(Phase 2 for fetch/axios; extended by S1 to `XMLHttpRequest.open`, jQuery, and `new WebSocket` so
+the same `const u = "…"; sink(u)` folds at every sink). What stays `unattributed` is a URL that
+arrives as a **function parameter** (`fetch(o)`, `c.open("GET", a)`) or from a **builder-method
+call** (`fetch(t.build("fetch", r))`) — the shapes that dominate the real unresolved sinks on
+minified webpack (18/18 on the Asana corpus). This is REQ-C2-honest (unattributed, never guessed),
+not a bug — it is the deliberate ceiling of the static path.
+Resolving a parameter would need **cross-function (interprocedural) data-flow** — the taint
+analysis the thorough-endpoint-recovery §4 design review explicitly ruled out (F5: it is boolean
+source→sink *reachability* that does not reconstruct the URL string, and a per-sink pass over a
+function's call sites reintroduces the O(n²)/FP class DEBT D21 just closed). On minified-no-map
+bundles the names are mangled → poisoned → recall there is ~0 regardless of any analysis; the lever
+only ever pays on readable / source-map-recovered source.
+**Measure-first gate (do this BEFORE any build):** run the already-shipped static path across more
+real bundles and quantify what fraction of genuinely-unresolved sinks are (a) a *single unshadowed
+call site* whose argument is statically foldable (safely resolvable, 0-FP) versus (b) genuinely
+interprocedural / builder-method (not). Build only if (a) is a material population. If ever built:
+a bounded intraprocedural + single-call-site fold ONLY (never a full taint port), 0-FP re-proved on
+the real corpus, index-once / no per-sink re-traversal (D21 discipline). Related: the deferred exec
+engine (D29) and `apps/platform/docs/superpowers/thorough-endpoint-recovery-design.md`.
+
 #### D9 · Test-pyramid inversion [L, ongoing]  ·  maintainability
 42/75 backend test files need live PG/Redis/MinIO; the fast hermetic layer is the
 minority, so the heavy lane catches most real bugs. Grow the small-test layer.
