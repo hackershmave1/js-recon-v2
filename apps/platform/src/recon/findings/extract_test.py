@@ -359,6 +359,105 @@ def test_with_statement_drops_all_local_consts():
     assert r.endpoints == [] and r.unattributed == 1
 
 
+# --- S1: const-resolution extends to XHR / jQuery / WebSocket sinks ------------ #
+# `fetch`/`axios` already fold a single-unshadowed local const at the URL arg (Phase 2), but
+# `XMLHttpRequest.open`, jQuery, and `new WebSocket` accepted a bare string LITERAL only — so the
+# same `const u = "…"; sink(u)` resolved for a fetch yet landed `unattributed` for these three.
+# They now route their URL arg through the same `_resolve_url`; the poison set carries the 0-FP
+# guarantee across unchanged (a reassigned/param URL still never folds a guess).
+
+
+def test_xhr_open_resolves_local_const():
+    r = extract('const u = "/api/v1/items"; xhr.open("GET", u)')
+    assert len(r.endpoints) == 1 and r.unresolved == [] and r.unattributed == 0
+    ep = r.endpoints[0]
+    assert (ep.kind, ep.method, ep.url) == ("xhr", "GET", "/api/v1/items")
+
+
+def test_xhr_open_resolves_const_base_plus_path():
+    r = extract('const b = "/api/v1"; xhr.open("POST", b + "/orders")')
+    assert len(r.endpoints) == 1 and r.unattributed == 0
+    assert (r.endpoints[0].method, r.endpoints[0].url) == ("POST", "/api/v1/orders")
+
+
+def test_xhr_open_reassigned_local_still_unattributed():
+    # 0-FP carries over: a reassigned (poisoned) name must NOT fold its stale literal at `.open`.
+    r = extract('let u = "/a"; u = "/b"; xhr.open("GET", u)')
+    assert r.endpoints == [] and r.unattributed == 1
+    assert r.unresolved[0].kind == "xhr"
+
+
+def test_jquery_get_resolves_local_const():
+    r = extract('const u = "/api/items"; $.get(u)')
+    assert len(r.endpoints) == 1 and r.unattributed == 0
+    assert (r.endpoints[0].kind, r.endpoints[0].method, r.endpoints[0].url) == (
+        "jquery",
+        "GET",
+        "/api/items",
+    )
+
+
+def test_jquery_ajax_resolves_local_const_url():
+    r = extract('const u = "/api/y"; $.ajax({url: u, type: "PUT"})')
+    assert len(r.endpoints) == 1 and r.unattributed == 0
+    assert (r.endpoints[0].method, r.endpoints[0].url) == ("PUT", "/api/y")
+
+
+def test_jquery_post_resolves_local_const():
+    r = extract('const u = "/api/login"; $.post(u, {a: 1})')
+    assert len(r.endpoints) == 1 and r.unattributed == 0
+    assert (r.endpoints[0].method, r.endpoints[0].url) == ("POST", "/api/login")
+
+
+def test_websocket_resolves_local_const():
+    r = extract('const u = "wss://h.example.com/socket"; new WebSocket(u)')
+    assert len(r.endpoints) == 1 and r.unattributed == 0
+    assert (r.endpoints[0].kind, r.endpoints[0].method, r.endpoints[0].url) == (
+        "websocket",
+        "WSS",
+        "wss://h.example.com/socket",
+    )
+
+
+def test_param_url_stays_unattributed_the_static_ceiling():
+    # A URL that arrives as a FUNCTION PARAMETER is not a local const (no single static value
+    # here) -> it stays honestly `unattributed`. Resolving it would need interprocedural data-flow,
+    # deliberately out of scope (the §4-forbidden taint zone; tracked as measure-first debt D30).
+    r = extract('function load(a) { xhr.open("GET", a); }')
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_websocket_reassigned_local_still_unattributed():
+    # 0-FP symmetry with XHR (§4 review finding 6): the poison set must hold at EVERY new sink, so
+    # a reassigned name never folds its stale value at `new WebSocket` either.
+    r = extract('let u = "wss://a/x"; u = "wss://b/y"; new WebSocket(u)')
+    assert r.endpoints == [] and r.unattributed == 1
+    assert r.unresolved[0].kind == "websocket"
+
+
+def test_jquery_param_shadowed_local_still_unattributed():
+    # `u` is bound as a const AND as a parameter of `f` -> bound twice -> poisoned -> the $.get URL
+    # stays unattributed (0-FP symmetry guard at the jQuery sink).
+    r = extract('const u = "/a"; function f(u) { return u; } $.get(u)')
+    assert r.endpoints == [] and r.unattributed == 1
+    assert r.unresolved[0].kind == "jquery"
+
+
+def test_websocket_leading_template_const_resolves():
+    # The leading-`${CONST}` fold reaches the new sinks too, not just bare-id / `+`-concat forms.
+    r = extract('const API = "wss://h.example.com"; new WebSocket(`${API}/ws`)')
+    assert len(r.endpoints) == 1 and r.unattributed == 0
+    assert (r.endpoints[0].method, r.endpoints[0].url) == ("WSS", "wss://h.example.com/ws")
+
+
+def test_websocket_protocol_relative_const_not_mutated():
+    # base="" makes `_join_base` the identity: a protocol-relative URL folds to ITSELF, with no
+    # slash rewrite -- guards the reroute through `_resolve_url` against a base-join mutation.
+    r = extract('const u = "//h.example.com/socket"; new WebSocket(u)')
+    assert len(r.endpoints) == 1
+    assert (r.endpoints[0].method, r.endpoints[0].url) == ("WS", "//h.example.com/socket")
+
+
 # --- .concat() reconstruction + value-holder tokens --------------------------- #
 # `.concat()` is reconstructed exactly like `+`; a readable non-constant leaf renders as
 # a `:holder` token (its source identifier) so an analyst sees WHICH value fills a

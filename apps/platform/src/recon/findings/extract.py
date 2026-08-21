@@ -14,11 +14,12 @@ than guessed, but the call still lands in ``endpoints``, never a silent drop.
 Downstream, each :class:`RawEndpoint` is normalized (recon.findings.normalize)
 and written through the outbox (recon.findings.store).
 
-Known MVP limitations (no data-flow analysis): a library aliased to another name
-(``const a = axios; a.get(...)``) is not resolved and leaves no trace; a URL built
-by concatenation or held in a variable is counted as unattributed, never guessed;
-and ``.open(<method-string>, <url>)`` on a non-XHR receiver can be a rare false
-positive since the receiver's type isn't tracked.
+Known MVP limitations (no interprocedural data-flow): a library aliased to another name
+(``const a = axios; a.get(...)``) is not resolved and leaves no trace; a URL built from a
+single-unshadowed local ``const`` folds to its value (Phase 2, at every sink), but one held
+in a reassigned / parameter / dynamic value stays unattributed, never guessed; and
+``.open(<method-string>, <url>)`` on a non-XHR receiver can be a rare false positive since
+the receiver's type isn't tracked.
 
 The AST primitives (parser, dataclasses, tree/param helpers) live in
 :mod:`recon.findings._jsast` and the base-URL resolution unit in
@@ -119,7 +120,7 @@ def extract(
         if node.type == "call_expression":
             _handle_call(node, result, env, callees)
         elif node.type == "new_expression":
-            _handle_new(node, result)
+            _handle_new(node, result, env)
         elif node.type == "pair":  # object-literal href/src/action value -> a page route
             _handle_property_url(node, result)
     _harvest_routes(tree.root_node, result, walk_limit)  # off-sink literals, after the sinks
@@ -414,11 +415,11 @@ def _dispatch_member(
     ):  # client-navigation sink -> page route; before .open so window.open wins
         _record_nav_route(call, obj, nav_arg, result)
     elif prop == "open":  # ANY receiver's `.open(method, url)` is XHR, checked before instances
-        _xhr_open(call, result)
+        _xhr_open(call, result, env)
     elif obj == "axios":
         _axios_member(call, prop, result, env, base=env.default_base or "")
     elif obj in _JQUERY:
-        _jquery(call, prop, result)
+        _jquery(call, prop, result, env)
     elif obj in env.instances:
         base = env.instances[obj]  # may be None (recognized instance, unknown base)
         _axios_member(call, prop, result, env, base=base or "")
@@ -450,7 +451,7 @@ def _fetch(call: Node, result: Extraction, env: BaseEnv, base: str = "") -> None
     result.endpoints.append(_endpoint("fetch", method, url, params, call, headers=headers))
 
 
-def _xhr_open(call: Node, result: Extraction) -> None:
+def _xhr_open(call: Node, result: Extraction, env: BaseEnv) -> None:
     args = _args(call)
     method = _string_value(args[0]) if args else None
     # NOTE: XHR is inferred from the `.open(<method>, <url>)` shape, not from
@@ -458,7 +459,10 @@ def _xhr_open(call: Node, result: Extraction) -> None:
     # rarely false-positive on another `.open(<http-method-string>, <str>)` API.
     if method is None or method.upper() not in HTTP_METHODS:
         return  # a `.open(...)` on something that isn't an XHR
-    url = _string_value(args[1]) if len(args) >= 2 else None
+    # `_resolve_url` (not bare `_string_value`), so a single-unshadowed local const folds here
+    # exactly as it already does for fetch/axios (Phase 2, S1); base="" — XHR has no instance
+    # base. A reassigned/parameter/dynamic URL still resolves to None -> unattributed (0-FP kept).
+    url = _resolve_url(args[1], env, "") if len(args) >= 2 else None
     if url is None:
         _record_unresolved(result, "xhr", method.upper(), args[1] if len(args) >= 2 else None, call)
         return
@@ -554,12 +558,12 @@ def _axios_from_config(
     )
 
 
-def _jquery(call: Node, prop: str, result: Extraction) -> None:
+def _jquery(call: Node, prop: str, result: Extraction, env: BaseEnv) -> None:
     args = _args(call)
     if prop == "ajax":
         config = args[0] if args and args[0].type == "object" else None
         pairs = _object_pairs(config)
-        url = _string_value(pairs.get("url"))
+        url = _resolve_url(pairs.get("url"), env, "")  # folds a single-unshadowed const (S1)
         if url is None:
             method = (
                 _string_value(pairs.get("type")) or _string_value(pairs.get("method")) or "GET"
@@ -576,7 +580,7 @@ def _jquery(call: Node, prop: str, result: Extraction) -> None:
         ]
         result.endpoints.append(_endpoint("jquery", method, url, params, call))
     elif prop in _JQUERY_METHODS:
-        url = _string_value(args[0]) if args else None
+        url = _resolve_url(args[0], env, "") if args else None  # folds a local const (S1)
         if url is None:
             _record_unresolved(
                 result, "jquery", _JQUERY_METHODS[prop], args[0] if args else None, call
@@ -589,7 +593,7 @@ def _jquery(call: Node, prop: str, result: Extraction) -> None:
         result.endpoints.append(_endpoint("jquery", _JQUERY_METHODS[prop], url, params, call))
 
 
-def _handle_new(new: Node, result: Extraction) -> None:
+def _handle_new(new: Node, result: Extraction, env: BaseEnv) -> None:
     constructor = new.child_by_field_name("constructor")
     # `_text_if_short` bounds the decode: a >cap constructor can't be `WebSocket` (a nested
     # `new WebSocket(new WebSocket(…))` DoS shape has a huge inner constructor), so treat it
@@ -598,7 +602,7 @@ def _handle_new(new: Node, result: Extraction) -> None:
     if name != "WebSocket":
         return
     args = _args(new)
-    url = _string_value(args[0]) if args else None
+    url = _resolve_url(args[0], env, "") if args else None  # folds a single-unshadowed const (S1)
     if url is None:
         _record_unresolved(result, "websocket", "WS", args[0] if args else None, new)
         return
