@@ -1135,3 +1135,85 @@ def test_harvest_routes_pass_stays_linear_no_dos():
     _harvest_routes(tree.root_node, result)
     assert time.perf_counter() - start < 10.0
     assert len(result.routes) <= 1
+
+
+def _flat_sinks(n: int) -> str:
+    """``fetch("/api/u0");fetch("/api/u1");…`` — n independent recorded sinks, so the harvest
+    pass's ``claimed`` list grows to O(n). This is the many-CLAIMED dimension, ORTHOGONAL to
+    the deep-single-chain shape the guard above covers (there the result stays empty, so
+    ``claimed`` never grows and the per-node containment scan is O(1))."""
+    return ";".join(f'fetch("/api/u{i}")' for i in range(n))
+
+
+def _harvest_seconds(n: int) -> tuple[float, int]:
+    """Populate a result with n recorded sinks via the main pass, then time ``_harvest_routes``
+    in ISOLATION — measuring only the claimed-containment scan, not parse/env/main."""
+    from recon.findings._base_env import collect_base_env
+    from recon.findings._jsast import Extraction, _walk
+    from recon.findings.extract import _handle_call, _harvest_routes
+
+    data = _flat_sinks(n).encode()
+    tree = _PARSER.parse(data)
+    env = collect_base_env(tree.root_node, data)
+    result = Extraction()
+    for node in _walk(tree.root_node):
+        if node.type == "call_expression":
+            _handle_call(node, result, env, frozenset())
+    best = float("inf")
+    for _ in range(3):  # min-of-3: extract is deterministic, so the min is the least-perturbed
+        fresh = Extraction()
+        fresh.endpoints[:] = result.endpoints
+        start = time.perf_counter()
+        _harvest_routes(tree.root_node, fresh)
+        best = min(best, time.perf_counter() - start)
+    return best, len(result.endpoints)
+
+
+def test_harvest_stays_linear_on_many_flat_sinks_no_dos():
+    """DoS guard for the ORTHOGONAL many-claimed dimension. With n recorded sinks the harvest
+    pass's ``claimed`` list is O(n), and the pre-fix per-node ``any(... in claimed)`` containment
+    scan made the whole pass O(n^2) — ~34s at 20k flat sinks, a <1MB crafted input well under the
+    10 MB ingest cap: a worker-stalling DoS the deep-single-chain guard above cannot catch (there
+    ``claimed`` stays empty). The merged-interval single-pointer sweep is O(n log n): a 4x input
+    scales ~linearly, not ~16x. Absolute ceilings are the robust primary guard; the ratio is a
+    secondary tripwire (pre-fix ~14x, post-fix ~4x)."""
+    extract('fetch("/warmup")')  # exclude one-time import/parse warmup
+    anchor, n_a = _harvest_seconds(2000)
+    assert n_a == 2000  # sanity: the sinks ARE recorded, so `claimed` really is O(n)
+    assert anchor < 2.0, f"harvest at 2000 flat sinks took {anchor:.2f}s (linear ~20ms) — DoS"
+    big, _ = _harvest_seconds(8000)  # 4x the input
+    assert big < 3.0, (
+        f"harvest at 8000 flat sinks took {big:.2f}s (linear ~80ms; pre-fix ~5s) — DoS"
+    )
+    assert big / max(anchor, 1e-3) < 10, (
+        f"harvest scaled {big / anchor:.1f}x for 4x more sinks "
+        f"(2000: {anchor * 1000:.0f}ms, 8000: {big * 1000:.0f}ms) — looks quadratic, DoS regression"
+    )
+
+
+def test_node_budget_curtails_pathological_tree_dos_guard(monkeypatch):
+    """One-shot AST work budget (DEBT D21): a tree over ``_MAX_AST_NODES`` bounds the two
+    EXPENSIVE passes (the sink walk + harvest) to a prefix, so worst-case wall-clock stays under
+    the analyze heartbeat regardless of input shape. A tree UNDER the cap is untouched (full
+    recall). The base-env / poison pre-pass is never bounded, so curtailment can never turn an
+    honest miss into a wrong resolution (soundness)."""
+    from recon.findings import extract as extract_mod
+
+    src = _flat_sinks(400)  # ~4400 nodes; fast to build/parse, well over the tiny cap below
+    assert len(extract(src).endpoints) == 400  # control: the default (huge) cap finds every sink
+    monkeypatch.setattr(extract_mod, "_MAX_AST_NODES", 500)  # tiny cap -> bound to a prefix
+    curtailed = extract(src)
+    assert 0 < len(curtailed.endpoints) < 400  # partial + honest — bounded work, never a crash
+
+
+def test_walk_limit_caps_node_count():
+    """The one-shot budget primitive: `_walk(limit)` yields at most `limit` nodes; `None` is
+    unbounded (every non-budget caller); `<= 0` yields nothing (the unreachable-in-prod edge)."""
+    from recon.findings._jsast import _walk
+
+    root = _PARSER.parse(b"a;b;c;d;e;").root_node
+    total = sum(1 for _ in _walk(root))
+    assert total > 3
+    assert sum(1 for _ in _walk(root, None)) == total  # None -> unbounded
+    assert sum(1 for _ in _walk(root, 3)) == 3  # caps at exactly `limit`
+    assert sum(1 for _ in _walk(root, 0)) == 0  # <= 0 yields nothing

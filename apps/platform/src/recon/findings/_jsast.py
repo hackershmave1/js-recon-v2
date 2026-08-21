@@ -193,11 +193,40 @@ class BaseEnv:
 # --- tree helpers ------------------------------------------------------------
 
 
-def _walk(node: Node) -> Iterator[Node]:
+# One-shot AST work budget (DEBT D21). With the harvest O(n^2) closed the extractor is linear in
+# the node count, but a maximally-pathological 10 MB in-cap bundle (~2.5-3M nodes) still runs in
+# ~25s (measured) — under the 30s analyze heartbeat, but not by a wide margin, and the beat is
+# shared with beautify (D23). This budget bounds only the two EXPENSIVE passes (the sink walk +
+# harvest): over this node count `extract` caps them to a prefix, which on the measured 10 MB case
+# cut end-to-end from ~40s to ~25s. The DOMINANT residual is `collect_base_env`'s poison/const
+# pre-pass — full-tree walks that are deliberately NOT bounded, because they must see the WHOLE
+# tree or a name shadowed past the prefix could resolve wrongly (a false positive); soundness
+# beats the time. So worst-case wall-clock is ~linear and can APPROACH the heartbeat on a crafted
+# oversize input — acceptable, bounded by the 10 MB ingest cap, not "well under regardless of
+# shape". Set above any real single file's node count (~6-8 MB of source) so genuine bundles are
+# never curtailed; only a crafted oversize input trips it, trading tail-recall for a bounded
+# worker. Checked once via `Node.descendant_count` (O(1)).
+_MAX_AST_NODES = 2_000_000
+
+
+def _walk(node: Node, limit: int | None = None) -> Iterator[Node]:
+    """Iterative pre-order DFS. Yields nodes in NON-DECREASING ``start_byte`` order — a parent
+    precedes its children and siblings follow source order, so each subtree is contiguous — a
+    property the harvest pass relies on for its single-pointer claimed-span sweep.
+
+    ``limit`` caps the number of nodes yielded: the one-shot DoS work budget (``_MAX_AST_NODES``),
+    applied by ``extract`` only when a tree is pathologically large. ``None`` (the default for
+    every other caller) is unbounded; ``limit <= 0`` yields nothing."""
+    if limit is not None and limit <= 0:
+        return
     stack = [node]
+    count = 0
     while stack:
         current = stack.pop()
         yield current
+        count += 1
+        if limit is not None and count >= limit:
+            return
         stack.extend(reversed(current.children))
 
 

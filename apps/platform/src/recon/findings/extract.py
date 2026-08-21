@@ -41,6 +41,7 @@ from recon.findings._jsast import (
     _GLOBAL_OBJECTS,
     _JQUERY,
     _JQUERY_METHODS,
+    _MAX_AST_NODES,
     _PARSER,
     HTTP_METHODS,
     BaseEnv,
@@ -106,16 +107,22 @@ def extract(
         env = replace(env, cross_module_consts=dict(cross_module_consts))
     if webpack_members:
         env = replace(env, webpack_members={k: dict(v) for k, v in webpack_members.items()})
+    # One-shot DoS work budget (DEBT D21), checked once via `descendant_count` (O(1)): a
+    # pathologically large tree caps the two EXPENSIVE passes (this sink walk + harvest) to a
+    # prefix; a normal bundle passes `None` and is untouched. This does NOT bound `collect_base_env`
+    # above — its poison/const pre-pass must see the whole tree (a late shadow could otherwise
+    # resolve wrongly), so it stays the ~linear, dominant residual of the worst case (`_MAX_AST_NODES`).
+    walk_limit = _MAX_AST_NODES if tree.root_node.descendant_count > _MAX_AST_NODES else None
     callees = wrapper_callees(wrappers)
     result = Extraction()
-    for node in _walk(tree.root_node):
+    for node in _walk(tree.root_node, walk_limit):
         if node.type == "call_expression":
             _handle_call(node, result, env, callees)
         elif node.type == "new_expression":
             _handle_new(node, result)
         elif node.type == "pair":  # object-literal href/src/action value -> a page route
             _handle_property_url(node, result)
-    _harvest_routes(tree.root_node, result)  # off-sink absolute-URL literals, after the sinks
+    _harvest_routes(tree.root_node, result, walk_limit)  # off-sink literals, after the sinks
     _fill_snippets(result, data)  # after all lanes (incl. routes) are populated
     return result
 
@@ -284,34 +291,73 @@ def _is_absolute_url(skeleton: str) -> bool:
     return bool(sep) and scheme != "" and "/" not in scheme and " " not in scheme
 
 
-def _harvest_routes(root: Node, result: Extraction) -> None:
+def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Sort byte spans by start and merge overlapping/touching ones into a minimal,
+    non-overlapping, start-ordered list. The union of covered bytes is unchanged, so
+    "is this node inside ANY span?" is preserved — but the merged list can then be probed by a
+    single forward pointer over the preorder walk (whose node start-bytes are non-decreasing)
+    instead of an ``any(... in claimed)`` scan per node. That scan was O(claimed) per builder,
+    i.e. O(n²) once a bundle had many recorded sinks (the many-flat-sink DoS, DEBT D21); the
+    sweep is O(n log n) overall (one sort + a monotonic pointer)."""
+    if not spans:
+        return []
+    ordered = sorted(spans)
+    merged = [ordered[0]]
+    for start, end in ordered[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:  # overlapping or touching -> extend the current run
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _harvest_routes(root: Node, result: Extraction, limit: int | None = None) -> None:
     """Second pass: harvest OFF-SINK absolute-URL literals — a ``.concat()``/``+``-built
     ``https://…`` that is returned or assigned, never passed to a sink (user pt 1). A
     top-level-expression guard — the claimed byte spans of every already-recorded sink/route
     AND each harvest — stops a nested concat, and a sink's own URL arg, from double-emitting.
     Context-free, so classified by shape (``_looks_api_ish``): API-ish -> the generic
     suspected-API lane; else -> a LOW-confidence page route."""
-    claimed = [
-        (ep.start_byte, ep.end_byte)
-        for ep in (*result.endpoints, *result.unresolved, *result.generic, *result.routes)
-    ]
-    for node in _walk(root):
+    claimed = _merge_spans(
+        [
+            (ep.start_byte, ep.end_byte)
+            for ep in (*result.endpoints, *result.unresolved, *result.generic, *result.routes)
+        ]
+    )
+    claim_at = 0  # forward pointer into `claimed`; both it and the walk are start-byte ordered
+    last_harvest_end = -1  # end byte of the most-recent harvest, for nested-sub-expression dedup
+    for node in _walk(root, limit):
         is_builder = node.type in ("string", "template_string", "binary_expression") or (
             node.type == "call_expression" and _is_concat_call(node)
         )
         if not is_builder:
             continue
-        # O(1), decode-free guards FIRST — a span cap, then the claimed-range check — so `_text`
+        # O(1), decode-free guards FIRST — a span cap, then the containment check — so `_text`
         # (which decodes the node's whole subtree) is only ever reached for a small, unclaimed
         # builder. `node.parent` is deliberately unused: it is O(depth) in tree-sitter (re-roots
         # from the top), so a per-node parent walk is itself O(n^2) on a deep chain (§4 review).
-        # Preorder + the claimed span dedup nested builders: the outer is harvested first and
-        # claims its span, so its inners are skipped here; an oversized outer is span-capped out
-        # (a multi-KB "URL" is not a route) and its inners then carry no `://` — nothing emitted.
         if node.end_byte - node.start_byte > _MAX_HARVEST_SPAN:
             continue
-        if any(start <= node.start_byte and node.end_byte <= end for start, end in claimed):
-            continue  # inside a recorded sink/route, or a nested sub-expression already taken
+        # Inside a recorded sink/route? Advance the pointer past every claimed span that ENDS
+        # before this node starts (monotonic — the preorder walk's start-bytes never decrease),
+        # then test the single remaining candidate. O(1) amortized, vs the old O(claimed) scan
+        # that made this pass O(n^2) on a many-sink bundle (DEBT D21). `claimed` is merged, so at
+        # most one span can contain the node.
+        while claim_at < len(claimed) and claimed[claim_at][1] < node.start_byte:
+            claim_at += 1
+        if (
+            claim_at < len(claimed)
+            and claimed[claim_at][0] <= node.start_byte
+            and node.end_byte <= claimed[claim_at][1]
+        ):
+            continue
+        # Nested-harvest dedup: a builder that BEGINS inside the most-recent harvested span is a
+        # sub-expression of an already-emitted outer (preorder visits a subtree contiguously
+        # before moving on), so skip it — a single scalar replaces the old dynamic
+        # `claimed.append`, whose re-scan was part of the O(n^2).
+        if node.start_byte < last_harvest_end:
+            continue
         if "://" not in _text(node):  # "://": absolute-only + cheap pre-skip
             continue
         skeleton = _collapse_url(node)
@@ -324,7 +370,7 @@ def _harvest_routes(root: Node, result: Extraction) -> None:
             result.generic.append(_endpoint("generic", "", skeleton, [], node))
         else:
             result.routes.append(_endpoint("route", "", skeleton, [], node, confidence="low"))
-        claimed.append((node.start_byte, node.end_byte))
+        last_harvest_end = node.end_byte
 
 
 def _handle_call(call: Node, result: Extraction, env: BaseEnv, callees: frozenset[str]) -> None:
