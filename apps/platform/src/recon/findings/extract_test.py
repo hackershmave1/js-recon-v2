@@ -422,9 +422,40 @@ def test_websocket_resolves_local_const():
 def test_param_url_stays_unattributed_the_static_ceiling():
     # A URL that arrives as a FUNCTION PARAMETER is not a local const (no single static value
     # here) -> it stays honestly `unattributed`. Resolving it would need interprocedural data-flow,
-    # deliberately out of scope (the §4-forbidden taint zone; tracked as measure-first debt).
+    # deliberately out of scope (the §4-forbidden taint zone; tracked as measure-first debt D30).
     r = extract('function load(a) { xhr.open("GET", a); }')
     assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_websocket_reassigned_local_still_unattributed():
+    # 0-FP symmetry with XHR (§4 review finding 6): the poison set must hold at EVERY new sink, so
+    # a reassigned name never folds its stale value at `new WebSocket` either.
+    r = extract('let u = "wss://a/x"; u = "wss://b/y"; new WebSocket(u)')
+    assert r.endpoints == [] and r.unattributed == 1
+    assert r.unresolved[0].kind == "websocket"
+
+
+def test_jquery_param_shadowed_local_still_unattributed():
+    # `u` is bound as a const AND as a parameter of `f` -> bound twice -> poisoned -> the $.get URL
+    # stays unattributed (0-FP symmetry guard at the jQuery sink).
+    r = extract('const u = "/a"; function f(u) { return u; } $.get(u)')
+    assert r.endpoints == [] and r.unattributed == 1
+    assert r.unresolved[0].kind == "jquery"
+
+
+def test_websocket_leading_template_const_resolves():
+    # The leading-`${CONST}` fold reaches the new sinks too, not just bare-id / `+`-concat forms.
+    r = extract('const API = "wss://h.example.com"; new WebSocket(`${API}/ws`)')
+    assert len(r.endpoints) == 1 and r.unattributed == 0
+    assert (r.endpoints[0].method, r.endpoints[0].url) == ("WSS", "wss://h.example.com/ws")
+
+
+def test_websocket_protocol_relative_const_not_mutated():
+    # base="" makes `_join_base` the identity: a protocol-relative URL folds to ITSELF, with no
+    # slash rewrite -- guards the reroute through `_resolve_url` against a base-join mutation.
+    r = extract('const u = "//h.example.com/socket"; new WebSocket(u)')
+    assert len(r.endpoints) == 1
+    assert (r.endpoints[0].method, r.endpoints[0].url) == ("WS", "//h.example.com/socket")
 
 
 # --- .concat() reconstruction + value-holder tokens --------------------------- #
