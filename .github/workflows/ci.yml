@@ -93,11 +93,12 @@ jobs:
       - run: npm run build
 
   # Capture-extension lane (DEBT D16): the MV3 extension under apps/capture ships
-  # Node test suites (tests/test_*.mjs) that no lane ran — security.yml only
-  # `npm audit`s this package — so a logic regression in the runtime-capture client
-  # could land on main green. The suites import only node: builtins + local modules
-  # (no third-party node_modules), so no `npm ci`/build is needed to run them; a
-  # future suite that adds a dependency import will fail loudly here (add `npm ci` then).
+  # both an esbuild/Preact popup bundle AND Node test suites (tests/test_*.mjs).
+  # This lane compiles the popup and runs the suites, so a broken popup import/JSX
+  # or a logic regression in the runtime-capture client fails here instead of
+  # landing on main green (security.yml otherwise only `npm audit`s this package).
+  # The committed dist/ bundle is force-tracked and was never built in CI before, so
+  # `npm run build` is the only gate that catches a popup that no longer compiles.
   extension:
     runs-on: ubuntu-latest
     # The suites finish in seconds; cap the job so a hung/leaked-handle suite fails
@@ -111,6 +112,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/capture/chrome-extension/package-lock.json
+      - run: npm ci
+      # Compile the esbuild/Preact popup so a broken import/JSX fails the build.
+      # We only assert it BUILDS — the emitted dist/ is not diffed against the
+      # force-committed bundle (minified output isn't a stable equality target).
+      - run: npm run build
       # Fail CLOSED: an empty glob (suites moved/renamed) is a hard error, not a
       # silent pass — a gate that runs zero tests is a false green. Run every suite
       # so one failure doesn't mask the rest, then exit non-zero if any failed.
