@@ -94,11 +94,15 @@ enterprise-hygiene cleanup (so the "later" doesn't become "never"):
   the build). The job needs no `npm ci`/build — the suites import only `node:` builtins + local
   modules. Fail-closed: an empty glob is a hard error (no silent zero-test pass), and every suite runs
   so one failure can't mask another. Both §4 gates passed (design: SHIP AS-IS; code: see PR).
-- **Popup bundle (`src/popup/*.jsx`) is not compiled in CI** — the new `extension` lane runs the
-  Node test suites but deliberately stays dependency-free, so it does not `npm run build` the
-  esbuild/Preact popup; a broken popup import/JSX could still merge green. Close with an
-  `npm ci && npm run build` step (needs `node_modules`, so add npm caching keyed to the extension
-  lockfile). Surfaced by the D16 code-review gate 2026-08-17.
+- ✅ **RESOLVED 2026-08-22 — the popup bundle is now compiled in CI.** The `extension` lane now runs
+  `npm ci` + `npm run build` (with npm caching keyed to the extension lockfile), mirroring the
+  `frontend` lane, so a broken popup import/JSX fails the build instead of merging green. The build
+  only asserts the popup COMPILES; the emitted `dist/` is not diffed against the force-committed
+  bundle (minified output isn't a stable equality target). This also pulls the `modules/*` files
+  (imported only by the previously-never-compiled popup) into a compiled path for the first time.
+  Verified: `npm ci && npm run build` → exit 0 (dist/popup.js 55kb + dist/popup.css); no
+  `.npmrc`/ignore-scripts gotcha blocks esbuild's binary fetch in CI. (Originally surfaced by the
+  D16 code-review gate 2026-08-17.)
 - **`background.js` is well over 1,000 lines** (~3× the ~300 cap) — the message router +
   `processFile` could extract further. Same class as D11; test-aware (the service worker is the
   capture entry point), so a careful slice, low priority.
@@ -116,7 +120,7 @@ enterprise-hygiene cleanup (so the "later" doesn't become "never"):
   count. Rare, display-only, self-heals on the next capture — still a strict improvement over the
   reset-to-0 bug it fixed. Optional close: eager-persist the projection in `stopCapture`.
 
-**Tier-1 facet:** the "Popup bundle is not compiled in CI" bullet is the user-facing risk (a broken capture popup could merge green); the other bullets are housekeeping. Kept together as one register entry.
+**Tier-1 facet:** the "Popup bundle is not compiled in CI" bullet was the user-facing risk (a broken capture popup could merge green) — ✅ RESOLVED 2026-08-22 (above); the remaining bullets are housekeeping. Kept together as one register entry.
 
 ### Tier 2 · fix before it scales up
 
