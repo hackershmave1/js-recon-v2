@@ -63,6 +63,152 @@ def test_fetch_loop_records_ok_and_failed_per_asset(redis, authorized_session, m
     assert rows["https://acme.io/bad.js"].fetch_status == "failed"
 
 
+# --- DEBT D20: bounded per-asset retry of a transient 429/5xx --------------------
+# These stub _await_host_slot + _beat_sleep to no-ops so the retry loop neither waits
+# on the per-host politeness gate nor sleeps the real backoff (the retry DECISION is
+# what's under test, not pacing).
+
+
+def test_fetch_asset_retries_transient_5xx_then_succeeds(redis, authorized_session, monkeypatch):
+    # A transient 5xx no longer drops the asset: it retries and, on the next success,
+    # the asset is `ok` (so the run is not needlessly PARTIAL).
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/a.js"])
+    calls = {"n": 0}
+
+    def flaky(url, scope, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise fetch._TransientStatus("target returned HTTP 503")
+        return _hop(b'fetch("/api/x");')
+
+    monkeypatch.setattr(fetch, "_fetch_hops", flaky)
+    monkeypatch.setattr(fetch, "_await_host_slot", lambda *a, **k: None)
+    monkeypatch.setattr(fetch, "_beat_sleep", lambda *a, **k: None)
+    fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    assert calls["n"] == 2  # one retry, then success
+    row = {r.url: r for r in assets.list_for_run(tenant, run_id)}["https://acme.io/a.js"]
+    assert row.fetch_status == "ok"
+    assert row.input_ref is not None
+
+
+def test_fetch_asset_retry_exhausted_marks_failed(redis, authorized_session, monkeypatch):
+    # A persistently-5xx asset retries the bounded number of times, then fails exactly
+    # as pre-D20 — the change only ADDS recovery attempts; the worst case is unchanged.
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/a.js"])
+    calls = {"n": 0}
+
+    def always_503(url, scope, **kw):
+        calls["n"] += 1
+        raise fetch._TransientStatus("target returned HTTP 503")
+
+    monkeypatch.setattr(fetch, "_fetch_hops", always_503)
+    monkeypatch.setattr(fetch, "_await_host_slot", lambda *a, **k: None)
+    monkeypatch.setattr(fetch, "_beat_sleep", lambda *a, **k: None)
+    fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    assert calls["n"] == 3  # default attempts=2 → 1 initial + 2 retries
+    row = {r.url: r for r in assets.list_for_run(tenant, run_id)}["https://acme.io/a.js"]
+    assert row.fetch_status == "failed"
+
+
+def test_fetch_asset_deadline_retryable_is_not_retried(redis, authorized_session, monkeypatch):
+    # Discrimination: a bare RetryableError (the "overall fetch deadline exceeded"
+    # case) is NOT a _TransientStatus, so it is NOT retried — the time budget is spent.
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/a.js"])
+    calls = {"n": 0}
+
+    def deadline(url, scope, **kw):
+        calls["n"] += 1
+        raise retry.RetryableError("overall fetch deadline exceeded")
+
+    monkeypatch.setattr(fetch, "_fetch_hops", deadline)
+    monkeypatch.setattr(fetch, "_await_host_slot", lambda *a, **k: None)
+    monkeypatch.setattr(fetch, "_beat_sleep", lambda *a, **k: None)
+    fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    assert calls["n"] == 1  # not retried
+    row = {r.url: r for r in assets.list_for_run(tenant, run_id)}["https://acme.io/a.js"]
+    assert row.fetch_status == "failed"
+
+
+def test_fetch_asset_retry_disabled_when_attempts_zero(redis, authorized_session, monkeypatch):
+    # attempts=0 is the kill-switch: exactly the pre-D20 behavior (one try, no retry).
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/a.js"])
+    patched = fetch.get_settings().model_copy(update={"fetch_asset_retry_attempts": 0})
+    monkeypatch.setattr(fetch, "get_settings", lambda: patched)
+    calls = {"n": 0}
+
+    def always_503(url, scope, **kw):
+        calls["n"] += 1
+        raise fetch._TransientStatus("target returned HTTP 503")
+
+    monkeypatch.setattr(fetch, "_fetch_hops", always_503)
+    monkeypatch.setattr(fetch, "_await_host_slot", lambda *a, **k: None)
+    monkeypatch.setattr(fetch, "_beat_sleep", lambda *a, **k: None)
+    fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    assert calls["n"] == 1  # no retry
+    row = {r.url: r for r in assets.list_for_run(tenant, run_id)}["https://acme.io/a.js"]
+    assert row.fetch_status == "failed"
+
+
+def test_fetch_asset_retry_backoff_is_capped(redis, authorized_session, monkeypatch):
+    # Lease safety: a hostile Retry-After must NOT blow the in-loop backoff — the delay
+    # handed to _beat_sleep is clamped to fetch_asset_retry_max_delay_seconds.
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/a.js"])
+    slept: list[float] = []
+
+    def flaky(url, scope, **kw):
+        if not slept:  # first try raises (→ one backoff), second returns
+            raise fetch._TransientStatus("target returned HTTP 503", retry_after=3600.0)
+        return _hop(b'fetch("/api/x");')
+
+    def capture_sleep(redis_, *, tenant_id, run_id, job_id, seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(fetch, "_fetch_hops", flaky)
+    monkeypatch.setattr(fetch, "_await_host_slot", lambda *a, **k: None)
+    monkeypatch.setattr(fetch, "_beat_sleep", capture_sleep)
+    fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    cap = fetch.get_settings().fetch_asset_retry_max_delay_seconds
+    assert len(slept) == 1
+    assert slept[0] == pytest.approx(cap)  # retry_after=3600 clamped down to the cap
+    row = {r.url: r for r in assets.list_for_run(tenant, run_id)}["https://acme.io/a.js"]
+    assert row.fetch_status == "ok"
+
+
+def test_fetch_asset_beats_before_every_attempt(redis, authorized_session, monkeypatch):
+    # The lease-safety fix: progress.beat runs before EVERY attempt (so a retry sequence
+    # can't outrun the job lease), and only attempt 1 emits a progress event.
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/a.js"])
+    fetches: list[str] = []
+    beats: list[bool] = []
+
+    def always_503(url, scope, **kw):
+        fetches.append(url)
+        raise fetch._TransientStatus("target returned HTTP 503")
+
+    def capture_beat(redis_, *, tenant_id, run_id, job_id, done, total, emit_event=True):
+        beats.append(emit_event)
+
+    monkeypatch.setattr(fetch, "_fetch_hops", always_503)
+    monkeypatch.setattr(fetch, "_await_host_slot", lambda *a, **k: None)
+    monkeypatch.setattr(fetch, "_beat_sleep", lambda *a, **k: None)
+    monkeypatch.setattr(fetch.progress, "beat", capture_beat)
+    fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    assert len(fetches) == 3  # default attempts=2 → 3 tries
+    assert beats == [True, False, False]  # a beat before each; only attempt 1 emits
+
+
 def test_fetch_loop_is_idempotent_on_redelivery(redis, authorized_session, monkeypatch):
     tenant, session_id = authorized_session
     run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/a.js"])
