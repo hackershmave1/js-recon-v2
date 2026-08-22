@@ -22,7 +22,7 @@ nothing is lost in the regrouping. Nothing is currently parked.
 
 Visible in results today, on the real targets you point the tool at. Fix these first.
 
-#### D22 · Tech detection JS-runtime + header-allowlist gaps [M] — ⏳ PARTIAL 2026-08-19 (js surface shipped)  ·  correctness
+#### D22 · Tech detection JS-runtime + header-allowlist gaps [M] — ⏳ PARTIAL 2026-08-22 (js + header allowlist shipped; html/dom remain)  ·  correctness
 - ✅ **RESOLVED 2026-08-19 — the `js` (window-global) surface now fires (PR #85).** Bundled
   SPAs (Next.js `__NEXT_DATA__`, Nuxt `$nuxt`, React) were invisible; the matcher now
   presence-matches enthec's `js` global names in stored bundle source via one RE2 `Set`
@@ -31,9 +31,18 @@ Visible in results today, on the real targets you point the tool at. Fix these f
   capped (`match._JS_SURFACE_CEILING`) so a js-only detection reads "suspected", never "certain".
   A distinctiveness filter (`_keep_js_key`) drops the false-positive band (<4 chars, bare words
   <8). Both §4 gates passed. **html/dom stay unimplemented** (they need raw HTML / rendered DOM
-  the allowlist signal omits) and the **header-allowlist review is still open** (below).
-- ⏳ **Still open — the curated header allowlist.** `fetch.py::_HEADER_ALLOWLIST` keeps only ~14
-  fingerprint headers (a T1 privacy control), so header-keyed techs outside that set never fire.
+  the allowlist signal omits); the **header-allowlist review is now resolved** (below).
+- ✅ **RESOLVED 2026-08-22 — the curated header allowlist is widened (data-driven).**
+  `fetch.py::_HEADER_ALLOWLIST` grew from ~14 to ~28 keys + a CORS `access-control-allow-*` prefix
+  rule, chosen by measuring the enthec dataset's real header keys (665/7586 techs carry a header
+  fingerprint; 324 distinct keys). The adds are CSP + CORS + vendor/CDN/CMS identifiers —
+  architecture signal, not credentials — so ~158 more techs can fire on a header. Privacy held:
+  `link` is excluded (its URLs carry signed-CDN query tokens, REQ-S2/S4), `www-authenticate` stores
+  only its scheme token (no NTLM/Negotiate challenge blob), each kept value is size-capped (16 KiB in
+  the shared `_allowlisted_headers`, covering both the fetch and capture producers), and
+  `set-cookie`/`authorization`/`cookie`/`proxy-authorization` stay excluded (cookie NAMES only). Both
+  §4 gates passed (design: BUILD-WITH-CHANGES — drop `link`, narrow `www-authenticate`, cap in the
+  shared helper, add `platform`; code: see PR).
 
 The fingerprint matcher (`findings/techdetect/match.py`) originally implemented only the Phase-1
 signal surfaces — response headers, cookie names, `scriptSrc` URLs, `scripts` (JS source text), and
@@ -48,8 +57,9 @@ headers (a T1 privacy control), so header-keyed techs outside that set never fir
 deferred:** the re-pin already resolves the reported "0 techs on modern sites" bug (vercel.com
 0 → Next.js + Vercel); the `js`/`html` surface (Phase 2) and any allowlist widening are
 separate, larger slices each needing their own privacy/perf review. **Still owed:** ~~(a) a
-Phase-2 `js`-global surface so bundled SPA frameworks fire~~ (shipped, PR #85); (b) a data-driven
-review of the header allowlist against the full dataset's header keys. **Trigger:** if "site X
+Phase-2 `js`-global surface so bundled SPA frameworks fire~~ (shipped, PR #85); ~~(b) a data-driven
+review of the header allowlist against the full dataset's header keys~~ (shipped 2026-08-22, above).
+Remaining: the `html`/`dom` surfaces (need raw HTML / rendered DOM). **Trigger:** if "site X
 still shows no `<framework>`" becomes a recurring operator complaint. **Detection note:** the
 `analyze.technologies` event carries per-host detection counts + `skipped_patterns`, so a
 widening blind spot is observable, not silent.

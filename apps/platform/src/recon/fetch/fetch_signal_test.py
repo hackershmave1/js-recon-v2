@@ -78,3 +78,62 @@ def test_allowlist_keeps_fingerprint_headers_and_drops_the_rest():
 
 def test_cookie_names_never_carry_values():
     assert fetch._cookie_names(["sid=SECRETVALUE; Path=/", "theme=dark"]) == ["sid", "theme"]
+
+
+def test_allowlist_keeps_widened_fingerprint_headers():
+    # DEBT D22: CSP / CORS / vendor identifiers are now kept (architecture signal).
+    kept = fetch._allowlisted_headers(
+        {
+            "content-security-policy": "default-src 'self' https://cdn.acme.io",
+            "access-control-allow-origin": "https://app.acme.io",  # CORS prefix rule
+            "access-control-allow-credentials": "true",
+            "x-cdn": "Incapsula",
+            "powered-by": "PleskLin",
+            "platform": "hostinger",
+            "x-fastly-request-id": "r1",
+        }
+    )
+    assert kept["content-security-policy"] == "default-src 'self' https://cdn.acme.io"
+    assert kept["access-control-allow-origin"] == "https://app.acme.io"
+    assert kept["access-control-allow-credentials"] == "true"
+    assert kept["x-cdn"] == "Incapsula"
+    assert kept["powered-by"] == "PleskLin"
+    assert kept["platform"] == "hostinger"
+    assert kept["x-fastly-request-id"] == "r1"
+
+
+def test_allowlist_drops_link_and_all_credential_headers():
+    # `link` is dropped: its URLs can carry signed-CDN query tokens (REQ-S2/S4). The
+    # credential-bearing headers stay excluded at every widening level.
+    kept = fetch._allowlisted_headers(
+        {
+            "server": "nginx",
+            "link": "<https://cdn.acme.io/a.js?Signature=SECRET&Expires=1>; rel=preload",
+            "authorization": "Bearer tok",
+            "proxy-authorization": "Basic tok",
+            "cookie": "sid=SECRET",
+            "set-cookie": "sid=SECRET; Path=/",
+        }
+    )
+    assert kept == {"server": "nginx"}
+
+
+def test_allowlist_www_authenticate_stores_scheme_only():
+    # A capture-path 401 challenge must not custody the NTLM/Negotiate type-2 blob
+    # (internal AD/host names + nonce) — only the scheme token is kept.
+    kept = fetch._allowlisted_headers({"www-authenticate": "NTLM TlRMTVNTUAABAAAAB4IIogAAAAAAAAAA"})
+    assert kept == {"www-authenticate": "NTLM"}
+    # empty/blank challenge must not IndexError — the `else ""` guard is load-bearing
+    assert fetch._allowlisted_headers({"www-authenticate": ""}) == {"www-authenticate": ""}
+    assert fetch._allowlisted_headers({"www-authenticate": "   "}) == {"www-authenticate": ""}
+
+
+def test_allowlist_truncates_oversized_header_value():
+    # A multi-KB header can't bloat the signal blob — kept values are size-bounded,
+    # for BOTH an exact-match (CSP) and a prefix-match (CORS) header.
+    big = "default-src 'self' " + "https://a.acme.io " * 5000
+    kept = fetch._allowlisted_headers(
+        {"content-security-policy": big, "access-control-allow-headers": "x-" * 20000}
+    )
+    assert len(kept["content-security-policy"]) == fetch._HEADER_VALUE_MAX_CHARS
+    assert len(kept["access-control-allow-headers"]) == fetch._HEADER_VALUE_MAX_CHARS

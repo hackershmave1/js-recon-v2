@@ -69,11 +69,15 @@ _FETCH_HEADERS = {
     "Accept-Encoding": "identity",
 }
 
-# Allowlisted response headers for tech detection (case-insensitive). VALUES of any
-# header NOT in this set are discarded; Set-Cookie contributes NAMES only (T1). No
-# credential-bearing header (Authorization, Cookie) is ever persisted. Shared with
-# the capture stage (Task 7) via `fetch._HEADER_ALLOWLIST` / `_allowlisted_headers`
-# so both signal producers stay in lockstep — one allowlist, not two.
+# Allowlisted response headers for tech detection (case-insensitive). A T1 privacy
+# control: the VALUE of any header NOT allowlisted here is discarded, so we custody only
+# tech-identifying signal — never credentials or user data. Set-Cookie contributes
+# cookie NAMES only (`_cookie_names`); Authorization / Cookie / Proxy-Authorization are
+# never persisted. The widened set (DEBT D22) adds vendor/CDN/CMS identifiers plus
+# CSP/CORS, whose values describe the target's ARCHITECTURE (framework, edge, allowed
+# origins/hostnames) — the recon signal we want, not secrets. Shared with the capture
+# stage (Task 7) via `fetch._HEADER_ALLOWLIST` / `_allowlisted_headers` so both signal
+# producers stay in lockstep — one allowlist, not two.
 _HEADER_ALLOWLIST = frozenset(
     {
         "server",
@@ -90,8 +94,38 @@ _HEADER_ALLOWLIST = frozenset(
         "x-served-by",
         "x-shopify-stage",
         "x-github-request-id",
+        # DEBT D22 widening — vendor/CDN/CMS identifiers + CSP/CORS architecture signal.
+        # Every value is a product/protocol name or hostname, never a credential.
+        # `www-authenticate` is narrowed to its scheme token in `_allowlisted_headers`;
+        # CORS `access-control-allow-*` is kept via the prefix rule below. (`link` is
+        # deliberately NOT here — its URLs can carry signed-CDN query tokens, REQ-S2/S4.)
+        "content-security-policy",
+        "content-security-policy-report-only",
+        "www-authenticate",
+        "powered",
+        "powered-by",
+        "x-powered-cms",
+        "platform",
+        "x-cdn",
+        "x-servedby",
+        "x-turbo-charged-by",
+        "x-litespeed-cache",
+        "x-cache",
+        "alt-svc",
+        "vary",
     }
 )
+
+# Header-value prefixes kept in full — vendor families we can't enumerate by exact key:
+# Fastly debug headers and all CORS `access-control-allow-*` (origin / methods / headers
+# / credentials; values are origins, header NAMES, or a bool — not secrets; `access-
+# control-max-age` / `-expose-headers` don't start with `-allow-` and stay excluded).
+_HEADER_ALLOWLIST_PREFIXES = ("x-fastly-", "access-control-allow-")
+
+# Size bound on any single stored header value so a multi-KB CSP/header can't bloat the
+# fingerprint-signal blob. NOT a privacy control (a report-uri/nonce can sit before the
+# cut — the allowlist is the privacy gate); a generous bound vs a normal header block.
+_HEADER_VALUE_MAX_CHARS = 16384
 
 
 @dataclass(frozen=True)
@@ -107,10 +141,19 @@ class _FetchedResponse:
 
 def _allowlisted_headers(headers: dict[str, str]) -> dict[str, str]:
     """Keep only allowlisted header VALUES (T1); ``headers`` keys must already be
-    lowercased (see ``_FetchedResponse.headers``)."""
+    lowercased (see ``_FetchedResponse.headers``). The single choke point for BOTH the
+    fetch and capture signal producers, so the privacy narrowing + size bound apply
+    everywhere:
+    - ``www-authenticate`` is reduced to its auth SCHEME token (never the full
+      challenge — an NTLM/Negotiate type-2 value custodies internal names + a nonce, and
+      every enthec pattern anchors on the scheme alone).
+    - each kept value is truncated to ``_HEADER_VALUE_MAX_CHARS`` (a size bound)."""
     kept = {name: headers[name] for name in _HEADER_ALLOWLIST if name in headers}
-    kept.update({k: v for k, v in headers.items() if k.startswith("x-fastly-")})
-    return kept
+    kept.update({k: v for k, v in headers.items() if k.startswith(_HEADER_ALLOWLIST_PREFIXES)})
+    if "www-authenticate" in kept:
+        scheme = kept["www-authenticate"].split(maxsplit=1)
+        kept["www-authenticate"] = scheme[0] if scheme else ""
+    return {k: v[:_HEADER_VALUE_MAX_CHARS] for k, v in kept.items()}
 
 
 def _cookie_names(set_cookie_lines: list[str]) -> list[str]:
