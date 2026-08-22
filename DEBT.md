@@ -58,8 +58,19 @@ widening blind spot is observable, not silent.
 Consciously-deferred SHOULDs from the multi-asset (Slice Y) build — safe now at bounded
 single-host scale, revisit at M3/scale. Design spec:
 `apps/platform/docs/superpowers/specs/2026-07-26-slice-y-multi-asset-design.md`.
-- **Per-asset fetch retry** (transient 5xx/429): a failed asset drops to `failed` (run →
-  `PARTIAL`); the queue's retry/backoff isn't applied per-asset.
+- ✅ **RESOLVED 2026-08-22 — per-asset fetch retry (transient 5xx/429).** The crawl fetch loop
+  now retries a transient 429/5xx per asset via `fetch._fetch_asset_with_retry` before dropping it
+  to `failed` (→ run `PARTIAL`), bounded by `fetch_asset_retry_attempts` (default 2) with
+  heartbeat-aware backoff capped at `fetch_asset_retry_max_delay_seconds` (default 5.0s). Only a
+  `_TransientStatus` (429/5xx) retries — a deadline-exceeded `RetryableError`, `FatalError`, and
+  `EgressBlocked` still fail fast. Every attempt heartbeats first, so the retry can't outrun the
+  30s job lease (no peer reclaim / double-fetch); the retry is synchronous in the worker thread, so
+  the DNS-pin single-thread invariant holds. `attempts=0` reproduces the pre-D20 behavior. Both §4
+  gates passed (design: BUILD-WITH-CHANGES — the per-attempt-beat lease fix folded; code: SHIP-WITH-NITS
+  — cap-clamp + heartbeat-cadence tests and a between-retries REQ-A4 control check folded). Residual
+  (pre-existing, low-probability): `_beat_sleep` does not heartbeat a wait shorter than
+  `crawl_heartbeat_interval_seconds`, so sustained host-slot contention narrows the lease margin —
+  a heartbeat-family property shared with the at-scale bullets below, not introduced by this fix.
 - **Analyze mid-scan heartbeat:** a long per-asset `kingfisher.scan` (≤ `engine_timeout_
   seconds`=120s) can exceed the 30s job lease with no mid-scan beat, so a peer can reclaim and
   re-run the analyze loop. Correctness-safe (idempotent REQ-A3 outbox upserts + analyze-
@@ -82,7 +93,7 @@ single-host scale, revisit at M3/scale. Design spec:
   real domain access.
 (Migrated 2026-08-15 from the retired `slice2-deferred-debt.md`.)
 
-**Tier-1 facet:** the per-asset fetch-retry bullet (a transient 5xx/429 during a crawl drops that asset -> run PARTIAL) is the one a user feels on a real target; the remaining bullets are at-scale robustness. Kept together as one register entry.
+**Tier-1 facet:** the per-asset fetch-retry bullet (a transient 5xx/429 during a crawl drops that asset -> run PARTIAL) was the one a user feels on a real target — ✅ RESOLVED 2026-08-22 (above); the remaining bullets are at-scale robustness (Tier-2), kept together as one register entry.
 
 #### D16 · Capture extension deferred items [S] — ⏳ PARTIAL 2026-08-17 (CI test gate added)  ·  maintainability
 Small deferred work in the MV3 capture extension (`apps/capture/chrome-extension/`), recorded here

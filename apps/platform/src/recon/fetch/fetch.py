@@ -159,6 +159,19 @@ def _pin_dns(host: str, ips: tuple[str, ...]) -> Iterator[None]:
         socket.getaddrinfo = real_getaddrinfo
 
 
+class _TransientStatus(retry.RetryableError):
+    """A 429/5xx worth a bounded per-asset retry INSIDE the crawl fetch loop (DEBT D20).
+
+    A fetch-local subclass rather than a flag on the domain-agnostic
+    ``retry.RetryableError`` so the retry decision is a local ``isinstance`` check: the
+    multi-asset loop retries ``_TransientStatus`` but NOT a bare ``RetryableError`` (e.g.
+    "overall fetch deadline exceeded" — the time budget is already spent, not worth
+    re-burning). It stays a ``RetryableError`` subclass, so every existing consumer is
+    unaffected: the loop's failure handler (`except (..., RetryableError)`), the queue's
+    ``is_retryable``/``should_retry``, and ``classify_failure``'s ``str(exc)`` regex all
+    still see a retryable error carrying the same message + ``retry_after``."""
+
+
 def _fetch_hops(
     url: str,
     scope_hosts: list[str],
@@ -211,8 +224,11 @@ def _fetch_hops(
                     message = f"target returned HTTP {response.status_code}"
                     if retry.http_retryable(response.status_code):
                         # Honor the target's own backoff ask (REQ-Q3) when present.
+                        # `_TransientStatus` (a RetryableError subclass) marks this as a
+                        # 429/5xx the per-asset loop MAY retry (DEBT D20) — distinct from
+                        # the deadline RetryableError below, which it never retries.
                         retry_after = _parse_retry_after(response.headers.get("retry-after"))
-                        raise retry.RetryableError(message, retry_after=retry_after)
+                        raise _TransientStatus(message, retry_after=retry_after)
                     raise retry.FatalError(message)
                 body = bytearray()
                 for chunk in response.iter_bytes():
@@ -382,6 +398,99 @@ def _beat_sleep(
             )
 
 
+def _fetch_asset_with_retry(
+    redis: Redis,
+    *,
+    asset_url: str,
+    scope_hosts: list[str],
+    max_bytes: int,
+    i: int,
+    total: int,
+    tenant_id: str,
+    run_id: str,
+    job_id: str | None,
+    settings: Settings,
+) -> _FetchedResponse:
+    """Fetch one crawl asset, retrying a transient 429/5xx a bounded number of times
+    (DEBT D20) so one flaky asset does not drop to ``failed`` (→ run PARTIAL).
+
+    Fail-closed lease invariant: EVERY attempt heartbeats BEFORE its ``_fetch_hops``
+    call, so — as long as the host-slot wait stays short — the gap between lease
+    renewals stays one fetch (<= fetch_timeout_seconds) plus one bounded backoff
+    (<= fetch_asset_retry_max_delay_seconds), under heartbeat_stall_threshold_seconds.
+    Without a per-attempt beat a retry sequence would outrun the lease and let a peer
+    reclaim the RUNNING job and double-fetch (the double-egress this loop prevents).
+    (``_beat_sleep`` does not itself beat a sub-heartbeat-interval host-slot wait, so a
+    heavily-contended global fetch budget narrows that margin — a pre-existing
+    heartbeat-family caveat tracked in DEBT D20; in practice the retry re-hits the
+    just-5xx'd host, whose own min-interval keeps that wait ~1s.) Only attempt 1 emits
+    a progress event; retries renew the lease silently.
+
+    Retries ONLY ``_TransientStatus`` (429/5xx). ``egress.EgressBlocked`` /
+    ``retry.FatalError`` and a bare ``retry.RetryableError`` (e.g. "overall fetch
+    deadline exceeded" — the budget is already spent) are NOT caught here; they
+    propagate to the loop's per-asset failure handler unchanged. On exhausting the
+    attempts the final ``_TransientStatus`` is re-raised, so that handler marks the
+    asset failed and honors any host-wide ``retry_after`` exactly as before.
+    Per-attempt ``_await_host_slot`` keeps REQ-Q3 politeness; the retry is synchronous
+    in the worker thread, so the DNS-pin single-thread invariant holds."""
+    host = (urlsplit(asset_url).hostname or "").lower()
+    # <=0 disables the retry (one try, pre-D20 behavior); clamp a misconfigured
+    # negative to 0 so the loop always makes at least the initial attempt.
+    attempts = max(0, settings.fetch_asset_retry_attempts)
+    cap = settings.fetch_asset_retry_max_delay_seconds
+    for attempt in range(1, attempts + 2):
+        if job_id:
+            progress.beat(
+                redis,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                job_id=job_id,
+                done=i,
+                total=total,
+                emit_event=attempt == 1,
+            )
+        if host:
+            _await_host_slot(
+                redis, host, tenant_id=tenant_id, run_id=run_id, job_id=job_id, settings=settings
+            )
+        try:
+            return _fetch_hops(
+                asset_url,
+                scope_hosts,
+                timeout_s=settings.fetch_timeout_seconds,
+                max_bytes=max_bytes,
+                allow_local=settings.allow_local_egress,
+            )
+        except _TransientStatus as exc:
+            if attempt > attempts:
+                raise  # retries exhausted — the loop's handler marks the asset failed
+            delay = min(
+                max(
+                    retry.compute_delay(
+                        attempt, base_delay=settings.retry_base_delay_seconds, max_delay=cap
+                    ),
+                    exc.retry_after or 0.0,
+                ),
+                cap,
+            )
+            log.info(
+                "fetch.asset_retry",
+                run_id=run_id,
+                url=asset_url,
+                attempt=attempt,
+                delay=round(delay, 2),
+                reason=str(exc),
+            )
+            # Observe a pause/cancel BETWEEN retries (REQ-A4) so a flaky asset can't
+            # delay honoring it by the whole retry budget. ControlInterrupt is not in
+            # the loop's failure `except`, so it propagates out like the top-of-loop
+            # check rather than being mistaken for a fetch failure.
+            run_queries.raise_if_control_requested(tenant_id, run_id)
+            _beat_sleep(redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, seconds=delay)
+    raise RuntimeError("unreachable: _fetch_asset_with_retry must return or raise")
+
+
 def _fetch_assets(
     redis: Redis,
     *,
@@ -399,15 +508,14 @@ def _fetch_assets(
     top of every iteration, before any fetch attempt, and propagates straight out
     of this loop (never caught here — it is not a failure).
 
-    Every asset actually processed (not skipped) gets an unconditional heartbeat
-    BEFORE its fetch attempt, regardless of how it turns out. This bounds the max
-    gap between lease renewals to one ``_fetch_hops`` call (<= fetch_timeout_seconds)
-    plus a short host-slot wait — safely under heartbeat_stall_threshold_seconds.
-    Without it, a run of several slow-then-fail assets whose errors carry no
-    ``retry_after`` (a bare FatalError/EgressBlocked, or a RetryableError like
-    "overall fetch deadline exceeded") would go unheartbeated long enough for a
-    peer worker to reclaim the stream message and double-fetch the remaining
-    assets — exactly what the politeness gate exists to prevent.
+    Every processed asset (not skipped) is fetched via ``_fetch_asset_with_retry``,
+    which heartbeats BEFORE every attempt — its bounded 429/5xx retry (DEBT D20)
+    included — so the gap between lease renewals stays one ``_fetch_hops`` call
+    (<= fetch_timeout_seconds) plus a short host-slot wait plus one bounded backoff,
+    safely under heartbeat_stall_threshold_seconds. Without a per-attempt beat, a
+    slow-then-fail asset or a retry sequence would go unheartbeated long enough for a
+    peer worker to reclaim the stream message and double-fetch the remaining assets —
+    exactly what the politeness gate exists to prevent.
 
     Every successfully-fetched asset also folds its allowlisted headers + cookie
     NAMES + script URL into an in-memory ``signal`` dict (T1), written as ONE
@@ -429,23 +537,18 @@ def _fetch_assets(
         if asset.fetch_status in terminal or asset.input_ref:
             continue  # terminal already — idempotent redelivery skip
         run_queries.raise_if_control_requested(tenant_id, run_id)  # REQ-A4
-        if job_id:
-            # Unconditional, once per processed asset — see the docstring above.
-            progress.beat(
-                redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, done=i, total=total
-            )
-        host = (urlsplit(asset.url).hostname or "").lower()
-        if host:
-            _await_host_slot(
-                redis, host, tenant_id=tenant_id, run_id=run_id, job_id=job_id, settings=settings
-            )
         try:
-            fetched = _fetch_hops(
-                asset.url,
-                engagement.scope_hosts,
-                timeout_s=settings.fetch_timeout_seconds,
+            fetched = _fetch_asset_with_retry(
+                redis,
+                asset_url=asset.url,
+                scope_hosts=engagement.scope_hosts,
                 max_bytes=cap,
-                allow_local=settings.allow_local_egress,
+                i=i,
+                total=total,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                job_id=job_id,
+                settings=settings,
             )
             content = fetched.body
         except (egress.EgressBlocked, retry.FatalError, retry.RetryableError) as exc:

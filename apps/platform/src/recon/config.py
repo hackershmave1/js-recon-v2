@@ -198,6 +198,20 @@ class Settings(BaseSettings):
     retry_base_delay_seconds: float = 1.0
     retry_max_delay_seconds: float = 60.0
 
+    # Per-asset fetch retry (DEBT D20): a transient 429/5xx on ONE crawl asset gets a
+    # bounded, in-thread retry instead of dropping that asset (which turns the whole
+    # run PARTIAL). Deliberately separate from the queue knobs above: this retry runs
+    # INSIDE the fetch loop while holding the job lease, so its delay is capped small
+    # (NOT retry_max_delay_seconds=60) and every attempt heartbeats first — together
+    # that keeps the gap between lease renewals under heartbeat_stall_threshold_seconds
+    # so a peer can never reclaim the job mid-retry and double-fetch. attempts=0
+    # disables the retry (exactly the pre-D20 behavior); the base delay reuses
+    # retry_base_delay_seconds.
+    # env: RECON_FETCH_ASSET_RETRY_ATTEMPTS
+    fetch_asset_retry_attempts: int = 2
+    # env: RECON_FETCH_ASSET_RETRY_MAX_DELAY_SECONDS
+    fetch_asset_retry_max_delay_seconds: float = 5.0
+
 
 @lru_cache
 def get_settings() -> Settings:
