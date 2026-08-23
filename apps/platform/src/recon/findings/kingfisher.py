@@ -30,15 +30,16 @@ log = get_logger("recon.findings.kingfisher")
 # 0 = clean, 200 = secrets found. Anything else is a genuine engine error.
 _OK_RETURNCODES = (0, 200)
 
-# A shipped custom rule so a STANDALONE AWS Access Key ID (AKIA…) emits as a
-# finding. Kingfisher's built-in AWS rule treats the access-key id as a pairing
-# "identity" and, under --no-validate, never emits a lone id — it only tallies it
-# in the summary's findings_by_rule (never the findings array we parse) — so a
-# leaked AKIA in a target's JS was silently missed. Resolved to a STABLE path
-# (packaged via pyproject [tool.setuptools.package-data]) so the compiled-rule
-# cache and the Dockerfile pre-warm stay effective; provider pinned to "aws" in
-# normalize._PROVIDER_BY_RULE.
-_RULES_PATH = Path(__file__).parent / "rules" / "aws_access_key_id.yml"
+# Shipped custom rules (recon.findings.rules.custom_rules) that emit secrets the
+# built-in ruleset tallies-but-suppresses under --no-validate: a standalone AWS
+# Access Key ID (custom.aws.akia_standalone) and a config-embedded GUID — a
+# tenant/client/app id or *_KEY (custom.config.guid_assignment, DEBT D33). Both
+# live in ONE file loaded via --rules-path so the fail surface stays bounded (a
+# stray/malformed rule file can't hard-fail every scan) and the single compiled-rule
+# cache key stays effective. Resolved to a STABLE path (packaged via pyproject
+# [tool.setuptools.package-data]) so the cache and the Dockerfile pre-warm match;
+# providers pinned in normalize._PROVIDER_BY_RULE.
+_RULES_PATH = Path(__file__).parent / "rules" / "custom_rules.yml"
 
 
 @dataclass(frozen=True)
@@ -218,10 +219,10 @@ def scan(
             "--no-update-check",
             "--no-dedup",
         ]
-        # Load the shipped standalone-AKIA rule. A missing file is a PACKAGING
-        # regression (the wheel dropped the data file), not a per-run condition, so
-        # degrade LOUDLY to the built-in ruleset — we still scan, only losing
-        # standalone AWS-key-id detection — rather than passing a bad --rules-path
+        # Load the shipped custom rules. A missing file is a PACKAGING regression
+        # (the wheel dropped the data file), not a per-run condition, so degrade
+        # LOUDLY to the built-in ruleset — we still scan, only losing standalone
+        # AWS-key-id + config-GUID detection — rather than passing a bad --rules-path
         # that makes kingfisher exit 1 and hard-fails every scan.
         if _RULES_PATH.is_file():
             argv += ["--rules-path", str(_RULES_PATH)]

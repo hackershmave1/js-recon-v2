@@ -75,7 +75,7 @@ _SECRET_DELIMS = "\"'`()[]{}<>,;: \t\r\n"
 # second-segment derivation was validated against (not wired into any hash).
 KINGFISHER_RULES_VERSION = "1.106"
 _PROVIDER_BY_RULE: dict[str, str] = {
-    # The shipped standalone-AKIA rule (recon.findings.rules.aws_access_key_id)
+    # The shipped standalone-AKIA rule (recon.findings.rules.custom_rules)
     # has id `custom.aws.akia_standalone`; its FIRST segment is "custom", so the
     # generic derivation would return "custom". Pin it to "aws" so a lone AWS
     # access key id hashes as aws:sha256(token) — a stable, honest provider slug,
@@ -84,6 +84,15 @@ _PROVIDER_BY_RULE: dict[str, str] = {
     # different token — so the values differ.) The hand-fixed-slug case this
     # override map exists for (review M1).
     "custom.aws.akia_standalone": "aws",
+    # The config-GUID rule (recon.findings.rules.custom_rules, DEBT D33) has id
+    # custom.config.guid_assignment; its first segment "custom" would derive to
+    # "custom". Pin it to "config" — NOT "azure": the rule also catches non-Azure
+    # `*_API_KEY: '<guid>'` keys, and provider is user-visible (it prefixes
+    # finding.value = provider:sha256, rendered as the finding header), so "azure"
+    # would be a false claim on a generic key. "config" honestly says "a GUID
+    # exposed in configuration" without guessing an issuer. The slug is baked into
+    # the finding hash (a one-way door under REQ-D5), so it is chosen once here.
+    "custom.config.guid_assignment": "config",
 }
 
 

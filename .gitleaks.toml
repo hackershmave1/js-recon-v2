@@ -32,7 +32,8 @@ paths = [
 # For files that ALSO carry real product/test code, allowlist the EXACT fake token
 # (not the whole path) so a REAL secret added there later is still caught.
 regexes = [
-  '''AKIA2E4XZ7K9QW3RT8YV''',                            # findings/rules/aws_access_key_id.yml example
+  '''AKIA2E4XZ7K9QW3RT8YV''',                            # findings/rules/custom_rules.yml AKIA example
+  '''3f2504e0-4f89-41d3-9a0c-0305e82c3301''',            # findings/rules/custom_rules.yml config-GUID example (fake)
   '''aZ9kQ2mB7xL4wP0rT6uY1eC5''',                        # apps/platform/src/recon/findings/normalize_test.py fixture
   '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0''',  # chrome-extension/tests/test_asset_classifier.mjs example JWT
   '''sk_live_abc123''',                                 # techdetect/match_test.py T1 fixture: proves a JS-embedded secret never reaches `evidence`

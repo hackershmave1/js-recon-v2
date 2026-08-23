@@ -79,9 +79,9 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-# The standalone-AKIA Kingfisher rule (recon.findings.rules) is loaded at runtime
-# via --rules-path. setuptools ships only *.py by default, so without this the
-# wheel omits the rule file and every secret scan fails on a missing --rules-path.
+# The shipped custom Kingfisher rules (recon.findings.rules.custom_rules) are loaded
+# at runtime via --rules-path. setuptools ships only *.py by default, so without this
+# the wheel omits the rule file and every secret scan fails on a missing --rules-path.
 "recon.findings" = ["rules/*.yml"]
 # Vendored enthec/webappanalyzer fingerprint dataset (GPL-3.0, server-side only —
 # see root NOTICE). Declared package-data or the wheel drops the JSON and every tech
