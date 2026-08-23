@@ -92,9 +92,18 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["src"]
 python_files = ["*_test.py"]
-addopts = "-ra -q"
+# --strict-markers turns an unregistered marker into a hard collection error, so a
+# typo'd @pytest.mark decorator can't silently un-tag a test (fail-closed, mirroring the
+# mypy "unused section" and empty-glob guards in ci.yml). Safe: the whole suite uses only
+# the markers registered below plus the builtins parametrize/skipif.
+addopts = "-ra -q --strict-markers"
 markers = [
     "integration: requires a live Postgres/Redis (spin docker-compose first)",
+    # Wall-clock DoS scaling guards (DEBT D21). Host-lane-only: they need no infra and
+    # their ratios are stable on the native host-tests runner, but the memory-pressured
+    # Docker integration lane inflates the timings into false reds, so that lane excludes
+    # them via `pytest -m 'not dos_timing'`. They stay enforced on every push in host-tests.
+    "dos_timing: wall-clock DoS scaling guard — host-lane-only (needs no infra; excluded from the memory-pressured Docker integration lane). See DEBT D21.",
 ]
 
 [tool.ruff]

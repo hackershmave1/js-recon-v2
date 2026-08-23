@@ -11,8 +11,9 @@ import time
 from collections.abc import Callable
 
 import pytest
+from tree_sitter import Node
 
-from recon.findings.extract import _PARSER, collect_base_env, extract
+from recon.findings.extract import _PARSER, RawEndpoint, collect_base_env, extract
 
 
 def _only(source: str):
@@ -1082,6 +1083,7 @@ def _interleaved_median_ratio(
     return min_big, statistics.median(ratios)
 
 
+@pytest.mark.dos_timing  # wall-clock scaling guard: host-lane-only (see pyproject / DEBT D21)
 @pytest.mark.parametrize(
     "build_chain",
     [_concat_chain, _plus_chain, _nested_sink_chain],
@@ -1368,6 +1370,7 @@ def test_nested_concat_harvest_emits_only_the_top_level_expression():
     assert len(r.routes) == 1
 
 
+@pytest.mark.dos_timing  # wall-clock scaling guard: host-lane-only (see pyproject / DEBT D21)
 def test_harvest_routes_pass_stays_linear_no_dos():
     # DoS-regression guard (§4 review HIGH) for the harvest pass specifically: on a deeply
     # nested .concat() chain — the string-splitting obfuscation this product targets — it must
@@ -1397,12 +1400,13 @@ def _flat_sinks(n: int) -> str:
     return ";".join(f'fetch("/api/u{i}")' for i in range(n))
 
 
-def _harvest_seconds(n: int) -> tuple[float, int]:
-    """Populate a result with n recorded sinks via the main pass, then time ``_harvest_routes``
-    in ISOLATION — measuring only the claimed-containment scan, not parse/env/main."""
+def _harvest_case(n: int) -> tuple[Node, list[RawEndpoint]]:
+    """Untimed setup for the harvest DoS probe: parse n flat sinks and run the main call pass so
+    the harvest ``claimed`` list is populated to O(n). Returns ``(root_node, recorded_endpoints)``
+    so the isolated ``_harvest_routes`` sweep can be timed repeatedly without re-parsing."""
     from recon.findings._base_env import collect_base_env
     from recon.findings._jsast import Extraction, _walk
-    from recon.findings.extract import _handle_call, _harvest_routes
+    from recon.findings.extract import _handle_call
 
     data = _flat_sinks(n).encode()
     tree = _PARSER.parse(data)
@@ -1411,16 +1415,55 @@ def _harvest_seconds(n: int) -> tuple[float, int]:
     for node in _walk(tree.root_node):
         if node.type == "call_expression":
             _handle_call(node, result, env, frozenset())
-    best = float("inf")
-    for _ in range(3):  # min-of-3: extract is deterministic, so the min is the least-perturbed
-        fresh = Extraction()
-        fresh.endpoints[:] = result.endpoints
-        start = time.perf_counter()
-        _harvest_routes(tree.root_node, fresh)
-        best = min(best, time.perf_counter() - start)
-    return best, len(result.endpoints)
+    return tree.root_node, result.endpoints
 
 
+def _time_harvest(root: Node, endpoints: list[RawEndpoint]) -> float:
+    """Wall-clock for ONE isolated ``_harvest_routes`` over a fresh result seeded with the
+    recorded (claimed) ``endpoints`` — measures only the claimed-containment sweep, never
+    mutating the shared ``endpoints`` list (slice-assigned into a fresh Extraction each call)."""
+    from recon.findings._jsast import Extraction
+    from recon.findings.extract import _harvest_routes
+
+    fresh = Extraction()
+    fresh.endpoints[:] = endpoints
+    start = time.perf_counter()
+    _harvest_routes(root, fresh)
+    return time.perf_counter() - start
+
+
+def _interleaved_harvest_ratio(
+    anchor_n: int, big_n: int, reps: int = 3
+) -> tuple[float, float, float, int]:
+    """Harvest counterpart to ``_interleaved_median_ratio``: build both cases once (untimed), then
+    interleave the anchor/big ``_harvest_routes`` timings (a, b, a, b, …) over ``reps`` rounds and
+    return ``(min_anchor, min_big, median_ratio, n_anchor)``.
+
+    Interleaving + a per-round median is the de-flake — see ``_interleaved_median_ratio`` for the
+    full argument. The prior probe (the removed ``_harvest_seconds``) took each size's internal
+    min-of-3 in two contiguous phases (every anchor rep before every big rep), so a shared-CI
+    contention burst landing in the big phase inflated only ``big`` and spiked the ratio on purely
+    linear code (~14-19x observed under the Docker integration lane's memory pressure). That is the
+    exact phase mismatch PR #86 fixed for the deep-split guard but never applied here. Timing both
+    sizes back-to-back each round exposes them to the same contention window, so a per-round ratio
+    cancels a burst spanning a round and the median lands on a clean round. This guard now runs
+    host-lane-only (``@pytest.mark.dos_timing``); the interleave keeps its native-runner home
+    robust so a real O(n^2) still trips it (slow in every round → the median trips too)."""
+    anchor_root, anchor_eps = _harvest_case(anchor_n)
+    big_root, big_eps = _harvest_case(big_n)
+    min_anchor = float("inf")
+    min_big = float("inf")
+    ratios: list[float] = []
+    for _ in range(reps):
+        anchor = _time_harvest(anchor_root, anchor_eps)
+        big = _time_harvest(big_root, big_eps)
+        min_anchor = min(min_anchor, anchor)
+        min_big = min(min_big, big)
+        ratios.append(big / max(anchor, 1e-6))  # same round: both timed under the same conditions
+    return min_anchor, min_big, statistics.median(ratios), len(anchor_eps)
+
+
+@pytest.mark.dos_timing  # wall-clock scaling guard: host-lane-only (see pyproject / DEBT D21)
 def test_harvest_stays_linear_on_many_flat_sinks_no_dos():
     """DoS guard for the ORTHOGONAL many-claimed dimension. With n recorded sinks the harvest
     pass's ``claimed`` list is O(n), and the pre-fix per-node ``any(... in claimed)`` containment
@@ -1428,17 +1471,18 @@ def test_harvest_stays_linear_on_many_flat_sinks_no_dos():
     10 MB ingest cap: a worker-stalling DoS the deep-single-chain guard above cannot catch (there
     ``claimed`` stays empty). The merged-interval single-pointer sweep is O(n log n): a 4x input
     scales ~linearly, not ~16x. Absolute ceilings are the robust primary guard; the ratio is a
-    secondary tripwire (pre-fix ~14x, post-fix ~4x)."""
+    secondary tripwire (pre-fix ~14x, post-fix ~4x), measured by interleaving the two sizes and
+    taking the per-round MEDIAN so shared-CI contention cancels (see ``_interleaved_harvest_ratio``
+    — the de-flake PR #86 gave the deep-split guard but this one originally lacked)."""
     extract('fetch("/warmup")')  # exclude one-time import/parse warmup
-    anchor, n_a = _harvest_seconds(2000)
-    assert n_a == 2000  # sanity: the sinks ARE recorded, so `claimed` really is O(n)
+    anchor, big, ratio, n_anchor = _interleaved_harvest_ratio(2000, 8000)  # big = 4x the input
+    assert n_anchor == 2000  # sanity: the sinks ARE recorded, so `claimed` really is O(n)
     assert anchor < 2.0, f"harvest at 2000 flat sinks took {anchor:.2f}s (linear ~20ms) — DoS"
-    big, _ = _harvest_seconds(8000)  # 4x the input
     assert big < 3.0, (
         f"harvest at 8000 flat sinks took {big:.2f}s (linear ~80ms; pre-fix ~5s) — DoS"
     )
-    assert big / max(anchor, 1e-3) < 10, (
-        f"harvest scaled {big / anchor:.1f}x for 4x more sinks "
+    assert ratio < 10, (
+        f"harvest median-scaled {ratio:.1f}x for 4x more sinks "
         f"(2000: {anchor * 1000:.0f}ms, 8000: {big * 1000:.0f}ms) — looks quadratic, DoS regression"
     )
 
