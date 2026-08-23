@@ -31,6 +31,7 @@ are re-exported here (see ``__all__``) because downstream modules
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
@@ -187,10 +188,54 @@ _ROUTE_KEYS = frozenset({"href", "src", "action"})
 # Pseudo-schemes / fragments that are never a navigable page route. Some embed `://`
 # (`javascript://…`, `blob:https://…`), so they must be rejected BEFORE the path anchor.
 _ROUTE_SCHEME_REJECTS = ("#", "mailto:", "tel:", "javascript:", "data:", "blob:", "about:")
-# Absolute URLs that pervade bundles as namespace / spec identifiers, never a page the app
-# navigates to (SVG/XML/XHTML `xmlns`, schema.org microdata, the RFC example domain).
-# Harvest-only: they carry a `://` so they would otherwise pass the route gate.
-_HARVEST_HOST_DENY = ("w3.org", "schema.org", "ns.adobe.com", "purl.org", "example.com")
+# Absolute URLs that pervade bundles as namespace / spec / library-doc identifiers, never a
+# page the app navigates to (OOXML/ODF/SVG/XML/XHTML `xmlns`, schema.org microdata, JS-library
+# doc links, the RFC example domains). Harvest-only: they carry a `://` so they would otherwise
+# pass the route gate. Matched by EXACT host-or-dot-suffix in `_harvest_denied` — the old raw
+# substring test both MISSED real garbage (`schema.org` is not a substring of
+# `schemas.openxmlformats.org`) and could over-match a real host (`example.com` in
+# `notexample.com`). DEBT D34. Extend this set (registrable domain only) as new library
+# namespace hosts surface; the shape rule below generalizes to unlisted ones.
+_HARVEST_HOST_DENY = frozenset(
+    {
+        # XML / document-format / spec namespace registrars
+        "w3.org",
+        "schema.org",
+        "purl.org",
+        "purl.oclc.org",
+        "ns.adobe.com",
+        "openxmlformats.org",
+        "openoffice.org",
+        "schemas.microsoft.com",
+        "oasis-open.org",
+        "docbook.org",
+        # JS-library documentation / demo / error-decoder hosts baked into vendored bundles.
+        # Registrable PROJECT domains only — never a bare public suffix (`github.io`) or a
+        # third-party host a real target could legitimately use (`fb.me`, `npms.io`): a bare
+        # public suffix would shadow the target's OWN `*.github.io` routes (§4 review, DEBT D34).
+        "reactjs.org",
+        "react.dev",
+        "redux.js.org",
+        "popper.js.org",
+        "ag-grid.com",
+        # RFC example / test domains
+        "example.com",
+        "example.org",
+        "example.net",
+    }
+)
+# Schemes a harvested off-sink literal may carry to be a real route. Kills `file://…` bundle
+# paths, `blob:https://…`, and other pseudo-schemes that `partition("://")` lets through.
+_HARVEST_SCHEMES = frozenset({"http", "https", "ws", "wss"})
+# XML/spec-namespace path fingerprint: a year as a NON-TERMINAL path segment (`/2006/`), the
+# shape of OOXML/ODF/XML namespaces (`…/2006/relationships`). The trailing slash is required so a
+# TERMINAL numeric segment that is really an id, not a year (`/products/2020`), is NOT matched
+# (§4 review MED-1). Used ONLY to generalize the deny to UNLISTED registrars, and ONLY for
+# `http://` non-API literals — real navigable routes today are https — so a genuine https dated
+# route is never dropped. Documented residual: an `http://` route with a LEADING `/YYYY/` segment
+# (`http://blog/2024/post`) is dropped; it is off-sink + low-confidence and normally also
+# recovered via its href/nav sink, which bypasses this filter. DEBT D34.
+_NS_YEAR_SEG = re.compile(r"/(?:19|20)\d\d/")
 # A URL builder wider than this many source bytes is not a route — skip it without decoding
 # (defence-in-depth against a pathological single top-level concat/`+` chain).
 _MAX_HARVEST_SPAN = 8192
@@ -292,6 +337,36 @@ def _is_absolute_url(skeleton: str) -> bool:
     return bool(sep) and scheme != "" and "/" not in scheme and " " not in scheme
 
 
+def _harvest_denied(skeleton: str) -> bool:
+    """True if an off-sink absolute-URL literal is library/spec BOILERPLATE, not a navigable
+    route — so the harvest pass drops it instead of polluting the route + host inventory (the
+    Hosts page was ~95% OOXML/ODF/library noise before this; DEBT D34). Three cheap, ordered
+    rejects. HARVEST-ONLY: a URL passed to a real network/nav sink is already claimed and never
+    reaches here, so this can never hide a confirmed endpoint.
+
+    1. scheme not http/https/ws/wss  -> a `file://…` bundle path, `blob:…`, etc.;
+    2. host matches a known namespace-registrar / library-doc domain by EXACT host-or-dot-suffix
+       (not the old substring test, which missed `schemas.openxmlformats.org` and could
+       over-match `notexample.com`);
+    3. host is unknown but the URL is an XML-namespace identifier by SHAPE — an ``http://``
+       (non-https) literal, no query/fragment, a dated path segment, and not API-ish — which
+       generalizes the deny to libraries we have not enumerated, with no list upkeep. Gated to
+       ``http://`` so a real https content route with a dated path is never dropped."""
+    scheme, _sep, rest = skeleton.partition("://")
+    scheme = scheme.lower()
+    if scheme not in _HARVEST_SCHEMES:
+        return True
+    authority = rest.split("/", 1)[0]
+    host = authority.rsplit("@", 1)[-1].rsplit(":", 1)[0].lower().rstrip(".")
+    if any(host == deny or host.endswith("." + deny) for deny in _HARVEST_HOST_DENY):
+        return True
+    if scheme == "http" and "?" not in skeleton and "#" not in skeleton:
+        path = rest[len(authority) :]
+        if not _looks_api_ish(skeleton) and _NS_YEAR_SEG.search(path):
+            return True
+    return False
+
+
 def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
     """Sort byte spans by start and merge overlapping/touching ones into a minimal,
     non-overlapping, start-ordered list. The union of covered bytes is unchanged, so
@@ -362,8 +437,14 @@ def _harvest_routes(root: Node, result: Extraction, limit: int | None = None) ->
         if "://" not in _text(node):  # "://": absolute-only + cheap pre-skip
             continue
         skeleton = _collapse_url(node)
-        lowered = skeleton.lower()
-        if not _is_absolute_url(skeleton) or any(deny in lowered for deny in _HARVEST_HOST_DENY):
+        if not _is_absolute_url(skeleton):
+            continue
+        if _harvest_denied(skeleton):
+            # Claim the denied builder's whole span so the preorder walk skips its inner string
+            # children — otherwise a denied composite (`"http://h/x/".concat("2006/rel")`) leaks
+            # a truncated sub-literal (`http://h/x/`) as a separate route (§4 review MED-2).
+            # Mirrors the emit-path `last_harvest_end` dedup below.
+            last_harvest_end = node.end_byte
             continue
         if not _looks_like_route(skeleton):
             continue
