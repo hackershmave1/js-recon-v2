@@ -22,6 +22,134 @@ nothing is lost in the regrouping. Nothing is currently parked.
 
 Visible in results today, on the real targets you point the tool at. Fix these first.
 
+**D31–D35 added 2026-08-23 from a dogfood audit** against a real ~4.4 MB minified React SPA
+(an Azure-AD-fronted app). The tool reported "2 files, 0 secrets, 10 hosts"; manual review found
+a source map, real config secrets, real in-scope hosts in the file tail, and a host inventory that
+was ~95% library boilerplate. Each item below is root-caused with a fix path (four-agent research
+swarm, evidence-backed). Cross-cutting theme: **two of these are SILENT** (D31, D32) — the run
+finalizes DONE with no partial-coverage signal, which is the honesty (REQ-C2/REQ-D5) half of the bug.
+
+#### D31 · Large-file AST node-budget silently curtails endpoint/host recovery [S–M]  ·  correctness
+The static extractor caps its two expensive AST walks (the sink walk + the off-sink route harvest)
+at `_MAX_AST_NODES = 2_000_000` nodes once `tree.root_node.descendant_count` exceeds it
+(`findings/extract.py:116`, `_jsast.py:209`, enforced by node-count in `_jsast._walk`). The base-env
+poison/const pre-pass is deliberately NOT curtailed — it must see the whole tree for soundness (a name
+shadowed past the prefix could fold to a stale value = a false-positive URL; `extract.py:111-115`,
+`_base_env.py:39-52`). **Impact (measured, 4.4 MB bundle = 2.36M nodes):** the 2-millionth preorder node
+sits at 83.8% of the file, so all sink/harvest work over the final ~16% is dropped **silently** (no log,
+event, or completeness flag). Recall fell **88 → 31** unresolved network sinks (~65% lost) and two real
+in-scope hosts in the file tail were dropped entirely. Any bundle over ~2M nodes (~3.5 MB minified —
+common for real SPAs) reports a fraction of its surface with no warning. **The budget barely helps DoS
+(measured):** the crafted-input worst case is dominated by the UNBOUNDED parse (~10.7s @ 10 MiB) +
+`collect_base_env` (~30.6s @ 10 MiB — already over the 30s job lease), which the node cap never touches;
+what actually bounds crafted input is D21's algorithmic `_merge_spans` O(n²)→O(n log n) fix + idempotent
+at-least-once reclaim (D23), not the cap (it saves ~0–2s of noise on a real file). Real-file `extract()`
+runs ~13s uncurtailed — half the lease. **Fix (recommended, both S, ship together):** (1) *honesty* — add
+a `curtailed`/completeness field to `Extraction` (`_jsast.py:154-173`), set at `extract.py:116`, surface
+it on asset coverage + a `job.warning` event so a partial extract is never silent (REQ-C2); (2) *recall* —
+raise/re-key `_MAX_AST_NODES` above the real-file ceiling (~6M; a real 10 MiB file ≈ ≤5.5M nodes at
+~0.53 nodes/byte) or key it to the 10 MiB ingest byte cap (recovers 31→88 + the tail hosts). **Strategic
+follow-up [M–L]:** thread a heartbeat callback through ALL passes (base-env's two walks + sink + harvest),
+renewing the lease every N nodes, so even a 40s+ crafted extract stays lease-safe — the invariant the node
+budget only pretended to hold (the pre-existing base-env/parse lease breach on crafted 10 MiB+ input is
+orthogonal and is not worsened by raising the cap). **Trigger:** any target bundle > ~2M AST nodes.
+
+#### D32 · Source-map recovery: oversized-map soft-drop + recovered sources not secret-scanned, both silent [S / M–L]  ·  correctness
+Two independent gaps hide everything that lives only in a JS source map (the recovered original source,
+plus any secrets in `sourcesContent`). **(a)** The `.map` fetch inherits the *shared* bundle byte cap: the
+crawl stage reads `//# sourceMappingURL=` and GETs the map, but passes the same per-run
+`cap = min(max_fetch_bytes 10 MiB, ceiling 32 MiB)` as `max_bytes` (`fetch.py:575,631,751-757`). A real map
+is 3–6× the minified bundle, so a 4.4 MB bundle's ~15–25 MB map trips the streamed cap (`fetch.py:277-282`)
+and is swallowed as a soft miss (`fetch.py:759-761`, logged `fetch.source_map_skipped`, verbatim
+`response exceeds 10485760 bytes`) → no `source_map_ref` → analyze `source_map:"none"`. **(b)** Kingfisher
+runs once on the raw bundle only (`analyze.py:576,581`); recovered source-map units are fed only to
+`extract()` for endpoints (`analyze.py:466`), never to `kingfisher.scan` (explicit deferral,
+`analyze.py:597-599`) — so a recovered map's `sourcesContent` secrets (e.g. a hardcoded JWT, which
+`kingfisher.jwt.1` WOULD flag) are missed. **Silent (REQ-D5 hole):** a soft-missed map leaves the asset
+`fetch_ok`+`analyze_ok` → run finalizes DONE, not PARTIAL (`coordinator.py:376-378`), and `source_map:"none"`
+is indistinguishable from "no map existed", so a "complete" run that skipped a map could later license a
+"secret removed" diff. **Fix (recommended order):** (C, S — honesty first) record a `fetch.source_map_skipped`
+run event + a distinct `source_map:"skipped"` coverage status and finalize the run PARTIAL (zero
+memory/DoS/egress change); (A1, S) add a separate `max_source_map_bytes` (default = engine cap, 32 MiB) and
+pass it — not the shared bundle cap — to the map `fetch_url`; (B1, M–L) scan recovered sources through
+`kingfisher.scan` with `source_path=f.path` AND teach `probe/reveal.py::_derive` to re-derive recovered
+content from `source_map_ref` (mirroring `probe/sources.py:207-234`) so a recovered-source secret round-trips
+(else audited reveal 409s) — dedup is free (same finding, extra occurrence). **Invariants:** egress
+re-validated on every map hop (intact today, `fetch.py:242`); content-addressed blobs; no silent under-report
+(REQ-D5). **Note:** the single-URL/upload fetch path has NO source-map logic at all (only crawl + capture do).
+
+#### D33 · Secret detection misses config-key / GUID exposure (precision-first ruleset) [S + M]  ·  correctness
+Secret scanning = Kingfisher 1.106.0 built-in provider ruleset (~930 rules) + one custom AWS-AKIA rule, at
+default `--confidence medium` (`kingfisher.py:211-227`) — precision-first by design. Two structural COVERAGE
+gaps (not entropy): **(1)** config identifiers named `*_KEY` don't match — Kingfisher's Azure GUID rules
+(`azure.7` Entra Tenant ID, `azure.8` Client ID) are keyword-anchored on `..._ID`/`client_id`/`appId`, so a
+`*_TENANT_KEY/*_CLIENT_KEY/*_API_KEY: '<guid>'` assignment never matches (verified 0 hits on a real Azure-AD
+`config.js`), and `azure.7/8` are additionally `visible:false` under `--no-validate` (tallied but not emitted —
+the same non-emission the custom AKIA rule was written to work around); **(2)** info-disclosure classes
+(RFC1918 internal IPs) have no built-in rule. (A well-formed JWT is NOT a gap — `kingfisher.jwt.1` is
+`visible:true` and emits at medium; the audit's JWT was missed only because it lived in an un-fetched `.map`
+— see D32.) **Fix — precision-first default + opt-in recall lane (a product decision):** (A, S, ~0-FP, ship
+now) one `visible:true` custom rule for a UUID assigned to a `TENANT/CLIENT/APPID/APP_ID/*_KEY` identifier —
+verified **19/19** real config GUIDs (incl. commented env blocks), **0 FP** across 4.4 MB of minified JS (the
+readable-identifier + quoted-UUID shape can't match minified output); pin provider in
+`normalize._PROVIDER_BY_RULE`; respect the custom-rule gotchas (`pattern: |-`, omit `min_entropy`, wheel
+`package-data` for `rules/*.yml`, `--rules-path` cache key). (B, M, opt-in) a broader
+keyword/`*_KEY=UUID`/RFC1918 heuristic lane at `--confidence low`, surfaced as a NEW **suspected-secret** tier
+(mirroring `endpoint_unresolved`/`endpoint_generic`) so recall rises (~50% FP like generic scanners) WITHOUT
+polluting the high-precision default lane or the REQ-D5 diff — requires a new `FindingType`. **Reject C**
+(lowering the global `--confidence`): turns the ~50%-FP generic lane on for every scan, contradicting the
+honesty/precision stance. **Invariants:** REQ-S2 (raw value never in identity cleartext —
+`normalize_secret_value` sha256); REQ-D5 (opt-in recall must be a distinct surface); fail-closed engine contract.
+
+#### D34 · Endpoint/host inventory polluted by off-sink library-boilerplate URLs [S] — ✅ RESOLVED 2026-08-23  ·  correctness
+✅ **RESOLVED 2026-08-23.** Shipped a layered `_harvest_denied` predicate at the single harvest
+chokepoint (`findings/extract.py`): (1) a scheme allow-list (`http/https/ws/wss`) drops `file://…`
+junk; (2) an EXACT host-or-dot-suffix denylist of namespace registrars + JS-library PROJECT
+domains (replacing the broken 5-substring test); (3) an `http://` XML-namespace shape rule (no
+query/fragment, a NON-TERMINAL `/YYYY/` segment, not API-ish) that generalizes to unlisted
+registrars. On the real bundle the harvested Hosts inventory went from ~10 library-noise hosts to
+**0** (the real `login.microsoftonline.com` + two `*.accenture.com` hosts survive); confirmed-`endpoint`
+lane untouched by construction. Colocated tests in `findings/harvest_filter_test.py` (11). §4
+adversarial review = SHIP-WITH-NITS → all three nits folded: dropped bare public-suffix
+`github.io` / third-party `fb.me` / `npms.io` (a bare public suffix could shadow a target's own
+`*.github.io` host); required a non-terminal year so a trailing id segment (`/products/2020`) is
+not mistaken for a namespace year; and claim the denied builder's span so a denied composite can't
+leak a truncated sub-literal. Fast lane + mypy-strict + ruff clean. Residual (documented): a few
+host-LESS route literals (`http://`, `http://macVmlSchemaUri`) remain but never reach the Hosts
+inventory (no ≥2-label host). Original analysis below.
+
+The off-sink route harvest (`findings/extract.py::_harvest_routes`, :316-374) turns ANY absolute-URL string
+literal (has `://`, passes `_looks_like_route`, not `_looks_api_ish`) into a `page_route`/`endpoint_generic`
+by SHAPE ALONE — no requirement it flow to a network/nav sink. The only host filter is `_HARVEST_HOST_DENY`
+(:193), a 5-entry raw SUBSTRING test that is near-empty AND wrong both ways: `schema.org` is not a substring
+of `schemas.openxmlformats.org` (misses it), and `example.com` IS a substring of `notexample.com` (would
+false-drop a real host). Host attribution (`egress.attributed_host`) then launders any valid ≥2-label host
+into the Hosts inventory (`hosts.py` route roll-up). **Impact (real bundle w/ SheetJS + React):** of 63
+unique harvested routes, ~95% are OOXML/ODF XML-namespace + library doc URLs (`schemas.openxmlformats.org`,
+`schemas.microsoft.com`, `openoffice.org`, `purl.oclc.org`, `reactjs.org`, …); only one was a genuine host.
+The confirmed-`endpoint` lane is IMMUNE by construction (it emits only from resolved sink URLs via
+`normalize_endpoint`), so the fix is safe — it touches only the harvest lane. **Fix (recommended, S — one
+predicate at the `extract.py:366` chokepoint, layered):** (a) replace the substring test with EXACT
+host-or-dot-suffix match (`host==d or host.endswith("."+d)`, mirroring `egress.host_in_scope`), seeded with
+namespace registrars + lib-doc hosts; (b) a self-maintaining XML-namespace shape rule — drop an off-sink
+literal with no query, no fragment, a dated path segment (`/(19|20)\d\d/`), and not API-ish (matches 50/63
+with no per-library upkeep); plus a scheme allow-list (`http/https/ws/wss`) to kill `file://`/mangled-ident
+junk. This preserves the `.concat()` page-route differentiator (real absolute client routes are neither
+denylisted nor namespace-shaped) and needs no read-model change. **Optional layer (d):** exclude harvested-`low`
+route hosts from the Hosts `universe` roll-up (`hosts.py:190-197`) unless the host also appears via
+asset/endpoint/tech — a read-time lever, no re-extract. **Invariant:** never drop a real in-scope host (both
+(a) and (b) are strictly safer than today's over-matching substring); keep the confirmed-endpoint lane untouched.
+
+#### D35 · Sources viewer can't display large bundles [M]  ·  performance
+A multi-MB minified bundle is effectively unviewable in the Sources page: `CodeViewer` clamps to 512 K chars /
+10 K lines and `SourcesPage` disables pretty-print above `BEAUTIFY_MAX_CHARS` = 200 K (js-beautify runs
+synchronously on the main thread and froze the tab on a large bundle in past QA — the reason for the cap) and
+highlighting above 200 K, so a 4.4 MB bundle renders as one truncated 512 K single line with only a "Download"
+affordance. **Fix:** move beautify off the main thread (Web Worker) behind an explicit "expand / format"
+affordance with an in-progress spinner, and virtualize the resulting ~100 K formatted lines (the CodeViewer
+already virtualizes the file TREE but not the code body). Files:
+`web/src/features/sources/{CodeViewer,SourcesPage}.tsx`. (User-reported 2026-08-23.)
+
 #### D22 · Tech detection JS-runtime + header-allowlist gaps [M] — ⏳ PARTIAL 2026-08-22 (js + header allowlist shipped; html/dom remain)  ·  correctness
 - ✅ **RESOLVED 2026-08-19 — the `js` (window-global) surface now fires (PR #85).** Bundled
   SPAs (Next.js `__NEXT_DATA__`, Nuxt `$nuxt`, React) were invisible; the matcher now
