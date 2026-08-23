@@ -1,17 +1,23 @@
 # Recon Workspace (web)
 
-The React SPA front-end for the JS API-recon platform. It's a thin UI over the
-platform API: browse capture/crawl **sessions** and their **runs**, watch run
-**progress**, and review reconstructed **findings** (endpoints, params, secrets).
+The React SPA front-end for the JS API-recon platform — a thin UI over the platform API. The whole
+app sits behind central login: an `AuthGate` renders a `LoginScreen` until you sign in, then the
+token rides as `Authorization: Bearer` on every API/SSE call (see the auth section in
+[`../../../docs/ARCHITECTURE.md`](../../../docs/ARCHITECTURE.md)).
 
-Key surfaces:
+Key surfaces (a cross-run **Sessions** route, plus per-run pages under `/runs/:id`):
 
-- **Sessions / runs** — list sessions, start a new run, follow live progress.
-- **Sources viewer** — read the analyzed JS with syntax highlighting and jump to
-  the source line behind a finding.
-- **Findings** — the reconstructed API surface and secret findings for a run.
-- **Manual probe** — inspect and issue single requests against a resolved endpoint.
-- **OpenAPI export** — download the run's reconstructed OpenAPI spec.
+- **Sessions / runs** — list sessions, start a new run, follow live progress (SSE + ETag/304 fallback).
+- **Overview** — run summary with host/finding metric cards.
+- **Findings** — the reconstructed API surface (endpoints, params) + secret findings, with
+  attributed/unattributed coverage and cross-run sightings.
+- **API Spec** — the tag-grouped operation list; export the reconstructed OpenAPI (JSON/YAML).
+- **Probe** — inspect and issue single requests against a resolved endpoint.
+- **Tech stack** — per-host technology detection.
+- **Hosts** — every host the run discovered, badged in/out of scope (+ a suspected-backend column).
+- **Sources viewer** — read the analyzed JS (fetched chunks + source-map-recovered originals) with
+  syntax highlighting; jump to the source line behind a finding.
+- **Threat Model** — marked **SOON** (not built yet).
 
 ## Stack
 
@@ -31,3 +37,4 @@ npm run build     # tsc -b && vite build
 
 - [`../README.md`](../README.md) — the platform backend (FastAPI + worker).
 - [`../../../docs/ARCHITECTURE.md`](../../../docs/ARCHITECTURE.md) — system architecture.
+- [`../../../docs/OPERATING.md`](../../../docs/OPERATING.md) — stand-up + how to read the output.
