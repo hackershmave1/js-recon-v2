@@ -79,7 +79,7 @@ USER app
 # it lands in that user's home) — a fresh container's first secret scan then skips
 # the full ruleset compile, helping the <4min SLA. Best-effort: never fail build.
 RUN printf 'const kingfisherWarmup = 1;\n' > /tmp/warm.js \
-    && KF_RULES="$(python -c "import importlib.util, pathlib; s = importlib.util.find_spec('recon.findings'); print(pathlib.Path(s.origin).parent / 'rules' / 'aws_access_key_id.yml')" 2>/dev/null || true)" \
+    && KF_RULES="$(python -c "import importlib.util, pathlib; s = importlib.util.find_spec('recon.findings'); print(pathlib.Path(s.origin).parent / 'rules' / 'custom_rules.yml')" 2>/dev/null || true)" \
     && (kingfisher scan /tmp/warm.js --no-validate --no-update-check --rules-path "$KF_RULES" >/dev/null 2>&1 || true) \
     && rm -f /tmp/warm.js
 

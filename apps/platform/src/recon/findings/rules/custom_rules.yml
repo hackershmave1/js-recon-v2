@@ -1,0 +1,60 @@
+# Custom Kingfisher rules this repo ships to close gaps in the built-in ruleset.
+# Loaded at runtime via --rules-path (recon.findings.kingfisher._RULES_PATH), packaged
+# into the wheel by pyproject [tool.setuptools.package-data], and each rule emits
+# ALONGSIDE the ~930 built-ins (no cross-rule suppression). The compiled-rule cache
+# key includes the --rules-path string, so the Dockerfile pre-warm passes this path.
+#
+# Gotchas that apply to every rule here (learned the hard way):
+#   - pattern: |-  (block-STRIP). `pattern: |` keeps a trailing newline, so the regex
+#     becomes `…\n` and silently matches nothing.
+#   - No min_entropy unless a rule's own comment justifies it: an entropy floor silently
+#     drops real-but-low-entropy tokens, against this repo's "a missing finding is not
+#     honest" bias (recon.findings.normalize).
+#   - Provider slug: a `custom.*` id derives to provider "custom"; pin the intended slug
+#     in recon.findings.normalize._PROVIDER_BY_RULE.
+rules:
+  # 1. Standalone AWS Access Key ID (AKIA…). Kingfisher's built-in kingfisher.aws.1
+  #    treats an access-key id as a pairing *identity*: under --no-validate it never
+  #    emits a lone id (only tallies it in the summary's findings_by_rule), so a leaked
+  #    AKIA in a target's JS was silently missed. This rule makes it a first-class
+  #    finding. No min_entropy: the AKIA prefix + fixed 16-char [0-9A-Z] body + word
+  #    boundaries are already near-zero-FP, and Kingfisher's placeholder filter still
+  #    suppresses the canonical AKIAIOSFODNN7EXAMPLE dummy. Provider pinned to "aws".
+  - name: AWS Access Key ID (standalone)
+    id: custom.aws.akia_standalone
+    pattern: |-
+      \b(AKIA[0-9A-Z]{16})\b
+    confidence: medium
+    visible: true
+    examples:
+      - "AKIA2E4XZ7K9QW3RT8YV"
+
+  # 2. Config-embedded GUID (Azure AD id / *_KEY) — DEBT D33(A). Config hardcodes
+  #    identity/API GUIDs the built-in ruleset won't surface: azure.7 (Entra Tenant ID)
+  #    and azure.8 (Entra Application Client ID) are visible:false under --no-validate
+  #    (tallied, never emitted — the same non-emission the AKIA rule above works around)
+  #    AND are keyword-anchored on `..._ID`/`client_id`/`appId`, so a
+  #    `*_TENANT_KEY / *_CLIENT_KEY / *_API_KEY: '<guid>'` assignment never matches at
+  #    all. This rule emits a UUID assigned to a readable config identifier; the
+  #    readable-keyword + well-formed-UUID shape can't match minified output (verified
+  #    0 FP across 4.4 MB of minified JS in the D33 audit), so it stays precision-first
+  #    at medium. Broader recall (kebab keys, camelCase apiKey/applicationId, RFC1918
+  #    IPs, --confidence low heuristics) is a separate opt-in "suspected" tier, D33(B).
+  #    Scope (deliberate): camelCase/snake tenant|client|appid|app_id + snake *_KEY,
+  #    assigned a quoted-or-bare UUID. No min_entropy — a real GUID is high-entropy, but
+  #    a floor would drop low-entropy-but-real vanity GUIDs (deadbeef-…). The 0-FP
+  #    evidence is minified-JS-only; on hand-written config/fixtures a hardcoded UUID
+  #    on a non-credential `*_key` (idempotency_key, partition_key, cache_key, …) or a
+  #    degenerate value (nil 00000000-…, all-same 11111111-…) can also match — accepted
+  #    under the medium lane + honest `config:` slug + this repo's over-report bias.
+  #    NOTE(DEBT D33): non-dedup with azure.7/8 relies on their visible:false under
+  #    kingfisher-bin==1.106.0. If a bump flips them visible, the same GUID emits under
+  #    both `azure:` and `config:` slugs (two findings, one secret) — re-verify on bump.
+  - name: Config-embedded GUID (Azure AD id or *_KEY)
+    id: custom.config.guid_assignment
+    pattern: |-
+      (?i)(?:^|[^0-9a-z])(?:tenant|client|appid|app_id|[0-9a-z]*_key)[0-9a-z_]*["']?[ \t]*[:=][ \t]*["']?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b
+    confidence: medium
+    visible: true
+    examples:
+      - "AZURE_CLIENT_ID: '3f2504e0-4f89-41d3-9a0c-0305e82c3301'"

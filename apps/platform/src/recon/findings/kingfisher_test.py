@@ -151,11 +151,15 @@ def test_scan_real_binary_detects_planted_secret(engines_required):
     assert any("stripe" in secret.rule_id for secret in result.secrets)
 
 
-def test_akia_rule_file_ships_where_scan_expects():
-    # Guards a source-tree regression (rename/delete). Wheel packaging is enforced
-    # separately by pyproject's package-data; the integration lane (pytest inside
-    # the built image) is what catches a wheel that dropped the data file.
+def test_custom_rules_file_ships_where_scan_expects():
+    # Guards a source-tree regression (rename/delete). Both shipped custom rules live
+    # in ONE file loaded via --rules-path. Wheel packaging is enforced separately by
+    # pyproject's package-data; the integration lane (pytest inside the built image)
+    # is what catches a wheel that dropped the data file.
     assert kingfisher._RULES_PATH.is_file(), kingfisher._RULES_PATH
+    text = kingfisher._RULES_PATH.read_text(encoding="utf-8")
+    assert "custom.aws.akia_standalone" in text
+    assert "custom.config.guid_assignment" in text
 
 
 def test_scan_real_binary_detects_standalone_aws_access_key_id(engines_required):
@@ -179,3 +183,42 @@ def test_scan_real_binary_detects_standalone_aws_access_key_id(engines_required)
     assert akia.snippet == token
     # The pinned provider override resolves the identity to aws, not "custom".
     assert normalize.normalize_secret_value(akia.snippet, akia.rule_id).startswith("aws:")
+
+
+def test_scan_real_binary_detects_config_guid(engines_required):
+    # A config-embedded GUID assigned to an Azure-AD identity key (DEBT D33). The
+    # built-in azure.7/azure.8 are visible:false under --no-validate (tallied, never
+    # emitted) AND keyword-anchored on ..._ID, so before the shipped
+    # custom.config.guid_assignment rule this was silently missed. The GUID is
+    # fabricated and split so no contiguous UUID literal is committed; kingfisher
+    # reassembles it. A random (non-sequential/non-nil) value is used because
+    # Kingfisher's built-in example-filter suppresses placeholder GUIDs.
+    guid = "7c9e6679" + "-7425-40de-" + "944b-e07fc1f90ae7"
+    source = f'const cfg = {{ AZURE_CLIENT_ID: "{guid}" }};\n'.encode()
+
+    result = kingfisher.scan(source)
+    if result.status == "unavailable":
+        if engines_required:
+            pytest.fail("kingfisher binary required (RECON_REQUIRE_ENGINES) but unavailable")
+        pytest.skip("kingfisher binary not available")
+    assert result.status == "ok"
+    ids = {secret.rule_id for secret in result.secrets}
+    assert "custom.config.guid_assignment" in ids, ids
+    guid_secret = next(s for s in result.secrets if s.rule_id == "custom.config.guid_assignment")
+    # The capture group emits the bare UUID (no surrounding key/quotes) so it hashes
+    # and round-trips on reveal as the value itself (REQ-S2).
+    assert guid_secret.snippet == guid
+    # Provider pinned to "config" (not "azure": the rule also catches non-Azure keys).
+    assert normalize.normalize_secret_value(guid_secret.snippet, guid_secret.rule_id).startswith(
+        "config:"
+    )
+
+    # Precision guard: a key that merely CONTAINS "tenant" as a substring with no
+    # separator before it (lieutenant) must NOT emit — pins the leading word boundary
+    # so a future regex loosening that drops it fails here rather than in the field.
+    neg = f'const x = {{ lieutenant_rank: "{guid}" }};\n'.encode()
+    neg_result = kingfisher.scan(neg)
+    assert neg_result.status == "ok"
+    assert not any(s.rule_id == "custom.config.guid_assignment" for s in neg_result.secrets), [
+        s.rule_id for s in neg_result.secrets
+    ]

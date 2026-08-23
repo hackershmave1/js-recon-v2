@@ -132,7 +132,29 @@ content from `source_map_ref` (mirroring `probe/sources.py:207-234`) so a recove
 re-validated on every map hop (intact today, `fetch.py:242`); content-addressed blobs; no silent under-report
 (REQ-D5). **Note:** the single-URL/upload fetch path has NO source-map logic at all (only crawl + capture do).
 
-#### D33 · Secret detection misses config-key / GUID exposure (precision-first ruleset) [S + M]  ·  correctness
+#### D33 · Secret detection misses config-key / GUID exposure (precision-first ruleset) [S + M] — ⏳ PARTIAL 2026-08-24 (slice A shipped; B + RFC1918 remain)  ·  correctness
+✅ **Slice A RESOLVED 2026-08-24.** Shipped a `visible:true` custom rule `custom.config.guid_assignment`
+(`findings/rules/custom_rules.yml`) that EMITS a UUID assigned to a readable config identifier —
+camelCase/snake `tenant`/`client`/`appid`/`app_id` or snake `*_KEY` — closing gap (1). It emits alongside the
+built-ins with no double-count (azure.7/8 stay summary-tally-only), snippet = the bare UUID (REQ-S2:
+sha256-hashed, never stored cleartext), provider pinned to `"config"` in `normalize._PROVIDER_BY_RULE` (NOT
+"azure" — the rule also catches non-Azure `*_API_KEY` GUIDs and the slug prefixes the user-visible
+`finding.value`). The two custom rules now share ONE `--rules-path` file (renamed
+`aws_access_key_id.yml`→`custom_rules.yml`) so a stray/malformed rule can't hard-fail every scan; wheel
+packaging verified (the `rules/*.yml` glob ships it). Verified against real `kingfisher-bin==1.106.0` on a
+12-pos/9-neg fixture (boundary traps `lieutenant_rank`/`monkey`/bare `key`/`recipientId`/minified `{clientId:t}`
+rejected; Kingfisher's example-filter auto-suppresses placeholder UUIDs). **Scope correction to the original
+below:** the shape is snake `*_KEY` + camel/snake identity keys; **kebab** (`client-key`) and camelCase
+`apiKey`/`applicationId` are NOT matched (deferred to slice B), and the 0-FP claim is minified-JS-only — on
+hand-written config a hardcoded UUID on a non-credential `*_key` (`idempotency_key`, `cache_key`, …) or a
+degenerate value (nil/all-same) can also match, accepted under the medium lane + honest `config:` slug + this
+repo's over-report bias. A `# NOTE(DEBT D33)` marks the no-double-emit dependency on azure.7/8 `visible:false`
+under the 1.106.0 pin — re-verify on any Kingfisher bump. Both §4 gates passed (adversarial design =
+SHIP-WITH-CHANGES — single-file over a rules-dir, provider "config", `examples:`+`.gitleaks.toml` wiring all
+folded; code review = SHIP-WITH-NITS — FP-comment honesty, a negative boundary test, `visible` symmetry, and
+this stale-comment refresh all folded). **Still open:** slice B (opt-in `--confidence low` "suspected-secret"
+tier for broader recall incl. kebab/camelCase keys) + gap (2) RFC1918 internal IPs. Original analysis below.
+
 Secret scanning = Kingfisher 1.106.0 built-in provider ruleset (~930 rules) + one custom AWS-AKIA rule, at
 default `--confidence medium` (`kingfisher.py:211-227`) — precision-first by design. Two structural COVERAGE
 gaps (not entropy): **(1)** config identifiers named `*_KEY` don't match — Kingfisher's Azure GUID rules

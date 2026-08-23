@@ -173,6 +173,13 @@ def test_secret_provider_pins_standalone_akia_rule_to_aws():
     assert nz.provider_for_rule("custom.aws.akia_standalone") == "aws"
 
 
+def test_secret_provider_pins_config_guid_rule_to_config():
+    # The config-GUID rule (DEBT D33) would otherwise derive "custom"; pinned to
+    # "config" — NOT "azure", which would be a false claim on the non-Azure `*_KEY`
+    # GUIDs the rule also catches (provider prefixes the user-visible finding.value).
+    assert nz.provider_for_rule("custom.config.guid_assignment") == "config"
+
+
 def test_secret_does_not_strip_token_legal_chars():
     # `.` `-` `_` `=` `+` `/` are legal inside tokens and must survive.
     token = "abc.d0-Ef_G/h+i="
