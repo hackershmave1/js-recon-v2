@@ -67,6 +67,15 @@ export function OverviewPanel(
 
   return (
     <div className="ov">
+      {c?.curtailed && (
+        <div className="ov-curtailed" role="status">
+          <span className="ov-curtailed-tag">Partial</span>
+          <span>
+            Extraction hit the analyzer's size budget on a very large bundle — some endpoints and
+            hosts may be missing.
+          </span>
+        </div>
+      )}
       <div className="ov-metrics">
         {metrics.map((m) => (
           <button key={m.key} type="button" className="ov-card" onClick={() => go(m.section)}>

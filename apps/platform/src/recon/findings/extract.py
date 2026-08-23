@@ -117,6 +117,9 @@ def extract(
     walk_limit = _MAX_AST_NODES if tree.root_node.descendant_count > _MAX_AST_NODES else None
     callees = wrapper_callees(wrappers)
     result = Extraction()
+    # D31 honesty (REQ-C2): a bounded walk means the tree's tail was not examined — record it so
+    # the partial extract is surfaced on coverage downstream, never a silent under-report.
+    result.curtailed = walk_limit is not None
     for node in _walk(tree.root_node, walk_limit):
         if node.type == "call_expression":
             _handle_call(node, result, env, callees)

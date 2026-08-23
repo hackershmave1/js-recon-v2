@@ -34,7 +34,10 @@ from recon.findings.analyze import (
     build_export_index,
 )
 from recon.findings.wrappers import WrapperRule
+from recon.observability import get_logger
 from recon.runs import assets as run_assets
+
+log = get_logger("recon.findings.reextract")
 
 
 class SourceBlobMissing(Exception):
@@ -144,7 +147,7 @@ def _reextract_blob(
 ) -> int:
     raw = storage.get_blob(input_ref)
     source = raw.decode("utf-8", "replace")
-    return _extract_endpoints(
+    result = _extract_endpoints(
         session,
         tenant_id=tenant_id,
         run_id=run_id,
@@ -155,4 +158,10 @@ def _reextract_blob(
         asset_url=asset_url,
         wrappers=wrappers,
         cross_index=cross_index,
-    ).written
+    )
+    # D31 honesty: re-extract emits no `analyze.coverage` event, so a node-budget curtailment here
+    # would otherwise be silent. The run's original analyze already flagged curtailment on coverage;
+    # this log covers the re-extract's own partial pass so the tail-drop is never unrecorded (REQ-C2).
+    if result.curtailed:
+        log.warning("reextract.extract_curtailed", run_id=run_id, asset_url=asset_url)
+    return result.written

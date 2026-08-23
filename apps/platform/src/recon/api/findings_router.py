@@ -106,6 +106,7 @@ def _coverage_dict(coverage: queries.CoverageView | None) -> dict | None:
         "secrets_engine": coverage.secrets_engine,
         "sources_recovered": coverage.sources_recovered,
         "source_map": coverage.source_map,
+        "curtailed": coverage.curtailed,
         "files": [
             {"path": f.path, "attributed": f.attributed, "unattributed": f.unattributed}
             for f in coverage.files

@@ -131,6 +131,9 @@ class CoverageView:
     sources_recovered: int
     source_map: str
     files: list[FileCoverageView]
+    # D31 honesty: True when the extract hit the AST node budget on any of the run's assets, so
+    # some of the surface was not examined — a partial extract, reported truthfully (REQ-C2).
+    curtailed: bool = False
 
 
 @dataclass(frozen=True)
@@ -455,6 +458,7 @@ def _coverage_view_from_payload(payload: dict[str, Any]) -> CoverageView:
         secrets_engine=str(payload.get("secrets_engine", "ok")),
         sources_recovered=int(payload.get("sources_recovered", 0)),
         source_map=str(payload.get("source_map", "none")),
+        curtailed=bool(payload.get("curtailed", False)),
         files=[
             FileCoverageView(
                 path=str(entry.get("path", "")),
@@ -493,6 +497,9 @@ def _merge_coverage_payloads(payloads: Sequence[dict[str, Any]]) -> dict[str, An
         ),
         "sources_recovered": sum(int(p.get("sources_recovered", 0)) for p in payloads),
         "source_map": payloads[0].get("source_map", "none"),
+        # D31: the run is curtailed if ANY asset's extract was (mirrors analyze._merge_coverage's
+        # OR); a payload predating the field has no key and reads as not-curtailed.
+        "curtailed": any(bool(p.get("curtailed")) for p in payloads),
         "files": files,
     }
 

@@ -53,6 +53,10 @@ export interface Finding {
 export interface Coverage {
   attributed: number; unattributed: number; secrets: number; secrets_engine: string | null;
   sources_recovered: number; source_map: boolean;
+  // D31: true when a bundle exceeded the static analyzer's AST node budget, so the extract was
+  // bounded to a prefix and some endpoints/hosts may be missing (REQ-C2 honesty). Optional so
+  // events/responses predating the field read as not-curtailed.
+  curtailed?: boolean;
   files: { path: string; attributed: number; unattributed: number }[];
 }
 // Run-scoped shadow-API bucket summary (design §5.4/§6.4): null until a spec is

@@ -7,6 +7,20 @@
 
 .ov { display: flex; flex-direction: column; gap: 16px; }
 
+/* D31: extraction hit the AST node budget, so part of the bundle wasn't examined — surfaced so a
+   partial extract is never silent (REQ-C2). Shown only on real coverage.curtailed, never faked. */
+.ov-curtailed {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel); border: 1px solid var(--warn, var(--border-strong));
+  border-radius: var(--r-lg); padding: 11px 15px;
+  font-size: 12.5px; color: var(--text); line-height: 1.5;
+}
+.ov-curtailed-tag {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+  color: var(--warn, var(--muted)); border: 1px solid var(--warn, var(--border-strong));
+  border-radius: var(--r-sm); padding: 2px 7px; flex: 0 0 auto;
+}
+
 .ov-metrics { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; }
 @media (max-width: 900px) { .ov-metrics { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 560px) { .ov-metrics { grid-template-columns: repeat(2, 1fr); } }
