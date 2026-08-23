@@ -1,7 +1,10 @@
 # Tech detection (fingerprinting) slice — design
 
-Status: DESIGN (not built). Date: 2026-08-16. Grounded against the current fetch / analyze /
-capture code (file:line below) and the adversarial design gate (Meta + Google IC8, 2026-08-16).
+Status: **SHIPPED** — per-host tech detection is live (`findings/techdetect/`, `api/tech_router.py`,
+the "Tech stack" workspace page). NOTE: `run_technology` shipped as **migration 0017**, not the
+`0016` this doc predicts below — `0016` became `finding_type_generic` first. Date: 2026-08-16 (design).
+Grounded against the then-current fetch / analyze / capture code (file:line below) and the
+adversarial design gate (Meta + Google IC8, 2026-08-16).
 Delivery model: **SaaS / internal only** (user, 2026-08-16) — the GPL-3.0 dataset stays
 server-side and is never conveyed, so copyleft is not triggered (see G + T10).
 

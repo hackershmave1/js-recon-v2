@@ -1,10 +1,11 @@
 """Worker: consume jobs off the queues and drive the run through its stages.
 
-Slice-1 stage work is a stub (a few heartbeating steps) so the async spine can
-be exercised end-to-end before the real engines arrive. The worker observes
-cancel/pause flags at safe checkpoints (REQ-A4), retries transient failures with
-backoff, dead-letters exhausted ones (REQ-Q2), and reclaims work abandoned by a
-crashed peer (REQ-R3 durability).
+Before each stage's real work a short bounded loop (``STUB_STEPS``) observes the
+cancel/pause flags at safe checkpoints (REQ-A4) and heartbeats progress; then the
+stage dispatches its real engine work — discover (katana crawl / CDP capture),
+fetch (egress-guarded), analyze (Vespasian / Kingfisher / Sourcemapper), correlate.
+Transient failures retry with backoff, exhausted ones dead-letter (REQ-Q2), and work
+abandoned by a crashed peer is reclaimed (REQ-R3 durability).
 """
 
 from __future__ import annotations

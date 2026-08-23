@@ -47,7 +47,8 @@ mutable, per-sighting detail; they are tracked (never dropped) so a merge is vis
 Finding (one row per run_id + finding_hash)
 ├─ HARD IDENTITY  → finding_hash = sha256(canonical {v, type, value})   # v = FINDING_HASH_VERSION
 │    v      identity-algorithm version (2) — disjoint hash space per bump
-│    type   "endpoint" | "secret" | "param"
+│    type   "endpoint" | "endpoint_unresolved" | "endpoint_generic"
+│           | "page_route" | "secret" | "param"   (6 kinds — see §4 + findings/hosts.py)
 │    value  normalized, per-type (§4) — NO host, NO path for endpoints
 │
 └─ OCCURRENCES (1..N child rows, keyed (finding_hash, occurrence_hash))

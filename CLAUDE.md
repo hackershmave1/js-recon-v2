@@ -9,7 +9,9 @@ change that alters these rules updates this file in the same PR.
 
 A static **JavaScript → API-recon security platform**: it reconstructs the backend
 API surface a JS bundle talks to (endpoints, params, request shapes), scans for
-secrets, and emits an OpenAPI spec + a recon report. No active traffic against
+secrets, and exports an OpenAPI spec of the reconstructed surface. (A consolidated
+recon report and an evidence-grounded threat model over that surface are planned —
+the workspace's "Threat Model" tab is marked SOON.) No active traffic against
 targets — analysis is static; the fetch stage is SSRF-guarded (in-scope public
 hosts only).
 
@@ -21,9 +23,10 @@ restate it elsewhere. (Each `AGENTS.md` is a pointer-stub to the `CLAUDE.md` bes
 | Need | Read |
 |------|------|
 | Repo standards — layout, run/test, CI gates, conventions | **this file** (`CLAUDE.md`) |
+| Stand it up + first run + read the output (operator/QA guide) | [`docs/OPERATING.md`](docs/OPERATING.md) |
 | System *what* — components, async spine, engines, ingest contract, auth | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | *Why* a load-bearing decision was made — MADR trail, each cites its code | [`docs/adr/`](docs/adr/README.md) |
-| The 41 `REQ-*` capability/invariant IDs the ADRs cite | [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) |
+| The `REQ-*` capability/invariant IDs the ADRs cite (41 + a `REQ-CE*` addendum) | [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) |
 | Known, deliberate tech debt (effort + status) — before "why isn't X done" | [`DEBT.md`](DEBT.md) |
 | Backend — run, test, migrations, async-pipeline detail | [`apps/platform/README.md`](apps/platform/README.md) |
 | Web workspace (React/Vite SPA) | [`apps/platform/web/README.md`](apps/platform/web/README.md) |

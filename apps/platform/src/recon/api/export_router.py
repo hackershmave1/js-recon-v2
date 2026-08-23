@@ -3,7 +3,7 @@
 GET /runs/{run_id}/export/openapi?format=json|yaml — the inverse of the spec
 attach/classify endpoint. Thin: reconstruct the run's requests (RLS-scoped),
 serialize + self-validate in recon.probe.openapi, and stream the bytes as a file
-download. No persistence; the threat-model stage calls build_openapi in-process.
+download. No persistence; a planned threat-model stage will reuse build_openapi in-process.
 """
 
 from __future__ import annotations

@@ -21,8 +21,9 @@ class QueueName(StrEnum):
 
 
 class RunStage(StrEnum):
-    """The ordered active stages of a run. The threat-model (MODEL) pass is
-    on-demand and tracked separately, so it is not in this core sequence."""
+    """The ordered active stages of a run. The threat-model pass is planned
+    (on-demand, tracked separately — see the SOON workspace nav), so it is not in
+    this core sequence."""
 
     DISCOVERING = "discovering"
     FETCHING = "fetching"
@@ -62,8 +63,9 @@ class JobState(StrEnum):
 
 
 class FindingType(StrEnum):
-    """The content-addressed finding kinds (REQ-D3). Extended in later slices
-    (source_map, post_message, storage) as new extractors land."""
+    """The content-addressed finding kinds (REQ-D3): the API-surface lanes
+    (``endpoint`` + the suspected ``endpoint_unresolved`` / ``endpoint_generic``),
+    the client-navigation ``page_route`` lane, plus ``secret`` and ``param``."""
 
     ENDPOINT = "endpoint"
     SECRET = "secret"

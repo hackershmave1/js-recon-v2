@@ -20,12 +20,28 @@ Bring up the platform (API + workspace):
 
 ```bash
 cd apps/platform
-docker compose up -d --build   # http://localhost:8000
+docker compose up -d --build   # postgres + redis + minio + migrate + api + worker; API at http://localhost:8000
+```
+
+The default stack ships **auth on** (`RECON_AUTH_SECRET` is set in compose), so the workspace opens
+to a login screen. Seed the first operator off the HTTP surface, then sign in:
+
+```bash
+cd apps/platform
+# 1) create a tenant — prints its UUID
+docker compose run --rm api python -m recon.bootstrap create-tenant "Acme Security"
+# 2) seed an operator into that tenant (dev creds admin/admin; --force allows the weak default
+#    because compose sets RECON_ENV=docker, which isn't a recognized dev env)
+docker compose run --rm api python -m recon.bootstrap seed-admin \
+  --tenant-id <uuid-from-step-1> --username admin --password admin --force
+# 3) open http://localhost:8000 and log in as  admin / admin
 ```
 
 Then load the extension: open `chrome://extensions`, turn on **Developer mode**, click **Load
 unpacked**, and select `apps/capture/chrome-extension`. Its default backend is
-`http://localhost:8000` and capture ingest is enabled by default, so captured JS flows straight
-into the platform's run/analyze pipeline.
+`http://localhost:8000` and capture ingest is on by default; **sign in from the extension popup**
+(the same operator) so captured JS lands in your tenant and flows into the platform's run/analyze
+pipeline.
 
-Per-app docs live under each app directory.
+Full stand-up detail (host dev, tests, capture-mode runs) is in
+[`apps/platform/README.md`](apps/platform/README.md); per-app docs live under each app directory.

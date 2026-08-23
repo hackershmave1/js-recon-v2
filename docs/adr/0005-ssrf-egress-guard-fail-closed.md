@@ -38,8 +38,7 @@ Every failure path blocks rather than proceeds.
   can't accidentally widen egress (`egress.py:93-123`).
 * Bad — **accepted residual**: there is no OS/network-level egress isolation, and katana
   does its own unpinned DNS mid-crawl, so a rebinding window remains that the app-level pin
-  can't fully close (`egress.py:11-14`, `crawl.py:9-11`,
-  `apps/platform/README.md:94-97`).
+  can't fully close (`egress.py:11-14`, `crawl.py:9-11`; tracked as DEBT D18).
 * Neutral — `EgressBlocked` is a deterministic `FatalError`, not retried
   (`fetch/fetch.py:229-231`), so a blocked host fails fast instead of burning the budget.
 

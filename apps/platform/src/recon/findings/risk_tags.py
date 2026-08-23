@@ -1,8 +1,8 @@
 """Param risk-tagging (enrichment slice A) — pure, stdlib-only.
 
 Classify an already-extracted request param by its NAME into zero or more advisory
-risk tags (``auth``/``admin``/``idor``/``flag``) so the recon report + OpenAPI export
-can point a reviewer at the params worth poking first. Name-only heuristic: it never
+risk tags (``auth``/``admin``/``idor``/``flag``) so the OpenAPI export (and a planned
+recon report) can point a reviewer at the params worth poking first. Name-only heuristic: it never
 sees a value, asserts nothing, and errs toward silence — an over-eager tag is noise, a
 missing tag is honest.
 

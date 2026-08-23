@@ -1,7 +1,8 @@
 # Requirements
 
 The canonical, traceable requirement set the platform is built against — **41 `REQ-*`
-IDs**, each with a subsystem and a **MUST / SHOULD** priority. These IDs are the grounding
+IDs** (plus a later `REQ-CE*` crawl-enhancements addendum, below), each with a subsystem and a
+**MUST / SHOULD** priority. These IDs are the grounding
 the [Architecture Decision Records](adr/README.md) cite (e.g. ADR-0001 → REQ-Q1/Q2/R2/R3,
 ADR-0005 → REQ-P2): an ADR names the requirement that drove the decision, and this file is
 where that requirement's exact wording lives.
@@ -95,6 +96,17 @@ Bracketed `[RT-nn]` tags mark points hardened during the design's red-team pass.
 | REQ-T3 | SHOULD | Runtime prerequisites (headless Chrome, Node+cdxgen, Hyperscan/SIMD, vuln-DB cache) are baked into the worker image and health-checked at boot, not installed per-run. |
 | REQ-T4 | MUST | Each external engine has a contract-test suite with golden-output fixtures in CI that fails the build on upstream output-schema drift, so a silent field rename can never drop findings in production. [RT-07] |
 | REQ-T5 | SHOULD | A documented monthly upgrade + CVE-triage cadence per pinned binary/image (Kingfisher, Sourcemapper, katana, gau, depscan, Chrome, cdxgen); pins are reviewed, not frozen. [RT-07] |
+
+## Crawl enhancements (`REQ-CE*`, post-original addendum)
+
+Added after the verbatim transcription above — crawl/fetch capabilities the build grew that the
+code references by ID (so `REQ-CE1` resolves here). Not part of the original 41.
+
+| ID | Priority | Requirement |
+|---|---|---|
+| REQ-CE1 | SHOULD | A standard (non-headless) crawl passes katana `-jc` so lazy/dynamic `import()` chunk URLs (webpack/vite) are discovered during the crawl, not only on a runtime scroll. Config-gated kill-switch (`RECON_CRAWL_JS_CRAWL`, default on) since katana flag semantics drift between releases. |
+| REQ-CE2 | SHOULD | On the crawl/fetch path, a fetched JS asset's external `//# sourceMappingURL=` is discovered, the `.map` is fetched **through the egress guard** (REQ-P2/T2), and linked to the asset so analyze recovers original sources (tolerant `"capture"` origin — a malformed map degrades to bundle analysis, never drops findings). |
+| REQ-CE3 | dev/test | An SSRF-guard override (`RECON_ALLOW_LOCAL_EGRESS`, **DEFAULT OFF**) that also permits loopback + private-range targets and single-label hosts (`localhost`) so the pipeline can run against a local target in dev/test. Off in any real deployment; it relaxes only the public-IP requirement, never scope. |
 
 ## Recommended stack candidates (from the original component diagram)
 
