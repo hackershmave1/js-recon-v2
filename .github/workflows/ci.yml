@@ -161,9 +161,17 @@ jobs:
         # X-Tenant-Id, but the tracked compose now sets RECON_AUTH_SECRET so a real `docker
         # compose up` is login-gated (else the served SPA bricks). The auth-specific tests
         # re-enable auth per-test via monkeypatch, so the login path is still exercised here.
+        #
+        # `-m 'not dos_timing'` excludes the wall-clock DoS scaling guards (DEBT D21). They need
+        # no infra and already run in host-tests on the native runner, where their ratios are
+        # stable; re-running them here adds no coverage (algorithmic complexity class is
+        # environment-independent) and this memory-pressured Docker lane inflates their timings
+        # into false reds (~14-19x on linear code). They stay ENFORCED every push — just in the
+        # lane that measures them reliably. `--strict-markers` (pyproject) makes a mistagged guard
+        # a hard collection error, so this exclusion can't silently swallow a real test.
         run: >
           docker compose run --rm --user root -e RECON_REQUIRE_ENGINES=1 -e RECON_AUTH_SECRET=""
-          api sh -c "pip install --quiet pytest fakeredis && pytest -m ''"
+          api sh -c "pip install --quiet pytest fakeredis && pytest -m 'not dos_timing'"
       - name: Dump service logs on failure
         if: failure()
         run: docker compose logs --no-color

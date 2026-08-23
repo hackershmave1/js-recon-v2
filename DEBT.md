@@ -720,6 +720,25 @@ softened wording + the `_walk(limit<=0)` guard are the folded nits.) Guards (bot
 `findings/extract_test.py`): `test_harvest_stays_linear_on_many_flat_sinks_no_dos` (the
 orthogonal many-claimed dimension) + `test_node_budget_curtails_pathological_tree_dos_guard`.
 
+**Guard placement (2026-08-23):** the three *wall-clock* scaling guards
+(`test_harvest_stays_linear_on_many_flat_sinks_no_dos`,
+`test_extract_stays_linear_on_deep_split_chain_no_dos`, `test_harvest_routes_pass_stays_linear_no_dos`)
+are marked `@pytest.mark.dos_timing` and run **host-lane-only** — do NOT re-add them to the Docker
+integration lane. They need no infra and their ratios are stable on the native `host-tests` runner,
+but the memory-pressured integration lane inflated them into false reds (~14-19x on linear code, and
+a marginal 12.5x on the deep-split ratio, 2026-08-22) — where they added zero coverage, since a
+super-linear regression is a complexity class that shows on any runner. The integration lane
+excludes them via `pytest -m 'not dos_timing'` (`.github/workflows/ci.yml`); `--strict-markers`
+(`apps/platform/pyproject.toml`) makes a mistagged guard a hard collection error so the exclusion
+can't silently swallow a test. The harvest guard was also switched from a phased min-of-3 to an
+interleaved per-round median (`_interleaved_harvest_ratio`) — the same de-flake PR #86 gave the
+deep-split guard, which this one originally lacked. The *deterministic* count guards
+(`test_node_budget_curtails_pathological_tree_dos_guard`, `test_walk_limit_caps_node_count`) are
+unmarked and still run in both lanes. Rejected alternatives: bumping the ratio threshold (masks real
+regressions — PR #86) and calibrating against a same-run baseline op (the ratio is already same-run;
+the already-interleaved deep-split guard still flaked, proving the environment, not the measurement,
+was the variable).
+
 ### D24 · Runtime-capture / unconfirmed-lane findings lose host attribution [M] — ✅ RESOLVED 2026-08-19  ·  correctness
 Host is now lifted from a finding's absolute-URL literal on the unconfirmed lanes
 (`egress.attributed_host` + `analyze`), and the `source_path` mislabel was fixed (52e5669),

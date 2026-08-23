@@ -82,7 +82,9 @@ lanes passed:
 - **extension**: runs the MV3 capture extension's `tests/test_*.mjs` Node suites
   (`apps/capture/chrome-extension`) — dependency-free, so no `npm ci`/build (DEBT D16).
 - **integration-tests**: builds the app image (compiles the pinned Sourcemapper),
-  brings up the stores, runs the whole suite incl. real-engine + integration tests.
+  brings up the stores, runs the suite incl. real-engine + integration tests via
+  `pytest -m 'not dos_timing'` — the wall-clock DoS scaling guards are host-lane-only
+  (they need no infra and this memory-pressured lane flakes their ratios; see DEBT D21).
 
 Don't add a gate that isn't green on current code (a red trunk is worse than no
 gate). Ruff runs `F,I,UP,B,C4,SIM,PIE,RET` + `ruff format --check`, and mypy is
