@@ -1,6 +1,6 @@
 # Tech Detection Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: SHIPPED** — kept as the point-in-time implementation plan (a record, not open work). Tech detection is live; `run_technology` shipped as **migration 0017**, not the `0016` predicted throughout below (`0016` became `finding_type_generic` first). The open `- [ ]` checkboxes are historical.
 
 **Goal:** Give every recon run a per-host technology stack (server, framework, CDN, JS libraries, analytics) with versions where detectable, built only from signal the platform already collects, surfaced in the Recon Workspace and structured to feed the future threat model.
 

@@ -94,8 +94,8 @@ curl localhost:8000/runs/<run_id>/status -H "Authorization: Bearer <token>"
 Compose wiring: `api`/`worker`/`migrate` share `recon-platform:local`; `api` and `worker`
 wait on `service_healthy` stores **and** `migrate` `service_completed_successfully`. Inside
 the network the stores resolve by service name (`postgres`, `redis`, `minio`) via the
-`x-app-env` block. To also serve the capture extension, set `RECON_ENABLE_CAPTURE_INGEST=true`
-on the api + worker.
+`x-app-env` block. The capture-extension ingest surface is mounted **by default**
+(`RECON_ENABLE_CAPTURE_INGEST`, on); set it `false` on the api + worker to disable it.
 
 ## Local dev (host, without app containers)
 

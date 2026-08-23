@@ -284,8 +284,9 @@ the real corpus, index-once / no per-sink re-traversal (D21 discipline). Related
 engine (D29) and `apps/platform/docs/superpowers/thorough-endpoint-recovery-design.md`.
 
 #### D9 · Test-pyramid inversion [L, ongoing]  ·  maintainability
-42/75 backend test files need live PG/Redis/MinIO; the fast hermetic layer is the
-minority, so the heavy lane catches most real bugs. Grow the small-test layer.
+58 of 123 backend test files carry an integration marker (need live PG/Redis/MinIO); the fast
+hermetic layer is now ~half (≈65 files) — grown by the D9 slices below, no longer the clear
+minority — but the heavy lane still catches most real bugs. Grow the small-test layer.
 
 **Slice 1 (2026-08-09):** added hermetic tests for the decision kernels that were
 previously only exercised under live infra — `worker/main.py::process_message` (the
@@ -306,16 +307,18 @@ uncovered lines are DB/queue semantics where a hermetic test buys mock-fiction):
 `findings/reextract.py`, `runs/service.py`, `runs/coordinator.py`, `probe/triage.py`.
 
 #### D11 · Files over the ~300-line cap [M] — ⏳ PARTIAL 2026-08-07 (extract.py split)  ·  maintainability
-`findings/extract.py` (639, 2.1x) split into a 3-module import DAG — `_jsast.py` (185,
-leaf: tree-sitter parser/AST helpers + value dataclasses + param builders) ← `_base_env.py`
-(251, REQ-C2 base-URL resolution) ← `extract.py` (276, network-sink handlers + `extract()`).
+`findings/extract.py` (639, 2.1x) was split into a 3-module import DAG — `_jsast.py`
+(leaf: tree-sitter parser/AST helpers + value dataclasses + param builders) ← `_base_env.py`
+(REQ-C2 base-URL resolution) ← `extract.py` (network-sink handlers + `extract()`).
 Pure move (per-symbol AST diff proved byte-identical; §4 code gate SHIP-WITH-NITS), with an
 `__all__` re-export shim so `analyze.py`/`classify.py`/tests keep importing `RawEndpoint`,
 `HTTP_METHODS`, `collect_base_env`, `_PARSER` from `recon.findings.extract` unchanged (matters
 under D3's now-strict `no_implicit_reexport`). All three modules are mypy-strict-clean.
+Since the split, cross-chunk resolution + dataflow work has regrown all three back over the cap
+(2026-08-23: `_jsast.py` 679, `_base_env.py` 394, `extract.py` 610) — a re-split is a future slice.
 
 **Deferred (evidence-backed, both §4 design engineers):**
-- `db/models.py` (608) — DON'T split: a cohesive declarative schema (17 classes + 35
+- `db/models.py` (645) — DON'T split: a cohesive declarative schema (17 classes + 35
   FK/`back_populates` cross-refs + the RLS `*_TABLES` tuples read by Alembic `env.py`). With
   `from __future__ import annotations`, `relationship()` targets resolve only via the class
   registry, so a package split makes `__init__` load-bearing for ORM registration (a bypassing
@@ -325,11 +328,11 @@ under D3's now-strict `no_implicit_reexport`). All three modules are mypy-strict
   `capture_router.<helper>` (e.g. `monkeypatch.setattr(capture_router, "_run_has_job", …)`);
   moving a handler/helper to a sibling module silently breaks the patch (a test would pass while
   testing nothing). Also can't reach the cap (~420 residual). Needs a careful test-aware slice.
-- `findings/analyze.py` (743, the largest) — DEFER: a clean record-trio seam exists but it
+- `findings/analyze.py` (1126, the largest) — DEFER: a clean record-trio seam exists but it
   touches the outbox/RLS/REQ-A3–A4 invariants and `reextract.py` imports `_extract_endpoints`;
-  higher-risk, own slice. `findings/queries.py` (581) + `fetch/fetch.py` (471): smaller
-  overages, low priority (fetch is SSRF-fail-closed-critical — don't fragment).
-(Line counts re-measured 2026-08-15.)
+  higher-risk, own slice. `findings/queries.py` (623) + `fetch/fetch.py` (879, ~2.9x — grown by
+  D20/D22/source-map work): low priority (fetch is SSRF-fail-closed-critical — don't fragment).
+(Line counts re-measured 2026-08-23.)
 
 #### D5 · Coverage ratchet [ongoing]  ·  enforcement/tooling
 Floor is `--cov-fail-under=60` (fast-lane coverage is ~61%, grown by the D9 slice-1

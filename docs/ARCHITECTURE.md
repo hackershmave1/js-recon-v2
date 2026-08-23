@@ -292,13 +292,12 @@ docker compose up -d --build   # postgres + redis + minio + migrate + api + work
 docker compose run --rm api python -m recon.bootstrap create-tenant "Acme Security"
 ```
 
-To also serve the capture extension, enable the ingest flag on the API + worker, then load the
-extension unpacked:
+The capture-extension ingest surface is mounted **by default** (`RECON_ENABLE_CAPTURE_INGEST`, on;
+set it `false` to disable). Load the extension unpacked:
 
 ```bash
-# RECON_ENABLE_CAPTURE_INGEST=true in the api/worker env, then:
 # chrome://extensions -> Developer mode -> Load unpacked -> apps/capture/chrome-extension
-# the extension's default backend is already http://localhost:8000
+# the extension's default backend is already http://localhost:8000; sign in from its popup
 ```
 
 To run a **server-side capture** run instead of a static crawl, enable the capture flag on the API +

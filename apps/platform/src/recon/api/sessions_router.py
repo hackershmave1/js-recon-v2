@@ -2,7 +2,8 @@
 
 Tenant creation is deliberately NOT here: it needs the privileged admin
 connection, so it lives in the out-of-band bootstrap CLI (recon.bootstrap), not
-on an anonymous request route. Real auth for these routes lands in a later slice.
+on an anonymous request route. These routes are tenant-scoped by the central-login
+session token (``api.deps.get_tenant_id``).
 
 R6 adds the Sessions surface: list the tenant's sessions as cards (each with its
 latest run's real stats), open a session's runs, and rename / archive / delete /

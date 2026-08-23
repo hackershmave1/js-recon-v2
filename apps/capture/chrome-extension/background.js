@@ -266,7 +266,7 @@ class JSExtractor {
   // Noise denylist + out-of-scope "exclude" mode → drop before capture.
   shouldSkipUrl(url, documentUrl) {
     // Never capture the recon workspace's own assets — the tool must not recon itself. Safety
-    // net even when scope is wide-open (e.g. after "Open Workspace" loads localhost:3000).
+    // net even when scope is wide-open (e.g. after "Open Workspace" loads the workspace at localhost:8000).
     if (this.isWorkspaceUrl(url)) {
       return true;
     }
