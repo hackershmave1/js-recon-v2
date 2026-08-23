@@ -541,6 +541,45 @@ def test_capture_asset_bad_map_falls_back_and_asset_still_ok(
     assert row.analyze_status == AssetStatus.OK.value  # asset kept, not failed
 
 
+def test_skipped_source_map_reports_skipped_coverage(redis, authorized_session):
+    # D32: an asset whose referenced .map the fetch stage couldn't retrieve
+    # (source_map_skipped=True, no source_map_ref) reports coverage source_map:"skipped"
+    # — NOT the "none" a genuinely map-less bundle gets — while STILL analyzing the
+    # minified bundle so its findings are never dropped.
+    from recon import storage
+    from recon.db.base import tenant_session
+    from recon.domain import AssetStatus
+    from recon.findings import analyze
+    from recon.runs import assets as run_assets
+    from recon.runs import service
+
+    tenant, session_id = authorized_session
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
+    input_key = storage.put_blob(tenant, view.id, "input", b'fetch("/api/health");')
+    with tenant_session(tenant) as session:
+        session.add(
+            models.RunAsset(
+                tenant_id=tenant,
+                run_id=view.id,
+                url="https://acme.io/app.js",
+                input_ref=input_key,
+                source_map_skipped=True,  # a referenced map the fetch stage soft-missed
+                fetch_status=AssetStatus.OK.value,
+                analyze_status=AssetStatus.PENDING.value,
+            )
+        )
+
+    coverage = analyze.analyze_run(redis, tenant_id=tenant, run_id=view.id)
+
+    assert coverage.source_map == "skipped"  # honest gap, not silent "none"
+    endpoint_values = {f.value for f in _findings(tenant, view.id) if f.type == "endpoint"}
+    assert "GET /api/health" in endpoint_values  # bundle still analyzed, finding kept
+    with tenant_session(tenant):
+        rows = run_assets.list_for_run(tenant, view.id)
+        row = next(r for r in rows if r.url == "https://acme.io/app.js")
+    assert row.analyze_status == AssetStatus.OK.value  # asset kept, not failed
+
+
 def _endpoint_occurrences(tenant, run_id):
     with tenant_session(tenant) as session:
         return list(

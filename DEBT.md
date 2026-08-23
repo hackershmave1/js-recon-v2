@@ -81,7 +81,34 @@ renewing the lease every N nodes, so even a 40s+ crafted extract stays lease-saf
 budget only pretended to hold (the pre-existing base-env/parse lease breach on crafted 10 MiB+ input is
 orthogonal and is not worsened by raising the cap). **Trigger:** any target bundle > ~2M AST nodes.
 
-#### D32 · Source-map recovery: oversized-map soft-drop + recovered sources not secret-scanned, both silent [S / M–L]  ·  correctness
+#### D32 · Source-map recovery: oversized-map soft-drop + recovered sources not secret-scanned, both silent [S / M–L] — ⏳ PARTIAL 2026-08-23 (honesty slice C shipped; A1 cap + B1 secret-scan remain)  ·  correctness
+✅ **Slice C (honesty-first) RESOLVED 2026-08-23.** A soft-missed source map is no longer SILENT.
+New per-asset `run_asset.source_map_skipped` BOOLEAN (migration `0019_run_asset_source_map_skip`,
+guarded `ADD COLUMN IF NOT EXISTS`) carries the fetch-detected miss across the fetch→analyze worker
+boundary — symmetric with `source_map_ref`, the success twin. `fetch._fetch_and_store_source_map`
+now returns a `_SourceMapResult(ref|skipped|map_url|reason)`; the caller sets the flag AND records a
+durable `fetch.source_map_skipped` run event (was `log.info`-only) in the asset's fetch_ok tx
+(recorded-not-published, like `fingerprint.signal`; the same-tx write makes it effectively
+exactly-once under redelivery). `analyze._analysis_units` reports coverage `source_map:"skipped"`
+(distinct from a genuinely map-less "none"); `queries._merge_coverage_payloads` makes "skipped"
+DOMINATE the run-wide roll-up. The capture path (`capture.stage`) sets the same flag on its own
+captured-map soft-miss (via `seed_captured`), so capture runs aren't a second silent hole. Web: the
+coverage `source_map` type was corrected `boolean`→`string` (a latent mistype no consumer read) and
+the Overview shows a "Partial" banner when `source_map === "skipped"`. **DECISION (adversarial review
++ user):** the run finalize state is deliberately LEFT DONE (not PARTIAL) — mirrors the D31
+curtailment precedent that `_finalize_state` keys off asset FAILURE, not coverage quality; honesty
+rides the coverage status + event + banner + a `# NOTE(DEBT D32)` recording the future run-to-run
+diff hazard (a "skipped" asset's absent recovered-source findings must diff as UNKNOWN, never
+REMOVED). §4 gates: adversarial design = SHIP-WITH-CHANGES (capture parity + finalize reconciliation
+both folded); higher-model code review passed. Tests: fast-lane `findings/source_map_honesty_test.py`
+(the `_analysis_units`/merge/read-model glue, no stack) + integration additions in
+`fetch/fetch_multi_test.py` (flag + event round-trip) and `findings/analyze_test.py` (end-to-end
+"skipped" coverage). **STILL OPEN:** (A1, S) a separate `max_source_map_bytes` (=32 MiB engine cap)
+so an oversized map is actually FETCHED, not just honestly skipped; (B1, M–L) scan recovered
+`sourcesContent` through `kingfisher.scan` + teach `probe/reveal.py::_derive` to re-derive recovered
+content. Minor parity: the capture soft-miss is still `log.info`-only (crawl got the durable event);
+promote it for full symmetry. Original analysis below.
+
 Two independent gaps hide everything that lives only in a JS source map (the recovered original source,
 plus any secrets in `sourcesContent`). **(a)** The `.map` fetch inherits the *shared* bundle byte cap: the
 crawl stage reads `//# sourceMappingURL=` and GETs the map, but passes the same per-run

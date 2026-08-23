@@ -439,6 +439,11 @@ def _augment_with_source_maps(
             row["source_map_ref"] = ref
             fetched += 1
         else:
+            # D32: the loop only calls _fetch_captured_source_map for a REFERENCED map
+            # (line above skips absent/data: URLs), so a None here is a soft miss, not
+            # "no map" — flag it so analyze reports the honest source_map:"skipped" and
+            # the Overview surfaces a "Partial" banner (parity with the static crawl).
+            row["source_map_skipped"] = True
             missed += 1
     return fetched, missed
 

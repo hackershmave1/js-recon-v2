@@ -46,7 +46,7 @@ describe("OverviewPanel", () => {
       run_id: "r", count: 3,
       coverage: {
         attributed: 3, unattributed: 1, secrets: 2, secrets_engine: "ok",
-        sources_recovered: 5, source_map: true,
+        sources_recovered: 5, source_map: "capture",
         files: [{ path: "a.js", attributed: 2, unattributed: 0 }, { path: "b.js", attributed: 1, unattributed: 1 }],
       },
       spec: { documented: 1, shadow: 2, unresolved: 0, suffix_verify: 0, base_url_incompleteness_ratio: 0 },
@@ -134,7 +134,7 @@ describe("OverviewPanel", () => {
 
   const coverage = (over: Partial<NonNullable<FindingsResponse["coverage"]>> = {}) => ({
     attributed: 3, unattributed: 1, secrets: 0, secrets_engine: "ok",
-    sources_recovered: 0, source_map: false, files: [], ...over,
+    sources_recovered: 0, source_map: "none", files: [], ...over,
   });
 
   it("shows a partial-extract banner when coverage is curtailed (REQ-C2 honesty)", () => {
@@ -147,5 +147,27 @@ describe("OverviewPanel", () => {
   it("hides the partial-extract banner when the run is not curtailed", () => {
     renderPanel({ run_id: "r", count: 0, spec: null, findings: [], coverage: coverage({ curtailed: false }) });
     expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("shows a partial banner when a referenced source map was skipped (D32 honesty)", () => {
+    renderPanel({ run_id: "r", count: 0, spec: null, findings: [], coverage: coverage({ source_map: "skipped" }) });
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(screen.getByText("Partial")).toBeInTheDocument();
+    expect(screen.getByText(/source map couldn't be fetched/i)).toBeInTheDocument();
+  });
+
+  it("hides the source-map banner when a map was recovered or absent (not skipped)", () => {
+    renderPanel({ run_id: "r", count: 0, spec: null, findings: [], coverage: coverage({ source_map: "none" }) });
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("coalesces curtailed + skipped into ONE Partial banner carrying both reasons", () => {
+    renderPanel({
+      run_id: "r", count: 0, spec: null, findings: [],
+      coverage: coverage({ curtailed: true, source_map: "skipped" }),
+    });
+    expect(screen.getAllByRole("status")).toHaveLength(1); // one banner, not two stacked chips
+    expect(screen.getByText(/some endpoints and hosts may be missing/i)).toBeInTheDocument();
+    expect(screen.getByText(/source map couldn't be fetched/i)).toBeInTheDocument();
   });
 });

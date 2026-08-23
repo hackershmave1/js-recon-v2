@@ -32,6 +32,10 @@ class AssetRow:
     # crawled asset or one the extension captured without a map. Default keeps
     # existing constructors (tests, older callers) working unchanged.
     source_map_ref: str | None = None
+    # D32: a referenced external ``.map`` was soft-missed (oversized/404/blocked) —
+    # distinct from "no map at all" (both leave source_map_ref None). Drives the
+    # honest coverage ``source_map:"skipped"`` status.
+    source_map_skipped: bool = False
     # Why a fetch/analyze FAILED (bounded string) so the UI can surface a blocked
     # crawl's dominant reason (e.g. "target returned HTTP 403"); None otherwise.
     fetch_error: str | None = None
@@ -54,11 +58,12 @@ def seed_captured(session: Session, *, tenant_id: str, run_id: str, rows: list[d
     which holds every byte in hand (unlike the static crawl, whose fetch stage fills
     ``input_ref`` later).
 
-    ``rows`` items are ``{"url", "input_ref"[, "source_map_ref"]}``. A recovered external
-    source map (parity with the static crawl's CE2 fetch) is linked here at INSERT time
-    rather than by a later UPDATE; ``source_map_ref`` is read via ``.get`` so EVERY value
-    dict carries the column and the bulk insert stays uniform even when only some rows
-    have a map. Skips any row whose ``(run_id, url)`` already exists
+    ``rows`` items are ``{"url", "input_ref"[, "source_map_ref"][, "source_map_skipped"]}``.
+    A recovered external source map (parity with the static crawl's CE2 fetch) is linked
+    here at INSERT time rather than by a later UPDATE; ``source_map_ref`` and the D32
+    ``source_map_skipped`` flag are read via ``.get`` so EVERY value dict carries the
+    columns and the bulk insert stays uniform even when only some rows have a map or a
+    skip. Skips any row whose ``(run_id, url)`` already exists
     (``on_conflict_do_nothing``), so a redelivery that re-runs capture never duplicates —
     the caller commits these together with the ``discover.assets`` event in one
     transaction (atomic manifest)."""
@@ -74,6 +79,7 @@ def seed_captured(session: Session, *, tenant_id: str, run_id: str, rows: list[d
                     "url": r["url"],
                     "input_ref": r["input_ref"],
                     "source_map_ref": r.get("source_map_ref"),
+                    "source_map_skipped": r.get("source_map_skipped", False),
                     "fetch_status": AssetStatus.OK.value,
                 }
                 for r in rows
@@ -98,6 +104,7 @@ def list_for_run(tenant_id: str, run_id: str) -> list[AssetRow]:
                 fetch_status=r.fetch_status,
                 analyze_status=r.analyze_status,
                 source_map_ref=r.source_map_ref,
+                source_map_skipped=r.source_map_skipped,
                 fetch_error=r.fetch_error,
                 analyze_error=r.analyze_error,
             )
@@ -120,8 +127,19 @@ def set_fetch_ok(session: Session, asset_id: str, input_ref: str) -> None:
 def set_source_map_ref(session: Session, asset_id: str, source_map_ref: str) -> None:
     """Link a stored source map blob to an asset. Set once, in the same tx that
     marks the asset fetch_ok (capture ingest) — first-wins, so a retry or a later
-    same-url batch never clobbers the original map."""
-    _set(session, asset_id, {"source_map_ref": source_map_ref})
+    same-url batch never clobbers the original map. Also clears any prior
+    ``source_map_skipped`` (recovered wins over skipped): a recovered map and a skip
+    are mutually exclusive per fetch attempt, but this keeps the two flags consistent
+    even if a future refactor reordered them (D32)."""
+    _set(session, asset_id, {"source_map_ref": source_map_ref, "source_map_skipped": False})
+
+
+def set_source_map_skipped(session: Session, asset_id: str) -> None:
+    """Flag that a referenced external ``.map`` was soft-missed (oversized/404/blocked).
+    Set in the same tx that marks the asset fetch_ok; idempotent (a retry re-sets the
+    same True). Does NOT touch fetch_status — a missing map is never an asset failure
+    (D32)."""
+    _set(session, asset_id, {"source_map_skipped": True})
 
 
 def set_fetch_failed(session: Session, asset_id: str, error: str) -> None:

@@ -327,6 +327,7 @@ def test_capture_fetches_external_source_map_and_links_ref():
     assert fetch_url.call_args.args[0] == "https://acme.io/app.js.map"  # relative -> resolved
     assert fetch_url.call_args.args[1] == ["acme.io"]  # scope_hosts handed to the guard
     assert seeded["rows"][0]["source_map_ref"]  # a stored blob key, not None
+    assert seeded["rows"][0].get("source_map_skipped", False) is False  # D32: recovered != skipped
 
 
 def test_capture_inline_data_map_is_not_fetched():
@@ -341,6 +342,9 @@ def test_capture_inline_data_map_is_not_fetched():
 
     fetch_url.assert_not_called()
     assert seeded["rows"][0]["source_map_ref"] is None
+    # D32: an inline data: map is handled downstream, NOT a fetch soft-miss — the guard
+    # (continue before the .map GET) must leave it unflagged so it never reads "skipped".
+    assert seeded["rows"][0].get("source_map_skipped", False) is False
 
 
 def test_capture_source_map_soft_miss_keeps_asset():
@@ -355,6 +359,7 @@ def test_capture_source_map_soft_miss_keeps_asset():
     recorded, seeded, publish = _run_capture(scripts, engagement, map_fetch=blocked)
 
     assert seeded["rows"][0]["source_map_ref"] is None
+    assert seeded["rows"][0]["source_map_skipped"] is True  # D32: honest, not silent "none"
     assert seeded["rows"][0]["input_ref"]  # the captured script blob is untouched
     assert recorded["payload"]["count"] == 1
     assert recorded["payload"]["status"] == "ok"

@@ -269,12 +269,15 @@ def test_fetch_loop_links_external_source_map(redis, authorized_session, monkeyp
     assert row.fetch_status == "ok"
     assert row.input_ref is not None
     assert row.source_map_ref is not None  # the .map was fetched, stored, linked
+    assert row.source_map_skipped is False  # D32: a recovered map is never flagged skipped
 
 
 def test_fetch_loop_bad_source_map_is_soft_miss(redis, authorized_session, monkeypatch):
     # REQ-CE2 load-bearing invariant: a blocked/failing .map must NEVER fail the
     # asset (that would drop its JS finding). The asset stays fetch_ok with no
     # source_map_ref, and analyze later falls back to the minified bundle.
+    # D32: the soft miss is no longer SILENT — the asset is flagged source_map_skipped
+    # and a durable fetch.source_map_skipped event records the reason (REQ-D5 honesty).
     tenant, session_id = authorized_session
     run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/app.js"])
 
@@ -290,6 +293,36 @@ def test_fetch_loop_bad_source_map_is_soft_miss(redis, authorized_session, monke
     assert row.fetch_status == "ok"  # NOT failed — the JS fetch succeeded
     assert row.input_ref is not None
     assert row.source_map_ref is None  # the bad .map was a soft miss, not linked
+    assert row.source_map_skipped is True  # D32: honest, not silent
+    events = _source_map_skipped_events(tenant, run_id)
+    assert len(events) == 1
+    assert events[0].payload["url"] == "https://acme.io/app.js"
+    assert events[0].payload["map_url"] == "https://acme.io/app.js.map"
+    assert "404" in events[0].payload["reason"]
+
+
+def test_fetch_loop_oversize_source_map_is_skipped(redis, authorized_session, monkeypatch):
+    # D32's headline case: a real .map is 3-6x the bundle and trips the streamed byte cap.
+    # Today that was a silent "none"; now it is an honest "skipped" with the byte-cap reason
+    # preserved in the event payload (so oversize is distinguishable from a 404 downstream).
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/app.js"])
+
+    def fake_fetch(url, scope, **kw):
+        if url.endswith(".map"):
+            raise retry.FatalError("response exceeds 10485760 bytes")
+        return _hop(b'fetch("/api/x");\n//# sourceMappingURL=app.js.map\n')
+
+    monkeypatch.setattr(fetch, "_fetch_hops", fake_fetch)
+    fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    row = {r.url: r for r in assets.list_for_run(tenant, run_id)}["https://acme.io/app.js"]
+    assert row.fetch_status == "ok"  # the oversized map never fails the JS asset
+    assert row.source_map_ref is None
+    assert row.source_map_skipped is True
+    events = _source_map_skipped_events(tenant, run_id)
+    assert len(events) == 1
+    assert "exceeds" in events[0].payload["reason"]
 
 
 def test_fetch_loop_source_map_generic_error_is_soft_miss(redis, authorized_session, monkeypatch):
@@ -312,12 +345,22 @@ def test_fetch_loop_source_map_generic_error_is_soft_miss(redis, authorized_sess
     row = {r.url: r for r in assets.list_for_run(tenant, run_id)}["https://acme.io/app.js"]
     assert row.fetch_status == "ok"
     assert row.source_map_ref is None
+    assert row.source_map_skipped is True  # D32: any soft miss is flagged, not just fetch errors
 
 
 def _fingerprint_events(tenant, run_id):
     with tenant_session(tenant) as session:
         return (
             session.query(models.RunEvent).filter_by(run_id=run_id, type="fingerprint.signal").all()
+        )
+
+
+def _source_map_skipped_events(tenant, run_id):
+    with tenant_session(tenant) as session:
+        return (
+            session.query(models.RunEvent)
+            .filter_by(run_id=run_id, type="fetch.source_map_skipped")
+            .all()
         )
 
 
