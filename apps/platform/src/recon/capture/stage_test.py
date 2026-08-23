@@ -31,6 +31,7 @@ def _settings(enabled=True):
         fetch_timeout_seconds=20.0,
         max_fetch_bytes=10 * 1024 * 1024,
         max_fetch_bytes_ceiling=32 * 1024 * 1024,
+        max_source_map_bytes=32 * 1024 * 1024,  # D32-A1: .map fetch's own (larger) cap
         allow_local_egress=False,
     )
 
@@ -328,6 +329,20 @@ def test_capture_fetches_external_source_map_and_links_ref():
     assert fetch_url.call_args.args[1] == ["acme.io"]  # scope_hosts handed to the guard
     assert seeded["rows"][0]["source_map_ref"]  # a stored blob key, not None
     assert seeded["rows"][0].get("source_map_skipped", False) is False  # D32: recovered != skipped
+
+
+def test_capture_source_map_uses_its_own_larger_cap():
+    # D32-A1: the captured .map GET must use max_source_map_bytes (its own, larger cap),
+    # NOT the per-script bundle cap — a real source map is 3-6x its bundle, so sharing the
+    # cap soft-drops it. Assert the byte cap handed to the guarded fetch (a kwarg).
+    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
+    fetch_url = MagicMock(return_value=b'{"version":3,"sources":["app/src/api.js"]}')
+    scripts = [_script("https://acme.io/app.js", "APP", source_map_url="app.js.map")]
+    _run_capture(scripts, engagement, map_fetch=fetch_url)
+
+    # the .map GET uses the stub's max_source_map_bytes (32 MiB), not the 10 MiB bundle cap
+    assert fetch_url.call_args.kwargs["max_bytes"] == 32 * 1024 * 1024
+    assert fetch_url.call_args.kwargs["max_bytes"] > 10 * 1024 * 1024
 
 
 def test_capture_inline_data_map_is_not_fetched():

@@ -628,7 +628,9 @@ def _fetch_assets(
                 done=i,
                 total=total,
                 settings=settings,
-                max_bytes=cap,
+                # D32-A1: the .map gets its OWN (larger) cap — a real source map is
+                # 3-6x its bundle, so the shared `cap` above soft-drops it.
+                max_bytes=settings.max_source_map_bytes,
             )
             if settings.crawl_fetch_source_maps
             else _NO_SOURCE_MAP

@@ -169,7 +169,9 @@ def capture_run(
             tenant_id=tenant_id,
             run_id=run_id,
             settings=settings,
-            max_bytes=cap,
+            # D32-A1: the .map gets its OWN (larger) cap, not the per-script bundle `cap`
+            # — a real source map is 3-6x its bundle, so sharing the cap soft-drops it.
+            max_bytes=settings.max_source_map_bytes,
             on_progress=on_progress,
         )
 

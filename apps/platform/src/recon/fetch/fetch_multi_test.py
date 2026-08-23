@@ -15,6 +15,7 @@ import json
 import pytest
 
 from recon import storage
+from recon.config import clamp_fetch_bytes, get_settings
 from recon.db import models
 from recon.db.base import tenant_session
 from recon.fetch import fetch
@@ -323,6 +324,30 @@ def test_fetch_loop_oversize_source_map_is_skipped(redis, authorized_session, mo
     events = _source_map_skipped_events(tenant, run_id)
     assert len(events) == 1
     assert "exceeds" in events[0].payload["reason"]
+
+
+def test_fetch_loop_source_map_uses_its_own_larger_cap(redis, authorized_session, monkeypatch):
+    # D32-A1: the .map GET must use max_source_map_bytes (its OWN cap), NOT the shared
+    # bundle cap — a real source map is 3-6x its bundle, so sharing the cap soft-drops it.
+    # Capture the byte cap each GET receives at the _fetch_hops boundary and prove they
+    # come from DIFFERENT sources (map cap vs bundle cap), the map being larger by default.
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/app.js"])
+    caps: dict[str, int] = {}
+
+    def fake_fetch(url, scope, **kw):
+        caps["map" if url.endswith(".map") else "bundle"] = kw["max_bytes"]
+        if url.endswith(".map"):
+            return _hop(b'{"version":3,"sources":["src/app.js"],"mappings":"AAAA"}')
+        return _hop(b'fetch("/api/x");\n//# sourceMappingURL=app.js.map\n')
+
+    monkeypatch.setattr(fetch, "_fetch_hops", fake_fetch)
+    fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    s = get_settings()
+    assert caps["map"] == s.max_source_map_bytes  # the .map uses its OWN cap...
+    assert caps["bundle"] == clamp_fetch_bytes(None, s)  # ...the bundle uses the shared cap
+    assert caps["map"] > caps["bundle"]  # and by default the map cap is the larger one
 
 
 def test_fetch_loop_source_map_generic_error_is_soft_miss(redis, authorized_session, monkeypatch):

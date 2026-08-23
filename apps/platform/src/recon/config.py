@@ -61,6 +61,18 @@ class Settings(BaseSettings):
     # than an engine can process buys nothing, and it is the size the analyze path is sized
     # to survive. Raise deliberately, with worker RAM in mind. Env RECON_MAX_FETCH_BYTES_CEILING.
     max_fetch_bytes_ceiling: int = 32 * 1024 * 1024  # 32 MiB == engine_max_output_bytes
+    # D32-A1: the external source-map (.map) fetch gets its OWN byte cap, separate from
+    # the bundle cap above. A real source map is 3-6x its minified bundle, so sharing the
+    # bundle cap (default 10 MiB) soft-drops a large map (a 4.4 MB bundle's ~15-25 MB map)
+    # and its recovered original sources are lost silently. Defaulted to the 32 MiB engine
+    # output cap (== max_fetch_bytes_ceiling): the size the analyze path is already sized to
+    # survive, because recovered output is hard-capped at engine_max_output_bytes regardless
+    # of map size (sourcemapper._walk_recovered). An UNCLAMPED operator knob (no per-run
+    # override, no ceiling clamp) — raise it deliberately with worker RAM in mind (peak ~=
+    # map + recovered). Non-positive fails CLOSED: the streaming cap (fetch._fetch_hops)
+    # rejects every body, so a misconfigured 0/negative soft-misses each map (honest
+    # "skipped"), never an unbounded read. Env RECON_MAX_SOURCE_MAP_BYTES.
+    max_source_map_bytes: int = 32 * 1024 * 1024  # 32 MiB == engine_max_output_bytes
 
     # SSRF guard override — DEFAULT OFF (REQ-CE3). When true, the egress guard also
     # permits loopback + private-range targets and single-label hosts (localhost) so
