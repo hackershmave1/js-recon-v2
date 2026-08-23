@@ -7,7 +7,7 @@
    - the design's RESPONSES block is omitted because static reconstruction never
      observes a response;
    - risk chips + severity colours are omitted (severity = null; risk is the
-     Threat Model's job, per the footer note). */
+     planned Threat Model's job, per the footer note). */
 
 .as { display: flex; align-items: stretch; min-height: 460px; }
 

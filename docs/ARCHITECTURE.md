@@ -14,8 +14,9 @@ post-authentication capture** and hands what it grabs to the platform for the sa
 ```
 apps/
 ├── platform/   The recon platform — the whole product. Upload/crawl a target's JS -> Vespasian
-│               tree-sitter AST analysis -> content-addressed findings -> OpenAPI rebuild ->
-│               evidence-grounded threat model. Async spine (FastAPI API + Redis-Streams worker +
+│               tree-sitter AST analysis -> content-addressed findings -> OpenAPI rebuild
+│               (an evidence-grounded threat model over that surface is a planned next stage,
+│               marked SOON in the workspace). Async spine (FastAPI API + Redis-Streams worker +
 │               MinIO/S3 blobs + multi-tenant Postgres with row-level security). Frontend: the
 │               Recon Workspace — React + Vite + TypeScript. API :8000.
 └── capture/

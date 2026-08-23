@@ -90,7 +90,7 @@ export function LoginScreen() {
           <h2 className="login-tagline">Reconstruct the API surface hidden in any <b>JavaScript</b> bundle.</h2>
           <ul className="login-points">
             <li><CheckIcon /> Static endpoint, parameter, and secret recon — no traffic against the target.</li>
-            <li><CheckIcon /> Export an OpenAPI spec and a recon report from the reconstructed surface.</li>
+            <li><CheckIcon /> Export an OpenAPI spec of the reconstructed surface (a consolidated recon report is coming soon).</li>
             <li><CheckIcon /> Capture post-auth runtime JavaScript with the browser extension.</li>
           </ul>
         </div>

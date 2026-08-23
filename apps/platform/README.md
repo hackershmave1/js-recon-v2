@@ -1,8 +1,9 @@
 # Recon platform
 
 AppSec JavaScript API-recon platform. Statically reconstructs a backend API from a
-target's JavaScript, extracts findings, rebuilds an OpenAPI spec, and runs an
-evidence-grounded AI threat model. Built against the platform requirements (the `REQ-*`
+target's JavaScript, extracts findings, and rebuilds an OpenAPI spec. (An
+evidence-grounded AI threat model over that surface is planned — the "Threat Model"
+workspace tab is marked SOON.) Built against the platform requirements (the `REQ-*`
 IDs in `docs/REQUIREMENTS.md`); the load-bearing decisions behind the design are recorded
 as ADRs in [`../../docs/adr/`](../../docs/adr/README.md), and the whole-system picture is in
 [`../../docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md).
