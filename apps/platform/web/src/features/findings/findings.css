@@ -40,8 +40,8 @@
 .fp-type-param { color: var(--purple); }
 /* Unconfirmed lane (Tier 4): a detected sink with an unresolved URL. Dashed
    border + warning tint mark it as lower-confidence than a real endpoint. */
-.fp-type-endpoint_unresolved { color: var(--warning, var(--muted)); border-style: dashed; }
-.fp-type-endpoint_generic { color: var(--warning, var(--muted)); border-style: dashed; }
+.fp-type-endpoint_unresolved { color: var(--warn, var(--muted)); border-style: dashed; }
+.fp-type-endpoint_generic { color: var(--warn, var(--muted)); border-style: dashed; }
 /* Page route (Phase 2): a client-side navigation target. A confident category — solid
    border + distinct teal — not a lower-confidence dashed API lane. */
 .fp-type-page_route { color: var(--teal); }
