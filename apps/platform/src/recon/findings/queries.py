@@ -479,9 +479,9 @@ def _merge_coverage_payloads(payloads: Sequence[dict[str, Any]]) -> dict[str, An
     clean scan (REQ-C2); ``files`` (per-source-path detail) is concatenated across
     assets rather than merged path-by-path — it is per-file-per-asset detail, so
     two assets sharing the same fallback path still get two distinct entries;
-    ``source_map`` is not meaningful to merge (every asset this slice analyzes
-    with ``source_map_ref=None``), so any one value stands in — the first
-    (highest-id) event's.
+    ``source_map`` is a single scalar; a D32 "skipped" (a referenced map we could not
+    retrieve) DOMINATES so the roll-up stays honest when ANY asset skipped, otherwise the
+    first (highest-id) event's value stands in.
     """
     files: list[dict[str, Any]] = []
     for payload in payloads:
@@ -496,7 +496,13 @@ def _merge_coverage_payloads(payloads: Sequence[dict[str, Any]]) -> dict[str, An
             else "ok"
         ),
         "sources_recovered": sum(int(p.get("sources_recovered", 0)) for p in payloads),
-        "source_map": payloads[0].get("source_map", "none"),
+        # D32: "skipped" (a referenced map we couldn't retrieve) dominates so the run-wide
+        # roll-up is honest when ANY asset skipped its map; else the highest-id value stands in.
+        "source_map": (
+            "skipped"
+            if any(p.get("source_map") == "skipped" for p in payloads)
+            else payloads[0].get("source_map", "none")
+        ),
         # D31: the run is curtailed if ANY asset's extract was (mirrors analyze._merge_coverage's
         # OR); a payload predating the field has no key and reads as not-curtailed.
         "curtailed": any(bool(p.get("curtailed")) for p in payloads),

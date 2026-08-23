@@ -404,6 +404,14 @@ class RunAsset(Base):
     # origin — a bad map falls back to bundle analysis, never fails the asset).
     # Mirrors the run-level ``Run.source_map_ref``. Added in migration 0010.
     source_map_ref: Mapped[str | None] = mapped_column(Text)
+    # D32: the asset referenced an external ``.map`` we then failed to retrieve
+    # (oversized past the byte cap, 404, blocked, or malformed) — as opposed to a
+    # bundle that had no map at all (``source_map_ref`` null + this False). Lets
+    # analyze report the honest ``source_map:"skipped"`` instead of "none". The miss
+    # never fails the asset (fetch_status stays OK). Added in migration 0019.
+    source_map_skipped: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     fetch_status: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=AssetStatus.PENDING.value
     )

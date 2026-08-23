@@ -65,15 +65,26 @@ export function OverviewPanel(
 
   const top = [...data.findings].sort((a, b) => priorityRank(a) - priorityRank(b)).slice(0, 6);
 
+  // Coverage-gap notes shown under ONE "Partial" banner — a run can be both curtailed AND
+  // have a skipped map, so collect the reasons rather than stacking two identical chips.
+  const partialNotes: string[] = [];
+  if (c?.curtailed) {
+    partialNotes.push(
+      "Extraction hit the analyzer's size budget on a very large bundle — some endpoints and hosts may be missing.",
+    );
+  }
+  if (c?.source_map === "skipped") {
+    partialNotes.push(
+      "A referenced source map couldn't be fetched (too large or unavailable) — recovered original sources, and any secrets in them, may be incomplete.",
+    );
+  }
+
   return (
     <div className="ov">
-      {c?.curtailed && (
+      {partialNotes.length > 0 && (
         <div className="ov-curtailed" role="status">
           <span className="ov-curtailed-tag">Partial</span>
-          <span>
-            Extraction hit the analyzer's size budget on a very large bundle — some endpoints and
-            hosts may be missing.
-          </span>
+          <span>{partialNotes.join(" ")}</span>
         </div>
       )}
       <div className="ov-metrics">

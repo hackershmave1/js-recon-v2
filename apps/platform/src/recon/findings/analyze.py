@@ -333,6 +333,9 @@ def _analyze_assets(
                     # unlike a legacy explicit upload whose failure surfaces).
                     source_map_ref=asset.source_map_ref,
                     source_map_origin="capture",
+                    # D32: a referenced .map fetch soft-missed (crawl or capture) →
+                    # honest coverage source_map:"skipped" instead of "none".
+                    source_map_skipped=asset.source_map_skipped,
                     run_asset_id=asset.id,
                     asset_url=asset.url,
                     wrappers=wrappers,
@@ -426,6 +429,7 @@ def _extract_endpoints(
     source: str,
     source_map_ref: str | None,
     source_map_origin: str = "uploaded",
+    source_map_skipped: bool = False,
     run_asset_id: str | None,
     asset_url: str | None,
     wrappers: Sequence[WrapperRule] = (),
@@ -448,7 +452,7 @@ def _extract_endpoints(
     pass the SAME index so the re-extract writes the identical resolved endpoint the
     analyze pass did — never a contradictory unresolved skeleton."""
     units, source_map_status, sources_recovered = _analysis_units(
-        source_map_ref, source, source_map_origin
+        source_map_ref, source, source_map_origin, source_map_skipped
     )
     attributed = 0
     unattributed = 0
@@ -568,6 +572,7 @@ def _analyze_blob(
     input_ref: str,
     source_map_ref: str | None,
     source_map_origin: str = "uploaded",
+    source_map_skipped: bool = False,
     run_asset_id: str | None,
     asset_url: str | None,
     wrappers: Sequence[WrapperRule] = (),
@@ -599,6 +604,7 @@ def _analyze_blob(
         source=source,
         source_map_ref=source_map_ref,
         source_map_origin=source_map_origin,
+        source_map_skipped=source_map_skipped,
         run_asset_id=run_asset_id,
         asset_url=asset_url,
         wrappers=wrappers,
@@ -685,7 +691,8 @@ def _merge_coverage(a: Coverage, b: Coverage) -> Coverage:
     ``source_map`` is not a health signal the same way (a crawl asset passes
     ``source_map_ref=None`` so it is "none" unless its JS carries an inline map; a
     capture asset may carry its own uploaded map → "capture"/"capture-error") — the
-    latest asset's value is kept as a simple, low-stakes default. ``files`` (per-source-path detail) is already
+    latest asset's value is kept EXCEPT a D32 "skipped" (a referenced map we could not retrieve)
+    dominates, so an honest coverage gap survives the merge. ``files`` (per-source-path detail) is already
     durably recorded on each asset's own ``analyze.coverage`` event, which is
     what REQ-C2 reads back (the highest-id event wins — see
     ``findings/queries.py``'s ``_latest_coverage``); this run-level aggregate is
@@ -702,7 +709,10 @@ def _merge_coverage(a: Coverage, b: Coverage) -> Coverage:
             unavailable if unavailable in (a.secrets_engine, b.secrets_engine) else "ok"
         ),
         sources_recovered=a.sources_recovered + b.sources_recovered,
-        source_map=b.source_map,
+        # D32: a "skipped" (referenced map we couldn't retrieve) DOMINATES so a non-last
+        # skipped asset is never masked by the latest asset's value (mirrors curtailed's OR
+        # and the payload-merge below); otherwise the latest asset's value is kept.
+        source_map=("skipped" if "skipped" in (a.source_map, b.source_map) else b.source_map),
         curtailed=a.curtailed or b.curtailed,
     )
 
@@ -719,14 +729,24 @@ def _bundle_unit(source: str) -> list[tuple[str, str]]:
 
 
 def _analysis_units(
-    source_map_ref: str | None, source: str, source_map_origin: str = "uploaded"
+    source_map_ref: str | None,
+    source: str,
+    source_map_origin: str = "uploaded",
+    source_map_skipped: bool = False,
 ) -> tuple[list[tuple[str, str]], str, int]:
     """Decide what to analyze: recovered original sources (real paths) if a source
     map recovers any, else the bundle under ``input.js``. Returns the (name, text)
     units, the source-map status, and the count of recovered files."""
     map_bytes, origin = _resolve_source_map(source_map_ref, source, source_map_origin)
     if not map_bytes:
-        return _bundle_unit(source), "none", 0
+        # D32: a REFERENCED map the fetch stage couldn't retrieve (``source_map_skipped``)
+        # is an honest coverage gap reported as "skipped" — distinct from a bundle that
+        # had no map at all ("none"). Both fall back to bundle analysis; only the label
+        # differs, so the Overview surfaces a "Partial" banner and the gap is never silent.
+        # NOTE(DEBT D32): a future run-to-run diff MUST treat a "skipped" asset's absent
+        # recovered-source findings as UNKNOWN, not REMOVED (mirrors the D31 curtailment
+        # hazard) — a skipped map means we never looked, not that the source vanished.
+        return _bundle_unit(source), ("skipped" if source_map_skipped else "none"), 0
 
     try:
         recovered = sourcemapper.recover_sources(map_bytes, origin=origin)

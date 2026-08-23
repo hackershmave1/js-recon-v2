@@ -616,7 +616,7 @@ def _fetch_assets(
         # fetch_failed (which would drop its JS finding). The .map GET runs with no
         # DB session open (mirrors the input put_blob); the ref then commits together
         # with fetch_ok in the one tx below.
-        map_key = (
+        map_result = (
             _fetch_and_store_source_map(
                 redis,
                 js=content,
@@ -631,12 +631,30 @@ def _fetch_assets(
                 max_bytes=cap,
             )
             if settings.crawl_fetch_source_maps
-            else None
+            else _NO_SOURCE_MAP
         )
         with tenant_session(tenant_id) as s:
             run_assets.set_fetch_ok(s, asset.id, key)  # per-asset commit
-            if map_key:
-                run_assets.set_source_map_ref(s, asset.id, map_key)
+            if map_result.ref:
+                run_assets.set_source_map_ref(s, asset.id, map_result.ref)
+            elif map_result.skipped:
+                # D32 honesty: a referenced .map we couldn't retrieve is a real coverage
+                # gap (analyze -> source_map:"skipped"). Flag the asset AND record a
+                # durable event (recorded, not published — like fingerprint.signal;
+                # committed in this same fetch_ok tx so a redelivery, which skips an
+                # already-terminal asset, never re-records).
+                run_assets.set_source_map_skipped(s, asset.id)
+                record_event(
+                    s,
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    event_type="fetch.source_map_skipped",
+                    payload={
+                        "url": asset.url,
+                        "map_url": map_result.map_url,
+                        "reason": map_result.reason,
+                    },
+                )
         # Best-effort webpack lazy-chunk enumeration (P4). Runs AFTER the parent asset is
         # committed fetch_ok, in its own non-re-raising helper, so a bad/blocked chunk can
         # never fail the parent JS asset (same invariant as the .map recovery above).
@@ -662,7 +680,7 @@ def _fetch_assets(
             run_id=run_id,
             url=asset.url,
             bytes=len(content),
-            source_map=bool(map_key),
+            source_map=bool(map_result.ref),
             chunks=chunks,
         )
     _write_fingerprint_signal(redis, tenant_id=tenant_id, run_id=run_id, signal=signal)
@@ -708,6 +726,24 @@ def _write_fingerprint_signal(
         )
 
 
+@dataclass(frozen=True)
+class _SourceMapResult:
+    """Outcome of the best-effort ``.map`` fetch (D32). ``ref`` is the stored blob key
+    on success. ``skipped`` is True when a map was REFERENCED but soft-missed
+    (oversized past the byte cap, 404, blocked, or malformed) — an honest coverage gap,
+    distinct from "no map referenced" (every field falsy). ``map_url``/``reason`` carry
+    the skip detail for the durable ``fetch.source_map_skipped`` event. ``ref`` and
+    ``skipped`` are mutually exclusive per fetch attempt."""
+
+    ref: str | None = None
+    skipped: bool = False
+    map_url: str | None = None
+    reason: str | None = None
+
+
+_NO_SOURCE_MAP = _SourceMapResult()
+
+
 def _fetch_and_store_source_map(
     redis: Redis,
     *,
@@ -721,20 +757,23 @@ def _fetch_and_store_source_map(
     total: int,
     settings: Settings,
     max_bytes: int,
-) -> str | None:
+) -> _SourceMapResult:
     """Best-effort: if ``js`` references an external ``//# sourceMappingURL=``, fetch
-    that ``.map`` THROUGH THE EGRESS GUARD and store it, returning the blob key (or
-    ``None``). REQ-CE2.
+    that ``.map`` THROUGH THE EGRESS GUARD and store it, returning a ``_SourceMapResult``
+    (``ref`` on success, ``skipped`` on a soft miss, all-falsy when no map is
+    referenced). REQ-CE2.
 
     NEVER raises: a missing/blocked/oversized/malformed map is a soft miss (analyze
     falls back to the minified bundle) and must never propagate to the caller's outer
     handler, which would mark the asset fetch_failed and DROP its JS finding. The
     ``.map`` GET runs with NO DB session open (mirrors the input put_blob); the caller
-    links the returned key in the same tx that marks the asset fetch_ok."""
+    links the returned key / records the skip in the same tx that marks the asset
+    fetch_ok."""
+    map_url: str | None = None
     try:
         ref = sourcemapper.external_map_url(js.decode("utf-8", "replace"))
         if not ref:
-            return None
+            return _NO_SOURCE_MAP
         map_url = urljoin(asset_url, ref)
         # A SECOND outbound request for this asset — preserve the per-asset heartbeat
         # + politeness invariant (see _fetch_assets docstring): renew the job lease
@@ -755,10 +794,19 @@ def _fetch_and_store_source_map(
             max_bytes=max_bytes,
             allow_local=settings.allow_local_egress,
         )
-        return storage.put_blob(tenant_id, run_id, "source_map", map_bytes)
+        return _SourceMapResult(ref=storage.put_blob(tenant_id, run_id, "source_map", map_bytes))
     except Exception as exc:  # noqa: BLE001 — soft miss; a bad map must never fail the asset
-        log.info("fetch.source_map_skipped", run_id=run_id, url=asset_url, error=str(exc))
-        return None
+        # D32: a REFERENCED map we couldn't retrieve (map_url set) is an honest coverage
+        # gap the caller records durably; a decode/parse failure before ref resolution
+        # (map_url None) is still surfaced as a skip rather than silently dropped.
+        log.info(
+            "fetch.source_map_skipped",
+            run_id=run_id,
+            url=asset_url,
+            map_url=map_url,
+            error=str(exc),
+        )
+        return _SourceMapResult(skipped=True, map_url=map_url, reason=str(exc))
 
 
 def _enumerate_and_seed_chunks(

@@ -52,7 +52,11 @@ export interface Finding {
 }
 export interface Coverage {
   attributed: number; unattributed: number; secrets: number; secrets_engine: string | null;
-  sources_recovered: number; source_map: boolean;
+  // How the asset's source map was handled: "none" (no map) | "uploaded"/"inline"/"capture"
+  // (recovered) | "unavailable"/"inline-error"/"capture-error" (retrieved but unusable) |
+  // D32 "skipped" (a referenced map we couldn't fetch — an honest coverage gap). Backend has
+  // always sent a string; this was mistyped `boolean` (no consumer read the value until D32).
+  sources_recovered: number; source_map: string;
   // D31: true when a bundle exceeded the static analyzer's AST node budget, so the extract was
   // bounded to a prefix and some endpoints/hosts may be missing (REQ-C2 honesty). Optional so
   // events/responses predating the field read as not-curtailed.
