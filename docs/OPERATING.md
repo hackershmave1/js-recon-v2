@@ -150,9 +150,10 @@ What is safe to point this at, and what it will and won't do.
 - **Auth (central login).** Password + bcrypt, stateless HMAC-signed session tokens, one generic 401
   (no user enumeration, timing-equalized), and a Redis-backed brute-force throttle. The tenant comes
   from the verified token, never a client header.
-- **Engines are out-of-process + hardened.** Kingfisher/Sourcemapper/katana run under one harness
-  (wall-clock timeout, output cap, explicit exit codes, non-root); Kingfisher runs offline
-  (`--no-validate`, no network).
+- **Engines are out-of-process + hardened.** Kingfisher/Sourcemapper run under the engine harness
+  (`findings/engines.py`: wall-clock timeout, output cap, explicit acceptable exit codes, non-root),
+  and katana under a separate crawl harness (`discover/harness.py`: timeout, output cap, non-root,
+  whole-process-group kill on timeout). Kingfisher runs offline (`--no-validate`, no network).
 
 ### Known limitations
 
