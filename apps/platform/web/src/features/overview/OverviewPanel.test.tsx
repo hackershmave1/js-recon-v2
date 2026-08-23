@@ -131,4 +131,21 @@ describe("OverviewPanel", () => {
     render(<RouterProvider router={router} />);
     expect(within(card("Tech stack")).getByText("3")).toBeInTheDocument();
   });
+
+  const coverage = (over: Partial<NonNullable<FindingsResponse["coverage"]>> = {}) => ({
+    attributed: 3, unattributed: 1, secrets: 0, secrets_engine: "ok",
+    sources_recovered: 0, source_map: false, files: [], ...over,
+  });
+
+  it("shows a partial-extract banner when coverage is curtailed (REQ-C2 honesty)", () => {
+    renderPanel({ run_id: "r", count: 0, spec: null, findings: [], coverage: coverage({ curtailed: true }) });
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(screen.getByText("Partial")).toBeInTheDocument();
+    expect(screen.getByText(/some endpoints and hosts may be missing/i)).toBeInTheDocument();
+  });
+
+  it("hides the partial-extract banner when the run is not curtailed", () => {
+    renderPanel({ run_id: "r", count: 0, spec: null, findings: [], coverage: coverage({ curtailed: false }) });
+    expect(screen.queryByRole("status")).toBeNull();
+  });
 });

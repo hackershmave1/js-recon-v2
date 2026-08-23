@@ -171,6 +171,15 @@ class Extraction:
     # DISTINCT FindingType.PAGE_ROUTE (not `endpoint`), so it auto-excludes from every
     # `type == 'endpoint'` read model AND, like `generic`, never touches the coverage counters.
     routes: list[RawEndpoint] = field(default_factory=list)
+    # D31 honesty (REQ-C2): True when the one-shot node budget (`_MAX_AST_NODES`) bounded the sink
+    # walk + harvest to a prefix, so the tail of a very large tree was NOT examined. Set by
+    # `extract()` and surfaced on coverage so a partial extract is never silent.
+    # NOTE(DEBT D31): a curtailed run still finalizes DONE (curtailment is not an asset FAILURE) —
+    # that is REQ-C2-honest (completeness is explicitly not guaranteed), but a future run-to-run
+    # diff MUST consult this flag and downgrade a "removed" endpoint/host to "unknown" when it is
+    # set, or a curtailment-dropped tail would read as a false removal (the REQ-D5 hazard D32
+    # raises for skipped source maps).
+    curtailed: bool = False
 
 
 @dataclass(frozen=True)
@@ -193,20 +202,29 @@ class BaseEnv:
 # --- tree helpers ------------------------------------------------------------
 
 
-# One-shot AST work budget (DEBT D21). With the harvest O(n^2) closed the extractor is linear in
-# the node count, but a maximally-pathological 10 MB in-cap bundle (~2.5-3M nodes) still runs in
-# ~25s (measured) — under the 30s analyze heartbeat, but not by a wide margin, and the beat is
-# shared with beautify (D23). This budget bounds only the two EXPENSIVE passes (the sink walk +
-# harvest): over this node count `extract` caps them to a prefix, which on the measured 10 MB case
-# cut end-to-end from ~40s to ~25s. The DOMINANT residual is `collect_base_env`'s poison/const
-# pre-pass — full-tree walks that are deliberately NOT bounded, because they must see the WHOLE
-# tree or a name shadowed past the prefix could resolve wrongly (a false positive); soundness
-# beats the time. So worst-case wall-clock is ~linear and can APPROACH the heartbeat on a crafted
-# oversize input — acceptable, bounded by the 10 MB ingest cap, not "well under regardless of
-# shape". Set above any real single file's node count (~6-8 MB of source) so genuine bundles are
-# never curtailed; only a crafted oversize input trips it, trading tail-recall for a bounded
-# worker. Checked once via `Node.descendant_count` (O(1)).
-_MAX_AST_NODES = 2_000_000
+# One-shot AST work budget (DEBT D21, raised for D31). `extract` bounds its two EXPENSIVE passes
+# (the sink walk + harvest) to the first `_MAX_AST_NODES` preorder nodes of a tree bigger than this;
+# a smaller tree is untouched (full recall). It does NOT bound `collect_base_env`'s poison/const
+# pre-pass — those two full-tree walks must see the WHOLE tree or a name shadowed past the prefix
+# could resolve wrongly (a false positive), so soundness beats the time.
+#
+# Sized for RECALL first (D31). The old 2M value silently curtailed a real 4.4 MB bundle (2.36M
+# nodes) — dropping ~65% of its sinks + tail hosts with no signal — because 2M ≈ 3.5 MB of minified
+# JS, below common real SPAs. 6M sits above a DEFAULT-cap file's node ceiling (`max_fetch_bytes`
+# = 10 MiB ≈ ~5.5M nodes at the ~0.53 nodes/byte measured on that bundle, n=1), so genuine
+# default-cap bundles are no longer curtailed. A run that RAISES its byte cap toward
+# `max_fetch_bytes_ceiling` (32 MiB ≈ ~18M nodes) can still exceed 6M and curtail — but that is now
+# FLAGGED via `Extraction.curtailed`, not silent, which is D31's primary fix.
+#
+# Raising the cap is NOT a free DoS win: it re-admits 2M–6M-node crafted inputs to a FULL
+# sink+harvest, forfeiting the ~15s the 2M cap saved on the D21 nested-concat shape (~25s → ~40s,
+# crossing the 30s job lease). Tolerable only because a lease breach here is idempotent self-healing
+# double-work (REQ-A3 outbox + analyze-terminal skip), NOT data loss, and the densest inputs already
+# breach the lease inside the unbounded `collect_base_env` regardless of this cap; the real fix is
+# the deferred heartbeat-through-all-passes follow-up (DEBT D31, M–L). The DoS-guard test
+# monkeypatches this constant to 500, so it exercises the curtailment MECHANISM, not the 6M
+# threshold's timing. Checked once via `Node.descendant_count` (O(1)).
+_MAX_AST_NODES = 6_000_000
 
 
 def _walk(node: Node, limit: int | None = None) -> Iterator[Node]:

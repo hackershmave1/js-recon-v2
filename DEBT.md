@@ -29,7 +29,34 @@ was ~95% library boilerplate. Each item below is root-caused with a fix path (fo
 swarm, evidence-backed). Cross-cutting theme: **two of these are SILENT** (D31, D32) — the run
 finalizes DONE with no partial-coverage signal, which is the honesty (REQ-C2/REQ-D5) half of the bug.
 
-#### D31 · Large-file AST node-budget silently curtails endpoint/host recovery [S–M]  ·  correctness
+#### D31 · Large-file AST node-budget silently curtails endpoint/host recovery [S–M] — ✅ RESOLVED 2026-08-23  ·  correctness
+✅ **RESOLVED 2026-08-23.** Shipped both halves. **Honesty:** an `Extraction.curtailed` flag, set in
+`extract()` whenever the node budget bounds the walk, is threaded through `_EndpointExtraction` →
+`Coverage` + the `analyze.coverage` event payload + a `log.warning("analyze.extract_curtailed")`, the
+`_merge_coverage`/`_merge_coverage_payloads` roll-ups, the `CoverageView` read model, the
+`/runs/{id}/findings` API, and a `--warn` "Partial" banner on the Overview page; the out-of-band
+re-extract (which emits no coverage event) logs its own curtailment. A curtailed extract is now
+surfaced everywhere, never silent (REQ-C2). **Recall:** `_MAX_AST_NODES` raised 2M → **6M** — above a
+DEFAULT-cap (10 MiB ≈ ~5.5M-node) real bundle, so genuine default runs no longer curtail (recovers the
+dogfood 31→88 sinks + tail hosts). **Deliberate deviations from the sketch below:** (a) kept 6M FIXED
+rather than byte-keyed, to keep `extract()` pure (no settings dependency) — a run that raises its byte
+cap toward the 32 MiB ceiling (~18M nodes) can still curtail, but is now FLAGGED, which is exactly what
+the honesty flag is for; (b) the "never silent" signal is the flag on the existing `analyze.coverage`
+event + a `log.warning`, NOT a new persisted run event — matching the actual
+`analyze.asset_failed`/`fetch.source_map_skipped` convention (both are log lines) and avoiding a
+redundant event + second merge site; (c) the run is NOT finalized PARTIAL on curtailment (it is not an
+asset FAILURE; `_finalize_state` keys off asset status, not coverage) — a `# NOTE(DEBT D31)` at the flag
+records the REQ-D5 hazard so a future run-to-run diff downgrades a "removed" endpoint/host to "unknown"
+on a curtailed run. **DoS (honest):** raising the cap re-admits 2M–6M-node crafted inputs to a full
+sink+harvest, forfeiting the ~15s the 2M cap saved on the D21 nested-concat shape (~25s → ~40s, crossing
+the 30s lease); tolerable only because the lease breach is idempotent self-healing double-work (REQ-A3 +
+analyze-terminal skip) and the densest inputs already breach it inside the unbounded `collect_base_env`.
+**Still owed (deferred, [M–L]):** the strategic follow-up below — a heartbeat threaded through ALL passes
+— remains the real DoS fix and is NOT closed by this change. Tests: new hermetic
+`findings/node_budget_honesty_test.py`; fast lane + frontend green; ruff + mypy-strict clean. Both §4
+gates passed (design: BUILD-WITH-CHANGES, all must-fixes folded; code: SHIP-WITH-NITS, the substantive
+nit folded). Original analysis below.
+
 The static extractor caps its two expensive AST walks (the sink walk + the off-sink route harvest)
 at `_MAX_AST_NODES = 2_000_000` nodes once `tree.root_node.descendant_count` exceeds it
 (`findings/extract.py:116`, `_jsast.py:209`, enforced by node-count in `_jsast._walk`). The base-env

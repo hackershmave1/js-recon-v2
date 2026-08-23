@@ -45,6 +45,7 @@ from recon.findings import (
     store,
     techdetect_pass,
 )
+from recon.findings._jsast import _MAX_AST_NODES
 from recon.findings.extract import RawEndpoint, extract
 from recon.findings.kingfisher import RawSecret
 from recon.findings.wrappers import WrapperRule
@@ -112,6 +113,10 @@ class Coverage:
     # Per-file breakdown of the attributed/unattributed totals (REQ-C2 is a
     # per-file counter — a bundle-wide sum hides which file needs attention).
     files: tuple[FileCoverage, ...] = ()
+    # D31 honesty: True when any of this blob's units hit the AST node budget, so the extract
+    # bounded its walk to a prefix and the tail was not examined. Surfaced so a partial extract
+    # is never silent (REQ-C2); ORed across assets in `_merge_coverage`.
+    curtailed: bool = False
 
 
 def analyze_run(
@@ -373,6 +378,9 @@ class _EndpointExtraction:
     sources_recovered: int
     source_map: str
     files: tuple[FileCoverage, ...]
+    # D31: True if any unit's extract() hit the node budget (surfaced on coverage; also read by
+    # the re-extract path to log its own tail-drop). Defaulted so older constructions stay valid.
+    curtailed: bool = False
 
 
 def _resolve_cross_module(
@@ -445,6 +453,8 @@ def _extract_endpoints(
     attributed = 0
     unattributed = 0
     written = 0
+    # D31: any unit hitting the node budget makes the whole blob's extract partial.
+    curtailed = False
     per_file: dict[str, list[int]] = {}
     # A recovered asset yields >=1 units keyed by `f.path`; a no-map asset yields the
     # single "input.js" bundle unit (sources_recovered == 0) whose module identity is
@@ -472,6 +482,7 @@ def _extract_endpoints(
         path = normalize.normalize_source_path(source_name)
         attributed += len(extraction.endpoints)
         unattributed += extraction.unattributed
+        curtailed = curtailed or extraction.curtailed
         bucket = per_file.setdefault(path, [0, 0])
         bucket[0] += len(extraction.endpoints)
         bucket[1] += extraction.unattributed
@@ -545,6 +556,7 @@ def _extract_endpoints(
         sources_recovered=sources_recovered,
         source_map=source_map_status,
         files=files,
+        curtailed=curtailed,
     )
 
 
@@ -593,6 +605,16 @@ def _analyze_blob(
         cross_index=cross_index,
     )
     written = endpoints.written
+    # D31 honesty: the node budget bounded this blob's extract to a prefix — never silent. Surfaced
+    # durably on the coverage event/read model below; this operator log mirrors the convention of
+    # the other soft-miss signals (`analyze.asset_failed`, `fetch.source_map_skipped`).
+    if endpoints.curtailed:
+        log.warning(
+            "analyze.extract_curtailed",
+            run_id=run_id,
+            asset_url=asset_url,
+            cap=_MAX_AST_NODES,
+        )
 
     # Secrets are scanned on the original bundle this slice (input.js path).
     # NOTE (follow-up): scanning recovered sources for secrets (real per-source
@@ -630,6 +652,7 @@ def _analyze_blob(
             "secrets_engine": scan.status,
             "sources_recovered": endpoints.sources_recovered,
             "source_map": endpoints.source_map,
+            "curtailed": endpoints.curtailed,
             "files": [
                 {"path": f.path, "attributed": f.attributed, "unattributed": f.unattributed}
                 for f in endpoints.files
@@ -645,6 +668,7 @@ def _analyze_blob(
         sources_recovered=endpoints.sources_recovered,
         source_map=endpoints.source_map,
         files=endpoints.files,
+        curtailed=endpoints.curtailed,
     )
     return coverage, coverage_event
 
@@ -679,6 +703,7 @@ def _merge_coverage(a: Coverage, b: Coverage) -> Coverage:
         ),
         sources_recovered=a.sources_recovered + b.sources_recovered,
         source_map=b.source_map,
+        curtailed=a.curtailed or b.curtailed,
     )
 
 
