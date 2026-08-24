@@ -58,3 +58,23 @@ rules:
     visible: true
     examples:
       - "AZURE_CLIENT_ID: '3f2504e0-4f89-41d3-9a0c-0305e82c3301'"
+
+  # 3. Config-embedded GUID on a KEBAB-case (client-key) or camelCase (apiKey /
+  #    applicationId) identifier — the D33(B) recall lane. confidence: low, so it emits
+  #    ONLY under an opt-in `--confidence low` scan (silent at the default medium
+  #    threshold — verified against 1.106.0) and its hits are recorded as the separate
+  #    SECRET_SUSPECTED tier (~50% FP, out of the precision `secret` count/diff). It
+  #    deliberately targets the two shapes rule 2 does NOT: a hyphen before the suffix
+  #    (`client-key`, `application-id`) and a camelCase suffix (`apiKey`, `applicationId`,
+  #    `clientSecret`) — so it does not double-emit against rule 2's snake `*_key` /
+  #    `tenant|client|appid` shapes. Broader-than-precision by design (a UUID on any
+  #    `*-key`/`*Id` key is only SUSPECTED); provider pinned to "config" like rule 2.
+  - name: Config-embedded GUID (kebab or camelCase key, suspected)
+    id: custom.config.guid_assignment_low
+    pattern: |-
+      (?:^|[^0-9A-Za-z_])(?:[a-z0-9]+(?:-[a-z0-9]+)*-(?:key|id|token|secret)|[a-z]+(?:[A-Z][a-z0-9]*)*(?:Key|Id|Token|Secret))["']?[ \t]*[:=][ \t]*["']?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b
+    confidence: low
+    visible: true
+    examples:
+      - "apiKey: '3f2504e0-4f89-41d3-9a0c-0305e82c3301'"
+      - "client-key='3f2504e0-4f89-41d3-9a0c-0305e82c3301'"

@@ -100,6 +100,10 @@ class Coverage:
     unattributed: int
     findings_written: int
     secrets: int = 0
+    # D33-B: opt-in low-confidence "suspected secret" sightings, counted SEPARATELY so
+    # the precision-first `secrets` count above is never inflated by the ~50%-FP recall
+    # lane. 0 unless the run opted into the `--confidence low` sweep.
+    secrets_suspected: int = 0
     # Honest engine status (REQ-C2/§5): a scanner that was absent must not be
     # reported as "no secrets". Reachable values are "ok" and "unavailable" — a
     # genuine engine error/timeout raises before a Coverage is ever returned.
@@ -144,13 +148,29 @@ def analyze_run(
     it can never fail the run (T2), and it never affects the returned
     ``Coverage``."""
     wrappers = _session_wrappers(tenant_id, run_id)  # REQ-D5: recognize taught wrappers live
+    # D33-B: the per-run opt-in for the low-confidence "suspected secret" recall lane
+    # (nullable column; NULL/false → unchanged medium scan). Read once here and threaded
+    # down so every blob of this run scans at the same confidence.
+    scan_suspected = _run_scans_suspected(tenant_id, run_id)
     rows = run_assets.list_for_run(tenant_id, run_id)
     if rows:
         coverage = _analyze_assets(
-            redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, rows=rows, wrappers=wrappers
+            redis,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            job_id=job_id,
+            rows=rows,
+            wrappers=wrappers,
+            scan_suspected=scan_suspected,
         )
     else:
-        coverage = _analyze_legacy(redis, tenant_id=tenant_id, run_id=run_id, wrappers=wrappers)
+        coverage = _analyze_legacy(
+            redis,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            wrappers=wrappers,
+            scan_suspected=scan_suspected,
+        )
     # Best-effort per-host fingerprint pass (T2): enrichment that must NEVER fail the
     # run (a raise would DLQ -> run FAILED -> all findings lost). A cooperative
     # control interrupt is not a failure, so it propagates.
@@ -166,7 +186,12 @@ def analyze_run(
 
 
 def _analyze_legacy(
-    redis: Redis, *, tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]
+    redis: Redis,
+    *,
+    tenant_id: str,
+    run_id: str,
+    wrappers: Sequence[WrapperRule],
+    scan_suspected: bool = False,
 ) -> Coverage:
     """The upload/single-URL path: analyze ``run.input_ref`` as one unit (unchanged)."""
     with tenant_session(tenant_id) as session:
@@ -199,6 +224,7 @@ def _analyze_legacy(
             asset_url=None,
             wrappers=wrappers,
             cross_index=cross_index,
+            scan_suspected=scan_suspected,
         )
     publish(redis, coverage_event)
     log.info(
@@ -226,6 +252,14 @@ def _session_wrappers(tenant_id: str, run_id: str) -> list[WrapperRule]:
         return queries.wrapper_rules_in_session(session, str(run.session_id))
 
 
+def _run_scans_suspected(tenant_id: str, run_id: str) -> bool:
+    """The run's D33-B opt-in: True only if it asked for the low-confidence recall lane.
+    A NULL column (every pre-D33-B run + the default) reads False — unchanged behavior."""
+    with tenant_session(tenant_id) as session:
+        run = session.get(Run, run_id)
+        return bool(run.scan_suspected_secrets) if run is not None else False
+
+
 def _analyze_assets(
     redis: Redis,
     *,
@@ -234,6 +268,7 @@ def _analyze_assets(
     job_id: str | None,
     rows: list[run_assets.AssetRow],
     wrappers: Sequence[WrapperRule] = (),
+    scan_suspected: bool = False,
 ) -> Coverage:
     """Analyze every fetched-but-not-yet-analyzed asset of a crawl run, best-effort.
 
@@ -340,6 +375,7 @@ def _analyze_assets(
                     asset_url=asset.url,
                     wrappers=wrappers,
                     cross_index=cross_index,
+                    scan_suspected=scan_suspected,
                 )
                 run_assets.set_analyze_ok(session, asset.id)
         except (ClientError, SQLAlchemyError):
@@ -588,6 +624,7 @@ def _analyze_blob(
     asset_url: str | None,
     wrappers: Sequence[WrapperRule] = (),
     cross_index: CrossModuleIndex | None = None,
+    scan_suspected: bool = False,
 ) -> tuple[Coverage, RecordedEvent]:
     """Analyze one blob — the legacy single input OR one crawled asset — and
     persist its findings inside the caller's OPEN ``session``.
@@ -606,7 +643,12 @@ def _analyze_blob(
     # Secret scanning runs out-of-process. A missing binary degrades coverage
     # (status recorded on the event); a genuine engine failure raises here and
     # fails/retries the stage rather than under-reporting secrets.
-    scan = kingfisher.scan(raw)
+    # D33-B: when the run opted in, scan at `--confidence low` so the recall lane's
+    # rules (and low-confidence built-ins) emit; each sighting is then partitioned by
+    # confidence into SECRET (medium/high) vs SECRET_SUSPECTED (low) below. Not opted in
+    # → default medium scan, all SECRET (unchanged).
+    confidence = "low" if scan_suspected else None
+    scan = kingfisher.scan(raw, confidence=confidence)
 
     endpoints = _extract_endpoints(
         session,
@@ -642,7 +684,10 @@ def _analyze_blob(
     # Per (rule, snippet) search cursor so N identical secret sightings map to N
     # distinct byte offsets (distinct occurrences, REQ-C2) instead of collapsing.
     secret_cursors: dict[tuple[str, str], int] = {}
+    secrets_sighted = 0
+    suspected_sighted = 0
     for secret in scan.secrets:
+        finding_type = _secret_finding_type(secret)
         written += _record_secret(
             session,
             tenant_id,
@@ -651,22 +696,31 @@ def _analyze_blob(
             source,
             secret,
             secret_cursors,
+            finding_type=finding_type,
             run_asset_id=run_asset_id,
             asset_url=asset_url,
         )
-    recovered_written, recovered_secrets = _record_recovered_secrets(
+        if finding_type is FindingType.SECRET_SUSPECTED:
+            suspected_sighted += 1
+        else:
+            secrets_sighted += 1
+    recovered_written, recovered_secrets, recovered_suspected = _record_recovered_secrets(
         session,
         tenant_id=tenant_id,
         run_id=run_id,
         recovered_units=endpoints.recovered_units,
         run_asset_id=run_asset_id,
         asset_url=asset_url,
+        confidence=confidence,
     )
     written += recovered_written
-    # REQ-C2 honesty: the coverage `secrets` count is SIGHTINGS (== occurrences), so a
+    # REQ-C2 honesty: the coverage counts are SIGHTINGS (== occurrences), so a
     # recovered-only secret is never under-reported (the D32 silent-miss this closes) and
     # a token seen in both bundle and recovered counts as 2 sightings of its 1 finding.
-    secrets_sighted = len(scan.secrets) + recovered_secrets
+    # D33-B: the precision-first `secrets` count excludes the low-confidence lane, which
+    # gets its own `secrets_suspected` count — the ~50%-FP recall never inflates `secrets`.
+    secrets_sighted += recovered_secrets
+    suspected_sighted += recovered_suspected
     # GraphQL operations (enrichment C, export-only): a run-level artifact, never a
     # finding — persisted separately so it never pollutes the HTTP-endpoints read model.
     _record_graphql_operations(
@@ -681,6 +735,7 @@ def _analyze_blob(
             "attributed": endpoints.attributed,
             "unattributed": endpoints.unattributed,
             "secrets": secrets_sighted,
+            "secrets_suspected": suspected_sighted,
             "secrets_engine": scan.status,
             "sources_recovered": endpoints.sources_recovered,
             "source_map": endpoints.source_map,
@@ -696,6 +751,7 @@ def _analyze_blob(
         endpoints.unattributed,
         written,
         secrets=secrets_sighted,
+        secrets_suspected=suspected_sighted,
         secrets_engine=scan.status,
         sources_recovered=endpoints.sources_recovered,
         source_map=endpoints.source_map,
@@ -731,6 +787,7 @@ def _merge_coverage(a: Coverage, b: Coverage) -> Coverage:
         unattributed=a.unattributed + b.unattributed,
         findings_written=a.findings_written + b.findings_written,
         secrets=a.secrets + b.secrets,
+        secrets_suspected=a.secrets_suspected + b.secrets_suspected,  # D33-B: additive like secrets
         secrets_engine=(
             unavailable if unavailable in (a.secrets_engine, b.secrets_engine) else "ok"
         ),
@@ -1077,11 +1134,15 @@ def _record_secret(
     secret: RawSecret,
     cursors: dict[tuple[str, str], int],
     *,
+    finding_type: FindingType = FindingType.SECRET,
     source_path: str = _SOURCE_NAME,
     run_asset_id: str | None = None,
     asset_url: str | None = None,
 ) -> int:
     # value = provider:sha256(token) — the raw token is never hashed in cleartext.
+    # D33-B: ``finding_type`` is SECRET (precision lane) or SECRET_SUSPECTED (opt-in
+    # low-confidence recall); both use the identical reveal/redaction machinery below —
+    # only the type (hence the finding identity + read-model bucket) differs.
     value = normalize.normalize_secret_value(secret.snippet, secret.rule_id)
     # REQ-S2 (storage model A): the raw secret is NOT stored — only the identity
     # hash (finding.value) + byte offsets; the plaintext is re-derived just-in-time
@@ -1107,7 +1168,7 @@ def _record_secret(
         session,
         tenant_id,
         run_id,
-        FindingType.SECRET,
+        finding_type,
         value,
         path,
         occurrence=store.Occurrence(
@@ -1139,8 +1200,10 @@ def _record_recovered_secrets(
     recovered_units: tuple[tuple[str, str], ...],
     run_asset_id: str | None,
     asset_url: str | None,
-) -> tuple[int, int]:
-    """Secret-scan the source-map-recovered units (D32-B1); return (rows_written, sightings).
+    confidence: str | None = None,
+) -> tuple[int, int, int]:
+    """Secret-scan the source-map-recovered units (D32-B1); return
+    (rows_written, secret_sightings, suspected_sightings).
 
     ONE batched Kingfisher pass (`scan_many`) over every recovered unit — a single
     subprocess, not one per file (a real bundle's map recovers dozens–hundreds). Each
@@ -1148,14 +1211,20 @@ def _record_recovered_secrets(
     SAME `beautify_if_minified` unit text `sources.recover_file_text` reproduces at reveal
     time — so an audited reveal round-trips (and any drift fail-closes 409, never leaks).
     A genuine engine failure still RAISES (via `scan_many`) to fail/retry the stage; an
-    absent binary yields no sightings (the bundle scan already reports the honest status)."""
+    absent binary yields no sightings (the bundle scan already reports the honest status).
+
+    D33-B: ``confidence`` matches the bundle scan's; each sighting is partitioned into
+    SECRET vs SECRET_SUSPECTED by its own confidence, and the two sighting counts are
+    returned separately so the caller keeps the precision `secrets` count clean."""
     if not recovered_units:
-        return 0, 0
+        return 0, 0, 0
     by_index, _status = kingfisher.scan_many(
-        [(path, text.encode("utf-8")) for path, text in recovered_units]
+        [(path, text.encode("utf-8")) for path, text in recovered_units],
+        confidence=confidence,
     )
     written = 0
     sighted = 0
+    suspected = 0
     for index, secrets in by_index.items():
         source_path, unit_text = recovered_units[index]
         finding_path = normalize.normalize_source_path(source_path)
@@ -1163,6 +1232,7 @@ def _record_recovered_secrets(
         # so N identical sightings in one file still map to N distinct offsets (REQ-C2).
         cursors: dict[tuple[str, str], int] = {}
         for secret in secrets:
+            finding_type = _secret_finding_type(secret)
             written += _record_secret(
                 session,
                 tenant_id,
@@ -1171,12 +1241,24 @@ def _record_recovered_secrets(
                 unit_text,
                 secret,
                 cursors,
+                finding_type=finding_type,
                 source_path=source_path,
                 run_asset_id=run_asset_id,
                 asset_url=asset_url,
             )
-            sighted += 1
-    return written, sighted
+            if finding_type is FindingType.SECRET_SUSPECTED:
+                suspected += 1
+            else:
+                sighted += 1
+    return written, sighted, suspected
+
+
+def _secret_finding_type(secret: RawSecret) -> FindingType:
+    """Partition a Kingfisher sighting (D33-B): a ``low``-confidence hit is the opt-in
+    SECRET_SUSPECTED recall lane; medium/high (or an unreported confidence) is a
+    precision-lane SECRET. Only reachable as SECRET_SUSPECTED under a `--confidence low`
+    sweep — the default medium scan emits nothing at ``low``."""
+    return FindingType.SECRET_SUSPECTED if secret.confidence == "low" else FindingType.SECRET
 
 
 def _record_graphql_operations(

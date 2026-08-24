@@ -45,6 +45,9 @@ class StartRunBody(BaseModel):
     # to capture EXECUTED scripts instead of the static katana crawl. Requires a
     # target (the URL to open) and RECON_ENABLE_CAPTURE_MODE. See recon.capture.
     capture: bool = False
+    # D33-B opt-in: also run the low-confidence "suspected secret" recall lane
+    # (~50% FP, a separate surface). Off by default — the precision lane is unchanged.
+    scan_suspected: bool = False
 
 
 class RerunBody(BaseModel):
@@ -59,6 +62,9 @@ class RerunBody(BaseModel):
     scope_hosts: list[str] | None = None
     authorized_by: str | None = None
     max_fetch_bytes: int | None = Field(default=None, gt=0)
+    # D33-B: re-run with (or without) the low-confidence suspected-secret lane. Absent
+    # (not in model_fields_set) inherits the source run's setting like every other field.
+    scan_suspected: bool | None = None
 
 
 @router.post("/runs", status_code=202)
@@ -100,6 +106,7 @@ def start_run(
         session_id=body.session_id,
         target=body.target,
         crawl_mode="capture" if body.capture else None,
+        scan_suspected_secrets=body.scan_suspected,
     )
     return {"run_id": view.id, "state": view.state}
 
@@ -110,6 +117,7 @@ def start_run_from_upload(
     session_id: str = Form(...),
     target: str | None = Form(default=None),
     map: UploadFile | None = File(default=None),
+    scan_suspected: bool = Form(default=False),
     tenant_id: str = Depends(get_tenant_id),
     redis: Redis = Depends(get_redis),
 ) -> dict:
@@ -154,6 +162,7 @@ def start_run_from_upload(
         js_source=content,
         map_source=map_source or None,
         target=target,
+        scan_suspected_secrets=scan_suspected,
     )
     return {"run_id": view.id, "state": view.state}
 
@@ -186,6 +195,8 @@ def edit_and_rerun_run(
         edits["scope_hosts"] = body.scope_hosts
     if "max_fetch_bytes" in fields:
         edits["max_fetch_bytes"] = body.max_fetch_bytes
+    if "scan_suspected" in fields:
+        edits["scan_suspected_secrets"] = body.scan_suspected
     try:
         view = coordinator.edit_and_rerun(
             redis,
@@ -227,6 +238,7 @@ def get_run_config(
         "crawl_mode": cfg.crawl_mode,
         "scope_hosts": cfg.scope_hosts,
         "max_fetch_bytes": cfg.max_fetch_bytes,
+        "scan_suspected_secrets": cfg.scan_suspected_secrets,
         "is_upload": cfg.is_upload,
     }
 

@@ -70,6 +70,17 @@ class FindingType(StrEnum):
     ENDPOINT = "endpoint"
     SECRET = "secret"
     PARAM = "param"
+    # An OPT-IN, low-confidence secret sighting (D33-B) — the recall lane to SECRET's
+    # precision lane. Emitted only when a run opts into the `--confidence low` Kingfisher
+    # sweep (~50% FP by design), so it is a DISTINCT type, mirroring the endpoint
+    # `*_unresolved`/`*_generic` lanes: it reuses SECRET's reveal/redaction machinery
+    # (offsets, provider:sha256 value — REQ-S2), but MUST stay OUT of the precision-first
+    # `secret` headline/coverage COUNT, and — because `finding_hash` includes the type, so
+    # a hash-set diff would otherwise fabricate add/remove when the opt-in toggles — OUT of
+    # the REQ-D5 removal diff (that diff is scoped to `secret` + confirmed endpoint lanes;
+    # the medium/high→`secret` set is byte-identical opted-in-or-not, so a secret-scoped
+    # diff is provably toggle-safe). See DEBT D33.
+    SECRET_SUSPECTED = "secret_suspected"
     # A network sink we detected but whose URL isn't statically resolvable — the
     # "unconfirmed" lane (Tier 4). A DISTINCT type (not an attribute on ENDPOINT) so
     # every `type == 'endpoint'` read model — OpenAPI export, shadow classification,

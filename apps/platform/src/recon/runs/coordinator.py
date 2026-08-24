@@ -107,12 +107,14 @@ def start_run(
     input_ref: str | None = None,
     crawl_mode: str | None = None,
     max_fetch_bytes: int | None = None,
+    scan_suspected_secrets: bool | None = None,
 ) -> RunView:
     """Create a run (returns immediately) and enqueue its first stage.
 
     ``crawl_mode="capture"`` routes the DISCOVER stage to the CDP browser-capture
     path; default/NULL keeps the static katana crawl. ``max_fetch_bytes`` is an
-    optional per-run fetch-cap override (edit-&-re-run), clamped at read time."""
+    optional per-run fetch-cap override (edit-&-re-run), clamped at read time.
+    ``scan_suspected_secrets`` (D33-B) opts this run into the low-confidence recall lane."""
     view = service.create_run(
         redis,
         tenant_id=tenant_id,
@@ -121,6 +123,7 @@ def start_run(
         input_ref=input_ref,
         crawl_mode=crawl_mode,
         max_fetch_bytes=max_fetch_bytes,
+        scan_suspected_secrets=scan_suspected_secrets,
     )
     enqueue_stage(redis, tenant_id=tenant_id, run_id=view.id, stage=RunStage.DISCOVERING)
     return view
@@ -135,11 +138,13 @@ def start_run_with_input(
     map_source: bytes | None = None,
     target: str | None = None,
     max_fetch_bytes: int | None = None,
+    scan_suspected_secrets: bool | None = None,
 ) -> RunView:
     """Create a run, store its JS input (and optional source map) as blobs, point
     the run at them, then enqueue the first stage. The analyze stage reads the JS
     blob (REQ-D2) and, when present, recovers real source paths from the map.
-    ``max_fetch_bytes`` is stored (inert for an upload — no fetch) for parity."""
+    ``max_fetch_bytes`` is stored (inert for an upload — no fetch) for parity.
+    ``scan_suspected_secrets`` (D33-B) opts this run into the low-confidence recall lane."""
     content = js_source.encode("utf-8") if isinstance(js_source, str) else js_source
     view = service.create_run(
         redis,
@@ -147,6 +152,7 @@ def start_run_with_input(
         session_id=session_id,
         target=target,
         max_fetch_bytes=max_fetch_bytes,
+        scan_suspected_secrets=scan_suspected_secrets,
     )
     values: dict[str, str] = {"input_ref": storage.put_blob(tenant_id, view.id, "input", content)}
     if map_source:
@@ -181,6 +187,7 @@ def edit_and_rerun(
     capture: Any = _UNSET,
     scope_hosts: Any = _UNSET,
     max_fetch_bytes: Any = _UNSET,
+    scan_suspected_secrets: Any = _UNSET,
     authorized_by: str | None = None,
 ) -> RunView:
     """Clone a SPECIFIC run's config into a NEW run, applying the operator's edits
@@ -201,6 +208,9 @@ def edit_and_rerun(
     eff_target = cfg.target if target is _UNSET else target
     eff_crawl_mode = cfg.crawl_mode if capture is _UNSET else ("capture" if capture else None)
     eff_cap = cfg.max_fetch_bytes if max_fetch_bytes is _UNSET else max_fetch_bytes
+    eff_scan_suspected = (
+        cfg.scan_suspected_secrets if scan_suspected_secrets is _UNSET else scan_suspected_secrets
+    )
 
     # MF6: a capture re-run re-checks the kill-switch + target (either may have changed
     # since the source run) and fails with a clean 400, not a worker DLQ. Only for a
@@ -235,6 +245,7 @@ def edit_and_rerun(
             map_source=map_source,
             target=eff_target,
             max_fetch_bytes=eff_cap,
+            scan_suspected_secrets=eff_scan_suspected,
         )
     if eff_target:
         return start_run(
@@ -244,6 +255,7 @@ def edit_and_rerun(
             target=eff_target,
             crawl_mode=eff_crawl_mode,
             max_fetch_bytes=eff_cap,
+            scan_suspected_secrets=eff_scan_suspected,
         )
     raise NoRunToRerun("source run has neither stored input nor a target to re-run")
 

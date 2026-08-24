@@ -152,7 +152,11 @@ def _load_target(tenant_id: str, run_id: str, finding_hash: str) -> _Target | No
             .where(
                 models.Finding.run_id == str(run_id),
                 models.Finding.finding_hash == finding_hash,
-                models.Finding.type == FindingType.SECRET.value,
+                # D33-B: the opt-in suspected tier is revealed by the same audited,
+                # offset-based machinery as a confirmed secret (same reveal contract).
+                models.Finding.type.in_(
+                    (FindingType.SECRET.value, FindingType.SECRET_SUSPECTED.value)
+                ),
             )
             .options(selectinload(models.Finding.occurrences))
         ).first()

@@ -93,6 +93,11 @@ _PROVIDER_BY_RULE: dict[str, str] = {
     # exposed in configuration" without guessing an issuer. The slug is baked into
     # the finding hash (a one-way door under REQ-D5), so it is chosen once here.
     "custom.config.guid_assignment": "config",
+    # D33-B recall sibling (custom.config.guid_assignment_low) — kebab/camelCase key
+    # GUIDs surfaced only in the opt-in low-confidence "suspected" tier. Same "config"
+    # provider slug and rationale as the medium rule above; the finding TYPE
+    # (secret_suspected), not the provider, is what separates the tiers.
+    "custom.config.guid_assignment_low": "config",
 }
 
 

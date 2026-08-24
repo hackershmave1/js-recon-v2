@@ -544,7 +544,11 @@ def _finding_view(
 ) -> FindingView:
     # REQ-S2: a secret's raw evidence is never served; the value comes only from the
     # audited reveal endpoint. Endpoint/param evidence (a code snippet) is kept.
-    is_secret = finding.type == FindingType.SECRET.value
+    # D33-B: the suspected tier is the SECRET family for the SECURITY gates — its raw
+    # value is redacted the same way and it is revealable the same way (it uses the same
+    # offsets/reveal machinery). It is NOT in the SECRET family for the precision COUNT
+    # gates (headline/coverage `secrets`), which stay SECRET-only elsewhere.
+    is_secret = finding.type in (FindingType.SECRET.value, FindingType.SECRET_SUSPECTED.value)
     asset_refs = asset_refs or {}
 
     def _asset_url_for(occurrence: FindingOccurrence) -> str | None:
