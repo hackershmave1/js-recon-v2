@@ -81,7 +81,7 @@ renewing the lease every N nodes, so even a 40s+ crafted extract stays lease-saf
 budget only pretended to hold (the pre-existing base-env/parse lease breach on crafted 10 MiB+ input is
 orthogonal and is not worsened by raising the cap). **Trigger:** any target bundle > ~2M AST nodes.
 
-#### D32 · Source-map recovery: oversized-map soft-drop + recovered sources not secret-scanned, both silent [S / M–L] — ⏳ PARTIAL 2026-08-23 (honesty slice C shipped; A1 cap + B1 secret-scan remain)  ·  correctness
+#### D32 · Source-map recovery: oversized-map soft-drop + recovered sources not secret-scanned, both silent [S / M–L] — ⏳ PARTIAL (slices C + A1 + A2 shipped; B1 secret-scan remains)  ·  correctness
 ✅ **Slice C (honesty-first) RESOLVED 2026-08-23.** A soft-missed source map is no longer SILENT.
 New per-asset `run_asset.source_map_skipped` BOOLEAN (migration `0019_run_asset_source_map_skip`,
 guarded `ADD COLUMN IF NOT EXISTS`) carries the fetch-detected miss across the fetch→analyze worker
@@ -103,11 +103,27 @@ REMOVED). §4 gates: adversarial design = SHIP-WITH-CHANGES (capture parity + fi
 both folded); higher-model code review passed. Tests: fast-lane `findings/source_map_honesty_test.py`
 (the `_analysis_units`/merge/read-model glue, no stack) + integration additions in
 `fetch/fetch_multi_test.py` (flag + event round-trip) and `findings/analyze_test.py` (end-to-end
-"skipped" coverage). **STILL OPEN:** (A1, S) a separate `max_source_map_bytes` (=32 MiB engine cap)
-so an oversized map is actually FETCHED, not just honestly skipped; (B1, M–L) scan recovered
+"skipped" coverage).
+✅ **Slice A1 RESOLVED (#112).** A dedicated `max_source_map_bytes` (=32 MiB, the engine output cap)
+now caps the `.map` fetch on BOTH the crawl (`fetch.py`) and capture-driver (`capture/stage.py`)
+paths, so an oversized map is actually FETCHED, not just honestly skipped — the bundle/chunk caps stay
+at the shared 10 MiB. Tests: `config_test.py` (env-independent default assertion) + wiring tests in
+`capture/stage_test.py` and `fetch/fetch_multi_test.py`.
+✅ **Slice A2 RESOLVED.** The extension-upload ingest (`capture_router.py::save_files`) was the THIRD
+`.map` path — it capped uploaded maps at `max_upload_bytes` (10 MiB) and dropped an oversized map
+SILENTLY (analyze → coverage `"none"`). It now uses `max_source_map_bytes` and flags
+`source_map_skipped` (via `set_source_map_skipped`, inside `_seed_fetched_assets`' first-wins fetch_ok
+tx so a retry never flips a recovered map to skipped or vice-versa) + a `capture.source_map_skipped`
+log — parity with the capture-driver path. `_valid_source_map` now returns `(bytes|None, skipped)` so
+a present-but-oversized map (a real coverage gap) is distinguished from an absent/malformed one
+(nothing to recover → not flagged). §4 gates: adversarial design = SHIP-WITH-CHANGES (test-lever +
+skip-assertion folded), higher-model code review = SHIP (all 7 invariants verified). D17 (untrusted,
+shared-tenant ingress): the 10→32 MiB cap raise does NOT widen peak parse-time memory — Starlette
+parses the whole body into a dict before the handler, so the cap only bounds the transient
+`json.dumps` + blob PUT; documented at the cap site. **STILL OPEN:** (B1, M–L) scan recovered
 `sourcesContent` through `kingfisher.scan` + teach `probe/reveal.py::_derive` to re-derive recovered
-content. Minor parity: the capture soft-miss is still `log.info`-only (crawl got the durable event);
-promote it for full symmetry. Original analysis below.
+content. Minor parity: BOTH capture paths (driver + upload) log the skip while the crawl records a
+durable run event; promote both for full symmetry. Original analysis below.
 
 Two independent gaps hide everything that lives only in a JS source map (the recovered original source,
 plus any secrets in `sourcesContent`). **(a)** The `.map` fetch inherits the *shared* bundle byte cap: the
