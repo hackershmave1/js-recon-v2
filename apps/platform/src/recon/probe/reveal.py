@@ -20,7 +20,8 @@ from recon.db import models
 from recon.db.base import tenant_session
 from recon.domain import FindingType
 from recon.events.log import record_event
-from recon.findings import normalize
+from recon.findings import engines, normalize
+from recon.probe import sources
 
 # Denial code -> HTTP status. The taxonomy lives with the service that produces it;
 # the router (recon.api.probe_router) maps the code to a response.
@@ -38,6 +39,12 @@ class RevealOutcome:
     denial: str | None = None  # one of DENIAL_STATUS when not revealed
 
 
+# A secret occurrence's source_path == this bundle sentinel means "slice the raw blob";
+# anything else is a source-map-recovered original that reveal re-derives (D32-B1). Mirrors
+# analyze._SOURCE_NAME / sources._UPLOAD_PATH (kept local to avoid an import cycle).
+_BUNDLE_SOURCE_PATH = "input.js"
+
+
 @dataclass(frozen=True)
 class _Target:
     """Plain data captured under RLS so the blob/slice work holds no DB connection."""
@@ -49,6 +56,9 @@ class _Target:
     offset_end: int | None
     source_path: str | None
     line: int | None
+    # D32-B1: the source map for a recovered-source occurrence (its asset's map, or the
+    # legacy run-level map). None for a raw-bundle occurrence (source_path == input.js).
+    source_map_ref: str | None = None
 
 
 def reveal_secret(
@@ -163,6 +173,13 @@ def _load_target(tenant_id: str, run_id: str, finding_hash: str) -> _Target | No
         occurrence, input_ref = _first_resolvable_occurrence(
             session, run_id, run.input_ref, candidates
         )
+        # D32-B1: for a recovered-source occurrence, reveal re-derives from the source MAP,
+        # not the JS blob — resolve that map ref here (under RLS) so `_derive` holds no DB.
+        source_map_ref = (
+            _occurrence_map_ref(session, run_id, run.source_map_ref, occurrence)
+            if occurrence is not None
+            else None
+        )
         return _Target(
             input_ref=input_ref,
             rule=str((finding.attributes or {}).get("rule", "")),
@@ -171,6 +188,7 @@ def _load_target(tenant_id: str, run_id: str, finding_hash: str) -> _Target | No
             offset_end=None if occurrence is None else occurrence.offset_end,
             source_path=None if occurrence is None else occurrence.source_path,
             line=None if occurrence is None else occurrence.line,
+            source_map_ref=source_map_ref,
         )
 
 
@@ -221,20 +239,88 @@ def _occurrence_blob_ref(session, run_id, run_input_ref, occurrence):
     return asset.input_ref if asset is not None else None
 
 
+def _occurrence_map_ref(session, run_id, run_source_map_ref, occurrence):
+    """The SOURCE-MAP blob ref for a recovered-source occurrence (D32-B1) — its own
+    run_asset's map (scoped to THIS run, like ``_occurrence_blob_ref``), or the legacy
+    run-level ``run.source_map_ref`` (``run_asset_id`` NULL). Mirrors
+    ``recon.probe.sources._resolve_source_map_ref`` so reveal derives from the exact
+    map the Sources viewer serves from."""
+    if occurrence.run_asset_id is None:
+        return run_source_map_ref
+    asset = session.scalars(
+        select(models.RunAsset).where(
+            models.RunAsset.id == occurrence.run_asset_id,
+            models.RunAsset.run_id == str(run_id),
+        )
+    ).first()
+    return asset.source_map_ref if asset is not None else None
+
+
 def _derive(target: _Target) -> RevealOutcome:
     if target.offset_start is None or target.offset_end is None:
         return RevealOutcome(revealed=False, denial="no_offsets")
-    if not target.input_ref:
+    # D32-B1: a recovered-source occurrence is re-derived from its source map; a bundle
+    # occurrence slices the raw blob. Both produce `data` in the SAME utf-8/replace byte
+    # space the offsets were located in, then funnel into the ONE integrity-gated return
+    # below — so any reproduction drift fails closed (409), never leaks wrong bytes.
+    # Recovered iff BOTH: source_path is a real path (not the "input.js" bundle sentinel)
+    # AND a source map is actually available. The map guard is load-bearing, not belt-and-
+    # suspenders: a bundle secret on a MAPPED asset still has source_path "input.js" (so
+    # the sentinel keeps it on the bundle path), and if a recovered secret's map is gone
+    # we slice the bundle and fail the integrity check (409) rather than leak — either way
+    # fail-closed. It also settles the "map author named a source input.js" collision the
+    # same safe way.
+    if _is_recovered(target):
+        data = _recovered_byte_space(target)
+    else:
+        data = _bundle_byte_space(target.input_ref)
+    if data is None:
         return RevealOutcome(revealed=False, denial="source_gone")
-    try:
-        raw = storage.get_blob(target.input_ref)
-    except ClientError:
-        return RevealOutcome(revealed=False, denial="source_gone")
-    # Slice in the SAME byte space the offsets were computed in: analyze decodes the
-    # blob with utf-8/replace before byte_offset, so a stray non-UTF-8 byte would
-    # shift raw-byte offsets. Re-encoding the replaced string reproduces that space.
-    data = raw.decode("utf-8", "replace").encode("utf-8")
     sliced = data[target.offset_start : target.offset_end].decode("utf-8", "replace")
     if normalize.normalize_secret_value(sliced, target.rule) != target.value:
         return RevealOutcome(revealed=False, denial="integrity")
     return RevealOutcome(revealed=True, value=sliced)
+
+
+def _is_recovered(target: _Target) -> bool:
+    """A source-map-recovered occurrence (D32-B1): a real recovered `source_path` (not the
+    ``input.js`` bundle sentinel) AND a source map to re-derive it from. See ``_derive``
+    for why BOTH conditions matter (bundle-on-mapped-asset, purged map, name collision)."""
+    return (
+        target.source_path is not None
+        and target.source_path != _BUNDLE_SOURCE_PATH
+        and target.source_map_ref is not None
+    )
+
+
+def _bundle_byte_space(input_ref: str | None) -> bytes | None:
+    """The raw bundle blob in the byte space analyze located offsets in: analyze decodes
+    with utf-8/replace before byte_offset, so a stray non-UTF-8 byte would shift raw-byte
+    offsets — re-encoding the replaced string reproduces that exact space. ``None`` when
+    the blob is absent (→ source_gone)."""
+    if not input_ref:
+        return None
+    try:
+        raw = storage.get_blob(input_ref)
+    except ClientError:
+        return None
+    return raw.decode("utf-8", "replace").encode("utf-8")
+
+
+def _recovered_byte_space(target: _Target) -> bytes | None:
+    """Reproduce a recovered original's byte space by re-deriving it from the source map
+    exactly as analyze scanned it and the Sources viewer serves it (the shared
+    ``sources.recover_file_text`` = one definition of the recovered bytes). ``None`` (→
+    source_gone) if the map is absent/unparseable or no longer recovers this path; the
+    integrity re-check in ``_derive`` still guards against any residual drift."""
+    if not target.source_map_ref or not target.source_path:
+        return None
+    try:
+        map_bytes = storage.get_blob(target.source_map_ref)
+    except ClientError:
+        return None
+    try:
+        text = sources.recover_file_text(map_bytes, target.source_path)
+    except engines.EngineError:
+        return None  # unparseable map / absent binary — fail closed, not a 500
+    return None if text is None else text.encode("utf-8")

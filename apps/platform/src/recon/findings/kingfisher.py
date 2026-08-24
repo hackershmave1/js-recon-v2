@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -56,6 +57,10 @@ class RawSecret:
     column_start: int | None = None
     column_end: int | None = None
     validation_status: str | None = None
+    # The scanned file's path as Kingfisher reported it. Ignored by the single-file
+    # scan() (the caller already knows the source); scan_many() uses it to attribute
+    # each sighting back to its input unit (D32-B1).
+    path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +132,7 @@ def _to_raw_secret(entry: object) -> RawSecret | None:
         column_start=_opt_int(finding.get("column_start")),
         column_end=_opt_int(finding.get("column_end")),
         validation_status=_opt_str(validation.get("status")),
+        path=_opt_str(finding.get("path")),
     )
 
 
@@ -209,28 +215,9 @@ def scan(
         with open(target, "wb") as handle:
             handle.write(source)
         # Scan the file (not the dir) so no sibling/symlink is ever walked.
-        argv = [
-            engines.resolve_bin(bin_path),
-            "scan",
-            target,
-            "--format",
-            "json",
-            "--no-validate",
-            "--no-update-check",
-            "--no-dedup",
-        ]
-        # Load the shipped custom rules. A missing file is a PACKAGING regression
-        # (the wheel dropped the data file), not a per-run condition, so degrade
-        # LOUDLY to the built-in ruleset — we still scan, only losing standalone
-        # AWS-key-id + config-GUID detection — rather than passing a bad --rules-path
-        # that makes kingfisher exit 1 and hard-fails every scan.
-        if _RULES_PATH.is_file():
-            argv += ["--rules-path", str(_RULES_PATH)]
-        else:
-            log.error("kingfisher.rules_missing", path=str(_RULES_PATH))
         try:
             result = engines.run_engine(
-                argv,
+                _scan_argv(bin_path, target),
                 timeout_s=timeout_s,
                 max_output_bytes=max_output_bytes,
                 ok_returncodes=_OK_RETURNCODES,
@@ -244,3 +231,96 @@ def scan(
     secrets = parse_findings(result.stdout)
     log.info("kingfisher.done", secrets=len(secrets))
     return ScanResult(secrets=secrets, status="ok")
+
+
+def scan_many(
+    units: Sequence[tuple[str, bytes]],
+    *,
+    bin_path: str | None = None,
+    timeout_s: float | None = None,
+    max_output_bytes: int | None = None,
+) -> tuple[dict[int, list[RawSecret]], str]:
+    """Scan MANY sources for secrets in ONE Kingfisher invocation.
+
+    ``units`` is an ordered ``(label, content_bytes)`` sequence; the label is for the
+    CALLER's mapping only — here each unit is written to ``<tmpdir>/<i>.js`` and the
+    results are grouped back by that index. Returns ``(by_index, status)`` where
+    ``by_index[i]`` lists the secrets found in ``units[i]`` (a missing index == none),
+    and ``status`` is ``"ok"``/``"unavailable"`` exactly like :func:`scan` (a genuine
+    engine failure still RAISES so the stage fails/retries rather than under-reporting).
+
+    ONE subprocess regardless of unit count (Kingfisher walks the temp dir): the
+    D32-B1 recovered-source scan would otherwise fork once per recovered file —
+    dozens–hundreds for a real bundle's source map. Safe to scan the dir here (unlike
+    the arbitrary-target ``scan``): it holds ONLY the files we just wrote, so there is
+    no sibling/symlink to walk."""
+    if not units:
+        return {}, "ok"
+    settings = get_settings()
+    bin_path = bin_path or settings.kingfisher_bin
+    timeout_s = timeout_s if timeout_s is not None else settings.engine_timeout_seconds
+    max_output_bytes = (
+        max_output_bytes if max_output_bytes is not None else settings.engine_max_output_bytes
+    )
+    with tempfile.TemporaryDirectory(prefix="kf-") as workdir:
+        for slot, (_label, content) in enumerate(units):
+            with open(os.path.join(workdir, f"{slot}.js"), "wb") as handle:
+                handle.write(content)
+        try:
+            result = engines.run_engine(
+                _scan_argv(bin_path, workdir),
+                timeout_s=timeout_s,
+                max_output_bytes=max_output_bytes,
+                ok_returncodes=_OK_RETURNCODES,
+            )
+        except engines.EngineNotAvailable:
+            log.warning("kingfisher.unavailable", bin=bin_path)
+            return {}, "unavailable"
+
+    by_index: dict[int, list[RawSecret]] = {}
+    for secret in parse_findings(result.stdout):
+        index = _index_from_path(secret.path, len(units))
+        if index is not None:
+            by_index.setdefault(index, []).append(secret)
+    log.info("kingfisher.done", secrets=sum(len(v) for v in by_index.values()), units=len(units))
+    return by_index, "ok"
+
+
+def _scan_argv(bin_path: str, target: str) -> list[str]:
+    """The ``kingfisher scan`` argv for one target (a file or a dir).
+
+    Loads the shipped custom rules; a missing file is a PACKAGING regression (the
+    wheel dropped the data file), not a per-run condition, so degrade LOUDLY to the
+    built-in ruleset — we still scan, only losing standalone AWS-key-id + config-GUID
+    detection — rather than passing a bad --rules-path that makes kingfisher exit 1
+    and hard-fails every scan."""
+    argv = [
+        engines.resolve_bin(bin_path),
+        "scan",
+        target,
+        "--format",
+        "json",
+        "--no-validate",
+        "--no-update-check",
+        "--no-dedup",
+    ]
+    if _RULES_PATH.is_file():
+        argv += ["--rules-path", str(_RULES_PATH)]
+    else:
+        log.error("kingfisher.rules_missing", path=str(_RULES_PATH))
+    return argv
+
+
+def _index_from_path(path: str | None, count: int) -> int | None:
+    """Map a Kingfisher-reported ``<tmpdir>/<i>.js`` path back to its unit index.
+
+    Match by BASENAME so it works whether Kingfisher reports an absolute or a
+    dir-relative path; ignore anything that isn't our ``<int>.js`` (defensive — a
+    stray path can't mis-attribute a secret to a real unit)."""
+    if not path:
+        return None
+    stem, _, ext = os.path.basename(path).partition(".")
+    if ext != "js" or not stem.isdigit():
+        return None
+    index = int(stem)
+    return index if 0 <= index < count else None

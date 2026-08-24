@@ -81,7 +81,7 @@ renewing the lease every N nodes, so even a 40s+ crafted extract stays lease-saf
 budget only pretended to hold (the pre-existing base-env/parse lease breach on crafted 10 MiB+ input is
 orthogonal and is not worsened by raising the cap). **Trigger:** any target bundle > ~2M AST nodes.
 
-#### D32 · Source-map recovery: oversized-map soft-drop + recovered sources not secret-scanned, both silent [S / M–L] — ⏳ PARTIAL (slices C + A1 + A2 shipped; B1 secret-scan remains)  ·  correctness
+#### D32 · Source-map recovery: oversized-map soft-drop + recovered sources not secret-scanned, both silent [S / M–L] — ✅ RESOLVED (slices C + A1 + A2 + B1 shipped)  ·  correctness
 ✅ **Slice C (honesty-first) RESOLVED 2026-08-23.** A soft-missed source map is no longer SILENT.
 New per-asset `run_asset.source_map_skipped` BOOLEAN (migration `0019_run_asset_source_map_skip`,
 guarded `ADD COLUMN IF NOT EXISTS`) carries the fetch-detected miss across the fetch→analyze worker
@@ -120,10 +120,28 @@ a present-but-oversized map (a real coverage gap) is distinguished from an absen
 skip-assertion folded), higher-model code review = SHIP (all 7 invariants verified). D17 (untrusted,
 shared-tenant ingress): the 10→32 MiB cap raise does NOT widen peak parse-time memory — Starlette
 parses the whole body into a dict before the handler, so the cap only bounds the transient
-`json.dumps` + blob PUT; documented at the cap site. **STILL OPEN:** (B1, M–L) scan recovered
-`sourcesContent` through `kingfisher.scan` + teach `probe/reveal.py::_derive` to re-derive recovered
-content. Minor parity: BOTH capture paths (driver + upload) log the skip while the crawl records a
-durable run event; promote both for full symmetry. Original analysis below.
+`json.dumps` + blob PUT; documented at the cap site.
+✅ **Slice B1 RESOLVED.** Secrets that live ONLY in a source map's recovered `sourcesContent` — a
+token in a comment, or in code tree-shaken out of the minified bundle — are now caught. `analyze`
+secret-scans each recovered unit IN ADDITION to the raw bundle (the bundle stays the floor: zero
+regression, a token in both is 1 finding / 2 occurrences) via a new `kingfisher.scan_many` that runs
+ONE subprocess over all recovered units (a real map recovers dozens–hundreds of files; one-fork-per-
+file would be a per-asset DoS). Each recovered sighting is recorded at its real per-source path
+(`occurrence.source_path`), and the coverage `secrets` count now sums bundle + recovered sightings
+(no silent under-report — the honesty this epic targets). `probe/reveal._derive` re-derives a
+recovered secret's byte space from its source map via a shared `probe/sources.recover_file_text` (the
+SINGLE definition of the recovered bytes, so analyze's offsets, the Sources viewer, and reveal all
+reproduce byte-identical text); the existing integrity re-check still fail-closes (409) on any drift,
+so a reproduction bug is un-revealable, never wrong-bytes. Reveal routes to the recovered path only
+when the occurrence has BOTH a real `source_path` AND a resolvable map (a bundle secret on a mapped
+asset keeps the `input.js` sentinel → bundle slice; a purged map → fail-closed). No migration
+(reuses `source_path`/offsets/`run_asset_id`). §4 gates: adversarial design = SHIP-WITH-CHANGES (the
+`_record_secret` source_path wiring + coverage-count under-report both folded; the sentinel-collision
+should-fix hardened via the map-present guard); higher-model code review = pending. Tests:
+`findings/kingfisher_test.py` (scan_many batching + per-unit attribution + path capture),
+`findings/analyze_test.py` (recovered-only secret recorded at its path + counted), and
+`probe/reveal_recovered_test.py` (reveal round-trips a recovered secret; drift fails closed 409).
+Original analysis below.
 
 Two independent gaps hide everything that lives only in a JS source map (the recovered original source,
 plus any secrets in `sourcesContent`). **(a)** The `.map` fetch inherits the *shared* bundle byte cap: the
