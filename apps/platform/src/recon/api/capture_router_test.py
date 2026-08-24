@@ -825,8 +825,10 @@ def test_save_files_source_map_retry_is_first_wins(make_capture_client):
 
 
 def test_save_files_oversized_map_skipped_file_still_stored(make_capture_client):
-    # A map over the byte cap is dropped; the JS is still stored + analyzable.
-    client = make_capture_client(RECON_MAX_UPLOAD_BYTES=64)
+    # D32-A2: a map over the source-map cap is dropped but flagged source_map_skipped
+    # (honest coverage:"skipped", not a silent "none"); the JS is still stored + analyzable.
+    # The map cap is now its OWN setting (RECON_MAX_SOURCE_MAP_BYTES), not the upload cap.
+    client = make_capture_client(RECON_MAX_SOURCE_MAP_BYTES=64)
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     big_map = {"version": 3, "sources": ["x"], "mappings": "A" * 200}
     body = _save(
@@ -836,6 +838,7 @@ def test_save_files_oversized_map_skipped_file_still_stored(make_capture_client)
     tid = _tenant_id(client.capture_tenant_name)
     row = _asset(tid, body["runId"], "https://acme.io/a.js")
     assert row.input_ref and row.source_map_ref is None
+    assert row.source_map_skipped is True  # D32-A2: honest, not silent "none"
 
 
 def test_save_files_non_object_map_skipped(make_capture_client):
@@ -848,7 +851,44 @@ def test_save_files_non_object_map_skipped(make_capture_client):
     )
     assert body["stored"] == 1
     tid = _tenant_id(client.capture_tenant_name)
-    assert _asset(tid, body["runId"], "https://acme.io/a.js").source_map_ref is None
+    row = _asset(tid, body["runId"], "https://acme.io/a.js")
+    assert row.source_map_ref is None
+    # D32-A2: a MALFORMED map is not "skipped" — there was nothing to recover, so no
+    # coverage gap is claimed (distinct from an oversized map, which IS flagged).
+    assert row.source_map_skipped is False
+
+
+def test_source_map_skip_flag_respects_first_wins(make_capture_client):
+    # D32-A2: the new source_map_skipped mutation lives INSIDE _seed_fetched_assets'
+    # first-wins guard (asset already fetch_ok -> no mutation), so a same-url retry can
+    # neither flip a RECOVERED map to skipped nor a SKIP to recovered. Locks the seam
+    # this slice added to that load-bearing branch.
+    client = make_capture_client(RECON_MAX_SOURCE_MAP_BYTES=64)
+    small = {"version": 3, "sources": ["s"], "mappings": "A"}  # 49 B, within cap
+    big = {"version": 3, "sources": ["s"], "mappings": "A" * 200}  # over cap
+
+    # (a) recovered first, oversized retry: the recovered map stays, never flips to skipped.
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    a_small = {**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": small}
+    a_big = {**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": big}
+    b = _save(client, sid, [a_small])
+    tid = _tenant_id(client.capture_tenant_name)  # capture tenant exists after the first save
+    ref = _asset(tid, b["runId"], "https://acme.io/a.js").source_map_ref
+    assert ref  # recovered on the first batch
+    _save(client, sid, [a_big])
+    row = _asset(tid, b["runId"], "https://acme.io/a.js")
+    assert row.source_map_ref == ref and row.source_map_skipped is False
+
+    # (b) oversized first, recovered retry: the skip holds, the later valid map is ignored.
+    sid2 = f"sess-{uuid.uuid4().hex[:8]}"
+    b_big = {**_file("https://acme.io/b.js", "b();", sid2), "sourceMapContent": big}
+    b_small = {**_file("https://acme.io/b.js", "b();", sid2), "sourceMapContent": small}
+    b2 = _save(client, sid2, [b_big])
+    row2 = _asset(tid, b2["runId"], "https://acme.io/b.js")
+    assert row2.source_map_ref is None and row2.source_map_skipped is True
+    _save(client, sid2, [b_small])
+    row2 = _asset(tid, b2["runId"], "https://acme.io/b.js")
+    assert row2.source_map_ref is None and row2.source_map_skipped is True  # skip held
 
 
 # --------------------------------------------------------------------------- #
