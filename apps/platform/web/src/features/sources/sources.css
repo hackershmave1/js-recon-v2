@@ -62,12 +62,17 @@ button.sv-node.sel { background: var(--accent-soft); color: var(--accent); }
 /* Floating jump-to-top, anchored to the non-scrolling wrapper (not the scroller). */
 .sv-top { position: absolute; right: 18px; bottom: 16px; width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--r-pill); background: var(--raised); border: 1px solid var(--border-strong); color: var(--text-2); box-shadow: 0 2px 12px rgba(0,0,0,0.4); }
 .sv-top:hover { background: #2b3446; border-color: var(--faint); color: var(--text); }
-.sv-line { display: flex; border-left: 3px solid transparent; }
+/* Fixed row height (D35): the code body is windowed for large bundles, which needs a
+   known row height. 21px == 12.5px font x 1.68 line-height; MUST equal CODE_ROW_HEIGHT
+   in CodeViewer.tsx or the windowed offsets drift over ~100K rows. */
+.sv-line { display: flex; height: 21px; line-height: 21px; box-sizing: border-box; border-left: 3px solid transparent; }
 .sv-line.marked { background: rgba(255,77,94,0.08); border-left-color: var(--danger); }
 /* The jump-to-source target line. A lime left-accent + faint wash so it stands out
    from a red finding `.marked` line; declared after `.marked` so it wins if both. */
 .sv-line.focus { background: var(--accent-soft); border-left-color: var(--accent); }
-.sv-ln { flex: 0 0 52px; text-align: right; padding: 0 14px 0 0; color: var(--faint); user-select: none; }
+/* Sticky gutter (D35): line numbers stay pinned while a long minified line scrolls
+   horizontally under them. Opaque `--field` so scrolled code doesn't bleed through. */
+.sv-ln { position: sticky; left: 0; z-index: 1; background: var(--field); flex: 0 0 52px; text-align: right; padding: 0 14px 0 0; color: var(--faint); user-select: none; }
 .sv-line.marked .sv-ln { color: var(--danger); }
 .sv-line.focus .sv-ln { color: var(--accent); }
 .sv-code-txt { color: var(--text-2); white-space: pre; padding-right: 20px; }

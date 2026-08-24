@@ -133,8 +133,10 @@ export interface SourcesResponse { run_id: string; count: number; sources: Sourc
 // carry a line, and a legacy occurrence resolves to the "input.js" bundle.
 export interface SourceJump { sourcePath: string | null; assetUrl: string | null; line: number | null; }
 // One source file's decoded text (GET /runs/{id}/sources/content?path=).
-// `truncated` is true when the raw blob exceeded the server's response cap.
-export interface SourceContent { path: string; content: string; truncated: boolean; }
+// `truncated` is true when the raw blob exceeded the server's response cap. `formatted`
+// (D35) is true when the SERVER already beautified this text (so its finding marks are
+// aligned and the client must not re-beautify it); false for a raw-served big bundle.
+export interface SourceContent { path: string; content: string; truncated: boolean; formatted: boolean; }
 // Result of POST pause/cancel/resume. pause returns pause_requested; cancel returns
 // cancel_requested; resume returns neither — all three return the authoritative state.
 export interface RunControlResult { run_id: string; state: string; pause_requested?: boolean; cancel_requested?: boolean; }

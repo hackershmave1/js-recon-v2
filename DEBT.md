@@ -298,7 +298,30 @@ route hosts from the Hosts `universe` roll-up (`hosts.py:190-197`) unless the ho
 asset/endpoint/tech — a read-time lever, no re-extract. **Invariant:** never drop a real in-scope host (both
 (a) and (b) are strictly safer than today's over-matching substring); keep the confirmed-endpoint lane untouched.
 
-#### D35 · Sources viewer can't display large bundles [M]  ·  performance
+#### D35 · Sources viewer can't display large bundles [M] — ✅ RESOLVED 2026-08-24  ·  performance
+✅ **RESOLVED 2026-08-24 (Path A — extend the windower).** A multi-MB minified bundle is now viewable.
+A 4-agent source-grounded research swarm (Monaco/CodeMirror, Chrome DevTools, GitHub/Sourcegraph)
+converged on three settled points: beautify is the PRECONDITION (a minified bundle is one physical
+line; nothing virtualizes until it is split), render + highlight the VIEWPORT ONLY (whole-file Prism on
+10 MB = 150-400 MB of token objects + GB of DOM — the actual freeze), and the 2 MiB server truncation is
+a correctness hazard (the operator audited a silently corrupted bundle). **Measure-first pivot:** Python
+`jsbeautifier` benchmarked at ~30 s for a 4.4 MB bundle (80-97 s at 8-10 MB) — over the 30 s worker lease
+AND typical proxy timeouts — so server-side beautify was rejected; beautify moved to a client **Web
+Worker** (`beautify.worker.ts` + `beautifyClient.ts`), off the main thread (the freeze that forced the
+old 200 KB cap is gone). The code body is **virtualized** (spacer-based fixed-height windowing in
+`CodeViewer.tsx`, reusing the file-tree pattern; long lines still scroll horizontally under a sticky
+gutter), highlighting is **viewport-scoped** (per-line Prism on the ~visible rows via
+`highlight.loadPrism`/`highlightLine`; lines > 20 K chars skipped), and the client clamps (`RENDER_MAX_*`,
+`BEAUTIFY_MAX_CHARS`, `HIGHLIGHT_MAX_CHARS`) are deleted. Server: `probe/sources._MAX_CONTENT_BYTES`
+2 MiB → 12 MiB (the full raw bundle, ≤ the 10 MiB ingest cap, reaches the client); the analyze/serve
+beautify caps stay at 1 MiB, so the D23 lease bound is unchanged (the client formats big files now).
+Auto-pretty keys on `isMinified(served)` alone: a server-beautified file (multi-line) keeps its aligned
+finding marks; a still-minified served file (a big raw bundle) is worker-formatted with its useless
+line-~1 marks dropped. Tests: new `CodeViewer.test.tsx` (windowing + per-line render cap + jump-to-line +
+marks + truncation) + rewritten `SourcesPage.test.tsx` large-file cases (frontend 229 green); host ruff +
+mypy clean. CodeMirror 6 (Path B — the DevTools/Sourcegraph editor-grade route) was weighed and held as
+the escape hatch if flawless highlighting / search / folding is ever wanted. Original analysis below.
+
 A multi-MB minified bundle is effectively unviewable in the Sources page: `CodeViewer` clamps to 512 K chars /
 10 K lines and `SourcesPage` disables pretty-print above `BEAUTIFY_MAX_CHARS` = 200 K (js-beautify runs
 synchronously on the main thread and froze the tab on a large bundle in past QA — the reason for the cap) and

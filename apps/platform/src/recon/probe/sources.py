@@ -39,10 +39,13 @@ from recon.db.base import tenant_session
 from recon.findings import deobfuscate, engines, sourcemapper
 from recon.runs import assets as run_assets
 
-# Bound the served text so one request can't stream an arbitrarily large decoded
-# string. The real *memory* bound is the 10 MiB ingest cap
-# (config.max_upload_bytes / max_fetch_bytes); this caps the RESPONSE.
-_MAX_CONTENT_BYTES = 2 * 1024 * 1024
+# Bound the served text so one request can't stream an unbounded decoded string.
+# D35: raised 2 MiB -> 12 MiB so a full minified bundle (<= the 10 MiB ingest cap
+# config.max_upload_bytes / max_fetch_bytes) reaches the client viewer intact — it
+# beautifies the bundle in a Web Worker and VIRTUALIZES the rows, so it no longer
+# needs a server-truncated preview (the old 2 MiB cap silently corrupted a big bundle
+# into an unreadable fragment). Beyond this the response is honestly `truncated`.
+_MAX_CONTENT_BYTES = 12 * 1024 * 1024
 
 # analyze._SOURCE_NAME — the logical name of the single legacy bundle. It equals
 # occurrences[].source_path for a legacy run and survives normalize_source_path
@@ -69,6 +72,13 @@ class SourceContent:
     path: str
     content: str
     truncated: bool
+    # D35: True when the SERVER already formatted this text (beautified a no-map bundle, or
+    # a minified recovered original) — so its finding-line marks are ALIGNED and the client
+    # must NOT re-beautify it (a re-beautify drops the marks). False only for a raw-served
+    # bundle (over the 1 MiB beautify cap), whose marks sit on the useless raw line ~1 and
+    # which the client formats in its Web Worker. Distinguishing this from a heuristic like
+    # "has a long line" is why the flag is authoritative rather than client-guessed.
+    formatted: bool
 
 
 def list_sources(tenant_id: str, run_id: str) -> list[SourceFile] | None:
@@ -168,19 +178,25 @@ def get_source_content(
         # originals go through _recovered_content, beautified only if themselves minified.
         text = raw.decode("utf-8", "replace")
         beautified = deobfuscate.beautify(text)
-        return _content_from_text(path, beautified if beautified is not None else text)
+        # `formatted` iff the server actually beautified (a <=1 MiB bundle) — an oversized
+        # bundle is served raw (beautified is None) and the client formats it (D35).
+        return _content_from_text(
+            path, beautified if beautified is not None else text, formatted=beautified is not None
+        )
     # Not a stored asset/upload blob: try a source-map-recovered original.
     return _recovered_content(tenant_id, run_id, path, asset_url)
 
 
-def _content_from_text(path: str, text: str) -> SourceContent:
+def _content_from_text(path: str, text: str, *, formatted: bool = False) -> SourceContent:
     """A decoded (possibly beautified) source string as bounded content: the response
-    cap is applied to the UTF-8 bytes so a huge file can't stream an unbounded string."""
+    cap is applied to the UTF-8 bytes so a huge file can't stream an unbounded string.
+    ``formatted`` records whether the server already beautified ``text`` (D35 — see
+    ``SourceContent``)."""
     encoded = text.encode("utf-8")
     truncated = len(encoded) > _MAX_CONTENT_BYTES
     if truncated:
         text = encoded[:_MAX_CONTENT_BYTES].decode("utf-8", "replace")
-    return SourceContent(path=path, content=text, truncated=truncated)
+    return SourceContent(path=path, content=text, truncated=truncated, formatted=formatted)
 
 
 def _resolve_key(tenant_id: str, run_id: str, path: str) -> str | None:
@@ -224,7 +240,10 @@ def _recovered_content(
         return None
     if text is None:
         return None
-    return _content_from_text(path, text)
+    # A recovered original is served through the SAME `beautify_if_minified`
+    # (`recover_file_text`) analyze ran, so its marks always align — the client must never
+    # re-format it (D35): `formatted=True`.
+    return _content_from_text(path, text, formatted=True)
 
 
 def recover_file_text(map_bytes: bytes, path: str) -> str | None:

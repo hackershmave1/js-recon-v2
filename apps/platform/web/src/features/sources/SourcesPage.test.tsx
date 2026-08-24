@@ -2,13 +2,21 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SourcesPage } from "./SourcesPage";
-import { highlightJsLines } from "./highlight";
 import * as api from "../../api/apiClient";
 import type { FindingsResponse, Finding, Occurrence, SourceFile, SourceJump } from "../../api/types";
 
-// Highlighting is lazy + async and splits a line into spans; mock it out so these
-// tests assert on plain text deterministically (highlight.ts has its own tests).
-vi.mock("./highlight", () => ({ highlightJsLines: vi.fn(() => Promise.reject(new Error("no highlight in test"))) }));
+// CodeViewer highlights the visible window via loadPrism/highlightLine; mock them out so
+// these tests assert plain text deterministically (highlight.ts has its own tests).
+vi.mock("./highlight", () => ({
+  loadPrism: vi.fn(() => Promise.reject(new Error("no highlight in test"))),
+  highlightLine: vi.fn(() => []),
+  highlightJsLines: vi.fn(() => Promise.reject(new Error("no highlight in test"))),
+}));
+// Beautify runs in a Web Worker (jsdom has no Worker); mock the client to a deterministic
+// synchronous transform that turns a minified one-liner into multiple lines.
+vi.mock("./beautifyClient", () => ({
+  beautify: vi.fn((code: string) => Promise.resolve(code.replace(/;/g, ";\n"))),
+}));
 
 beforeEach(() => vi.restoreAllMocks());
 
@@ -32,7 +40,7 @@ const CODE = "const a = 1\nfetch('/x')\nconst b = 2\n";
 
 function mount(sources: SourceFile[], data: FindingsResponse | null = findings, jump: SourceJump | null = null) {
   vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: sources.length, sources });
-  vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "input.js", content: CODE, truncated: false });
+  vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "input.js", content: CODE, truncated: false, formatted: true });
   return render(<SourcesPage data={data} tenantId="t" runId="r" jump={jump} />);
 }
 
@@ -90,7 +98,7 @@ describe("SourcesPage", () => {
       sources: [{ path: "https://acme.io/app.js", kind: "asset", fetch_status: "ok", asset_url: null }],
     });
     vi.spyOn(api, "getSourceContent").mockResolvedValue({
-      path: "https://acme.io/app.js", content: MIN, truncated: false,
+      path: "https://acme.io/app.js", content: MIN, truncated: false, formatted: false,
     });
     render(<SourcesPage data={null} tenantId="t" runId="r" jump={null} />);
 
@@ -112,23 +120,24 @@ describe("SourcesPage", () => {
     expect(screen.getByText("endpoint")).toBeInTheDocument();  // marks still shown
   });
 
-  it("does not auto-pretty-print a minified source that carries finding marks", async () => {
-    // A marked file's finding lines are server-authoritative (the server beautified it
-    // before recording them), so auto-pretty stays OFF — a client re-beautify would
-    // renumber the marks. Guards the residual case where a beautified line is still long.
-    const MIN = "const a=fetch('/x');" + "0;".repeat(300); // one long minified line
+  it("does not re-pretty a server-beautified marked source (marks stay aligned)", async () => {
+    // A marked file is served ALREADY beautified (multi-line) by the server, so isMinified
+    // is false and the client leaves it as-is — a client re-beautify would renumber the
+    // marks. (A still-minified served file only ever has marks on its raw line ~1, so it
+    // IS auto-formatted with those useless marks dropped — the D35 change.)
+    const SERVED = "const a = fetch('/x');\n" + "const y = 2;\n".repeat(20); // multi-line, not minified
     const asset: SourceFile = { path: "https://acme.io/app.js", kind: "asset", fetch_status: "ok", asset_url: null };
     const data: FindingsResponse = {
       run_id: "r", count: 1, coverage: null, spec: null,
       findings: [f({ finding_hash: "e1", occurrences: [occ({ asset_url: asset.path, line: 1 })] })],
     };
     vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: 1, sources: [asset] });
-    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: asset.path, content: MIN, truncated: false });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: asset.path, content: SERVED, truncated: false, formatted: true });
     render(<SourcesPage data={data} tenantId="t" runId="r" jump={null} />);
 
     const toggle = await screen.findByRole("button", { name: /pretty print/i });
     expect(await screen.findByText("endpoint")).toBeInTheDocument();  // mark shown, not dropped
-    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "false"));  // auto-pretty suppressed
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "false"));  // not re-prettied
   });
 
   it("folds a directory and shows an aggregated finding badge on the folder", async () => {
@@ -138,7 +147,7 @@ describe("SourcesPage", () => {
       findings: [f({ finding_hash: "e1", occurrences: [occ({ asset_url: asset.path, line: 1 })] })],
     };
     vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: 1, sources: [asset] });
-    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: asset.path, content: "x", truncated: false });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: asset.path, content: "x", truncated: false, formatted: true });
     render(<SourcesPage data={data} tenantId="t" runId="r" jump={null} />);
 
     const scriptsDir = await screen.findByRole("button", { name: /scripts/i });
@@ -152,7 +161,7 @@ describe("SourcesPage", () => {
 
   it("flags a truncated file", async () => {
     vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: 1, sources: [UPLOAD] });
-    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "input.js", content: "x", truncated: true });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "input.js", content: "x", truncated: true, formatted: true });
     render(<SourcesPage data={null} tenantId="t" runId="r" jump={null} />);
     expect(await screen.findByText(/truncated/i)).toBeInTheDocument();
   });
@@ -190,76 +199,35 @@ describe("SourcesPage", () => {
     await waitFor(() => expect(document.querySelector(".sv-line.focus")).not.toBeNull());
   });
 
-  it("keeps highlighting eligible in pretty mode by gauging the RAW source, not the expanded text", async () => {
-    // A minified one-liner UNDER the 200k highlight cap (so highlighting is
-    // eligible) that beautifies to WELL OVER 200k. The bug gated on the displayed
-    // (pretty-expanded) length, so it wrongly skipped highlighting in pretty mode
-    // only. The guard must follow the raw source length (identical in both modes).
-    const hl = vi.mocked(highlightJsLines);
-    hl.mockClear();
-    const raw = "function f(){" + "x=1;".repeat(23000) + "}"; // ~92k raw, one line -> minified
-    vi.spyOn(api, "getSources").mockResolvedValue({
-      run_id: "r", count: 1,
-      sources: [{ path: "https://acme.io/app.js", kind: "asset", fetch_status: "ok", asset_url: null }],
-    });
-    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "https://acme.io/app.js", content: raw, truncated: false });
-    render(<SourcesPage data={null} tenantId="t" runId="r" jump={null} />);
+  // ---- large-file handling (D35: a multi-MB minified bundle used to freeze the tab) ----
 
-    const toggle = await screen.findByRole("button", { name: /pretty print/i });
-    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "true")); // auto-on (minified)
-    // Highlighting is attempted on the expanded (>200k) pretty text — proving the
-    // guard measured the raw length. Pre-fix that call was skipped and never fired.
-    // Generous timeout: beautifying ~90k + rendering the expanded bundle outlasts
-    // waitFor's 1s default.
-    await waitFor(
-      () => expect(hl.mock.calls.some((c) => (c[0] as string).length > 200_000)).toBe(true),
-      { timeout: 15_000 },
-    );
-  }, 20_000);
-
-  // ---- large-file guards (a multi-MiB minified clientlib froze the machine) ----
-
-  it("does not auto-pretty a huge minified file and disables the Pretty button", async () => {
-    const HUGE = "a".repeat(250_000); // one line > BEAUTIFY_MAX_CHARS (200k)
+  it("auto-pretties a huge minified bundle off the main thread — no disabled button, no freeze", async () => {
+    // The D35 fix: a multi-MB minified bundle now formats in a Web Worker and renders
+    // VIRTUALIZED, instead of being stuck raw behind a disabled Pretty button.
+    const HUGE = "var x=1;".repeat(200_000); // ~1.6M chars, one minified line
     vi.spyOn(api, "getSources").mockResolvedValue({
       run_id: "r", count: 1,
       sources: [{ path: "https://acme.io/big.min.js", kind: "asset", fetch_status: "ok", asset_url: null }],
     });
-    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "https://acme.io/big.min.js", content: HUGE, truncated: false });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "https://acme.io/big.min.js", content: HUGE, truncated: false, formatted: false });
     render(<SourcesPage data={null} tenantId="t" runId="r" jump={null} />);
 
     const toggle = await screen.findByRole("button", { name: /pretty print/i });
-    expect(toggle).toBeDisabled(); // never re-runs the synchronous beautifier on the main thread
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
-    expect(document.querySelectorAll(".sv-line")).toHaveLength(1); // raw single line, no DOM explosion
+    expect(toggle).not.toBeDisabled();                                            // never disabled now
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "true"));  // auto-formatted
+    // The beautified ~200k lines render as only a windowed handful, never all at once.
+    await waitFor(() => expect(document.querySelectorAll(".sv-line").length).toBeGreaterThan(1));
+    expect(document.querySelectorAll(".sv-line").length).toBeLessThan(500);
   });
 
-  // Generous timeout: committing 10k rows to jsdom (the cap being proven here) outlasts
-  // vitest's 5s default under full-suite parallel-worker CPU contention — passes solo,
-  // flaked in-suite. Cf. the pretty-mode test's 20s override above.
-  it("caps how many lines it renders for a huge multi-line file", async () => {
-    const MANY = "x\n".repeat(12_000); // 12k short lines, not minified -> rendered raw, capped
+  it("virtualizes a huge multi-line file (only the viewport is in the DOM)", async () => {
+    const MANY = "x\n".repeat(12_000); // 12k short lines, not minified -> rendered raw, windowed
     vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: 1, sources: [UPLOAD] });
-    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "input.js", content: MANY, truncated: false });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "input.js", content: MANY, truncated: false, formatted: false });
     render(<SourcesPage data={null} tenantId="t" runId="r" jump={null} />);
 
-    await waitFor(() => expect(document.querySelector(".sv-note.sv-warn")?.textContent).toMatch(/large file/i));
-    expect(document.querySelectorAll(".sv-line")).toHaveLength(10_000); // RENDER_MAX_LINES, not ~12k
-  }, 15_000);
-
-  it("clamps the width of a single giant line", async () => {
-    const GIANT = "a=1;".repeat(150_000); // ~600k chars, one line > RENDER_MAX_CHARS (512k)
-    vi.spyOn(api, "getSources").mockResolvedValue({
-      run_id: "r", count: 1,
-      sources: [{ path: "https://acme.io/one.min.js", kind: "asset", fetch_status: "ok", asset_url: null }],
-    });
-    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "https://acme.io/one.min.js", content: GIANT, truncated: false });
-    render(<SourcesPage data={null} tenantId="t" runId="r" jump={null} />);
-
-    await waitFor(() => expect(document.querySelector(".sv-note.sv-warn")?.textContent).toMatch(/large file/i));
-    const rows = document.querySelectorAll(".sv-code-txt");
-    expect(rows).toHaveLength(1);
-    expect((rows[0].textContent ?? "").length).toBeLessThanOrEqual(512_000);
+    await waitFor(() => expect(document.querySelectorAll(".sv-line").length).toBeGreaterThan(0));
+    expect(document.querySelectorAll(".sv-line").length).toBeLessThan(500);        // windowed, not ~12k
   });
 
   // ---- windowed file tree (D25: the freeze was committing every node to the DOM) ----

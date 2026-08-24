@@ -67,4 +67,9 @@ async def get_run_source_content(
     )
     if content is None:
         raise HTTPException(status_code=404, detail="source not found")
-    return {"path": content.path, "content": content.content, "truncated": content.truncated}
+    return {
+        "path": content.path,
+        "content": content.content,
+        "truncated": content.truncated,
+        "formatted": content.formatted,
+    }
