@@ -66,6 +66,21 @@ describe("OverviewPanel", () => {
     expect(within(card("Attribution")).getByText("75%")).toBeInTheDocument(); // 3 / (3+1)
   });
 
+  it("counts cleartext internal-IP findings on the Internal IPs card", () => {
+    // No coverage field backs this metric — the card must tally it client-side from the
+    // findings list (like suspected secrets), showing the real count and no fabrication.
+    const data: FindingsResponse = {
+      run_id: "r", count: 3, coverage: null, spec: null,
+      findings: [
+        finding({ finding_hash: "ip1", type: "internal_ip", value: "10.0.0.1" }),
+        finding({ finding_hash: "ip2", type: "internal_ip", value: "192.168.1.5" }),
+        finding({ finding_hash: "e1", type: "endpoint", value: "/api/x" }),
+      ],
+    };
+    renderPanel(data);
+    expect(within(card("Internal IPs")).getByText("2")).toBeInTheDocument();
+  });
+
   it("orders the shadow endpoint first and tags it", () => {
     const data: FindingsResponse = {
       run_id: "r", count: 2, coverage: null, spec: null,

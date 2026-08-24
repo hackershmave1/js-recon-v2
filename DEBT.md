@@ -173,7 +173,7 @@ content from `source_map_ref` (mirroring `probe/sources.py:207-234`) so a recove
 re-validated on every map hop (intact today, `fetch.py:242`); content-addressed blobs; no silent under-report
 (REQ-D5). **Note:** the single-URL/upload fetch path has NO source-map logic at all (only crawl + capture do).
 
-#### D33 · Secret detection misses config-key / GUID exposure (precision-first ruleset) [S + M] — ⏳ PARTIAL (slices A + B shipped; only RFC1918 info-disclosure remains)  ·  correctness
+#### D33 · Secret detection misses config-key / GUID exposure (precision-first ruleset) [S + M] — ✅ RESOLVED (slices A + B + the RFC1918 info-disclosure family)  ·  correctness
 ✅ **Slice A RESOLVED 2026-08-24.** Shipped a `visible:true` custom rule `custom.config.guid_assignment`
 (`findings/rules/custom_rules.yml`) that EMITS a UUID assigned to a readable config identifier —
 camelCase/snake `tenant`/`client`/`appid`/`app_id` or snake `*_KEY` — closing gap (1). It emits alongside the
@@ -219,9 +219,23 @@ ranks suspected just below confirmed secrets. A "Scan for suspected secrets" opt
 — sent only when set so default request bodies stay lean. Higher-model code review = pending. Note: the Browser
 pane didn't composite in the build environment, so verification was via the vitest suite (221 pass — the panels
 + pill + toggle render + behave), oxlint+tsc, and a clean production build rather than a pixel screenshot.
-**Still open:** gap (2) **RFC1918 internal IPs** — deliberately NOT in the secret tier (the §4 review flagged
-hashing a plainly-visible internal IP + gating an "audited reveal" on it as a REQ-S2 category error); it belongs
-in its own cleartext info-disclosure finding family, tracked as a follow-up. Original analysis below.
+✅ **Gap (2) RESOLVED 2026-08-24 — the RFC1918 internal-IP info-disclosure family shipped.** A NEW
+`FindingType.INTERNAL_IP` (migration `0022_finding_internal_ip`, `ck_finding_type` widened like 0018/0021) —
+the first member of a CLEARTEXT info-disclosure family, deliberately NOT in the secret tier (the §4 review
+flagged hashing a plainly-visible internal IP + gating an audited reveal on it as a REQ-S2 category error).
+A pure detector (`findings/internal_ip.py`) finds IPv4 literals in the five locked ranges (10/8, 172.16/12,
+192.168/16 → `rfc1918`; 127/8 → `loopback`; 169.254/16 → `link-local`) via a boundary-guarded `re` dotted-quad
+(`(?<![\w.])…(?![\w.])`) + explicit-CIDR classify (NOT `ipaddress.is_private`, which over-matches), capped
+5000/blob. `analyze._record_internal_ip` emits it over the raw bundle AND recovered source-map units with the
+RAW cleartext IP as `finding.value` (never `normalize_secret_value`), `engine="internal-ip"`, category in
+attributes, counted separately (`coverage.internal_ips`, never inflating `secrets`). It is left OUT of the
+`queries._finding_view` is_secret tuple + the `reveal.py` type filter, so it renders cleartext, is never
+server-redacted, and the reveal endpoint refuses it. UI: an `--info` (blue) SOLID "internal IP" pill (findings
+list + `FindingDetail`, excluded from `isSecret`) + an Overview "Internal IPs" card counted client-side. Known
+accepted FP: a software version like `10.0.0.1` is indistinguishable from an IP (over-report bias, info lane).
+§4: the descope was settled at the D33-B review; higher-model code review PASSED (verified the non-secret emit
+path + that the redaction/reveal gates were left untouched). Backend host ruff/mypy + 27 hermetic detector
+tests green; frontend vitest/lint/build green. Original analysis below.
 
 Secret scanning = Kingfisher 1.106.0 built-in provider ruleset (~930 rules) + one custom AWS-AKIA rule, at
 default `--confidence medium` (`kingfisher.py:211-227`) — precision-first by design. Two structural COVERAGE

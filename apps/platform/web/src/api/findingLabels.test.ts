@@ -12,6 +12,10 @@ describe("typeLabel", () => {
     expect(typeLabel("endpoint_generic")).toBe("generic call");
   });
 
+  it("labels the cleartext internal-IP info-disclosure lane", () => {
+    expect(typeLabel("internal_ip")).toBe("internal IP");
+  });
+
   it("falls back to the raw wire token for types with no human label", () => {
     expect(typeLabel("secret")).toBe("secret");
     expect(typeLabel("param")).toBe("param");

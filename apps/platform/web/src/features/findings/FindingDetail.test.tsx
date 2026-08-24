@@ -39,6 +39,17 @@ describe("FindingDetail", () => {
     expect(screen.getByRole("button", { name: /reveal/i })).toBeInTheDocument();
   });
 
+  it("renders a cleartext internal IP with its evidence and never a reveal button", () => {
+    // internal_ip is a cleartext info-disclosure finding, NOT a secret: value + evidence
+    // show verbatim and it must never ride the isSecret reveal path. revealable is forced
+    // true to prove the isSecret exclusion (not a default flag) is what suppresses reveal.
+    show(finding({ type: "internal_ip", value: "10.0.0.1", revealable: true,
+      occurrences: [occ({ evidence: "fetch('http://10.0.0.1/admin')" })] }));
+    expect(screen.getByText("10.0.0.1")).toBeInTheDocument();
+    expect(screen.getByText(/fetch\('http:\/\/10\.0\.0\.1\/admin'\)/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /reveal/i })).toBeNull();
+  });
+
   it("attributes an occurrence to its source asset when asset_url is present", () => {
     show(finding({ occurrences: [occ({ asset_url: "https://acme.io/app.js" })] }));
     expect(screen.getByText(/https:\/\/acme\.io\/app\.js/)).toBeInTheDocument();

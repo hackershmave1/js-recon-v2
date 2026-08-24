@@ -37,6 +37,7 @@ from recon.findings import (
     deobfuscate,
     engines,
     graphql_ops,
+    internal_ip,
     kingfisher,
     normalize,
     queries,
@@ -104,6 +105,9 @@ class Coverage:
     # the precision-first `secrets` count above is never inflated by the ~50%-FP recall
     # lane. 0 unless the run opted into the `--confidence low` sweep.
     secrets_suspected: int = 0
+    # Cleartext info-disclosure sightings (internal-IP literals) — counted SEPARATELY, a
+    # NON-secret family, so they never inflate the `secrets` count above.
+    internal_ips: int = 0
     # Honest engine status (REQ-C2/§5): a scanner that was absent must not be
     # reported as "no secrets". Reachable values are "ok" and "unavailable" — a
     # genuine engine error/timeout raises before a Coverage is ever returned.
@@ -721,6 +725,38 @@ def _analyze_blob(
     # gets its own `secrets_suspected` count — the ~50%-FP recall never inflates `secrets`.
     secrets_sighted += recovered_secrets
     suspected_sighted += recovered_suspected
+    # Cleartext internal-IP literals (info-disclosure, NOT secrets): scan the raw bundle
+    # (source_path "input.js") AND each source-map-recovered original, exactly like the two
+    # secret passes above — a token in both is 1 finding / 2 occurrences. Unlike a secret,
+    # the value is stored/shown CLEARTEXT (never hashed/redacted/revealable) and counted in
+    # its OWN `internal_ips` total, so the ~precision `secrets` count is never inflated.
+    internal_ips_sighted = 0
+    for sighting in internal_ip.find_internal_ips(source):
+        written += _record_internal_ip(
+            session,
+            tenant_id,
+            run_id,
+            secret_path,
+            _SOURCE_NAME,
+            sighting,
+            run_asset_id=run_asset_id,
+            asset_url=asset_url,
+        )
+        internal_ips_sighted += 1
+    for source_path, unit_text in endpoints.recovered_units:
+        finding_path = normalize.normalize_source_path(source_path)
+        for sighting in internal_ip.find_internal_ips(unit_text):
+            written += _record_internal_ip(
+                session,
+                tenant_id,
+                run_id,
+                finding_path,
+                source_path,
+                sighting,
+                run_asset_id=run_asset_id,
+                asset_url=asset_url,
+            )
+            internal_ips_sighted += 1
     # GraphQL operations (enrichment C, export-only): a run-level artifact, never a
     # finding — persisted separately so it never pollutes the HTTP-endpoints read model.
     _record_graphql_operations(
@@ -736,6 +772,7 @@ def _analyze_blob(
             "unattributed": endpoints.unattributed,
             "secrets": secrets_sighted,
             "secrets_suspected": suspected_sighted,
+            "internal_ips": internal_ips_sighted,
             "secrets_engine": scan.status,
             "sources_recovered": endpoints.sources_recovered,
             "source_map": endpoints.source_map,
@@ -752,6 +789,7 @@ def _analyze_blob(
         written,
         secrets=secrets_sighted,
         secrets_suspected=suspected_sighted,
+        internal_ips=internal_ips_sighted,
         secrets_engine=scan.status,
         sources_recovered=endpoints.sources_recovered,
         source_map=endpoints.source_map,
@@ -788,6 +826,7 @@ def _merge_coverage(a: Coverage, b: Coverage) -> Coverage:
         findings_written=a.findings_written + b.findings_written,
         secrets=a.secrets + b.secrets,
         secrets_suspected=a.secrets_suspected + b.secrets_suspected,  # D33-B: additive like secrets
+        internal_ips=a.internal_ips + b.internal_ips,  # cleartext info-disclosure: additive too
         secrets_engine=(
             unavailable if unavailable in (a.secrets_engine, b.secrets_engine) else "ok"
         ),
@@ -1189,6 +1228,48 @@ def _record_secret(
             asset_url=asset_url,
         ),
         attributes={"rule": secret.rule_id, "name": secret.rule_name},
+    )
+
+
+def _record_internal_ip(
+    session: Session,
+    tenant_id: str,
+    run_id: str,
+    path: str,
+    source_path: str,
+    sighting: internal_ip.InternalIpSighting,
+    *,
+    run_asset_id: str | None = None,
+    asset_url: str | None = None,
+) -> int:
+    # value = the RAW cleartext dotted-quad. Unlike ``_record_secret`` this NEVER calls
+    # ``normalize.normalize_secret_value`` — an internal IP is info-disclosure, not a
+    # secret: it is plainly visible, so it is stored in CLEARTEXT as ``finding.value``
+    # (``finding_hash`` folds in the cleartext value only for identity/dedup — REQ-D3 —
+    # not to redact it), never server-redacted, and never reveal-gated (``internal_ip`` is
+    # deliberately absent from the ``_finding_view`` is_secret tuple and the ``reveal.py``
+    # type filter). Offsets are char offsets in the SAME unit text the detector scanned
+    # (the raw bundle or a recovered original); ``source_path`` threads through so the
+    # Sources tab joins this sighting to the endpoint/secret occurrences of that unit.
+    return _write(
+        session,
+        tenant_id,
+        run_id,
+        FindingType.INTERNAL_IP,
+        sighting.value,
+        path,
+        occurrence=store.Occurrence(
+            source_path=source_path,
+            line=sighting.line,
+            col=None,
+            offset_start=sighting.offset_start,
+            offset_end=sighting.offset_end,
+            engine="internal-ip",
+            confidence=None,
+            run_asset_id=run_asset_id,
+            asset_url=asset_url,
+        ),
+        attributes={"category": sighting.category},
     )
 
 
