@@ -196,12 +196,18 @@ def scan(
     bin_path: str | None = None,
     timeout_s: float | None = None,
     max_output_bytes: int | None = None,
+    confidence: str | None = None,
 ) -> ScanResult:
     """Scan ``source`` for secrets.
 
     Returns ``status="unavailable"`` (soft) if the binary is missing. Re-raises
     :class:`engines.EngineError`/:class:`engines.EngineTimeout` for a genuine
     failure so the analyze stage fails/retries instead of silently under-reporting.
+
+    ``confidence`` (D33-B) lowers Kingfisher's minimum emission threshold: ``"low"``
+    surfaces the opt-in recall lane (rules authored ``confidence: low`` emit ONLY then —
+    they stay silent at the default medium threshold, so the precision lane is untouched).
+    None keeps the engine default (medium).
     """
     settings = get_settings()
     bin_path = bin_path or settings.kingfisher_bin
@@ -217,7 +223,7 @@ def scan(
         # Scan the file (not the dir) so no sibling/symlink is ever walked.
         try:
             result = engines.run_engine(
-                _scan_argv(bin_path, target),
+                _scan_argv(bin_path, target, confidence),
                 timeout_s=timeout_s,
                 max_output_bytes=max_output_bytes,
                 ok_returncodes=_OK_RETURNCODES,
@@ -239,6 +245,7 @@ def scan_many(
     bin_path: str | None = None,
     timeout_s: float | None = None,
     max_output_bytes: int | None = None,
+    confidence: str | None = None,
 ) -> tuple[dict[int, list[RawSecret]], str]:
     """Scan MANY sources for secrets in ONE Kingfisher invocation.
 
@@ -268,7 +275,7 @@ def scan_many(
                 handle.write(content)
         try:
             result = engines.run_engine(
-                _scan_argv(bin_path, workdir),
+                _scan_argv(bin_path, workdir, confidence),
                 timeout_s=timeout_s,
                 max_output_bytes=max_output_bytes,
                 ok_returncodes=_OK_RETURNCODES,
@@ -286,14 +293,17 @@ def scan_many(
     return by_index, "ok"
 
 
-def _scan_argv(bin_path: str, target: str) -> list[str]:
+def _scan_argv(bin_path: str, target: str, confidence: str | None = None) -> list[str]:
     """The ``kingfisher scan`` argv for one target (a file or a dir).
 
     Loads the shipped custom rules; a missing file is a PACKAGING regression (the
     wheel dropped the data file), not a per-run condition, so degrade LOUDLY to the
     built-in ruleset — we still scan, only losing standalone AWS-key-id + config-GUID
     detection — rather than passing a bad --rules-path that makes kingfisher exit 1
-    and hard-fails every scan."""
+    and hard-fails every scan.
+
+    ``--confidence`` is a MINIMUM emission threshold (verified against 1.106.0): omitting
+    it keeps the default (medium) precision lane; ``low`` opts into the D33-B recall lane."""
     argv = [
         engines.resolve_bin(bin_path),
         "scan",
@@ -304,6 +314,8 @@ def _scan_argv(bin_path: str, target: str) -> list[str]:
         "--no-update-check",
         "--no-dedup",
     ]
+    if confidence:
+        argv += ["--confidence", confidence]
     if _RULES_PATH.is_file():
         argv += ["--rules-path", str(_RULES_PATH)]
     else:

@@ -219,6 +219,11 @@ class Run(Base):
     # clamped to max_fetch_bytes_ceiling by config.clamp_fetch_bytes() at read time.
     # NULL = use the global default. Bounds analyze memory (REQ-Q5). Migration 0013.
     max_fetch_bytes: Mapped[int | None] = mapped_column(Integer)
+    # D33-B opt-in: when true, the analyze stage runs Kingfisher at `--confidence low`
+    # and records the low-confidence-only hits as the SECRET_SUSPECTED recall tier
+    # (~50% FP, separate from the precision `secret` lane). NULL/false = the default
+    # medium scan (unchanged). Nullable + additive. Added in migration 0020.
+    scan_suspected_secrets: Mapped[bool | None] = mapped_column(Boolean)
     # Capture-ingest open-accumulator marker (see __table_args__). Added in 0011.
     capture_external_id: Mapped[str | None] = mapped_column(Text)
     error: Mapped[dict | None] = mapped_column(JSONB)

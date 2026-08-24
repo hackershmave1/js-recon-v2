@@ -163,6 +163,7 @@ class RunConfigView:
     input_ref: str | None
     source_map_ref: str | None
     max_fetch_bytes: int | None
+    scan_suspected_secrets: bool | None
     scope_hosts: list[str]
     engagement_id: str | None
     session_name: str | None
@@ -192,6 +193,7 @@ def get_run_config(tenant_id: str, run_id: str) -> RunConfigView | None:
             input_ref=run.input_ref,
             source_map_ref=run.source_map_ref,
             max_fetch_bytes=run.max_fetch_bytes,
+            scan_suspected_secrets=run.scan_suspected_secrets,
             scope_hosts=list(sess.scope_hosts) if sess else [],
             engagement_id=str(sess.engagement_id) if sess and sess.engagement_id else None,
             session_name=sess.name if sess else None,

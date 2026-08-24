@@ -192,6 +192,37 @@ def test_scan_many_attributes_each_secret_to_its_unit(engines_required):
     assert any("stripe" in s.rule_id for s in by_index[1])
 
 
+def test_scan_argv_adds_confidence_flag_only_when_set():
+    # D33-B: the opt-in low-confidence lane is expressed as `--confidence low`; the
+    # default (precision) scan must NOT pass the flag so Kingfisher keeps its medium floor.
+    with_low = kingfisher._scan_argv("kingfisher", "/tmp/t.js", "low")
+    assert "--confidence" in with_low
+    assert with_low[with_low.index("--confidence") + 1] == "low"
+    assert "--confidence" not in kingfisher._scan_argv("kingfisher", "/tmp/t.js")
+
+
+def test_low_confidence_recall_rule_is_silent_at_medium(engines_required):
+    # D33-B: the kebab/camelCase config-GUID recall rule (confidence: low) must emit ONLY
+    # under `--confidence low`, staying silent at the default medium scan — that gating is
+    # what keeps the ~50%-FP recall out of the precision lane.
+    guid = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+    units = [("app/config.js", f'const c={{apiKey:"{guid}", "client-key":"{guid}"}};'.encode())]
+    if kingfisher.scan(units[0][1]).status == "unavailable":
+        if engines_required:
+            pytest.fail("kingfisher binary required (RECON_REQUIRE_ENGINES) but unavailable")
+        pytest.skip("kingfisher binary not available")
+
+    at_medium, _ = kingfisher.scan_many(units)
+    at_low, _ = kingfisher.scan_many(units, confidence="low")
+    medium_rules = {s.rule_id for hits in at_medium.values() for s in hits}
+    low_rules = {s.rule_id for hits in at_low.values() for s in hits}
+    assert "custom.config.guid_assignment_low" not in medium_rules  # silent at medium
+    assert "custom.config.guid_assignment_low" in low_rules  # emits under low
+    assert all(
+        s.confidence == "low" for s in at_low[0] if s.rule_id.endswith("guid_assignment_low")
+    )
+
+
 def test_index_from_path_maps_or_rejects():
     # scan_many attributes each secret to its unit by parsing <tmpdir>/<i>.js; a stray or
     # out-of-range path must NOT mis-attribute to a real unit (it returns None instead).

@@ -173,7 +173,7 @@ content from `source_map_ref` (mirroring `probe/sources.py:207-234`) so a recove
 re-validated on every map hop (intact today, `fetch.py:242`); content-addressed blobs; no silent under-report
 (REQ-D5). **Note:** the single-URL/upload fetch path has NO source-map logic at all (only crawl + capture do).
 
-#### D33 · Secret detection misses config-key / GUID exposure (precision-first ruleset) [S + M] — ⏳ PARTIAL 2026-08-24 (slice A shipped; B + RFC1918 remain)  ·  correctness
+#### D33 · Secret detection misses config-key / GUID exposure (precision-first ruleset) [S + M] — ⏳ PARTIAL (slice A + B-backend shipped; B-UI + RFC1918 remain)  ·  correctness
 ✅ **Slice A RESOLVED 2026-08-24.** Shipped a `visible:true` custom rule `custom.config.guid_assignment`
 (`findings/rules/custom_rules.yml`) that EMITS a UUID assigned to a readable config identifier —
 camelCase/snake `tenant`/`client`/`appid`/`app_id` or snake `*_KEY` — closing gap (1). It emits alongside the
@@ -193,8 +193,27 @@ repo's over-report bias. A `# NOTE(DEBT D33)` marks the no-double-emit dependenc
 under the 1.106.0 pin — re-verify on any Kingfisher bump. Both §4 gates passed (adversarial design =
 SHIP-WITH-CHANGES — single-file over a rules-dir, provider "config", `examples:`+`.gitleaks.toml` wiring all
 folded; code review = SHIP-WITH-NITS — FP-comment honesty, a negative boundary test, `visible` symmetry, and
-this stale-comment refresh all folded). **Still open:** slice B (opt-in `--confidence low` "suspected-secret"
-tier for broader recall incl. kebab/camelCase keys) + gap (2) RFC1918 internal IPs. Original analysis below.
+this stale-comment refresh all folded).
+✅ **Slice B (BACKEND) RESOLVED.** The opt-in `--confidence low` "suspected secret" recall tier is a new
+`FindingType.SECRET_SUSPECTED` (migration `0021`, `ck_finding_type` widened like 0018/page_route), mirroring the
+endpoint `*_unresolved`/`*_generic` lanes. Per-run opt-in `run.scan_suspected_secrets` (nullable, migration
+`0020`) threads StartRunBody/RerunBody/upload → coordinator → service exactly like `max_fetch_bytes`; NULL =
+unchanged medium scan. `kingfisher.scan`/`scan_many` gained a `confidence` arg → `--confidence low` (a MINIMUM
+threshold, verified against 1.106.0: a `confidence: low` rule is silent at the default scan and emits only at
+low). `analyze._analyze_blob` scans at low when opted in and PARTITIONS by the engine-reported confidence —
+`low` → SECRET_SUSPECTED, medium/high/None → SECRET — so the precision lane is byte-identical opted-in-or-not.
+A new `custom.config.guid_assignment_low` rule (`confidence: low`, provider "config") catches the kebab
+(`client-key`) + camelCase (`apiKey`/`applicationId`) GUID keys slice A's medium rule deliberately doesn't.
+The suspected tier reuses SECRET's reveal/redaction machinery (widened together: `queries._finding_view`
+redaction + `revealable`, `reveal._load_target` query) but is counted SEPARATELY (`coverage.secrets_suspected`,
+never inflating `secrets`) and, because `finding_hash` includes the type, is kept OUT of the (still-unbuilt)
+REQ-D5 removal diff — documented on the enum member so the diff is scoped to `secret` + confirmed endpoints when
+built. §4 gates: adversarial design = SHIP-WITH-CHANGES (count-vs-security gate split, D5-diff-scoping, and the
+RFC1918-is-a-category-error descope all folded); higher-model code review = pending.
+**Still open:** slice B **UI** (the amber "suspected" pill + reveal button + overview treatment — a separate PR)
++ gap (2) **RFC1918 internal IPs** — deliberately NOT in the secret tier (the §4 review flagged hashing a
+plainly-visible internal IP + gating an "audited reveal" on it as a REQ-S2 category error); it belongs in its own
+cleartext info-disclosure finding family, tracked as a follow-up. Original analysis below.
 
 Secret scanning = Kingfisher 1.106.0 built-in provider ruleset (~930 rules) + one custom AWS-AKIA rule, at
 default `--confidence medium` (`kingfisher.py:211-227`) — precision-first by design. Two structural COVERAGE

@@ -31,6 +31,7 @@ def _cfg(**over) -> RunConfigView:
         "input_ref": None,
         "source_map_ref": None,
         "max_fetch_bytes": None,
+        "scan_suspected_secrets": None,
         "scope_hosts": ["acme.io"],
         "engagement_id": "eng-1",
         "session_name": "Acme",
@@ -186,3 +187,20 @@ def test_fetch_cap_edit_threads_to_start_run() -> None:
             MagicMock(), tenant_id="t", run_id="run-1", max_fetch_bytes=20 * _MIB
         )
     assert m.start_run.call_args.kwargs["max_fetch_bytes"] == 20 * _MIB
+
+
+def test_scan_suspected_edit_threads_to_start_run() -> None:
+    # D33-B: opting into the suspected lane on a re-run threads the flag to the new run.
+    with _patched(_cfg()) as m:
+        coordinator.edit_and_rerun(
+            MagicMock(), tenant_id="t", run_id="run-1", scan_suspected_secrets=True
+        )
+    assert m.start_run.call_args.kwargs["scan_suspected_secrets"] is True
+
+
+def test_scan_suspected_is_inherited_when_not_edited() -> None:
+    # Unset on the re-run → inherit the source run's setting (like every other field),
+    # so a re-run of a suspected-lane run stays a suspected-lane run.
+    with _patched(_cfg(scan_suspected_secrets=True)) as m:
+        coordinator.edit_and_rerun(MagicMock(), tenant_id="t", run_id="run-1")
+    assert m.start_run.call_args.kwargs["scan_suspected_secrets"] is True
