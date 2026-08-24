@@ -26,7 +26,10 @@ function occSource(o: Occurrence): { primary: string; bundle: string | null } {
 export function FindingDetail({ finding, runId, onJumpToSource }: {
   finding: Finding; runId: string; onJumpToSource?: (j: SourceJump) => void;
 }) {
-  const isSecret = finding.type === "secret";
+  // D33-B: the suspected tier reuses the SECRET machinery (server-redacted evidence +
+  // the audited reveal), so it takes the same treatment here — a raw suspected value is
+  // never rendered, and its reveal button shows when the backend marks it revealable.
+  const isSecret = finding.type === "secret" || finding.type === "secret_suspected";
   // null -> never classified (no spec attached to the session, or this
   // finding isn't an endpoint) -- rendered as its own "unclassified" verdict,
   // distinct from the three real classify_operation outcomes.

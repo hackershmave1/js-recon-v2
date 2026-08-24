@@ -30,6 +30,15 @@ describe("FindingDetail", () => {
     expect(screen.queryByText(/LEAKED-SECRET-MARKER-XYZ/)).toBeNull();
   });
 
+  it("treats a suspected secret like a secret: evidence hidden + reveal offered", () => {
+    // D33-B: secret_suspected rides the same isSecret path — its raw value is never
+    // rendered and a revealable one still gets the audited reveal control.
+    show(finding({ type: "secret_suspected", value: "config:sha256:abcd", revealable: true,
+      occurrences: [occ({ evidence: "SUSPECTED-MARKER-XYZ" })] }));
+    expect(screen.queryByText(/SUSPECTED-MARKER-XYZ/)).toBeNull();
+    expect(screen.getByRole("button", { name: /reveal/i })).toBeInTheDocument();
+  });
+
   it("attributes an occurrence to its source asset when asset_url is present", () => {
     show(finding({ occurrences: [occ({ asset_url: "https://acme.io/app.js" })] }));
     expect(screen.getByText(/https:\/\/acme\.io\/app\.js/)).toBeInTheDocument();

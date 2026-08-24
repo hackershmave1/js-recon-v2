@@ -40,6 +40,7 @@ export function EditRerunPanel({ runId, onCancel }: { runId: string; onCancel: (
   const [scopeHosts, setScopeHosts] = useState<string[]>([]);
   const [scopeInput, setScopeInput] = useState("");
   const [capMiB, setCapMiB] = useState("");
+  const [scanSuspected, setScanSuspected] = useState(false);
   const [authorizedBy, setAuthorizedBy] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +56,7 @@ export function EditRerunPanel({ runId, onCancel }: { runId: string; onCancel: (
         setCapture(c.crawl_mode === "capture");
         setScopeHosts(c.scope_hosts);
         setCapMiB(c.max_fetch_bytes ? String(Math.round(c.max_fetch_bytes / MIB)) : "");
+        setScanSuspected(!!c.scan_suspected_secrets);  // D33-B: inherit the source run's setting
         // MF1: the authorization ack is NEVER prefilled — a scope change is re-attested.
       })
       .catch((e) => {
@@ -94,7 +96,7 @@ export function EditRerunPanel({ runId, onCancel }: { runId: string; onCancel: (
     try {
       const body: {
         target?: string; capture?: boolean; scope_hosts?: string[];
-        authorized_by?: string; max_fetch_bytes?: number;
+        authorized_by?: string; max_fetch_bytes?: number; scan_suspected?: boolean;
       } = { scope_hosts: hosts };
       if (target.trim()) body.target = target.trim();
       if (!isUpload) {
@@ -102,6 +104,9 @@ export function EditRerunPanel({ runId, onCancel }: { runId: string; onCancel: (
         const mib = Number(capMiB);
         if (capMiB.trim() !== "" && mib > 0) body.max_fetch_bytes = Math.round(mib * MIB);
       }
+      // Analyze-stage opt-in — applies to uploads too (an uploaded bundle can carry a
+      // suspected secret), so it is sent regardless of isUpload.
+      body.scan_suspected = scanSuspected;
       if (authorizedBy.trim()) body.authorized_by = authorizedBy.trim();
       const run = await editAndRerun(tenantId, runId, body);
       navigate(`/runs/${run.run_id}`);
@@ -165,6 +170,15 @@ export function EditRerunPanel({ runId, onCancel }: { runId: string; onCancel: (
           <button type="button" className="nr-add" onClick={addHost} disabled={scopeInput.trim() === ""}>Add</button>
         </div>
       </div>
+
+      <label className="nr-capture">
+        <input type="checkbox" checked={scanSuspected}
+          onChange={(e) => setScanSuspected(e.target.checked)} />
+        <span className="nr-capture-text">
+          <span className="nr-capture-title">Scan for suspected secrets</span>
+          <span className="muted nr-capture-hint">Also run a broader, low-confidence secret pass (~50% false positives) — surfaced as a separate &quot;suspected&quot; lane, kept out of the confirmed count.</span>
+        </span>
+      </label>
 
       {needsAck && (
         <div className="nr-field">

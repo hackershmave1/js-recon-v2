@@ -11,5 +11,8 @@ export const TYPE_LABELS: Record<string, string> = {
   endpoint_unresolved: "unconfirmed",
   endpoint_generic: "generic call",
   page_route: "page route",
+  // Opt-in low-confidence recall lane (D33-B): a suspected secret (~50% FP), the
+  // recall counterpart to the precision `secret` lane. Shown as "suspected".
+  secret_suspected: "suspected",
 };
 export const typeLabel = (t: string): string => TYPE_LABELS[t] ?? t;

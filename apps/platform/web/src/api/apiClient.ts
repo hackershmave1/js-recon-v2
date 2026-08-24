@@ -145,7 +145,9 @@ export function uploadRun(tenantId: string, form: FormData): Promise<RunRef> {
 export function startRun(
   // `capture` opts the run into the runtime CDP capture stage (executed JS: workers,
   // injected, eval'd). Omitted unless true; the server 400s if capture mode is off.
-  tenantId: string, body: { session_id: string; target: string; capture?: boolean },
+  // `scan_suspected` opts into the D33-B low-confidence "suspected secret" recall lane.
+  tenantId: string,
+  body: { session_id: string; target: string; capture?: boolean; scan_suspected?: boolean },
 ): Promise<RunRef> {
   return request("/runs", json("POST", body), tenantId);
 }
@@ -162,7 +164,7 @@ export function editAndRerun(
   tenantId: string, runId: string,
   body: {
     target?: string; capture?: boolean; scope_hosts?: string[];
-    authorized_by?: string; max_fetch_bytes?: number;
+    authorized_by?: string; max_fetch_bytes?: number; scan_suspected?: boolean;
   },
 ): Promise<RunRef> {
   return request(`/runs/${encodeURIComponent(runId)}/rerun`, json("POST", body), tenantId);

@@ -173,7 +173,7 @@ content from `source_map_ref` (mirroring `probe/sources.py:207-234`) so a recove
 re-validated on every map hop (intact today, `fetch.py:242`); content-addressed blobs; no silent under-report
 (REQ-D5). **Note:** the single-URL/upload fetch path has NO source-map logic at all (only crawl + capture do).
 
-#### D33 · Secret detection misses config-key / GUID exposure (precision-first ruleset) [S + M] — ⏳ PARTIAL (slice A + B-backend shipped; B-UI + RFC1918 remain)  ·  correctness
+#### D33 · Secret detection misses config-key / GUID exposure (precision-first ruleset) [S + M] — ⏳ PARTIAL (slices A + B shipped; only RFC1918 info-disclosure remains)  ·  correctness
 ✅ **Slice A RESOLVED 2026-08-24.** Shipped a `visible:true` custom rule `custom.config.guid_assignment`
 (`findings/rules/custom_rules.yml`) that EMITS a UUID assigned to a readable config identifier —
 camelCase/snake `tenant`/`client`/`appid`/`app_id` or snake `*_KEY` — closing gap (1). It emits alongside the
@@ -210,10 +210,18 @@ never inflating `secrets`) and, because `finding_hash` includes the type, is kep
 REQ-D5 removal diff — documented on the enum member so the diff is scoped to `secret` + confirmed endpoints when
 built. §4 gates: adversarial design = SHIP-WITH-CHANGES (count-vs-security gate split, D5-diff-scoping, and the
 RFC1918-is-a-category-error descope all folded); higher-model code review = pending.
-**Still open:** slice B **UI** (the amber "suspected" pill + reveal button + overview treatment — a separate PR)
-+ gap (2) **RFC1918 internal IPs** — deliberately NOT in the secret tier (the §4 review flagged hashing a
-plainly-visible internal IP + gating an "audited reveal" on it as a REQ-S2 category error); it belongs in its own
-cleartext info-disclosure finding family, tracked as a follow-up. Original analysis below.
+✅ **Slice B (UI) RESOLVED.** The workspace now surfaces the tier: `secret_suspected` renders as a distinct
+amber, dashed "suspected" pill (findings list + overview, mirroring the endpoint unconfirmed lanes, NOT the
+solid-pink `secret`); `FindingDetail`'s `isSecret` covers it so its value stays server-redacted and it gets the
+same audited reveal button when revealable; the Overview Secrets card shows "+N suspected (low-confidence)" and
+ranks suspected just below confirmed secrets. A "Scan for suspected secrets" opt-in checkbox on both NewRunPanel
+(upload + crawl) and EditRerunPanel (prefilled from the source run, inherited on re-run) drives the backend flag
+— sent only when set so default request bodies stay lean. Higher-model code review = pending. Note: the Browser
+pane didn't composite in the build environment, so verification was via the vitest suite (221 pass — the panels
++ pill + toggle render + behave), oxlint+tsc, and a clean production build rather than a pixel screenshot.
+**Still open:** gap (2) **RFC1918 internal IPs** — deliberately NOT in the secret tier (the §4 review flagged
+hashing a plainly-visible internal IP + gating an "audited reveal" on it as a REQ-S2 category error); it belongs
+in its own cleartext info-disclosure finding family, tracked as a follow-up. Original analysis below.
 
 Secret scanning = Kingfisher 1.106.0 built-in provider ruleset (~930 rules) + one custom AWS-AKIA rule, at
 default `--confidence medium` (`kingfisher.py:211-227`) — precision-first by design. Two structural COVERAGE
