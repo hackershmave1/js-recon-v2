@@ -328,24 +328,41 @@ def _valid_file(f: dict, max_bytes: int) -> tuple[str, bytes] | None:
     return url, data
 
 
-def _valid_source_map(f: dict, max_bytes: int) -> bytes | None:
-    """Serialized source-map bytes for a file that carries one within the cap, else
-    ``None`` (no map / malformed / oversized). The extension sends
-    ``sourceMapContent`` as an already-parsed JSON OBJECT — it only sets it after a
-    successful client-side ``JSON.parse`` (``background.js``), so what arrives is
-    null or an object. A missing / non-object / oversized map is skipped WITHOUT
-    failing the file: the JS still analyzes, and a bad map is tolerated again at
-    analyze time (the "capture" source-map origin)."""
+def _valid_source_map(f: dict, max_bytes: int) -> tuple[bytes | None, bool]:
+    """Serialized source-map bytes for a file that carries one within the cap.
+
+    Returns ``(data, False)`` for a valid in-cap map, ``(None, True)`` when a map is
+    present but oversized (D32-A2: the caller sets ``source_map_skipped`` so analyze
+    reports coverage ``"skipped"`` rather than ``"none"``), and ``(None, False)`` for
+    absent or malformed (no honesty signal — there was nothing to recover).
+
+    The extension sends ``sourceMapContent`` as an already-parsed JSON OBJECT — it
+    only sets it after a successful client-side ``JSON.parse`` (``background.js``), so
+    what arrives is null or an object. A missing / non-object / oversized map is
+    skipped WITHOUT failing the file: the JS still analyzes, and a bad map is
+    tolerated again at analyze time (the "capture" source-map origin).
+
+    D17 blast-radius note (untrusted, shared-tenant ingress): ``max_bytes`` here is
+    ``max_source_map_bytes`` (32 MiB), larger than the 10 MiB it used to share with the
+    JS-content cap. This does NOT widen peak parse-time memory — Starlette has already
+    parsed the whole request body into ``smc`` (a dict) before this runs, so that
+    allocation is spent regardless of the cap (a pre-existing, uncapped-at-app-layer
+    property of this path; a hard body limit belongs at the ingress/reverse-proxy).
+    The cap raise only permits a larger ``json.dumps`` re-serialization + blob PUT — a
+    bounded, transient <=32 MiB bytestring per accepted map, freed after storage; the
+    analyze-memory bound is still enforced downstream (``engine_max_output_bytes``)."""
     smc = f.get("sourceMapContent")
     if not isinstance(smc, dict):
-        return None
+        return None, False
     try:
         data = json.dumps(smc).encode("utf-8")
     except (TypeError, ValueError):
-        return None
+        return None, False
     if len(data) > max_bytes:
-        return None
-    return data
+        # D32-A2: map was present but over the cap — caller sets source_map_skipped
+        # so analyze reports coverage:"skipped" instead of the silent "none".
+        return None, True
+    return data, False
 
 
 def _seed_fetched_assets(
@@ -353,6 +370,7 @@ def _seed_fetched_assets(
     run_id: str,
     keys_by_url: dict[str, str],
     map_keys_by_url: dict[str, str] | None = None,
+    skipped_map_urls: set[str] | None = None,
 ) -> int:
     """Seed this batch's urls as ``run_asset`` rows and mark each ``fetch_ok`` with
     its uploaded blob key — in ONE transaction, so a row is never left committed as
@@ -362,11 +380,16 @@ def _seed_fetched_assets(
     clobbers the original blob). A captured source map is linked in the SAME
     first-wins branch, so it is likewise set once and never clobbered.
 
+    ``skipped_map_urls`` (D32-A2) carries URLs whose uploaded map exceeded
+    ``max_source_map_bytes``. For those assets ``set_source_map_skipped`` is called in
+    the same transaction so analyze reports coverage ``"skipped"`` rather than ``"none"``.
+
     Returns the run's cumulative distinct-asset count after this batch (``len(by_url)``),
     reusing the rows already materialized here (no extra query) — the ABSOLUTE value the
     slice-2 ``capture.received`` indicator reports (eventually-consistent under concurrent
     same-session batches; the UI reducer keeps the max)."""
     map_keys_by_url = map_keys_by_url or {}
+    skipped_map_urls = skipped_map_urls or set()
     with tenant_session(tenant_id) as session:
         assets.seed_pending(session, tenant_id=tenant_id, run_id=run_id, urls=list(keys_by_url))
         session.flush()  # make the seeded rows visible to the query below, same tx
@@ -385,6 +408,10 @@ def _seed_fetched_assets(
                 map_key = map_keys_by_url.get(url)
                 if map_key:
                     assets.set_source_map_ref(session, str(row.id), map_key)
+                elif url in skipped_map_urls:
+                    # D32-A2: map was present but over max_source_map_bytes — flag so
+                    # analyze reports coverage:"skipped", not the silent "none".
+                    assets.set_source_map_skipped(session, str(row.id))
         return len(by_url)
 
 
@@ -422,6 +449,7 @@ def save_files(
     file_results: list[dict] = []
     keys_by_url: dict[str, str] = {}
     map_keys_by_url: dict[str, str] = {}
+    skipped_map_urls: set[str] = set()
     stored = failed = 0
     total_bytes = 0
     # Timing observability (§5): the batch is stored synchronously and the response
@@ -462,13 +490,26 @@ def save_files(
             key = storage.put_blob(tenant_id, run_id, "input", data)
             # Store the captured source map alongside the JS. A storage infra failure
             # here is STILL a 503 so the whole idempotent batch retries (a retry
-            # re-stores the same content-addressed blobs). A missing/malformed/oversized
-            # map is simply absent (None) — it never fails the file (a bad map is
-            # tolerated again at analyze time via the "capture" origin).
-            map_bytes = _valid_source_map(f, settings.max_upload_bytes)
+            # re-stores the same content-addressed blobs). A missing/malformed map is
+            # simply absent (None) — it never fails the file (a bad map is tolerated
+            # again at analyze time via the "capture" origin). D32-A2: the map gets its
+            # OWN (larger) cap — a real source map is 3-6x its bundle — and an OVERSIZED
+            # map is recorded as skipped (honest coverage), not silently dropped.
+            map_bytes, map_skipped = _valid_source_map(f, settings.max_source_map_bytes)
             if map_bytes is not None:
                 map_keys_by_url[url] = storage.put_blob(tenant_id, run_id, "source_map", map_bytes)
                 total_bytes += len(map_bytes)
+            elif map_skipped:
+                # D32-A2 honesty: a present-but-oversized map is a real coverage gap
+                # (analyze -> source_map:"skipped"), not "no map". Flagged in
+                # _seed_fetched_assets below (same tx as the fetch_ok seed).
+                skipped_map_urls.add(url)
+                log.info(
+                    "capture.source_map_skipped",
+                    run_id=run_id,
+                    url=url,
+                    reason="oversized",
+                )
         except Exception as exc:  # infra: 5xx so the extension RETRIES the whole (idempotent) batch
             log.error("capture.save_files.blob_failed", url=url, error=str(exc))
             raise HTTPException(status_code=503, detail="blob storage unavailable") from exc
@@ -485,7 +526,9 @@ def save_files(
         )
 
     if keys_by_url:
-        total = _seed_fetched_assets(tenant_id, run_id, keys_by_url, map_keys_by_url)
+        total = _seed_fetched_assets(
+            tenant_id, run_id, keys_by_url, map_keys_by_url, skipped_map_urls
+        )
         # Slice 2 — tell the run workspace captures are arriving, LIVE. The batch is
         # already durably stored+committed above, so this capture.received event is a
         # BEST-EFFORT side-channel: an event-bus hiccup (or a malformed url below) must

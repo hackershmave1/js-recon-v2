@@ -825,8 +825,10 @@ def test_save_files_source_map_retry_is_first_wins(make_capture_client):
 
 
 def test_save_files_oversized_map_skipped_file_still_stored(make_capture_client):
-    # A map over the byte cap is dropped; the JS is still stored + analyzable.
-    client = make_capture_client(RECON_MAX_UPLOAD_BYTES=64)
+    # D32-A2: a map over the source-map cap is dropped but flagged source_map_skipped
+    # (honest coverage:"skipped", not a silent "none"); the JS is still stored + analyzable.
+    # The map cap is now its OWN setting (RECON_MAX_SOURCE_MAP_BYTES), not the upload cap.
+    client = make_capture_client(RECON_MAX_SOURCE_MAP_BYTES=64)
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     big_map = {"version": 3, "sources": ["x"], "mappings": "A" * 200}
     body = _save(
@@ -836,6 +838,7 @@ def test_save_files_oversized_map_skipped_file_still_stored(make_capture_client)
     tid = _tenant_id(client.capture_tenant_name)
     row = _asset(tid, body["runId"], "https://acme.io/a.js")
     assert row.input_ref and row.source_map_ref is None
+    assert row.source_map_skipped is True  # D32-A2: honest, not silent "none"
 
 
 def test_save_files_non_object_map_skipped(make_capture_client):
@@ -848,7 +851,11 @@ def test_save_files_non_object_map_skipped(make_capture_client):
     )
     assert body["stored"] == 1
     tid = _tenant_id(client.capture_tenant_name)
-    assert _asset(tid, body["runId"], "https://acme.io/a.js").source_map_ref is None
+    row = _asset(tid, body["runId"], "https://acme.io/a.js")
+    assert row.source_map_ref is None
+    # D32-A2: a MALFORMED map is not "skipped" — there was nothing to recover, so no
+    # coverage gap is claimed (distinct from an oversized map, which IS flagged).
+    assert row.source_map_skipped is False
 
 
 # --------------------------------------------------------------------------- #
