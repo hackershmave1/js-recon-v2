@@ -14,5 +14,8 @@ export const TYPE_LABELS: Record<string, string> = {
   // Opt-in low-confidence recall lane (D33-B): a suspected secret (~50% FP), the
   // recall counterpart to the precision `secret` lane. Shown as "suspected".
   secret_suspected: "suspected",
+  // Cleartext internal-IP info-disclosure (e.g. "10.0.0.1"): NOT a secret — shown in
+  // cleartext, never redacted/revealable. Labelled "internal IP".
+  internal_ip: "internal IP",
 };
 export const typeLabel = (t: string): string => TYPE_LABELS[t] ?? t;

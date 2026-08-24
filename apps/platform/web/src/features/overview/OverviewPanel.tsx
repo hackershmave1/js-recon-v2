@@ -18,8 +18,11 @@ function priorityRank(f: Finding): number {
   // D33-B: a suspected secret ranks below a confirmed one but above generic endpoints —
   // still credential-shaped, just lower-confidence.
   if (f.type === "secret_suspected") return 2;
-  if (f.type === "endpoint") return 3;
-  return 4;
+  // Cleartext internal-IP disclosure: a security-relevant info leak, ranked just below the
+  // credential-shaped secrets lanes and above generic endpoints.
+  if (f.type === "internal_ip") return 3;
+  if (f.type === "endpoint") return 4;
+  return 5;
 }
 
 export function OverviewPanel(
@@ -39,6 +42,9 @@ export function OverviewPanel(
   // D33-B: the opt-in recall count, surfaced on the Secrets card so an operator who
   // turned the lane on sees it (distinct from the precision `secrets` headline value).
   const suspectedSecrets = countType(data.findings, "secret_suspected");
+  // Cleartext internal-IP info-disclosure: no coverage field exists for it, so count it
+  // client-side from the findings list (like the suspected-secret tally above).
+  const internalIps = countType(data.findings, "internal_ip");
   const files = c ? c.files.length : null;
   // `count` is the FLAT total of technologies across every host (not a host count).
   const techCount = technologies ? technologies.count : null;
@@ -63,6 +69,9 @@ export function OverviewPanel(
       sub: suspectedSecrets > 0
         ? `+${suspectedSecrets} suspected (low-confidence)`
         : c?.secrets_engine ? `secrets engine ${c.secrets_engine}` : "hardcoded values" },
+    { key: "internal_ips", label: "Internal IPs", section: "findings",
+      value: String(internalIps),
+      sub: "cleartext IP disclosure" },
     { key: "coverage", label: "Attribution", section: "findings",
       value: attributionPct == null ? DASH : `${attributionPct}%`,
       sub: c ? `${c.attributed} attributed · ${c.unattributed} not` : "awaiting analysis" },

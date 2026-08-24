@@ -99,6 +99,15 @@ class FindingType(StrEnum):
     # its own category: excluded from every `type == 'endpoint'` read model automatically,
     # and never counted in the API-surface coverage numbers.
     PAGE_ROUTE = "page_route"
+    # A cleartext internal-IP literal (info-disclosure) — the first member of a NON-secret
+    # info-disclosure family. Unlike SECRET, the value is plainly visible in the bundle, so
+    # it is stored + shown in CLEARTEXT (its raw dotted-quad is `finding.value`, never
+    # sha256-hashed into identity, never server-redacted, never reveal-gated) and it is
+    # counted SEPARATELY from secrets (it never inflates the `secrets` count). Like every
+    # non-`secret`/non-confirmed-endpoint lane, it is kept OUT of the future REQ-D5 removal
+    # diff (that diff is scoped to `secret` + confirmed endpoint lanes). A DISTINCT type, for
+    # the same auto-exclusion + provenance-in-identity rationale as the other lanes above.
+    INTERNAL_IP = "internal_ip"
 
 
 class AssetStatus(StrEnum):
