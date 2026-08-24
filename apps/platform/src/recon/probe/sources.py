@@ -219,19 +219,36 @@ def _recovered_content(
     except ClientError:
         return None
     try:
-        recovered = sourcemapper.recover_sources(map_bytes)
+        text = recover_file_text(map_bytes, path)
     except engines.EngineError:
         return None
+    if text is None:
+        return None
+    return _content_from_text(path, text)
+
+
+def recover_file_text(map_bytes: bytes, path: str) -> str | None:
+    """The recovered original at ``path`` from ``map_bytes``, beautified EXACTLY as the
+    analyze stage scans it (`findings.analyze._analysis_units`) — the single definition
+    of the recovered byte space. Analyze's secret offsets (D32-B1), this viewer, and the
+    audited reveal (`recon.probe.reveal`) all call this, so all three reproduce
+    byte-identical text and an offset located at analyze time round-trips at reveal time.
+
+    Returns ``None`` when the map recovered nothing usable or has no such file; raises
+    ``engines.EngineError`` on an unparseable map / absent binary so each caller decides
+    its own fallback (this viewer → 404; reveal → fail-closed denial)."""
+    recovered = sourcemapper.recover_sources(map_bytes)
     if recovered.status != "ok":
         return None
     for recovered_file in recovered.files:
+        # The SAME beautify_if_minified analyze ran before extraction, so a minified
+        # vendor original's served line numbers match its finding marks (and the web
+        # viewer no longer re-beautifies it, which would renumber lines out from under
+        # those marks).
         if recovered_file.path == path:
-            # The SAME beautify_if_minified analyze ran before extraction, so a minified
-            # vendor original's served line numbers match its finding marks (and the web
-            # viewer no longer re-beautifies it, which would renumber lines out from
-            # under those marks).
-            text = recovered_file.content.decode("utf-8", "replace")
-            return _content_from_text(path, deobfuscate.beautify_if_minified(text))
+            return deobfuscate.beautify_if_minified(
+                recovered_file.content.decode("utf-8", "replace")
+            )
     return None
 
 

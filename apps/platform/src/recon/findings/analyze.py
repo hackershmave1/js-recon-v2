@@ -384,6 +384,13 @@ class _EndpointExtraction:
     # D31: True if any unit's extract() hit the node budget (surfaced on coverage; also read by
     # the re-extract path to log its own tail-drop). Defaulted so older constructions stay valid.
     curtailed: bool = False
+    # D32-B1: the source-map-recovered `(source_path, unit_text)` pairs this pass analyzed —
+    # EMPTY for a no-map bundle (that single unit is the raw blob, already secret-scanned in
+    # `_analyze_blob`). `_analyze_blob` secret-scans these; the re-extract path ignores them
+    # (so re-extract still runs NO Kingfisher, spec §12 Blocker 2). The text is EXACTLY what
+    # was fed to `extract()`, so a secret offset located here round-trips through the reveal's
+    # identical `sources.recover_file_text` reproduction.
+    recovered_units: tuple[tuple[str, str], ...] = ()
 
 
 def _resolve_cross_module(
@@ -561,6 +568,10 @@ def _extract_endpoints(
         source_map=source_map_status,
         files=files,
         curtailed=curtailed,
+        # D32-B1: hand the recovered units to `_analyze_blob` for secret scanning. Empty
+        # when `is_bundle` (sources_recovered == 0) — that single "input.js" unit is the raw
+        # blob, already scanned from `raw` there, so it must never be re-scanned as recovered.
+        recovered_units=tuple(units) if not is_bundle else (),
     )
 
 
@@ -622,9 +633,11 @@ def _analyze_blob(
             cap=_MAX_AST_NODES,
         )
 
-    # Secrets are scanned on the original bundle this slice (input.js path).
-    # NOTE (follow-up): scanning recovered sources for secrets (real per-source
-    # paths for secrets too) is deferred; endpoint/param paths are the D3 win here.
+    # Secrets are scanned on the raw minified bundle (this loop, source_path "input.js")
+    # AND on each source-map-recovered original (D32-B1, below). The bundle scan is the
+    # floor — everything a minified string literal exposes; the recovered scan adds what
+    # lives ONLY in the original (a secret in a comment, or in code tree-shaken out of the
+    # bundle) — the silent gap D32 closes. A token in both is 1 finding / 2 occurrences.
     secret_path = normalize.normalize_source_path(_SOURCE_NAME)
     # Per (rule, snippet) search cursor so N identical secret sightings map to N
     # distinct byte offsets (distinct occurrences, REQ-C2) instead of collapsing.
@@ -641,6 +654,19 @@ def _analyze_blob(
             run_asset_id=run_asset_id,
             asset_url=asset_url,
         )
+    recovered_written, recovered_secrets = _record_recovered_secrets(
+        session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        recovered_units=endpoints.recovered_units,
+        run_asset_id=run_asset_id,
+        asset_url=asset_url,
+    )
+    written += recovered_written
+    # REQ-C2 honesty: the coverage `secrets` count is SIGHTINGS (== occurrences), so a
+    # recovered-only secret is never under-reported (the D32 silent-miss this closes) and
+    # a token seen in both bundle and recovered counts as 2 sightings of its 1 finding.
+    secrets_sighted = len(scan.secrets) + recovered_secrets
     # GraphQL operations (enrichment C, export-only): a run-level artifact, never a
     # finding — persisted separately so it never pollutes the HTTP-endpoints read model.
     _record_graphql_operations(
@@ -654,7 +680,7 @@ def _analyze_blob(
         payload={
             "attributed": endpoints.attributed,
             "unattributed": endpoints.unattributed,
-            "secrets": len(scan.secrets),
+            "secrets": secrets_sighted,
             "secrets_engine": scan.status,
             "sources_recovered": endpoints.sources_recovered,
             "source_map": endpoints.source_map,
@@ -669,7 +695,7 @@ def _analyze_blob(
         endpoints.attributed,
         endpoints.unattributed,
         written,
-        secrets=len(scan.secrets),
+        secrets=secrets_sighted,
         secrets_engine=scan.status,
         sources_recovered=endpoints.sources_recovered,
         source_map=endpoints.source_map,
@@ -1051,6 +1077,7 @@ def _record_secret(
     secret: RawSecret,
     cursors: dict[tuple[str, str], int],
     *,
+    source_path: str = _SOURCE_NAME,
     run_asset_id: str | None = None,
     asset_url: str | None = None,
 ) -> int:
@@ -1084,7 +1111,12 @@ def _record_secret(
         value,
         path,
         occurrence=store.Occurrence(
-            source_path=_SOURCE_NAME,
+            # D32-B1: the occurrence's source_path is the discriminator reveal uses to
+            # pick its byte space — _SOURCE_NAME ("input.js") == the raw bundle (slice the
+            # blob), a recovered path == the source map's original (re-derive it). The raw
+            # recovered `f.path`, matching the endpoint occurrences' source_path so the
+            # Sources tab joins them and reveal's `recover_file_text(map, path)` finds it.
+            source_path=source_path,
             line=secret.line,
             col=secret.column_start,
             offset_start=offset_start,
@@ -1097,6 +1129,54 @@ def _record_secret(
         ),
         attributes={"rule": secret.rule_id, "name": secret.rule_name},
     )
+
+
+def _record_recovered_secrets(
+    session: Session,
+    *,
+    tenant_id: str,
+    run_id: str,
+    recovered_units: tuple[tuple[str, str], ...],
+    run_asset_id: str | None,
+    asset_url: str | None,
+) -> tuple[int, int]:
+    """Secret-scan the source-map-recovered units (D32-B1); return (rows_written, sightings).
+
+    ONE batched Kingfisher pass (`scan_many`) over every recovered unit — a single
+    subprocess, not one per file (a real bundle's map recovers dozens–hundreds). Each
+    sighting is recorded at its recovered `source_path`, with the offset located in the
+    SAME `beautify_if_minified` unit text `sources.recover_file_text` reproduces at reveal
+    time — so an audited reveal round-trips (and any drift fail-closes 409, never leaks).
+    A genuine engine failure still RAISES (via `scan_many`) to fail/retry the stage; an
+    absent binary yields no sightings (the bundle scan already reports the honest status)."""
+    if not recovered_units:
+        return 0, 0
+    by_index, _status = kingfisher.scan_many(
+        [(path, text.encode("utf-8")) for path, text in recovered_units]
+    )
+    written = 0
+    sighted = 0
+    for index, secrets in by_index.items():
+        source_path, unit_text = recovered_units[index]
+        finding_path = normalize.normalize_source_path(source_path)
+        # Fresh cursor per unit: offsets are located within THIS unit's own byte space,
+        # so N identical sightings in one file still map to N distinct offsets (REQ-C2).
+        cursors: dict[tuple[str, str], int] = {}
+        for secret in secrets:
+            written += _record_secret(
+                session,
+                tenant_id,
+                run_id,
+                finding_path,
+                unit_text,
+                secret,
+                cursors,
+                source_path=source_path,
+                run_asset_id=run_asset_id,
+                asset_url=asset_url,
+            )
+            sighted += 1
+    return written, sighted
 
 
 def _record_graphql_operations(

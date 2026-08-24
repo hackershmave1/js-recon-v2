@@ -376,6 +376,62 @@ def test_recovered_sources_get_real_paths(redis, authorized_session, monkeypatch
     assert endpoints[0].value == "GET /api/widgets/{id}"
 
 
+def test_recovered_source_secret_recorded_at_its_path(
+    redis, authorized_session, monkeypatch, engines_required
+):
+    # D32-B1: a secret living ONLY in a source-map-recovered original (here in a COMMENT,
+    # which a minifier strips) is caught by scanning the recovered sources and attributed
+    # to the real per-source path — invisible to the raw-bundle-only scan, and counted so
+    # it is never silently under-reported (the exact D32 honesty gap).
+    from sqlalchemy import update
+
+    from recon import storage
+    from recon.db.base import tenant_session
+    from recon.findings import analyze, kingfisher, sourcemapper
+    from recon.runs import service
+
+    tenant, session_id = authorized_session
+    token = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEF0123"
+    recovered = (
+        f'// prod config (never shipped minified)\nconst KEY = "{token}";\n'
+        'export const pay = () => fetch("/api/pay");\n'
+    ).encode()
+    if kingfisher.scan(recovered).status == "unavailable":
+        if engines_required:
+            pytest.fail("kingfisher binary required (RECON_REQUIRE_ENGINES) but unavailable")
+        pytest.skip("kingfisher binary not available")
+
+    def fake_recover(map_bytes, **_kwargs):
+        return sourcemapper.RecoveredSources(
+            files=[sourcemapper.RecoveredFile("app/src/config.js", recovered)],
+            status="ok",
+            origin="uploaded",
+        )
+
+    monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
+
+    view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
+    # The minified bundle carries NO secret — only an endpoint — so the token is
+    # recovered-only: the bundle scan can't see it.
+    input_key = storage.put_blob(tenant, view.id, "input", b'fetch("/api/pay");')
+    map_key = storage.put_blob(tenant, view.id, "source_map", b'{"version":3}')
+    with tenant_session(tenant) as session:
+        session.execute(
+            update(models.Run)
+            .where(models.Run.id == view.id)
+            .values(input_ref=input_key, source_map_ref=map_key)
+        )
+
+    coverage = analyze.analyze_run(redis, tenant_id=tenant, run_id=view.id)
+
+    secrets = [f for f in _findings(tenant, view.id) if f.type == "secret"]
+    assert len(secrets) == 1  # the recovered-only secret is surfaced
+    assert coverage.secrets == 1  # and counted (REQ-C2 honesty), not silently dropped
+    # Attributed to the recovered path (occurrence.source_path), NOT the "input.js" bundle
+    # — so reveal re-derives the map, and the Sources tab lists it under the real file.
+    assert [o.source_path for o in _secret_occurrences(tenant, view.id)] == ["app/src/config.js"]
+
+
 def test_malformed_inline_map_falls_back_to_bundle(redis, authorized_session, monkeypatch):
     # A malformed inline map (attacker-influenced — it rides in the analyzed JS)
     # must NOT fail the run; analyze falls back to bundle analysis and records the
@@ -587,6 +643,17 @@ def _endpoint_occurrences(tenant, run_id):
                 select(models.FindingOccurrence)
                 .join(models.Finding, models.FindingOccurrence.finding)
                 .where(models.Finding.run_id == run_id, models.Finding.type == "endpoint")
+            ).scalars()
+        )
+
+
+def _secret_occurrences(tenant, run_id):
+    with tenant_session(tenant) as session:
+        return list(
+            session.execute(
+                select(models.FindingOccurrence)
+                .join(models.Finding, models.FindingOccurrence.finding)
+                .where(models.Finding.run_id == run_id, models.Finding.type == "secret")
             ).scalars()
         )
 

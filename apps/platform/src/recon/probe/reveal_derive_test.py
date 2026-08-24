@@ -106,6 +106,37 @@ def test_offsets_are_sliced_in_the_utf8_replace_space(monkeypatch):
     assert outcome.value == token
 
 
+def test_bundle_sentinel_wins_over_a_present_map(monkeypatch):
+    # D32-B1 discriminator guard: a raw-bundle secret keeps source_path "input.js" even on
+    # an asset that HAS a source map. _is_recovered must stay False (the sentinel check
+    # short-circuits before the map check), so _derive slices the bundle blob — never the
+    # map. Guards against a future refactor dropping the sentinel and mis-routing bundle
+    # secrets into map re-derivation.
+    token = "reveal-me-bundle-value"
+    blob = b"const k = '" + token.encode() + b"';"
+    start = blob.index(token.encode())
+    end = start + len(token)
+    value = normalize.normalize_secret_value(token, "stripe")
+    reads: list[str] = []
+
+    def _get_blob(key):
+        reads.append(key)
+        return blob
+
+    monkeypatch.setattr(reveal.storage, "get_blob", _get_blob)
+    outcome = reveal._derive(
+        _target(
+            value=value,
+            offset_start=start,
+            offset_end=end,
+            source_path="input.js",
+            source_map_ref="t/r/source_map/deadbeef",  # present, but must be ignored
+        )
+    )
+    assert outcome.revealed is True and outcome.value == token
+    assert reads == ["t/r/raw_js/deadbeef"]  # read the bundle input_ref, never the map
+
+
 def _occ(offset_start, offset_end, source_path, occurrence_hash):
     return types.SimpleNamespace(
         offset_start=offset_start,

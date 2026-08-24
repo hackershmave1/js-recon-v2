@@ -151,6 +151,58 @@ def test_scan_real_binary_detects_planted_secret(engines_required):
     assert any("stripe" in secret.rule_id for secret in result.secrets)
 
 
+def test_parse_findings_captures_path():
+    # D32-B1: scan_many attributes each sighting back to its unit via finding.path.
+    secret = kingfisher.parse_findings(_JSONL)[0]
+    assert secret.path == "/tmp/kf/input.js"
+
+
+def test_scan_many_empty_is_a_noop_without_a_subprocess():
+    # No units -> no work, no binary needed (guards the D32-B1 no-map/no-recovery path).
+    by_index, status = kingfisher.scan_many([])
+    assert by_index == {} and status == "ok"
+
+
+def test_scan_many_missing_binary_degrades_gracefully():
+    by_index, status = kingfisher.scan_many(
+        [("a.js", b"const x = 1;")], bin_path="definitely-not-kingfisher-xyzzy"
+    )
+    assert status == "unavailable" and by_index == {}
+
+
+def test_scan_many_attributes_each_secret_to_its_unit(engines_required):
+    # D32-B1 core: ONE batched pass over many units still attributes each secret to the
+    # right unit index — including a secret in a COMMENT (the recovered-only case that a
+    # minified bundle would have stripped). Split literals so no token is committed.
+    token = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc" + "ABCDEF0123"
+    units = [
+        ("app/clean.js", b"export const x = 1;"),
+        ("app/config.js", f"// leaked key: {token}".encode()),  # secret in a comment
+        ("app/other.js", b'const y = fetch("/api/z");'),
+    ]
+    if kingfisher.scan(units[1][1]).status == "unavailable":
+        if engines_required:
+            pytest.fail("kingfisher binary required (RECON_REQUIRE_ENGINES) but unavailable")
+        pytest.skip("kingfisher binary not available")
+
+    by_index, status = kingfisher.scan_many(units)
+    assert status == "ok"
+    # Only unit 1 carries a secret; it is attributed to index 1, not 0 or 2.
+    assert set(by_index) == {1}
+    assert any("stripe" in s.rule_id for s in by_index[1])
+
+
+def test_index_from_path_maps_or_rejects():
+    # scan_many attributes each secret to its unit by parsing <tmpdir>/<i>.js; a stray or
+    # out-of-range path must NOT mis-attribute to a real unit (it returns None instead).
+    assert kingfisher._index_from_path("/tmp/kf-x/2.js", 3) == 2
+    assert kingfisher._index_from_path("2.js", 3) == 2  # basename match, rel or abs
+    assert kingfisher._index_from_path("/tmp/kf-x/9.js", 3) is None  # out of range
+    assert kingfisher._index_from_path("/tmp/kf-x/notanumber.js", 3) is None
+    assert kingfisher._index_from_path("/tmp/kf-x/2.txt", 3) is None  # not our .js
+    assert kingfisher._index_from_path(None, 3) is None
+
+
 def test_custom_rules_file_ships_where_scan_expects():
     # Guards a source-tree regression (rename/delete). Both shipped custom rules live
     # in ONE file loaded via --rules-path. Wheel packaging is enforced separately by
