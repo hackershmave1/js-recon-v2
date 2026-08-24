@@ -91,6 +91,19 @@ describe("NewRunPanel", () => {
     expect(api.startRun).toHaveBeenCalledWith(TENANT, { session_id: "s1", target: "acme.io", capture: true });
   });
 
+  it("crawl with 'scan for suspected secrets' checked sends scan_suspected:true", async () => {
+    // D33-B: the opt-in flows to startRun only when checked (default body stays lean).
+    vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: ["acme.io"], authorization_ack: true });
+    vi.spyOn(api, "startRun").mockResolvedValue({ run_id: "run-sus", state: "queued" });
+    renderPanel();
+    await userEvent.click(screen.getByRole("radio", { name: /crawl/i }));
+    await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
+    await userEvent.type(screen.getByLabelText("Domain"), "acme.io");
+    await userEvent.click(screen.getByRole("checkbox", { name: /suspected secrets/i }));
+    await userEvent.click(screen.getByRole("button", { name: /crawl/i }));
+    expect(api.startRun).toHaveBeenCalledWith(TENANT, { session_id: "s1", target: "acme.io", scan_suspected: true });
+  });
+
   it("adds a scope host on Enter without submitting the form", async () => {
     renderPanel();
     await userEvent.click(screen.getByRole("radio", { name: /crawl/i }));
