@@ -20,7 +20,10 @@ from recon.runs import service
 
 pytestmark = pytest.mark.integration
 
-_MED = "sk_live_MEDIUMTOKEN0000000000"
+# Non-secret-shaped markers: the scan is FAKED, so these only need to be locatable in the
+# source blob (locate_snippet) and are hashed into the finding value regardless of shape —
+# keeping them free of any real secret prefix so the gitleaks lane stays clean.
+_MED = "medium-lane-marker-000111"
 _LOW = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 _LOW_RULE = "custom.config.guid_assignment_low"
 
