@@ -46,6 +46,7 @@ export function NewRunPanel() {
   const [dragOver, setDragOver] = useState(false);
   const [domain, setDomain] = useState("");
   const [capture, setCapture] = useState(false);
+  const [scanSuspected, setScanSuspected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -98,6 +99,7 @@ export function NewRunPanel() {
         const run = await startRun(tenantId, {
           session_id: session.session_id, target: domain.trim(),
           ...(capture ? { capture: true } : {}),
+          ...(scanSuspected ? { scan_suspected: true } : {}),
         });
         navigate(`/runs/${run.run_id}`);
         return;
@@ -106,6 +108,8 @@ export function NewRunPanel() {
       const form = new FormData();
       form.append("file", file);
       form.append("session_id", session.session_id);
+      // Only send the opt-in when set, mirroring `capture` — keeps the default body lean.
+      if (scanSuspected) form.append("scan_suspected", "true");
       const run = await uploadRun(tenantId, form);
       navigate(`/runs/${run.run_id}`);
     } catch (err) {
@@ -194,6 +198,15 @@ export function NewRunPanel() {
         </div>
         <p className="muted nr-hint">{scopeHint}</p>
       </div>
+
+      <label className="nr-capture">
+        <input type="checkbox" checked={scanSuspected}
+          onChange={(e) => setScanSuspected(e.target.checked)} />
+        <span className="nr-capture-text">
+          <span className="nr-capture-title">Scan for suspected secrets</span>
+          <span className="muted nr-capture-hint">Also run a broader, low-confidence secret pass (~50% false positives) — surfaced as a separate &quot;suspected&quot; lane, kept out of the confirmed count.</span>
+        </span>
+      </label>
 
       <div className="nr-field"><label htmlFor="auth">Authorized by</label>
         <input id="auth" value={authorizedBy} placeholder="your name / ticket"

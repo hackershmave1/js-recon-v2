@@ -7,6 +7,8 @@ export interface RunRef { run_id: string; state: string; }
 export interface RunConfig {
   run_id: string; target: string | null; crawl_mode: string | null;
   scope_hosts: string[]; max_fetch_bytes: number | null; is_upload: boolean;
+  // D33-B: whether the run opted into the low-confidence "suspected secret" recall lane.
+  scan_suspected_secrets: boolean | null;
 }
 export interface RunStatus {
   run_id: string; session_id?: string; state: string; stage: string | null; done: number; total: number;

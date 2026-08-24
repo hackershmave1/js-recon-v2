@@ -53,6 +53,9 @@
 }
 .ov-type-secret { color: var(--pink); }
 .ov-type-param { color: var(--purple); }
+/* Suspected secret (D33-B, opt-in recall): lower-confidence than a real secret — warning
+   tint + dashed, like the unconfirmed endpoint lanes, not the solid pink of `secret`. */
+.ov-type-secret_suspected { color: var(--warn, var(--muted)); border-style: dashed; }
 /* Unconfirmed lane (Tier 4): lower-confidence than a real endpoint — dashed + warning tint. */
 .ov-type-endpoint_unresolved { color: var(--warn, var(--muted)); border-style: dashed; }
 .ov-type-endpoint_generic { color: var(--warn, var(--muted)); border-style: dashed; }

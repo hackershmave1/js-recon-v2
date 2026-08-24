@@ -17,7 +17,8 @@ beforeEach(() => { vi.restoreAllMocks(); localStorage.setItem("recon.tenantId", 
 function crawlCfg(over: Partial<RunConfig> = {}): RunConfig {
   return {
     run_id: "run-1", target: "acme.io", crawl_mode: null,
-    scope_hosts: ["acme.io"], max_fetch_bytes: null, is_upload: false, ...over,
+    scope_hosts: ["acme.io"], max_fetch_bytes: null, is_upload: false,
+    scan_suspected_secrets: null, ...over,
   };
 }
 
@@ -40,7 +41,7 @@ describe("EditRerunPanel", () => {
     expect(screen.queryByLabelText(/authorized by/i)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /re-run/i }));
     expect(api.editAndRerun).toHaveBeenCalledWith(TENANT, "run-1",
-      { scope_hosts: ["acme.io"], target: "acme.io", capture: false });
+      { scope_hosts: ["acme.io"], target: "acme.io", capture: false, scan_suspected: false });
     expect(navigate).toHaveBeenCalledWith("/runs/run-2");
   });
 
@@ -57,7 +58,7 @@ describe("EditRerunPanel", () => {
     await userEvent.click(submit);
     expect(api.editAndRerun).toHaveBeenCalledWith(TENANT, "run-1", {
       scope_hosts: ["acme.io", "cdn.acme.io"], target: "acme.io",
-      capture: false, authorized_by: "tester-2",
+      capture: false, scan_suspected: false, authorized_by: "tester-2",
     });
   });
 
@@ -77,7 +78,25 @@ describe("EditRerunPanel", () => {
     await userEvent.type(screen.getByLabelText(/fetch size cap/i), "32");
     await userEvent.click(screen.getByRole("button", { name: /re-run/i }));
     expect(api.editAndRerun).toHaveBeenCalledWith(TENANT, "run-1", {
-      scope_hosts: ["acme.io"], target: "acme.io", capture: false, max_fetch_bytes: 32 * MIB,
+      scope_hosts: ["acme.io"], target: "acme.io", capture: false,
+      max_fetch_bytes: 32 * MIB, scan_suspected: false,
     });
+  });
+
+  it("prefills the suspected-secret toggle and sends it when re-run", async () => {
+    // D33-B: a re-run of a run that had the lane on inherits the toggle (checked), and
+    // toggling it flows to editAndRerun as scan_suspected.
+    vi.spyOn(api, "getRunConfig").mockResolvedValue(crawlCfg({ scan_suspected_secrets: true }));
+    vi.spyOn(api, "editAndRerun").mockResolvedValue({ run_id: "run-2", state: "queued" });
+    renderPanel();
+    const toggle = await screen.findByRole("checkbox", { name: /suspected secrets/i });
+    expect(toggle).toBeChecked();  // inherited from the source run
+    await userEvent.click(toggle);  // turn it off for this re-run
+    await userEvent.click(screen.getByRole("button", { name: /re-run/i }));
+    expect(api.editAndRerun).toHaveBeenCalledWith(
+      TENANT,
+      "run-1",
+      expect.objectContaining({ scan_suspected: false }),
+    );
   });
 });

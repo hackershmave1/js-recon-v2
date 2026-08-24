@@ -15,8 +15,11 @@ function countType(findings: Finding[], type: string): number {
 function priorityRank(f: Finding): number {
   if (f.type === "endpoint" && f.spec_status?.status === "shadow") return 0;
   if (f.type === "secret") return 1;
-  if (f.type === "endpoint") return 2;
-  return 3;
+  // D33-B: a suspected secret ranks below a confirmed one but above generic endpoints —
+  // still credential-shaped, just lower-confidence.
+  if (f.type === "secret_suspected") return 2;
+  if (f.type === "endpoint") return 3;
+  return 4;
 }
 
 export function OverviewPanel(
@@ -33,6 +36,9 @@ export function OverviewPanel(
   const attributionPct = attributedTotal > 0 ? Math.round((c!.attributed / attributedTotal) * 100) : null;
   const endpoints = countType(data.findings, "endpoint");
   const secrets = c ? c.secrets : countType(data.findings, "secret");
+  // D33-B: the opt-in recall count, surfaced on the Secrets card so an operator who
+  // turned the lane on sees it (distinct from the precision `secrets` headline value).
+  const suspectedSecrets = countType(data.findings, "secret_suspected");
   const files = c ? c.files.length : null;
   // `count` is the FLAT total of technologies across every host (not a host count).
   const techCount = technologies ? technologies.count : null;
@@ -54,7 +60,9 @@ export function OverviewPanel(
       sub: hosts ? `${hosts.in_scope} in scope · ${hostsOut} out` : "attack surface" },
     { key: "secrets", label: "Secrets", section: "findings",
       value: String(secrets),
-      sub: c?.secrets_engine ? `secrets engine ${c.secrets_engine}` : "hardcoded values" },
+      sub: suspectedSecrets > 0
+        ? `+${suspectedSecrets} suspected (low-confidence)`
+        : c?.secrets_engine ? `secrets engine ${c.secrets_engine}` : "hardcoded values" },
     { key: "coverage", label: "Attribution", section: "findings",
       value: attributionPct == null ? DASH : `${attributionPct}%`,
       sub: c ? `${c.attributed} attributed · ${c.unattributed} not` : "awaiting analysis" },
