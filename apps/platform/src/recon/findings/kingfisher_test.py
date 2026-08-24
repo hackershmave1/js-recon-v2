@@ -192,6 +192,17 @@ def test_scan_many_attributes_each_secret_to_its_unit(engines_required):
     assert any("stripe" in s.rule_id for s in by_index[1])
 
 
+def test_index_from_path_maps_or_rejects():
+    # scan_many attributes each secret to its unit by parsing <tmpdir>/<i>.js; a stray or
+    # out-of-range path must NOT mis-attribute to a real unit (it returns None instead).
+    assert kingfisher._index_from_path("/tmp/kf-x/2.js", 3) == 2
+    assert kingfisher._index_from_path("2.js", 3) == 2  # basename match, rel or abs
+    assert kingfisher._index_from_path("/tmp/kf-x/9.js", 3) is None  # out of range
+    assert kingfisher._index_from_path("/tmp/kf-x/notanumber.js", 3) is None
+    assert kingfisher._index_from_path("/tmp/kf-x/2.txt", 3) is None  # not our .js
+    assert kingfisher._index_from_path(None, 3) is None
+
+
 def test_custom_rules_file_ships_where_scan_expects():
     # Guards a source-tree regression (rename/delete). Both shipped custom rules live
     # in ONE file loaded via --rules-path. Wheel packaging is enforced separately by

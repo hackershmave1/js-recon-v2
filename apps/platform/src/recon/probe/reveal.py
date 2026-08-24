@@ -312,7 +312,16 @@ def _recovered_byte_space(target: _Target) -> bytes | None:
     exactly as analyze scanned it and the Sources viewer serves it (the shared
     ``sources.recover_file_text`` = one definition of the recovered bytes). ``None`` (→
     source_gone) if the map is absent/unparseable or no longer recovers this path; the
-    integrity re-check in ``_derive`` still guards against any residual drift."""
+    integrity re-check in ``_derive`` still guards against any residual drift.
+
+    KNOWN LIMITATION (DEBT D32, inline maps): a secret recovered from an INLINE ``data:``
+    source map has no persisted ``source_map_ref`` (the map rode in the bundle and was
+    never stored), so ``_is_recovered`` is False and reveal slices the bundle → integrity
+    409. This is FAIL-CLOSED (never wrong bytes) and CONSISTENT with the Sources viewer,
+    which likewise can't re-derive an inline map (``sources._resolve_source_map_ref``
+    returns None). The finding is still surfaced; only the just-in-time plaintext reveal
+    is unavailable. Rare in practice — inline maps bloat a bundle so production ships
+    external ``.map`` files (this slice's target). Fix would persist the inline map."""
     if not target.source_map_ref or not target.source_path:
         return None
     try:

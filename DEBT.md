@@ -141,6 +141,13 @@ should-fix hardened via the map-present guard); higher-model code review = pendi
 `findings/kingfisher_test.py` (scan_many batching + per-unit attribution + path capture),
 `findings/analyze_test.py` (recovered-only secret recorded at its path + counted), and
 `probe/reveal_recovered_test.py` (reveal round-trips a recovered secret; drift fails closed 409).
+**Known residual (inline maps, fail-closed):** a secret recovered from an INLINE `data:` source map
+has no persisted `source_map_ref` (the map rode in the bundle, never stored), so reveal slices the
+bundle → integrity 409 and the Sources viewer can't re-derive it either — a PRE-EXISTING systemic
+limitation (inline maps aren't persisted), consistent across both surfaces and fail-closed (the
+finding is still surfaced; only the JIT plaintext reveal is unavailable). Rare in practice (inline
+maps bloat a bundle, so production ships external `.map`); a full fix would persist the inline map at
+analyze time. Higher-model code review = SHIP-WITH-CHANGES (this residual documented, not a blocker).
 Original analysis below.
 
 Two independent gaps hide everything that lives only in a JS source map (the recovered original source,
