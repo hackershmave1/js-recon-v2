@@ -1,4 +1,5 @@
-"""Unit tests for config helpers — clamp_fetch_bytes (per-run fetch-cap, REQ-Q5)."""
+"""Unit tests for config helpers — clamp_fetch_bytes (per-run fetch-cap, REQ-Q5) +
+the D32-A1 source-map cap default."""
 
 from __future__ import annotations
 
@@ -42,3 +43,13 @@ def test_ceiling_bounds_even_the_global_default() -> None:
     s = _settings(default=100, ceiling=32)
     assert clamp_fetch_bytes(None, s) == 32
     assert clamp_fetch_bytes(50, s) == 32
+
+
+def test_source_map_cap_default_is_larger_than_bundle_cap() -> None:
+    # D32-A1: the .map fetch gets its OWN declared-default cap (32 MiB engine bound),
+    # larger than the default bundle cap (10 MiB) — a real source map is 3-6x its bundle,
+    # so sharing a cap would soft-drop the map. Assert the DECLARED defaults, which is
+    # env-independent (a stray RECON_* env / .env can't flip this regression check).
+    fields = Settings.model_fields
+    assert fields["max_source_map_bytes"].default == 32 * 1024 * 1024
+    assert fields["max_source_map_bytes"].default > fields["max_fetch_bytes"].default
