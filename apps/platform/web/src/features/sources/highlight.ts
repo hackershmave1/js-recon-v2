@@ -52,3 +52,35 @@ export async function highlightJsLines(code: string): Promise<HighlightedSpan[][
   for (const t of tokens) collectSegments(t, [], segments);
   return splitIntoLines(segments);
 }
+
+// Minimal structural shape of Prism used for per-line, viewport-scoped highlighting.
+interface PrismLike {
+  tokenize: (code: string, grammar: unknown) => unknown[];
+  languages: { javascript: unknown };
+}
+
+// D35: the virtualized code viewer highlights only the ~visible lines, so it loads
+// Prism ONCE and tokenizes line-by-line as rows scroll into view (whole-file Prism on a
+// 10 MB bundle is the 150-400 MB token cliff the swarm flagged). Trade-off: a token that
+// spans lines (block comment, multi-line template literal) is tokenized per line without
+// carry-over state, so it can mis-highlight — accepted for a viewer over correctness of
+// the whole-file path. Long lines are skipped by the caller (a per-line char cap).
+let prismPromise: Promise<PrismLike> | null = null;
+
+export function loadPrism(): Promise<PrismLike> {
+  prismPromise ??= import("prismjs").then(
+    (mod) => (mod as unknown as { default: PrismLike }).default,
+  );
+  return prismPromise;
+}
+
+// Highlight ONE line into spans (empty line -> no spans). Reuses the same token->span
+// flattening as the whole-file path so the CSS token classes match.
+export function highlightLine(prism: PrismLike, code: string): HighlightedSpan[] {
+  if (code === "") return [];
+  const tokens = prism.tokenize(code, prism.languages.javascript) as unknown as PrismNode[];
+  const segments: HighlightedSpan[] = [];
+  for (const t of tokens) collectSegments(t, [], segments);
+  // A single line yields a single line-array from splitIntoLines.
+  return splitIntoLines(segments)[0] ?? [];
+}

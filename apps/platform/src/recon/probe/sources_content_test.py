@@ -52,3 +52,11 @@ def test_non_utf8_input_decoded_with_replacement_round_trips():
     out = sources._content_from_text("bin.js", text)
     assert out.truncated is False
     assert out.content.startswith("ok")
+
+
+def test_formatted_flag_defaults_false_and_passes_through():
+    # D35: `formatted` records whether the SERVER already beautified the text. It defaults
+    # False (a raw-served bundle, which the client formats) and passes through unchanged, so
+    # the client decides whether to re-format from an authoritative flag, not a content guess.
+    assert sources._content_from_text("raw.js", "x").formatted is False
+    assert sources._content_from_text("fmt.js", "x", formatted=True).formatted is True

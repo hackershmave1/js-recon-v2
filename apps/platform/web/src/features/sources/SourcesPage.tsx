@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import { getSources, getSourceContent, ApiError } from "../../api/apiClient";
 import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump } from "../../api/types";
 import { CodeViewer } from "./CodeViewer";
+import { beautify } from "./beautifyClient";
 import { useResizableRail } from "../../shell/useResizableRail";
 import { measureSync } from "../../shell/observability";
 import "./sources.css";
@@ -201,28 +202,11 @@ function isMinified(text: string): boolean {
   return text.split("\n", 200).some((line) => line.length > 500);
 }
 
-// Lazily load the beautifier the first time a source is pretty-printed, so it never
-// enters the initial bundle. Falls back to the raw code if the import/format fails.
-async function formatJs(code: string): Promise<string> {
-  try {
-    const mod = await import("js-beautify");
-    // Vite's CJS interop may put the named export directly or under `default`.
-    const beautify = mod.js_beautify ?? (mod as unknown as { default?: typeof mod }).default?.js_beautify;
-    return beautify ? beautify(code, { indent_size: 2, end_with_newline: false }) : code;
-  } catch {
-    return code;
-  }
-}
-
-// Files past this size skip syntax highlighting: tokenizing multiple MiB
-// synchronously would freeze the tab (design fix S2).
-const HIGHLIGHT_MAX_CHARS = 200_000;
-
-// Files past this size are NOT auto-pretty-printed and the "Pretty print" button is disabled:
-// js-beautify runs SYNCHRONOUSLY on the main thread and froze the whole machine on a multi-MiB
-// bundle (the server caps its own beautify at 1 MiB and serves such files raw — the client must
-// not re-run that transform uncapped). Download to format offline instead.
-const BEAUTIFY_MAX_CHARS = 200_000;
+// Pretty-print (beautify) now runs in a Web Worker — see ./beautifyClient — so a
+// multi-MB minified bundle formats OFF the main thread without freezing the tab (the
+// freeze that forced the old 200 KB cap). There is no client-side size gate: the code
+// body is virtualized (CodeViewer) and highlighting is viewport-scoped, so a large file
+// renders fine.
 
 // Fixed tree-row height (must equal .sv-node height in sources.css) + the row count
 // above which the tree is windowed. Below it the whole (small) tree renders in flow,
@@ -427,27 +411,23 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   // Resets per file; the beautified text is computed lazily (js-beautify) once.
   const [pretty, setPretty] = useState(false);
   const [prettyText, setPrettyText] = useState<string | null>(null);
-  // A file with finding marks is server-authoritative for its lines; key the effect on
-  // the boolean (not the `marks` Map identity) so it doesn't re-run when `data` gets a
-  // new reference while the has-marks state is unchanged.
-  const hasMarks = marks.size > 0;
   useEffect(() => {
     setPrettyText(null);
-    // Don't auto-pretty-print a file that carries finding marks: the server already
-    // beautified such sources before recording the finding lines, so those lines are
-    // authoritative — a second client-side beautify would renumber them out from under
-    // the marks (and drop them). The user can still pretty-print manually.
-    setPretty(
-      content != null &&
-        !hasMarks &&
-        isMinified(content.content) &&
-        content.content.length <= BEAUTIFY_MAX_CHARS,
-    );
-  }, [content, hasMarks]);
+    // Auto-format ONLY a file the server served RAW (`!formatted`) that is minified — i.e.
+    // a big bundle over the server's 1 MiB beautify cap, whose finding marks sit uselessly
+    // on raw line ~1. A file the server already beautified (`formatted`) is shown as-is so
+    // its ALIGNED marks survive — even one with a long banner/data-URI line that would trip
+    // `isMinified` (why `formatted` is an authoritative server flag, not a client guess).
+    // Beautify runs OFF the main thread (D35), so there is no size gate.
+    setPretty(content != null && !content.formatted && isMinified(content.content));
+  }, [content]);
   useEffect(() => {
-    if (!pretty || content == null || prettyText != null || content.content.length > BEAUTIFY_MAX_CHARS) return;
+    if (!pretty || content == null || prettyText != null) return;
     let live = true;
-    void formatJs(content.content).then((out) => { if (live) setPrettyText(out); });
+    const raw = content.content;
+    void beautify(raw)
+      .then((out) => { if (live) setPrettyText(out); })
+      .catch(() => { if (live) setPrettyText(raw); }); // worker unavailable -> show raw, never hang
     return () => { live = false; };
   }, [pretty, content, prettyText]);
 
@@ -500,11 +480,9 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
             )}
             {content && (
               <button type="button" className={"sv-pretty" + (pretty ? " on" : "")}
-                aria-pressed={pretty} disabled={content.content.length > BEAUTIFY_MAX_CHARS}
+                aria-pressed={pretty}
                 onClick={() => setPretty((p) => !p)}
-                title={content.content.length > BEAUTIFY_MAX_CHARS
-                  ? "Too large to format in-app — Download to format offline"
-                  : pretty ? "Show the raw, unformatted source" : "Format (pretty-print) the source"}>
+                title={pretty ? "Show the raw, unformatted source" : "Format (pretty-print) the source"}>
                 <span className="sv-pretty-glyph" aria-hidden="true">{"{ }"}</span> Pretty print
               </button>
             )}
@@ -519,16 +497,13 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
           <div className="sv-note sv-warn">Couldn't load this file's source.</div>
         ) : content ? (
           pretty && prettyText == null ? (
-            <div className="sv-note">Formatting…</div>
+            <div className="sv-note">Formatting… (large files may take a few seconds)</div>
           ) : (
             <CodeViewer
               text={pretty ? prettyText! : content.content}
               truncated={content.truncated}
               marks={pretty ? null : marks}
               focusLine={focusLine}
-              // Highlight eligibility follows the RAW source size, so toggling
-              // pretty-print (which only inflates whitespace) can't trip the cap.
-              canHighlight={content.content.length <= HIGHLIGHT_MAX_CHARS}
             />
           )
         ) : null}
