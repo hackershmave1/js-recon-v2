@@ -118,3 +118,48 @@ def test_suspected_secret_is_hashed_revealable_and_reveals(redis, authorized_ses
     outcome = reveal.reveal_secret(tenant, run_id, finding.finding_hash)
     assert outcome is not None and outcome.revealed is True
     assert normalize.strip_secret_delimiters(outcome.value) == _LOW
+
+
+def test_recovered_source_low_confidence_hit_is_suspected(redis, authorized_session, monkeypatch):
+    # The RECOVERED-source partition path (D32-B1 scan_many + D33-B partition): a low-
+    # confidence hit in a source-map-recovered unit is recorded as SECRET_SUSPECTED at its
+    # recovered path and counted in secrets_suspected, not secrets. Fakes recover_sources
+    # (→ a recovered unit) and scan_many (→ a low hit on it); the bundle scan is empty.
+    from recon.findings import sourcemapper
+
+    tenant, session_id = authorized_session
+    recovered = f'// prod\nconst c = "{_LOW}";\n'.encode()
+    monkeypatch.setattr(kingfisher, "scan", _fake_scan())  # bundle: no secret
+    monkeypatch.setattr(
+        sourcemapper,
+        "recover_sources",
+        lambda *a, **k: sourcemapper.RecoveredSources(
+            files=[sourcemapper.RecoveredFile("app/config.js", recovered)],
+            status="ok",
+            origin="uploaded",
+        ),
+    )
+
+    def fake_scan_many(units, *, confidence=None, **_kw):
+        assert confidence == "low"  # opted-in confidence threads to the recovered scan too
+        return {0: [_sec(_LOW, "low", _LOW_RULE)]}, "ok"
+
+    monkeypatch.setattr(kingfisher, "scan_many", fake_scan_many)
+
+    view = service.create_run(
+        redis, tenant_id=tenant, session_id=session_id, scan_suspected_secrets=True
+    )
+    input_key = storage.put_blob(tenant, view.id, "input", b'fetch("/api/x");')
+    map_key = storage.put_blob(tenant, view.id, "source_map", b'{"version":3}')
+    with tenant_session(tenant) as session:
+        session.execute(
+            update(models.Run)
+            .where(models.Run.id == view.id)
+            .values(input_ref=input_key, source_map_ref=map_key)
+        )
+
+    coverage = analyze.analyze_run(redis, tenant_id=tenant, run_id=view.id)
+
+    suspected = [f for f in _findings(tenant, view.id) if f.type == "secret_suspected"]
+    assert len(suspected) == 1 and suspected[0].path.endswith("config.js")  # recovered path
+    assert coverage.secrets == 0 and coverage.secrets_suspected == 1
