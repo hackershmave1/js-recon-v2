@@ -3,6 +3,9 @@ the D32-A1 source-map cap default."""
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from recon.config import Settings, clamp_fetch_bytes
 
 
@@ -66,3 +69,27 @@ def test_sourcemapper_memory_limit_default_clears_the_measured_go_floor() -> Non
     assert limit == 3 * 1024 * 1024 * 1024
     assert limit > 2 * 1024 * 1024 * 1024  # the measured recover-vs-trip floor
     assert limit > fields["max_source_map_bytes"].default
+
+
+def test_fetch_timing_defaults_are_lease_safe() -> None:
+    # D36: the fetch heartbeat cadence, per-read timeout, and secondary-fetch deadline must all
+    # stay below the stall threshold, or a slow/stalled fetch outlasts the job lease and a peer
+    # reclaims it (double-fetch). Assert the DECLARED defaults hold the invariant.
+    fields = Settings.model_fields
+    stall = fields["heartbeat_stall_threshold_seconds"].default
+    for name in (
+        "heartbeat_interval_seconds",
+        "fetch_read_timeout_seconds",
+        "fetch_secondary_timeout_seconds",
+    ):
+        assert fields[name].default < stall
+
+
+def test_fetch_timing_over_stall_fails_closed() -> None:
+    # The lease-safety invariant is ENFORCED at construction (a startup validator), not merely
+    # documented: an operator raising a timing knob past the stall window fails loud (pydantic
+    # wraps the validator's ValueError in a ValidationError) instead of silently double-fetching.
+    with pytest.raises(ValidationError, match="lease-safety"):
+        Settings(fetch_read_timeout_seconds=999.0)
+    with pytest.raises(ValidationError, match="lease-safety"):
+        Settings(heartbeat_interval_seconds=99.0)

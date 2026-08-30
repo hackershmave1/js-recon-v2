@@ -29,6 +29,7 @@ def _settings(enabled=True):
         crawl_heartbeat_interval_seconds=0.1,
         crawl_fetch_source_maps=True,
         fetch_timeout_seconds=20.0,
+        fetch_secondary_timeout_seconds=20.0,  # D36: best-effort .map/chunk deadline
         max_fetch_bytes=10 * 1024 * 1024,
         max_fetch_bytes_ceiling=32 * 1024 * 1024,
         max_source_map_bytes=32 * 1024 * 1024,  # D32-A1: .map fetch's own (larger) cap

@@ -331,6 +331,136 @@ affordance with an in-progress spinner, and virtualize the resulting ~100 K form
 already virtualizes the file TREE but not the code body). Files:
 `web/src/features/sources/{CodeViewer,SourcesPage}.tsx`. (User-reported 2026-08-23.)
 
+#### D36 · Large/slow in-scope asset (and its whole source map) dropped by the 20 s per-asset fetch deadline [S–M] — ✅ RESOLVED 2026-08-30  ·  correctness
+✅ **RESOLVED 2026-08-30 (option (a) — heartbeat the body stream, then raise the deadline).** The primary asset
+fetch now renews the job lease mid-download, so `fetch_timeout_seconds` was raised **20 → 120 s** without widening
+the peer-reclaim window. `fetch._fetch_hops` gained an `on_progress` callback invoked once the response headers
+arrive and then throttled to `heartbeat_interval_seconds` per body chunk; the two PRIMARY call sites
+(`_fetch_asset_with_retry` crawl asset + the single-URL `fetch_run` path) pass a `_make_body_beat` closure that
+renews the lease AND checks pause/cancel (REQ-A4, closing the long-fetch cancel blind spot). **Design refinements
+the §4 adversarial review forced (all folded):** (1) the httpx per-read timeout is DECOUPLED from the overall
+deadline — a new `fetch_read_timeout_seconds` (10 s) + `_CONNECT_TIMEOUT_SECONDS` (8 s), both < the 30 s stall, so
+a stalled socket can't block `iter_bytes()` unbeaten (raising the unified 120 s timeout would have re-introduced the
+very reclaim bug); (2) **the headline bug** — a per-read `httpx.ReadTimeout`/`TransportError` was previously
+UNCAUGHT (there is no `except httpx.*` in `src/recon`), so on a stalled origin it escaped the per-asset handler and
+failed the WHOLE fetch job (every sibling's findings lost) → now converted to a `retry.RetryableError` in
+`_fetch_hops` (caught per-asset → run PARTIAL; also fixes a pre-existing latent crash); (3) the global knob has 5
+readers but only the 2 primary ones are safe to run long — the 3 BEST-EFFORT secondary fetches (crawl `.map`,
+lazy-chunk URLs, capture `.map`) now use a separate `fetch_secondary_timeout_seconds` (20 s, < stall) with NO
+mid-body beat, so they stay lease-safe (a large map on a SLOW origin still soft-skips — full big-map recovery is
+D37-L2); (4) a post-headers beat covers the connect+TTFB gap so the first mid-body beat can't outlast the lease.
+**Load-bearing invariant documented** (`_make_body_beat`): the mid-stream beat is safe inside `_pin_dns` only
+because psycopg2 resolves DNS in C (bypassing the pin's `socket.getaddrinfo` monkeypatch) and `emit_event=False`
+keeps it off pure-Python redis-py — a driver swap or `emit_event=True` would break it. **Known interaction (D20):**
+a 120 s fetch makes the fetch a "long stage" now subject to the pre-existing stream-reclaim strand (a peer reclaims
+at 30 s idle and acks on the live lease → removed from the PEL → if the original then crashes the job can strand,
+no redelivery) — the real fix is D20's owed work (refresh the Redis stream in `beat`, or reclaim off the DB lease
+not Redis idle), tracked there. §4 gates: adversarial design = SHIP-WITH-CHANGES (must-fixes 1–5 folded); code
+review = SHIP-WITH-NITS — egress path verified byte-for-byte unchanged (T5); NIT-1 folded = a `Settings`
+`@model_validator` (`_check_fetch_lease_safety`) now FAILS LOUD at startup if `heartbeat_interval_seconds`,
+`fetch_read_timeout_seconds`, or `fetch_secondary_timeout_seconds` reaches `heartbeat_stall_threshold_seconds`
+(the three env-tunable knobs D36 lease-safety silently depends on), so an operator can't reintroduce the
+double-fetch race by raising one. Tests: `fetch_test.py` (on_progress fires, ReadTimeout/ConnectError →
+RetryableError, control interrupt not swallowed), `config_test.py` (timing defaults lease-safe + over-stall
+override fails closed), a `stage_test.py` fake-settings field. Host ruff + mypy(findings/spec) + full fast lane
+green. Files: `fetch/fetch.py`, `capture/stage.py`, `config.py`. Original analysis below.
+
+A large or slow in-scope JS asset can exceed the per-asset fetch deadline (`config.fetch_timeout_seconds`,
+default **20 s**) and be marked `run_asset.fetch_status = 'failed'` with `"overall fetch deadline exceeded"`
+(`fetch.py:278` — the deadline is checked inside the `response.iter_bytes()` body-stream loop, because httpx's
+read timeout bounds only the gap between chunks, not total wall-clock). The asset is then absent from analysis —
+and because source-map discovery is DOWNSTREAM of a successful fetch → analyze (the analyzer reads the
+`//# sourceMappingURL=` pointer from the fetched body, then fetches the `.map`), the asset's ENTIRE source map,
+its recovered original sources, and any secrets / config GUIDs / internal-IPs therein are lost with it. It is
+VISIBLE (the asset row reads `failed`, REQ-C2), NOT a silent under-report — but a real recall gap.
+**Why the cap is low:** `fetch_timeout_seconds` is deliberately held below `heartbeat_stall_threshold_seconds`
+(30 s) because the blocking fetch does NOT heartbeat during body streaming — a longer fetch would let a peer
+worker judge the job stalled, reclaim the stream message, and double-fetch (`config.py:50-53`). So the deadline
+cannot simply be raised without also widening the stall window (slower peer-failover detection). A deadline
+failure is also deliberately NOT retried (the budget is already spent, `fetch.py:211`). Same
+heartbeat-through-a-blocking-pass family as D31's owed heartbeat work and D23.
+**Evidence (2026-08-30 QA, sanitized — repo is PUBLIC):** a real 5-asset crawl of an in-scope host fetched 4
+and dropped the one large enterprise bundle on a slow origin (its four small sibling language bundles fetched
+fine); the dropped bundle's source map and any findings inside it never surfaced.
+**Fix options:** (a) PROPER [M] — thread a heartbeat through the fetch body-stream loop (renew the lease
+mid-download), after which the default `fetch_timeout_seconds` can safely exceed the stall threshold and be
+raised; (b) STOPGAP [S] — raise `RECON_FETCH_TIMEOUT_SECONDS` **and** `RECON_HEARTBEAT_STALL_THRESHOLD_SECONDS`
+together so `timeout < stall` still holds. Files: `fetch/fetch.py` (`_fetch_once` body-stream deadline),
+`config.py` (`fetch_timeout_seconds`, `heartbeat_stall_threshold_seconds`).
+
+#### D37 · Large source-map recovery is memory-unsafe: the sourcemapper subprocess + container are unbounded [M–L] — ⏳ PARTIAL 2026-08-30 (L0 + L1 shipped; L2 streaming deferred by decision)  ·  reliability
+✅ **L0 + L1 RESOLVED 2026-08-30.** The recovery subprocess and both app containers are now memory-bounded, and
+the map cap is raised. **L0 — subprocess bound:** `engines.run_engine` gained an opt-in `memory_limit_bytes` that
+wraps the child in an exec'd `prlimit --as=<bytes>` guard, so an over-size recovery dies as a CONTAINED non-zero
+exit → `EngineError` instead of OOM-ing the box. **Deliberately `prlimit`, NOT the DEBT sketch's `setrlimit` via
+`preexec_fn`** — the §4 adversarial design review falsified `preexec_fn`: recovery is also forked from the
+multi-threaded viewer/reveal API (uvicorn threadpool), where a fork-time Python callable "is NOT SAFE to use in
+the presence of threads" (CPython subprocess docs) and can deadlock before exec; an exec'd wrapper runs no Python
+post-fork, so it is thread-safe on the worker AND the API (and also bounds the API viewer/reveal OOM vector). Only
+`sourcemapper.recover_sources` passes it (Kingfisher unchanged). **L0 — container bound:** `docker-compose.yml`
+now sets `mem_limit` on worker (8g — also runs chromium) + api (4g), a coarse box-protection cgroup backstop (the
+`prlimit` is the tight per-child bound). A Dockerfile `command -v prlimit` build guard fails loud if util-linux is
+absent. **L1 — cap raise:** `max_source_map_bytes` 32 → 96 MiB, safe ONLY because L0 now bounds recovery memory.
+**Value chosen by MEASUREMENT against the real pinned Go 1.23 binary** (the naïve fix would have regressed): Go
+over-reserves virtual address space (RLIMIT_AS counts its PROT_NONE arenas; golang/go#38010), so a 127-byte map
+needs >768 MiB just to start, and BOTH a 32 MiB map (recoverable today — regression guard) and a 96 MiB map trip
+at ≤1.5 GiB but recover at 2 GiB → default `sourcemapper_memory_limit_bytes` = **3 GiB** (clears the 2 GiB floor
+with headroom, still trips a runaway before the 8g container cap; `<=0` disables, off-Linux no-op). Verified
+end-to-end in the live container: a 96 MiB map recovers `status=ok` under the 3 GiB limit via the real
+`prlimit`-wrapped binary (no false-trip), and a 32 MiB map forced under 512 MiB dies as a contained `EngineError`.
+**Containment is honest + free for the path that matters:** a crawl-fetched map (origin `capture`) that trips →
+`EngineError` → `analyze._analysis_units` soft-falls-back to bundle analysis + a visible `capture-error` coverage
+status → the run CONTINUES, gap surfaced (REQ-C2), not silent. §4 gates: design = SHIP-WITH-CHANGES (the
+`preexec_fn`→`prlimit` switch + the measured value were both its catches, folded); code = SHIP-WITH-NITS (F1 the
+Linux gate `== "win32"`→`!= "linux"` + the `<=0`-disables guard folded). Tests: `engines_test.py` (wrapper
+construction incl. win32/darwin no-op + `<=0`-disabled + a Linux-gated real RLIMIT_AS trip/pass),
+`sourcemapper_test.py` (settings passthrough + override), `config_test.py` (the new defaults). Host ruff +
+mypy-strict + fast lane green. **Accepted L0+L1 residuals (all L2 territory, deferred by decision):** (a) the
+recovered *output* is still hard-capped at `engine_max_output_bytes` (32 MiB), so a >32 MiB map recovers only its
+first ~32 MiB of sources (a partial recovery — still a strict win over the pre-L1 total skip; logged
+`sourcemapper.truncated`); (b) the viewer/reveal path still WHOLE-LOADS the map on a click — now CONTAINED by the
+`prlimit` + api `mem_limit`, but not eliminated (that is L2's file-by-file streaming); (c) the D28 double-recover,
+disk-tree bound, and per-file heartbeat all remain L2. Files: `findings/{engines,sourcemapper}.py`, `config.py`,
+`docker-compose.yml`, `Dockerfile`, `api/capture_router.py` (stale comment). Original analysis (the full layered
+plan; L2 is what remains) below.
+
+A source map larger than `max_source_map_bytes` (32 MiB) is SKIPPED (visibly — D32), so its original sources (and
+any secrets in them) are never scanned. **Raising the cap to recover big maps is UNSAFE today**, and "it didn't
+crash" is misleading — it didn't crash because the map was skipped (never recovered). A source-grounded
+adversarial review located the real memory hog and three missing bounds:
+- **The `sourcemapper` Go child whole-loads the map** — `os.ReadFile`/`io.ReadAll` + `json.Unmarshal` into structs
+  holding `sources` + `sourcesContent` (pinned commit `442aed28…`), so its peak ≈ **~2× map size**; no streaming,
+  no size guard. `findings/sourcemapper.py:110-142` writes the whole map to a temp file and runs the binary on it.
+- **No memory bound on the subprocess**: `run_engine` is `subprocess.run` with no `setrlimit`/cgroup; the timeout
+  kills only the DIRECT child; `max_output_bytes` bounds STDOUT, not memory. `engines.py:9-20,96-117` already
+  flags this bound as DEFERRED, resting on the input cap this item would raise.
+- **No memory bound on the container**: `docker-compose.yml` sets no `mem_limit`/`deploy.resources` on api or
+  worker; there are no k8s manifests. A subprocess OOM is left to the host kernel OOM-killer, which can reap the
+  worker parent, not just the child.
+- **The viewer/reveal path re-recovers the WHOLE map on a user CLICK, in the API process** (`probe/sources.py:234-271`)
+  — so a giant-map run can OOM the API on demand, not just the worker.
+**Correct fix is layered (in order):**
+1. **Layer 0 — bound the subprocess + container (must-do FIRST, S–M).** `setrlimit(RLIMIT_AS)` via `preexec_fn`
+   on the recovery child (or `systemd-run --scope -p MemoryMax=` / a memory-capped sidecar) AND a `mem_limit` on
+   api+worker (compose) / k8s limits — so an over-size map fails as a CONTAINED `EngineError`, not a box-wide OOM.
+   Retires the deferred `engines.py:9-13` memory-bound note. This is the real "handle it correctly" step.
+2. **Layer 1 — raise `max_source_map_bytes` modestly (S), only AFTER Layer 0** (e.g. 32 → 64–96 MiB; child peak ≈ 2× map).
+3. **Layer 2 — stream + fix the viewer, to go bigger (M–L).** Stream the map fetch→disk (stream-hash then boto3
+   `upload_fileobj` — content-addressing needs the whole stream consumed to form the sha256 key, so buffer to a
+   temp FILE, not RAM: a real `storage.put_blob`/`object_key` change); scan the recovered tree file-by-file
+   (discard each) in BOTH `analyze.py` AND `probe/sources.py`; bound the recovered tree on disk (cumulative-write
+   cap or a size-limited `tmpfs` engine workdir — `_walk_recovered`'s read-cap does NOT stop sourcemapper writing
+   the whole tree); add a heartbeat between recovered files (the follow-up `analyze.py:896-902` already prescribes;
+   D23/D36 family); and fix the D28 double-recover (recover once, reuse).
+**Rejected — ijson `sourcesContent` scan-only:** fixes ONLY the secret scan (endpoints/IPs + viewer still
+whole-load) and diverging from `recover_file_text`'s normalization relocates analyze-time offsets → the D32-B1
+audited-reveal round-trip fails closed (systematic 409s). A niche fast-path at best, not a substitute.
+**Evidence:** 2026-08-30 QA — a real large in-scope bundle's map exceeded 32 MiB and was skipped; the raw-bundle
+analysis still surfaced endpoints + a real internal IP, but the map's original sources (where confirmed config
+secrets live) stayed unreachable. Files: `findings/{sourcemapper,engines}.py`, `storage.py`, `fetch/fetch.py`,
+`probe/sources.py`, `config.py` (`max_source_map_bytes`, `engine_max_output_bytes`), `docker-compose.yml`.
+Related: D32, D36, D28, D23.
+
 #### D22 · Tech detection JS-runtime + header-allowlist gaps [M] — ⏳ PARTIAL 2026-08-22 (js + header allowlist shipped; html/dom remain)  ·  correctness
 - ✅ **RESOLVED 2026-08-19 — the `js` (window-global) surface now fires (PR #85).** Bundled
   SPAs (Next.js `__NEXT_DATA__`, Nuxt `$nuxt`, React) were invisible; the matcher now

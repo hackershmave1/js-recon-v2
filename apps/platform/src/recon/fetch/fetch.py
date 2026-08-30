@@ -26,7 +26,7 @@ import contextlib
 import json
 import socket
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit
 
@@ -52,6 +52,11 @@ from recon.sessions import service as sessions_service
 log = get_logger("recon.fetch")
 
 _MAX_REDIRECTS = 5
+
+# D36: httpx CONNECT timeout, decoupled from the overall fetch deadline and held under
+# heartbeat_stall_threshold_seconds (with fetch_read_timeout_seconds) so the connect +
+# first-read gap can't outlast the job lease before the post-headers beat renews it.
+_CONNECT_TIMEOUT_SECONDS = 8.0
 
 # Present a browser-shaped request. The default python-httpx User-Agent trips
 # naive bot filters — e.g. Cloudflare bot-fight at default settings 403s it — which
@@ -224,69 +229,110 @@ def _fetch_hops(
     max_redirects: int = _MAX_REDIRECTS,
     allow_local: bool = False,
     transport: httpx.BaseTransport | None = None,
+    on_progress: Callable[[], None] | None = None,
 ) -> _FetchedResponse:
     """Fetch ``url`` under the full egress policy and return its bytes, status, and
     final-hop headers/Set-Cookie lines — the SHARED validated-hop core. ``fetch_url``
     is a thin bytes-only wrapper over this (its public signature and behavior are
     UNCHANGED; the SSRF crown jewel is not churned, T5).
 
+    ``on_progress`` (D36) is invoked once the response headers arrive and then, throttled
+    to ``heartbeat_interval_seconds``, per body chunk — so a PRIMARY asset fetch can renew
+    the job lease mid-download and ``timeout_s`` may safely exceed the stall threshold. The
+    per-read timeout (``fetch_read_timeout_seconds``, DECOUPLED from ``timeout_s``) stays
+    under the stall window so a stalled socket can't block ``iter_bytes()`` unbeaten; a read
+    that exceeds it raises ``httpx.ReadTimeout``, converted here to a retryable failure.
+
     Raises :class:`egress.EgressBlocked` (scope/SSRF), :class:`retry.FatalError`
     (deterministic: bad status, too large, too many redirects — do not retry), or
-    :class:`retry.RetryableError` (429/5xx, deadline — worth another attempt)."""
+    :class:`retry.RetryableError` (429/5xx, deadline, or a per-read timeout / transport
+    error — worth another attempt)."""
+    settings = get_settings()
+    # Decouple the per-read timeout from the overall deadline (D36). read/write/pool are
+    # held at fetch_read_timeout_seconds and connect at _CONNECT_TIMEOUT_SECONDS — all <
+    # heartbeat_stall_threshold_seconds — so the loop regains control at least once per read
+    # to heartbeat; only the overall `deadline` (checked below) tracks timeout_s, which may
+    # exceed the stall window. `min(..., timeout_s)` keeps reads <= a small secondary deadline.
+    read_to = min(settings.fetch_read_timeout_seconds, timeout_s)
+    beat_interval = settings.heartbeat_interval_seconds
     deadline = time.monotonic() + timeout_s
     current = url
-    with httpx.Client(
-        follow_redirects=False, timeout=httpx.Timeout(timeout_s), transport=transport
-    ) as client:
-        for _hop in range(max_redirects + 1):
-            target = egress.validate_target(  # scope + IP, every hop
-                current, scope_hosts, allow_local=allow_local
-            )
-            # Pin/validate on the SAME host httpx will connect to — a parser split
-            # between urlsplit (validator) and httpx.URL (client) must fail closed.
-            if httpx.URL(current).host.lower() != target.host.lower():
-                raise egress.EgressBlocked(
-                    f"URL host parse mismatch: {httpx.URL(current).host} vs {target.host}"
+    try:
+        with httpx.Client(
+            follow_redirects=False,
+            timeout=httpx.Timeout(read_to, connect=min(_CONNECT_TIMEOUT_SECONDS, timeout_s)),
+            transport=transport,
+        ) as client:
+            for _hop in range(max_redirects + 1):
+                target = egress.validate_target(  # scope + IP, every hop
+                    current, scope_hosts, allow_local=allow_local
                 )
-            # Pin DNS on the validated host and stream within one scope (enter order
-            # = pin then stream; exit reverses). Browser-shaped headers (see
-            # _FETCH_HEADERS); identity encoding so a decoded-byte cap == received-byte cap.
-            with (
-                _pin_dns(target.host, target.ips),
-                client.stream("GET", current, headers=_FETCH_HEADERS) as response,
-            ):
-                if response.is_redirect:
-                    location = response.headers.get("location")
-                    if not location:
-                        raise retry.FatalError("redirect without a Location header")
-                    current = urljoin(current, location)  # resolves relative / //host
-                    continue
-                if not 200 <= response.status_code < 300:
-                    # 429/5xx are worth a retry; other statuses (4xx, non-redirect
-                    # 3xx) are deterministic and fail fast.
-                    message = f"target returned HTTP {response.status_code}"
-                    if retry.http_retryable(response.status_code):
-                        # Honor the target's own backoff ask (REQ-Q3) when present.
-                        # `_TransientStatus` (a RetryableError subclass) marks this as a
-                        # 429/5xx the per-asset loop MAY retry (DEBT D20) — distinct from
-                        # the deadline RetryableError below, which it never retries.
-                        retry_after = _parse_retry_after(response.headers.get("retry-after"))
-                        raise _TransientStatus(message, retry_after=retry_after)
-                    raise retry.FatalError(message)
-                body = bytearray()
-                for chunk in response.iter_bytes():
-                    if time.monotonic() > deadline:
-                        raise retry.RetryableError("overall fetch deadline exceeded")
-                    body.extend(chunk)
-                    if len(body) > max_bytes:
-                        raise retry.FatalError(f"response exceeds {max_bytes} bytes")
-                return _FetchedResponse(
-                    body=bytes(body),
-                    status=response.status_code,
-                    headers={k.lower(): v for k, v in response.headers.items()},
-                    set_cookie=list(response.headers.get_list("set-cookie")),
-                )
-    raise retry.FatalError(f"exceeded {max_redirects} redirects")
+                # Pin/validate on the SAME host httpx will connect to — a parser split
+                # between urlsplit (validator) and httpx.URL (client) must fail closed.
+                if httpx.URL(current).host.lower() != target.host.lower():
+                    raise egress.EgressBlocked(
+                        f"URL host parse mismatch: {httpx.URL(current).host} vs {target.host}"
+                    )
+                # Pin DNS on the validated host and stream within one scope (enter order
+                # = pin then stream; exit reverses). Browser-shaped headers (see
+                # _FETCH_HEADERS); identity encoding so a decoded-byte cap == received-byte cap.
+                with (
+                    _pin_dns(target.host, target.ips),
+                    client.stream("GET", current, headers=_FETCH_HEADERS) as response,
+                ):
+                    if response.is_redirect:
+                        location = response.headers.get("location")
+                        if not location:
+                            raise retry.FatalError("redirect without a Location header")
+                        current = urljoin(current, location)  # resolves relative / //host
+                        continue
+                    if not 200 <= response.status_code < 300:
+                        # 429/5xx are worth a retry; other statuses (4xx, non-redirect
+                        # 3xx) are deterministic and fail fast.
+                        message = f"target returned HTTP {response.status_code}"
+                        if retry.http_retryable(response.status_code):
+                            # Honor the target's own backoff ask (REQ-Q3) when present.
+                            # `_TransientStatus` (a RetryableError subclass) marks this as a
+                            # 429/5xx the per-asset loop MAY retry (DEBT D20) — distinct from
+                            # the deadline RetryableError below, which it never retries.
+                            retry_after = _parse_retry_after(response.headers.get("retry-after"))
+                            raise _TransientStatus(message, retry_after=retry_after)
+                        raise retry.FatalError(message)
+                    # Headers are in hand (connect + TTFB done). Beat NOW, before the body
+                    # loop, so the connect+headers gap can't outlast the lease before the
+                    # first mid-body beat (D36: connect + read < stall keeps this bounded).
+                    last_beat = time.monotonic()
+                    if on_progress is not None:
+                        on_progress()
+                    body = bytearray()
+                    for chunk in response.iter_bytes():
+                        now = time.monotonic()
+                        if now > deadline:
+                            raise retry.RetryableError("overall fetch deadline exceeded")
+                        if on_progress is not None and now - last_beat >= beat_interval:
+                            on_progress()  # renew the lease mid-download (D36)
+                            last_beat = now
+                        body.extend(chunk)
+                        if len(body) > max_bytes:
+                            raise retry.FatalError(f"response exceeds {max_bytes} bytes")
+                    return _FetchedResponse(
+                        body=bytes(body),
+                        status=response.status_code,
+                        headers={k.lower(): v for k, v in response.headers.items()},
+                        set_cookie=list(response.headers.get_list("set-cookie")),
+                    )
+        raise retry.FatalError(f"exceeded {max_redirects} redirects")
+    except httpx.TransportError as exc:
+        # D36: a per-read timeout (httpx.ReadTimeout when the decoupled read window elapses),
+        # a connect timeout, or any network/protocol error is a RETRYABLE fetch failure — NOT
+        # an uncaught exception. Converting to retry.RetryableError keeps the crawl loop's
+        # per-asset handler in control (mark THIS asset failed -> run PARTIAL) and job-retries
+        # the single-URL path, instead of escaping to fail the whole fetch job (which would
+        # lose every sibling asset's findings). Bare RetryableError (not _TransientStatus): a
+        # timeout has already spent wall-clock, so the per-asset loop does not re-burn it —
+        # matching the "overall fetch deadline exceeded" precedent. httpx.TransportError is the
+        # base for TimeoutException + NetworkError + ProtocolError, so one clause covers them.
+        raise retry.RetryableError(f"fetch transport error: {type(exc).__name__}") from exc
 
 
 def fetch_url(
@@ -298,9 +344,11 @@ def fetch_url(
     max_redirects: int = _MAX_REDIRECTS,
     allow_local: bool = False,
     transport: httpx.BaseTransport | None = None,
+    on_progress: Callable[[], None] | None = None,
 ) -> bytes:
     """Fetch ``url`` under the egress policy and return its bytes. Thin wrapper over
-    ``_fetch_hops`` — signature and behavior unchanged (T5)."""
+    ``_fetch_hops`` — behavior unchanged (T5); ``on_progress`` (D36, default None) is
+    forwarded so a caller can heartbeat the job lease mid-download."""
     return _fetch_hops(
         url,
         scope_hosts,
@@ -309,6 +357,7 @@ def fetch_url(
         max_redirects=max_redirects,
         allow_local=allow_local,
         transport=transport,
+        on_progress=on_progress,
     ).body
 
 
@@ -368,6 +417,9 @@ def fetch_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None =
             timeout_s=settings.fetch_timeout_seconds,
             max_bytes=clamp_fetch_bytes(max_fetch, settings),
             allow_local=settings.allow_local_egress,
+            on_progress=_make_body_beat(
+                redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, done=0, total=0
+            ),
         )
     except egress.EgressBlocked as exc:
         # Scope/SSRF/scheme blocks are deterministic — fail fast, don't burn retries.
@@ -441,6 +493,42 @@ def _beat_sleep(
             )
 
 
+def _make_body_beat(
+    redis: Redis,
+    *,
+    tenant_id: str,
+    run_id: str,
+    job_id: str | None,
+    done: int,
+    total: int,
+) -> Callable[[], None]:
+    """Build the D36 mid-download ``on_progress`` callback for a PRIMARY asset fetch:
+    renew the job lease so the body stream can exceed the stall window without a peer
+    reclaiming it (double-fetch), and observe pause/cancel mid-download (REQ-A4) so a
+    long fetch is not a cancel blind spot.
+
+    SAFE to call inside ``_fetch_hops``'s ``_pin_dns`` scope, on two load-bearing
+    invariants: (1) ``progress.beat`` writes via psycopg2, which resolves DNS in C and so
+    bypasses the ``socket.getaddrinfo`` pin monkeypatch; (2) ``emit_event=False`` keeps it
+    off redis-py (pure-Python, which the pin WOULD intercept -> EgressBlocked). A driver
+    swap or an ``emit_event=True`` flip would break this — keep both."""
+
+    def _beat() -> None:
+        if job_id:
+            progress.beat(
+                redis,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                job_id=job_id,
+                done=done,
+                total=total,
+                emit_event=False,
+            )
+        run_queries.raise_if_control_requested(tenant_id, run_id)
+
+    return _beat
+
+
 def _fetch_asset_with_retry(
     redis: Redis,
     *,
@@ -504,6 +592,9 @@ def _fetch_asset_with_retry(
                 timeout_s=settings.fetch_timeout_seconds,
                 max_bytes=max_bytes,
                 allow_local=settings.allow_local_egress,
+                on_progress=_make_body_beat(
+                    redis, tenant_id=tenant_id, run_id=run_id, job_id=job_id, done=i, total=total
+                ),
             )
         except _TransientStatus as exc:
             if attempt > attempts:
@@ -792,7 +883,9 @@ def _fetch_and_store_source_map(
         map_bytes = fetch_url(
             map_url,
             scope_hosts,
-            timeout_s=settings.fetch_timeout_seconds,
+            # D36: a best-effort SECONDARY fetch — a separate, sub-stall deadline (no mid-body
+            # heartbeat here), so it stays lease-safe even after fetch_timeout_seconds was raised.
+            timeout_s=settings.fetch_secondary_timeout_seconds,
             max_bytes=max_bytes,
             allow_local=settings.allow_local_egress,
         )
@@ -892,7 +985,9 @@ def _enumerate_and_seed_chunks(
                     chunk_bytes = fetch_url(
                         chunk_url,
                         scope_hosts,
-                        timeout_s=settings.fetch_timeout_seconds,
+                        # D36: best-effort SECONDARY fetch — sub-stall deadline (no mid-body
+                        # beat), lease-safe even after fetch_timeout_seconds was raised.
+                        timeout_s=settings.fetch_secondary_timeout_seconds,
                         max_bytes=max_bytes,
                         allow_local=settings.allow_local_egress,
                     )

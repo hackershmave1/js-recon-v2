@@ -483,7 +483,9 @@ def _fetch_captured_source_map(
         map_bytes = fetch.fetch_url(
             map_url,
             scope_hosts,
-            timeout_s=settings.fetch_timeout_seconds,
+            # D36: best-effort SECONDARY fetch — a separate sub-stall deadline (no mid-body
+            # heartbeat), lease-safe even after fetch_timeout_seconds was raised for primary assets.
+            timeout_s=settings.fetch_secondary_timeout_seconds,
             max_bytes=max_bytes,
             allow_local=settings.allow_local_egress,
         )

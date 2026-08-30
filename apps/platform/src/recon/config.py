@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -65,10 +66,24 @@ class Settings(BaseSettings):
     sourcemapper_memory_limit_bytes: int = 3 * 1024 * 1024 * 1024  # 3 GiB (RLIMIT_AS / virtual)
 
     # Fetch stage: pulling a target asset through the egress guard (REQ-P2).
-    # NOTE: keep fetch_timeout_seconds < heartbeat_stall_threshold_seconds — the
-    # blocking fetch does not heartbeat, so a longer fetch than the stall window
-    # would let a peer worker reclaim the job and fetch twice.
-    fetch_timeout_seconds: float = 20.0
+    # D36: overall wall-clock deadline for a PRIMARY asset fetch (the run target / a crawl
+    # asset). It may now exceed heartbeat_stall_threshold_seconds because the body-stream loop
+    # heartbeats the job lease mid-download (fetch._fetch_hops `on_progress`) — so a large/slow
+    # in-scope asset is no longer dropped at 20s. What stays < the stall window is the per-read
+    # bound (fetch_read_timeout_seconds), NOT this overall deadline. Raised 20 -> 120s.
+    fetch_timeout_seconds: float = 120.0
+    # D36: per-READ timeout (connect / response headers / one body chunk), DECOUPLED from the
+    # overall deadline above. MUST stay < heartbeat_stall_threshold_seconds: a stalled socket
+    # blocks iter_bytes() unbeaten, so bounding each read is what guarantees the loop regains
+    # control to heartbeat before a peer reclaims the job. A read that exceeds this raises
+    # httpx.ReadTimeout, converted to a retryable per-asset failure (never an uncaught crash).
+    fetch_read_timeout_seconds: float = 10.0
+    # D36: overall deadline for BEST-EFFORT SECONDARY fetches (source maps, lazy-chunk URLs).
+    # These carry only a pre-fetch beat, no mid-body heartbeat, so their deadline must stay
+    # < heartbeat_stall_threshold_seconds to remain lease-safe. Exceeding it is a soft miss
+    # (the map/chunk is skipped; the primary asset is unaffected) — so a large map on a SLOW
+    # origin still soft-skips here (full big-map recovery on a slow origin is D37-L2, streaming).
+    fetch_secondary_timeout_seconds: float = 20.0
     # Default per-fetch decoded-byte cap. Bounds worker memory (REQ-Q5 — analyze reads
     # the whole blob). A run MAY raise this via run.max_fetch_bytes (edit-&-re-run), but
     # only UP TO max_fetch_bytes_ceiling; clamp_fetch_bytes() enforces min(override-or-
@@ -219,7 +234,9 @@ class Settings(BaseSettings):
     login_ratelimit_window_seconds: float = 300.0
     login_ratelimit_global_max_attempts: int = 60
 
-    # Realtime / durability (REQ-R2, REQ-R3).
+    # Realtime / durability (REQ-R2, REQ-R3). heartbeat_interval_seconds also governs the D36
+    # fetch body-stream beat throttle, so it is now load-bearing for lease-safety and MUST stay
+    # < heartbeat_stall_threshold_seconds (enforced by _check_fetch_lease_safety below).
     heartbeat_interval_seconds: float = 5.0
     heartbeat_stall_threshold_seconds: float = 30.0
     event_stream_maxlen: int = 10_000
@@ -242,6 +259,30 @@ class Settings(BaseSettings):
     fetch_asset_retry_attempts: int = 2
     # env: RECON_FETCH_ASSET_RETRY_MAX_DELAY_SECONDS
     fetch_asset_retry_max_delay_seconds: float = 5.0
+
+    @model_validator(mode="after")
+    def _check_fetch_lease_safety(self) -> Settings:
+        """Fail LOUD at startup if a fetch timing knob would break the D36 lease-safety
+        invariant, rather than silently double-fetch. The fetch body stream renews the job
+        lease every ``heartbeat_interval_seconds`` and each httpx read is bounded by
+        ``fetch_read_timeout_seconds``; a best-effort secondary fetch has NO mid-body beat, so
+        its whole ``fetch_secondary_timeout_seconds`` deadline must itself stay lease-safe. If
+        ANY of the three reaches ``heartbeat_stall_threshold_seconds``, a slow/stalled fetch
+        outlasts the lease and a peer worker reclaims the job (double-fetch / double-egress) —
+        the exact race D36 exists to prevent, silent if only documented."""
+        stall = self.heartbeat_stall_threshold_seconds
+        for name, value in (
+            ("heartbeat_interval_seconds", self.heartbeat_interval_seconds),
+            ("fetch_read_timeout_seconds", self.fetch_read_timeout_seconds),
+            ("fetch_secondary_timeout_seconds", self.fetch_secondary_timeout_seconds),
+        ):
+            if value >= stall:
+                raise ValueError(
+                    f"{name}={value} must be < heartbeat_stall_threshold_seconds={stall} "
+                    "(D36 fetch lease-safety: an unbeaten fetch longer than the stall window "
+                    "lets a peer reclaim the job and double-fetch)"
+                )
+        return self
 
 
 @lru_cache
