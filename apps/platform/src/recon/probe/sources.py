@@ -28,6 +28,8 @@ originals are served verbatim (never re-beautified)."""
 
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import dataclass
 
 from botocore.exceptions import ClientError
@@ -231,11 +233,7 @@ def _recovered_content(
     if map_ref is None:
         return None
     try:
-        map_bytes = storage.get_blob(map_ref)
-    except ClientError:
-        return None
-    try:
-        text = recover_file_text(map_bytes, path)
+        text = recover_file_text(map_ref, path)
     except engines.EngineError:
         return None
     if text is None:
@@ -246,29 +244,35 @@ def _recovered_content(
     return _content_from_text(path, text, formatted=True)
 
 
-def recover_file_text(map_bytes: bytes, path: str) -> str | None:
-    """The recovered original at ``path`` from ``map_bytes``, beautified EXACTLY as the
-    analyze stage scans it (`findings.analyze._analysis_units`) — the single definition
-    of the recovered byte space. Analyze's secret offsets (D32-B1), this viewer, and the
-    audited reveal (`recon.probe.reveal`) all call this, so all three reproduce
-    byte-identical text and an offset located at analyze time round-trips at reveal time.
+def recover_file_text(map_ref: str, path: str) -> str | None:
+    """The recovered original at ``path`` from the source-map blob ``map_ref``, beautified
+    EXACTLY as the analyze stage scans it (`findings.analyze._analysis_units`) — the single
+    definition of the recovered byte space. Analyze's secret offsets (D32-B1), this viewer,
+    and the audited reveal (`recon.probe.reveal`) all reproduce byte-identical text, so an
+    offset located at analyze time round-trips at reveal time.
 
-    Returns ``None`` when the map recovered nothing usable or has no such file; raises
-    ``engines.EngineError`` on an unparseable map / absent binary so each caller decides
-    its own fallback (this viewer → 404; reveal → fail-closed denial)."""
-    recovered = sourcemapper.recover_sources(map_bytes)
-    if recovered.status != "ok":
+    D37-L2 slice 2: the map is STREAMED to a temp file and ONLY ``path`` is recovered from
+    it (`sourcemapper.recover_one_file`), so neither the whole map nor the whole recovered
+    tree is held in the API process — narrowing the on-demand footprint from the whole tree
+    to a single file (NOT eliminating it: one map-sized ``sourcesContent`` entry can still
+    load ~the map cap, so a viewer of a large no-finding recovered file is the unbounded
+    case; a per-file read cap is the deferred M5 follow-up — reveal is already bounded
+    ~32 MiB by the analyze precondition). The recovered bytes go through the SAME
+    deterministic `beautify_if_minified` analyze ran, so a minified vendor original's served
+    line numbers still match its finding marks. Returns ``None``
+    when the map blob is gone, recovers nothing, or has no such file; raises
+    ``engines.EngineError`` on an unparseable map / absent binary so each caller decides its
+    own fallback (this viewer → 404; reveal → fail-closed denial)."""
+    with tempfile.TemporaryDirectory(prefix="smmap-") as workdir:
+        map_path = os.path.join(workdir, "in.map")
+        try:
+            storage.download_blob_to_path(map_ref, map_path)
+        except ClientError:
+            return None  # the map blob vanished from the store — nothing to recover
+        raw = sourcemapper.recover_one_file(map_path, path)
+    if raw is None:
         return None
-    for recovered_file in recovered.files:
-        # The SAME beautify_if_minified analyze ran before extraction, so a minified
-        # vendor original's served line numbers match its finding marks (and the web
-        # viewer no longer re-beautifies it, which would renumber lines out from under
-        # those marks).
-        if recovered_file.path == path:
-            return deobfuscate.beautify_if_minified(
-                recovered_file.content.decode("utf-8", "replace")
-            )
-    return None
+    return deobfuscate.beautify_if_minified(raw.decode("utf-8", "replace"))
 
 
 def _resolve_source_map_ref(tenant_id: str, run_id: str, asset_url: str | None) -> str | None:

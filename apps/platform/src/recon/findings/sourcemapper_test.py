@@ -165,6 +165,88 @@ def test_recover_sources_memory_limit_override_wins(monkeypatch):
     assert captured["memory_limit_bytes"] == 12345
 
 
+def _fake_tree_run_engine(files: dict[str, bytes]):
+    """A ``run_engine`` stub that emulates sourcemapper writing ``files`` (rel-path ->
+    bytes) into the ``-output`` dir, so ``recover_one_file``'s single-file read is
+    exercised without the Go binary."""
+
+    def fake_run_engine(argv, **_kwargs):
+        out_dir = argv[argv.index("-output") + 1]
+        for rel, content in files.items():
+            abspath = os.path.join(out_dir, *rel.split("/"))
+            os.makedirs(os.path.dirname(abspath) or out_dir, exist_ok=True)
+            with open(abspath, "wb") as handle:
+                handle.write(content)
+        return engines.EngineResult(0, b"", b"")
+
+    return fake_run_engine
+
+
+def test_recover_one_file_reads_only_the_target(monkeypatch, tmp_path):
+    # D37-L2 slice 2: recover ONE file from an on-disk map without materializing the whole
+    # tree (the viewer/reveal read on a click) — nested + root files both resolve.
+    monkeypatch.setattr(
+        sourcemapper.engines,
+        "run_engine",
+        _fake_tree_run_engine({"app/src/api.js": b'fetch("/api/x");', "index.js": b"// root"}),
+    )
+    map_path = tmp_path / "in.map"
+    map_path.write_bytes(b'{"version":3}')
+
+    assert (
+        sourcemapper.recover_one_file(str(map_path), "app/src/api.js", bin_path="stub")
+        == b'fetch("/api/x");'
+    )
+    assert sourcemapper.recover_one_file(str(map_path), "index.js", bin_path="stub") == b"// root"
+
+
+def test_recover_one_file_absent_path_is_none(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        sourcemapper.engines, "run_engine", _fake_tree_run_engine({"only.js": b"1"})
+    )
+    map_path = tmp_path / "in.map"
+    map_path.write_bytes(b"{}")
+    assert sourcemapper.recover_one_file(str(map_path), "missing.js", bin_path="stub") is None
+
+
+def test_recover_one_file_refuses_escaping_target(monkeypatch, tmp_path):
+    # Containment: a ``../`` target that would resolve outside the recovery root is refused
+    # even though a real file exists there (defense-in-depth, mirrors _walk_recovered).
+    monkeypatch.setattr(sourcemapper.engines, "run_engine", _fake_tree_run_engine({"a.js": b"1"}))
+    map_path = tmp_path / "in.map"
+    map_path.write_bytes(b"{}")
+    assert (
+        sourcemapper.recover_one_file(str(map_path), "../../etc/passwd", bin_path="stub") is None
+    )
+
+
+def test_recover_one_file_missing_binary_is_none():
+    # Absent binary is a soft skip (like recover_sources), never a raise.
+    assert (
+        sourcemapper.recover_one_file(
+            "/nonexistent.map", "x.js", bin_path="definitely-not-sourcemapper-xyz"
+        )
+        is None
+    )
+
+
+def test_recover_one_file_forwards_memory_limit(monkeypatch, tmp_path):
+    # D37-L0 parity: the single-file recovery child runs under the configured RLIMIT_AS.
+    captured: dict[str, object] = {}
+
+    def fake_run_engine(argv, **kwargs):
+        captured.update(kwargs)
+        out_dir = argv[argv.index("-output") + 1]
+        os.makedirs(out_dir, exist_ok=True)
+        return engines.EngineResult(0, b"", b"")
+
+    monkeypatch.setattr(sourcemapper.engines, "run_engine", fake_run_engine)
+    map_path = tmp_path / "in.map"
+    map_path.write_bytes(b"{}")
+    sourcemapper.recover_one_file(str(map_path), "x.js", bin_path="stub")
+    assert captured["memory_limit_bytes"] == get_settings().sourcemapper_memory_limit_bytes
+
+
 def test_recover_sources_total_bytes_capped(monkeypatch):
     def fake_run_engine(argv, **_kwargs):
         out_dir = argv[argv.index("-output") + 1]
