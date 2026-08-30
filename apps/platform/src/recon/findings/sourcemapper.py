@@ -165,6 +165,72 @@ def recover_sources(
     return RecoveredSources(files=files, status="ok", origin=origin)
 
 
+def recover_one_file(
+    map_path: str,
+    target_path: str,
+    *,
+    bin_path: str | None = None,
+    timeout_s: float | None = None,
+    memory_limit_bytes: int | None = None,
+) -> bytes | None:
+    """Recover ONE original (``target_path``) from the source map at ``map_path`` — a
+    LOCAL file, so the caller never holds the map in memory (D37-L2 slice 2). Returns the
+    file's raw bytes, or ``None`` if the map recovered nothing / has no such file / the
+    binary is absent. Raises ``engines.EngineError`` on an unparseable map, exactly like
+    :func:`recover_sources`, so a caller (the Sources viewer / audited reveal) picks its
+    own fallback.
+
+    Sourcemapper has no single-file mode, so it still writes the whole tree to a temp dir
+    and the Go child still whole-loads the map — but the child is bounded (D37-L0
+    ``prlimit``) and the tree is input-cap-bounded, and only the ONE requested file is read
+    back into the caller's (API) process, not the whole ``list[RecoveredFile]``. This is
+    the read the viewer/reveal do on a click, so it NARROWS the API parent's footprint from
+    the whole recovered tree to a single file — it does NOT eliminate the vector: one
+    map-sized ``sourcesContent`` entry can still load ~its own size (worst case ≈ the map
+    input cap). A hard per-file read cap is the deferred M5 follow-up."""
+    settings = get_settings()
+    bin_path = bin_path or settings.sourcemapper_bin
+    timeout_s = timeout_s if timeout_s is not None else settings.engine_timeout_seconds
+    mem_limit = (
+        memory_limit_bytes
+        if memory_limit_bytes is not None
+        else settings.sourcemapper_memory_limit_bytes
+    )
+    with tempfile.TemporaryDirectory(prefix="sm1-") as workdir:
+        out_dir = os.path.join(workdir, "out")
+        os.makedirs(out_dir, exist_ok=True)
+        argv = [engines.resolve_bin(bin_path), "-url", map_path, "-output", out_dir]
+        try:
+            engines.run_engine(
+                argv,
+                timeout_s=timeout_s,
+                max_output_bytes=settings.engine_max_output_bytes,
+                ok_returncodes=_OK_RETURNCODES,
+                memory_limit_bytes=mem_limit,
+            )
+        except engines.EngineNotAvailable:
+            log.warning("sourcemapper.unavailable", bin=bin_path)
+            return None
+        return _read_recovered_file(out_dir, target_path)
+
+
+def _read_recovered_file(out_dir: str, target_path: str) -> bytes | None:
+    """Read ONE recovered file by its relative ``target_path`` from ``out_dir`` (a
+    ``"/"``-separated path as recorded on a finding), or ``None`` if it is absent.
+    Containment: a path that resolves outside the recovery root is refused (defense-in-
+    depth — the same realpath guard :func:`_walk_recovered` applies to the whole tree)."""
+    root = os.path.realpath(out_dir)
+    abspath = os.path.join(out_dir, *target_path.split("/"))
+    real = os.path.realpath(abspath)
+    if real != root and not real.startswith(root + os.sep):
+        log.warning("sourcemapper.escaped_path", path=target_path)
+        return None
+    if not os.path.isfile(real):
+        return None
+    with open(real, "rb") as handle:
+        return handle.read()
+
+
 def _walk_recovered(out_dir: str, cap: int) -> list[RecoveredFile]:
     root = os.path.realpath(out_dir)
     files: list[RecoveredFile] = []

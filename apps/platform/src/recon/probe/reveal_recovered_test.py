@@ -49,6 +49,16 @@ def _fake_recover(content: bytes):
     return _recover
 
 
+def _fake_recover_one(content: bytes):
+    """Fake the slice-2 single-file recovery — reveal re-derives one file via
+    ``recover_one_file`` now, not the whole-tree ``recover_sources``."""
+
+    def _recover(_map_path, target_path, **_kwargs):
+        return content if target_path == "app/src/config.js" else None
+
+    return _recover
+
+
 def _seed_run_with_recovered_secret(redis, tenant, session_id) -> str:
     """A legacy run whose minified bundle carries NO secret and whose (faked) source map
     recovers ``_RECOVERED`` — so the only secret is recovered-only."""
@@ -77,6 +87,7 @@ def test_reveal_roundtrips_a_recovered_source_secret(
     _skip_if_no_kingfisher(engines_required)
     tenant, session_id = authorized_session
     monkeypatch.setattr(sourcemapper, "recover_sources", _fake_recover(_RECOVERED))
+    monkeypatch.setattr(sourcemapper, "recover_one_file", _fake_recover_one(_RECOVERED))
 
     run_id = _seed_run_with_recovered_secret(redis, tenant, session_id)
     secret = _the_secret(tenant, run_id)
@@ -101,8 +112,10 @@ def test_reveal_recovered_secret_fails_closed_when_the_map_drifts(
     run_id = _seed_run_with_recovered_secret(redis, tenant, session_id)
     secret = _the_secret(tenant, run_id)
 
+    # The map drifts under the recorded offset at REVEAL time — injected on the slice-2
+    # single-file re-derive path (recover_one_file), which is what reveal now calls.
     drifted = b"// a banner line added after analyze shifts every offset\n" + _RECOVERED
-    monkeypatch.setattr(sourcemapper, "recover_sources", _fake_recover(drifted))
+    monkeypatch.setattr(sourcemapper, "recover_one_file", _fake_recover_one(drifted))
 
     outcome = reveal.reveal_secret(tenant, run_id, secret.finding_hash)
     assert outcome is not None and outcome.revealed is False

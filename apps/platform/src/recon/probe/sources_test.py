@@ -23,18 +23,29 @@ from recon.runs import service
 pytestmark = pytest.mark.integration
 
 
+def _fake_both_recoveries(monkeypatch, path: str, content: bytes) -> None:
+    """Fake BOTH recovery seams (no Go binary needed): ``recover_sources`` for analyze's
+    scan + ``recover_one_file`` for the viewer's on-demand single-file serve — D37-L2
+    slice 2 split the whole-tree recovery (analyze) from the one-file read (viewer/reveal).
+    Both reproduce ``content`` for ``path``."""
+    monkeypatch.setattr(
+        sourcemapper,
+        "recover_sources",
+        lambda _map_bytes, **_k: sourcemapper.RecoveredSources(
+            files=[sourcemapper.RecoveredFile(path, content)], status="ok", origin="uploaded"
+        ),
+    )
+    monkeypatch.setattr(
+        sourcemapper,
+        "recover_one_file",
+        lambda _map_path, target, **_k: content if target == path else None,
+    )
+
+
 def _seed_run_with_recovered_source(redis, tenant, session_id, monkeypatch):
     """A legacy run whose (faked) source map recovers one original,
     ``app/src/api.js`` — so a real recovered-source finding is persisted."""
-
-    def fake_recover(map_bytes, **_kwargs):
-        return sourcemapper.RecoveredSources(
-            files=[sourcemapper.RecoveredFile("app/src/api.js", b'fetch("/api/widgets/7");')],
-            status="ok",
-            origin="uploaded",
-        )
-
-    monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
+    _fake_both_recoveries(monkeypatch, "app/src/api.js", b'fetch("/api/widgets/7");')
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
     input_key = storage.put_blob(tenant, view.id, "input", b'fetch("/bundle/only");')
     map_key = storage.put_blob(tenant, view.id, "source_map", b'{"version":3}')
@@ -76,10 +87,11 @@ def test_recovered_content_with_bad_map_is_not_found_not_500(
 
     # Now the map goes bad at VIEW time (e.g. store corruption / tool drift). The
     # viewer must return None (-> 404), never let EngineError escape and 500 the tab.
-    def boom(map_bytes, **_kwargs):
+    # The viewer re-derives via recover_one_file (slice 2), so the failure is injected there.
+    def boom(_map_path, _target, **_kwargs):
         raise engines.EngineError("unparseable source map")
 
-    monkeypatch.setattr(sourcemapper, "recover_sources", boom)
+    monkeypatch.setattr(sourcemapper, "recover_one_file", boom)
     assert sources.get_source_content(tenant, run_id, "app/src/api.js") is None
 
 
@@ -118,15 +130,7 @@ def test_no_map_bundle_served_beautified_multiline(redis, authorized_session):
 def _seed_recovered_run(redis, tenant, session_id, monkeypatch, recovered: bytes, path: str) -> str:
     """A legacy run whose (faked) source map recovers one original at ``path`` carrying
     ``recovered`` bytes, analyzed — so a real recovered-source finding is persisted."""
-
-    def fake_recover(map_bytes, **_kwargs):
-        return sourcemapper.RecoveredSources(
-            files=[sourcemapper.RecoveredFile(path, recovered)],
-            status="ok",
-            origin="uploaded",
-        )
-
-    monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
+    _fake_both_recoveries(monkeypatch, path, recovered)
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
     input_key = storage.put_blob(tenant, view.id, "input", b'fetch("/bundle/only");')
     map_key = storage.put_blob(tenant, view.id, "source_map", b'{"version":3}')

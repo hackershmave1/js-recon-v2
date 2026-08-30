@@ -329,11 +329,10 @@ def _recovered_byte_space(target: _Target) -> bytes | None:
     if not target.source_map_ref or not target.source_path:
         return None
     try:
-        map_bytes = storage.get_blob(target.source_map_ref)
-    except ClientError:
-        return None
-    try:
-        text = sources.recover_file_text(map_bytes, target.source_path)
+        # D37-L2 slice 2: recover_file_text streams the map blob to a temp file and reads
+        # back only this one recovered file, so the API process never whole-loads the map
+        # or the whole recovered tree just to re-derive one secret's byte space.
+        text = sources.recover_file_text(target.source_map_ref, target.source_path)
     except engines.EngineError:
         return None  # unparseable map / absent binary — fail closed, not a 500
     return None if text is None else text.encode("utf-8")
