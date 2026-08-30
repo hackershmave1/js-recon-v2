@@ -9,6 +9,7 @@ it skips cleanly if Kingfisher is not installed.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 import pytest
@@ -221,6 +222,68 @@ def test_low_confidence_recall_rule_is_silent_at_medium(engines_required):
     assert all(
         s.confidence == "low" for s in at_low[0] if s.rule_id.endswith("guid_assignment_low")
     )
+
+
+def test_scan_dir_empty_is_noop_missing_binary(tmp_path):
+    # An absent binary degrades to unavailable (like scan_many), never a raise.
+    by_path, status = kingfisher.scan_dir(str(tmp_path), bin_path="definitely-not-kingfisher-xyzzy")
+    assert status == "unavailable" and by_path == {}
+
+
+def test_rel_from_reported_path_inverts_and_refuses(tmp_path):
+    # M3: invert Kingfisher's reported absolute path to the recovered rel-path; refuse anything
+    # that resolves outside the scan root so a stray path can't mis-attribute a secret.
+    root_real = os.path.realpath(str(tmp_path))
+    nested = os.path.join(root_real, "app", "src", "a.js")
+    assert kingfisher._rel_from_reported_path(nested, root_real) == "app/src/a.js"
+    assert kingfisher._rel_from_reported_path(os.path.join(root_real, "a.js"), root_real) == "a.js"
+    outside = os.path.join(root_real, os.pardir, "x.js")
+    assert kingfisher._rel_from_reported_path(outside, root_real) is None
+    assert kingfisher._rel_from_reported_path(None, root_real) is None
+
+
+def test_scan_dir_attributes_nested_same_basename(engines_required, tmp_path):
+    # M3 core (D37-L2 slice 3): two recovered files sharing a BASENAME in different dirs must
+    # attribute to their OWN rel-path — the exact collision scan_many's basename index cannot
+    # resolve. Split literals so no key-shaped token is committed; kingfisher reassembles them.
+    token_app = "AKIA" + "APPKEYXQMWTPLVRA"
+    token_lib = "AKIA" + "LIBKEYXQMWTPLVRB"
+    (tmp_path / "app").mkdir()
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "app" / "a.js").write_text(f'const k = "{token_app}";\n')
+    (tmp_path / "lib" / "a.js").write_text(f'const k = "{token_lib}";\n')
+    if kingfisher.scan(f'const k = "{token_app}";'.encode()).status == "unavailable":
+        if engines_required:
+            pytest.fail("kingfisher binary required (RECON_REQUIRE_ENGINES) but unavailable")
+        pytest.skip("kingfisher binary not available")
+
+    by_path, status = kingfisher.scan_dir(str(tmp_path))
+    assert status == "ok"
+    assert set(by_path) == {"app/a.js", "lib/a.js"}
+    assert {s.snippet for s in by_path["app/a.js"]} == {token_app}
+    assert {s.snippet for s in by_path["lib/a.js"]} == {token_lib}
+
+
+def test_scan_dir_scans_non_js_extensions(engines_required, tmp_path):
+    # Regression guard for scan_dir's load-bearing assumption: recovered originals now keep their
+    # REAL extensions (unlike scan_many, which renamed every unit to <i>.js), so secret coverage
+    # depends on Kingfisher scanning by CONTENT regardless of extension. Pin it for a .vue and an
+    # extensionless file — if a future Kingfisher upgrade skips them, secrets in recovered
+    # TS/Vue/config originals would silently drop (a security regression), and this fails first.
+    token_vue = "AKIA" + "VUEKEYXQMWTPLVRC"
+    token_noext = "AKIA" + "NOEXTKEYQMWTPLVD"
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "widget.vue").write_text(f'const k = "{token_vue}";\n')
+    (tmp_path / "app" / "config").write_text(f'const k = "{token_noext}";\n')  # extensionless
+    if kingfisher.scan(f'const k = "{token_vue}";'.encode()).status == "unavailable":
+        if engines_required:
+            pytest.fail("kingfisher binary required (RECON_REQUIRE_ENGINES) but unavailable")
+        pytest.skip("kingfisher binary not available")
+
+    by_path, status = kingfisher.scan_dir(str(tmp_path))
+    assert status == "ok"
+    assert {s.snippet for s in by_path.get("app/widget.vue", [])} == {token_vue}
+    assert {s.snippet for s in by_path.get("app/config", [])} == {token_noext}
 
 
 def test_index_from_path_maps_or_rejects():

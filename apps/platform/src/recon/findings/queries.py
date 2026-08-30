@@ -134,6 +134,9 @@ class CoverageView:
     # D31 honesty: True when the extract hit the AST node budget on any of the run's assets, so
     # some of the surface was not examined — a partial extract, reported truthfully (REQ-C2).
     curtailed: bool = False
+    # D37-L2 honesty: True when source-map recovery hit its cumulative-write budget on any asset, so
+    # some recovered originals were not scanned — a partial recovery, reported truthfully (REQ-C2).
+    recovered_partial: bool = False
 
 
 @dataclass(frozen=True)
@@ -459,6 +462,7 @@ def _coverage_view_from_payload(payload: dict[str, Any]) -> CoverageView:
         sources_recovered=int(payload.get("sources_recovered", 0)),
         source_map=str(payload.get("source_map", "none")),
         curtailed=bool(payload.get("curtailed", False)),
+        recovered_partial=bool(payload.get("recovered_partial", False)),
         files=[
             FileCoverageView(
                 path=str(entry.get("path", "")),
@@ -506,6 +510,8 @@ def _merge_coverage_payloads(payloads: Sequence[dict[str, Any]]) -> dict[str, An
         # D31: the run is curtailed if ANY asset's extract was (mirrors analyze._merge_coverage's
         # OR); a payload predating the field has no key and reads as not-curtailed.
         "curtailed": any(bool(p.get("curtailed")) for p in payloads),
+        # D37-L2: the run's recovery is partial if ANY asset's map recovery was truncated (same OR).
+        "recovered_partial": any(bool(p.get("recovered_partial")) for p in payloads),
         "files": files,
     }
 

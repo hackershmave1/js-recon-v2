@@ -24,17 +24,15 @@ pytestmark = pytest.mark.integration
 
 
 def _fake_both_recoveries(monkeypatch, path: str, content: bytes) -> None:
-    """Fake BOTH recovery seams (no Go binary needed): ``recover_sources`` for analyze's
-    scan + ``recover_one_file`` for the viewer's on-demand single-file serve — D37-L2
-    slice 2 split the whole-tree recovery (analyze) from the one-file read (viewer/reveal).
-    Both reproduce ``content`` for ``path``."""
-    monkeypatch.setattr(
-        sourcemapper,
-        "recover_sources",
-        lambda _map_bytes, **_k: sourcemapper.RecoveredSources(
-            files=[sourcemapper.RecoveredFile(path, content)], status="ok", origin="uploaded"
-        ),
-    )
+    """Fake BOTH recovery seams (no Go binary needed): ``iter_recovered_files`` for analyze's
+    streamed scan + ``recover_one_file`` for the viewer's on-demand single-file serve — D37-L2
+    split the whole-tree recovery (analyze, now streamed to an on-disk beautified tree) from the
+    one-file read (viewer/reveal). Both reproduce ``content`` for ``path``."""
+
+    def _iter(_map_path, **_k):
+        yield path, content
+
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", _iter)
     monkeypatch.setattr(
         sourcemapper,
         "recover_one_file",

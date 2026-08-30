@@ -29,6 +29,7 @@ from recon.domain import AssetStatus
 from recon.findings import normalize
 from recon.findings.analyze import (
     CrossModuleIndex,
+    _analysis_units,
     _extract_endpoints,
     _harvest_asset_exports,
     build_export_index,
@@ -147,18 +148,21 @@ def _reextract_blob(
 ) -> int:
     raw = storage.get_blob(input_ref)
     source = raw.decode("utf-8", "replace")
-    result = _extract_endpoints(
-        session,
-        tenant_id=tenant_id,
-        run_id=run_id,
-        source=source,
-        source_map_ref=source_map_ref,
-        source_map_origin=source_map_origin,
-        run_asset_id=run_asset_id,
-        asset_url=asset_url,
-        wrappers=wrappers,
-        cross_index=cross_index,
-    )
+    # Rebuild the SAME analysis units the analyze pass used (D37-L2 slice 3: a recovered map streams
+    # to an on-disk beautified tree the `with` frees afterwards) so a re-emitted native endpoint keeps
+    # its source-map-recovered path + stable finding_hash. No heartbeat: this is the synchronous
+    # re-extract, not a leased worker job.
+    with _analysis_units(source_map_ref, source, source_map_origin) as units:
+        result = _extract_endpoints(
+            session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            units=units,
+            run_asset_id=run_asset_id,
+            asset_url=asset_url,
+            wrappers=wrappers,
+            cross_index=cross_index,
+        )
     # D31 honesty: re-extract emits no `analyze.coverage` event, so a node-budget curtailment here
     # would otherwise be silent. The run's original analyze already flagged curtailment on coverage;
     # this log covers the re-extract's own partial pass so the tail-drop is never unrecorded (REQ-C2).

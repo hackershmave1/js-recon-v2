@@ -236,3 +236,48 @@ def test_analyze_loop_honors_cancel(redis, authorized_session, monkeypatch):
     result = {r.url: r for r in assets.list_for_run(tenant, run_id)}
     assert result["https://acme.io/a.js"].analyze_status == "ok"
     assert result["https://acme.io/b.js"].analyze_status == "pending"
+
+
+def test_analyze_recovered_asset_honors_cancel_mid_recovery(redis, authorized_session, monkeypatch):
+    # D37-L2 regression (§4 finding #1): a cooperative cancel that lands WHILE a mapped asset's
+    # recovery is in flight — the per-file heartbeat (S4) now raises it from INSIDE _analyze_blob —
+    # must PROPAGATE, not be swallowed by the loop's `except Exception` and mark the asset
+    # permanently analyze_failed (terminal -> the resume skip never revisits it -> silent loss).
+    from recon.findings import deobfuscate, sourcemapper
+    from recon.runs import service as run_service
+
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/a.js"])
+    # An inline-map bundle so _analysis_units routes to the recovered path with no stored map_ref.
+    src = (
+        b'fetch("/api/x");\n//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ=='
+    )
+    key = storage.put_blob(tenant, run_id, "input", src)
+    rows = assets.list_for_run(tenant, run_id)
+    with tenant_session(tenant) as s:
+        assets.set_fetch_ok(s, rows[0].id, key)
+
+    # Two recovered files so the beautify loop heartbeats BETWEEN them; the cancel is requested while
+    # beautifying the FIRST, so the heartbeat before the SECOND raises ControlInterrupt in-blob.
+    monkeypatch.setattr(
+        sourcemapper,
+        "iter_recovered_files",
+        lambda *a, **k: iter([("app/a.js", b'fetch("/a");'), ("app/b.js", b'fetch("/b");')]),
+    )
+    real_beautify = deobfuscate.beautify_if_minified
+    calls: list[str] = []
+
+    def fake_beautify(text):
+        calls.append(text)
+        if len(calls) == 1:
+            run_service.request_cancel(redis, tenant_id=tenant, run_id=run_id)
+        return real_beautify(text)
+
+    monkeypatch.setattr(analyze.deobfuscate, "beautify_if_minified", fake_beautify)
+
+    with pytest.raises(retry.ControlInterrupt) as ci:
+        analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+    assert ci.value.kind == "cancel"
+    # It propagated instead of being swallowed: the asset is NOT analyze_failed, so a resume
+    # re-analyzes it (a failed row is terminal and would be skipped forever).
+    assert assets.list_for_run(tenant, run_id)[0].analyze_status != "failed"

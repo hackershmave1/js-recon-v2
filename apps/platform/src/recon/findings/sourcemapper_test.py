@@ -215,9 +215,7 @@ def test_recover_one_file_refuses_escaping_target(monkeypatch, tmp_path):
     monkeypatch.setattr(sourcemapper.engines, "run_engine", _fake_tree_run_engine({"a.js": b"1"}))
     map_path = tmp_path / "in.map"
     map_path.write_bytes(b"{}")
-    assert (
-        sourcemapper.recover_one_file(str(map_path), "../../etc/passwd", bin_path="stub") is None
-    )
+    assert sourcemapper.recover_one_file(str(map_path), "../../etc/passwd", bin_path="stub") is None
 
 
 def test_recover_one_file_missing_binary_is_none():
@@ -245,6 +243,58 @@ def test_recover_one_file_forwards_memory_limit(monkeypatch, tmp_path):
     map_path.write_bytes(b"{}")
     sourcemapper.recover_one_file(str(map_path), "x.js", bin_path="stub")
     assert captured["memory_limit_bytes"] == get_settings().sourcemapper_memory_limit_bytes
+
+
+def test_iter_recovered_files_streams_in_stable_order(monkeypatch, tmp_path):
+    # D37-L2 slice 3: the streaming form yields (rel_path, bytes) in the SAME total, stable
+    # order recover_sources materializes (dirnames sorted, filenames sorted) so a re-analysis
+    # keeps the identical finding-hash set (REQ-A3). Nested + root files interleave correctly.
+    monkeypatch.setattr(
+        sourcemapper.engines,
+        "run_engine",
+        _fake_tree_run_engine(
+            {
+                "b.js": b"B",
+                "a.js": b"A",
+                "app/src/x.js": b"X",
+                "sub/z.js": b"Z",
+                "sub/a.js": b"AA",
+            }
+        ),
+    )
+    map_path = tmp_path / "in.map"
+    map_path.write_bytes(b"{}")
+    yielded = list(
+        sourcemapper.iter_recovered_files(str(map_path), max_recovered_bytes=1000, bin_path="stub")
+    )
+    assert [rel for rel, _ in yielded] == ["a.js", "b.js", "app/src/x.js", "sub/a.js", "sub/z.js"]
+    assert dict(yielded)["sub/a.js"] == b"AA"
+
+
+def test_iter_recovered_files_cap_drops_whole_tripping_file(monkeypatch, tmp_path):
+    # The cumulative cap drops the file that would cross it ENTIRELY (never a truncated file)
+    # and stops — so the kept set is byte-identical across retries.
+    monkeypatch.setattr(
+        sourcemapper.engines,
+        "run_engine",
+        _fake_tree_run_engine({"a.js": b"x" * 10, "b.js": b"y" * 10}),
+    )
+    map_path = tmp_path / "in.map"
+    map_path.write_bytes(b"{}")
+    yielded = list(
+        sourcemapper.iter_recovered_files(str(map_path), max_recovered_bytes=15, bin_path="stub")
+    )
+    assert yielded == [("a.js", b"x" * 10)]  # b.js dropped whole, not read to 5 bytes
+
+
+def test_iter_recovered_files_missing_binary_raises():
+    # The generator raises EngineNotAvailable on a missing binary (recover_sources catches it
+    # and downgrades to status="unavailable"; a streaming caller decides for itself).
+    gen = sourcemapper.iter_recovered_files(
+        "/nonexistent.map", max_recovered_bytes=100, bin_path="definitely-not-sourcemapper-xyz"
+    )
+    with pytest.raises(engines.EngineNotAvailable):
+        list(gen)
 
 
 def test_recover_sources_total_bytes_capped(monkeypatch):

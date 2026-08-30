@@ -24,18 +24,20 @@ from recon.findings.analyze import Coverage
 def test_analysis_units_skipped_when_referenced_map_missed():
     # A referenced map the fetch stage couldn't retrieve (source_map_skipped=True, no
     # stored ref / inline map) is the honest "skipped" gap — while STILL falling back to
-    # bundle analysis (the same single unit a no-map bundle yields).
-    units, status, recovered = analyze._analysis_units(None, 'fetch("/api/x");', "capture", True)
-    assert status == "skipped"
-    assert recovered == 0
-    assert len(units) == 1  # the lone bundle unit — the skip changes only the label
+    # bundle analysis (the same single unit a no-map bundle yields). D37-L2: _analysis_units
+    # now returns an AnalysisUnits context manager, not a (units, status, count) tuple.
+    with analyze._analysis_units(None, 'fetch("/api/x");', "capture", True) as units:
+        assert units.source_map_status == "skipped"
+        assert units.sources_recovered == 0
+        assert units.is_bundle  # the lone bundle unit — the skip changes only the label
+        assert units.names == [analyze._SOURCE_NAME]
 
 
 def test_analysis_units_none_when_no_map_referenced():
     # No skip flag + no ref = a bundle that genuinely had no map -> "none", NOT "skipped",
     # so we never over-report a coverage gap that does not exist.
-    _units, status, _recovered = analyze._analysis_units(None, 'fetch("/api/x");', "capture", False)
-    assert status == "none"
+    with analyze._analysis_units(None, 'fetch("/api/x");', "capture", False) as units:
+        assert units.source_map_status == "none"
 
 
 # --- merge / read-model propagation (REQ-C2 must survive the roll-up) -------- #

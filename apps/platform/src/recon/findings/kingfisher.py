@@ -293,6 +293,77 @@ def scan_many(
     return by_index, "ok"
 
 
+def scan_dir(
+    tree_root: str,
+    *,
+    bin_path: str | None = None,
+    timeout_s: float | None = None,
+    max_output_bytes: int | None = None,
+    confidence: str | None = None,
+) -> tuple[dict[str, list[RawSecret]], str]:
+    """Scan an EXISTING on-disk tree for secrets in ONE Kingfisher invocation, keyed by rel-path.
+
+    The D37-L2 slice-3 twin of :func:`scan_many`: instead of writing flat ``<i>.js`` units to a
+    temp dir it owns, ``scan_dir`` points Kingfisher at a CALLER-owned tree whose files already sit
+    under their real recovered rel-paths (analyze's beautify-to-disk tree), so a 96 MiB map's secret
+    scan never rebuilds the whole tree in RAM. Returns ``(by_rel_path, status)`` where
+    ``by_rel_path[rel]`` lists the secrets in ``<tree_root>/<rel>`` (a missing rel == none).
+
+    Each sighting is attributed by inverting Kingfisher's reported ABSOLUTE path back to the tree-
+    relative path — ``relpath(realpath(reported), realpath(tree_root))`` (M3) — NOT by basename
+    (:func:`_index_from_path`), which collides when two recovered files share a basename in
+    different dirs. Kingfisher scans by CONTENT regardless of extension (verified 1.106.0: .ts/.vue/
+    extensionless all scanned), so the tree keeps its real names — no forced ``.js``. ONE subprocess
+    (no per-file fork DoS); safe to scan the dir because it holds ONLY the files analyze wrote. A
+    genuine engine failure RAISES (like :func:`scan`/:func:`scan_many`); an absent binary yields
+    ``({}, "unavailable")``. ``max_output_bytes`` bounds the buffered JSONL — the caller scales it
+    with tree size (D37-L2 M4) so a ``--no-dedup`` scan of a big tree doesn't false-``EngineError``."""
+    settings = get_settings()
+    bin_path = bin_path or settings.kingfisher_bin
+    timeout_s = timeout_s if timeout_s is not None else settings.engine_timeout_seconds
+    max_output_bytes = (
+        max_output_bytes if max_output_bytes is not None else settings.engine_max_output_bytes
+    )
+    try:
+        result = engines.run_engine(
+            _scan_argv(bin_path, tree_root, confidence),
+            timeout_s=timeout_s,
+            max_output_bytes=max_output_bytes,
+            ok_returncodes=_OK_RETURNCODES,
+        )
+    except engines.EngineNotAvailable:
+        log.warning("kingfisher.unavailable", bin=bin_path)
+        return {}, "unavailable"
+
+    root_real = os.path.realpath(tree_root)
+    by_path: dict[str, list[RawSecret]] = {}
+    for secret in parse_findings(result.stdout):
+        rel = _rel_from_reported_path(secret.path, root_real)
+        if rel is not None:
+            by_path.setdefault(rel, []).append(secret)
+    log.info("kingfisher.done", secrets=sum(len(v) for v in by_path.values()), files=len(by_path))
+    return by_path, "ok"
+
+
+def _rel_from_reported_path(reported: str | None, root_real: str) -> str | None:
+    """Invert a Kingfisher-reported scan path to the tree-relative ``"/"``-path (M3, D37-L2 slice 3).
+
+    Kingfisher reports an ABSOLUTE native-separator path into the scanned tree; realpath BOTH sides
+    (so a symlinked temp root — macOS ``/var`` -> ``/private/var`` — normalizes) then relpath. A
+    path resolving OUTSIDE the root (never expected — the scan walks only files we wrote) or on a
+    different drive (Windows ``relpath`` ``ValueError``) is refused, so a stray path can't mis-
+    attribute a secret to a real recovered file."""
+    if not reported:
+        return None
+    try:
+        rel = os.path.relpath(os.path.realpath(reported), root_real)
+    except ValueError:  # a different drive on Windows has no relative path
+        return None
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return None
+    return rel.replace(os.sep, "/")
+
+
 def _scan_argv(bin_path: str, target: str, confidence: str | None = None) -> list[str]:
     """The ``kingfisher scan`` argv for one target (a file or a dir).
 

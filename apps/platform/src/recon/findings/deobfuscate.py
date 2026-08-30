@@ -9,9 +9,12 @@ deterministic (pinned options), so analyze and the Sources re-derive produce
 byte-identical output with no persisted blob.
 
 Pure-Python (``jsbeautifier``), in-process, FAIL-SOFT: over the input cap or on any
-error it returns ``None`` and the caller uses the raw bundle unchanged. Secrets are
-NEVER beautified — Kingfisher scans the raw bytes and ``recon.probe.reveal`` slices
-the raw blob by offset, so this stays confined to endpoint extraction.
+error it returns ``None`` and the caller uses the raw source unchanged. On the no-map
+BUNDLE path, secrets scan the RAW bytes (``recon.probe.reveal`` slices the raw blob by
+offset), so beautify there stays confined to endpoint extraction. The D32-B1 source-map-
+RECOVERED path is different: analyze scans AND locates secrets in the SAME
+``beautify_if_minified`` text ``recon.probe.sources``/``reveal`` reproduce, so both sides
+agree byte-for-byte (D37-L2 streams that beautified tree to disk and scans it there).
 
 Phase 2 (a ``webcrack`` opt-in engine that unpacks bundles into per-module files,
 Node) plugs in behind this same fail-soft gate; not present yet.
