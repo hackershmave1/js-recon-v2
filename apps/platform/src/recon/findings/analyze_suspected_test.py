@@ -121,30 +121,26 @@ def test_suspected_secret_is_hashed_revealable_and_reveals(redis, authorized_ses
 
 
 def test_recovered_source_low_confidence_hit_is_suspected(redis, authorized_session, monkeypatch):
-    # The RECOVERED-source partition path (D32-B1 scan_many + D33-B partition): a low-
-    # confidence hit in a source-map-recovered unit is recorded as SECRET_SUSPECTED at its
-    # recovered path and counted in secrets_suspected, not secrets. Fakes recover_sources
-    # (→ a recovered unit) and scan_many (→ a low hit on it); the bundle scan is empty.
+    # The RECOVERED-source partition path (D32-B1 scan + D33-B partition): a low-confidence hit
+    # in a source-map-recovered unit is recorded as SECRET_SUSPECTED at its recovered path and
+    # counted in secrets_suspected, not secrets. Fakes iter_recovered_files (→ a recovered unit,
+    # D37-L2 slice 3) and scan_dir (→ a low hit on it); the bundle scan is empty.
     from recon.findings import sourcemapper
 
     tenant, session_id = authorized_session
     recovered = f'// prod\nconst c = "{_LOW}";\n'.encode()
     monkeypatch.setattr(kingfisher, "scan", _fake_scan())  # bundle: no secret
-    monkeypatch.setattr(
-        sourcemapper,
-        "recover_sources",
-        lambda *a, **k: sourcemapper.RecoveredSources(
-            files=[sourcemapper.RecoveredFile("app/config.js", recovered)],
-            status="ok",
-            origin="uploaded",
-        ),
-    )
 
-    def fake_scan_many(units, *, confidence=None, **_kw):
+    def fake_iter(_map_path, **_kwargs):
+        yield "app/config.js", recovered
+
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", fake_iter)
+
+    def fake_scan_dir(_tree_root, *, confidence=None, **_kw):
         assert confidence == "low"  # opted-in confidence threads to the recovered scan too
-        return {0: [_sec(_LOW, "low", _LOW_RULE)]}, "ok"
+        return {"app/config.js": [_sec(_LOW, "low", _LOW_RULE)]}, "ok"
 
-    monkeypatch.setattr(kingfisher, "scan_many", fake_scan_many)
+    monkeypatch.setattr(kingfisher, "scan_dir", fake_scan_dir)
 
     view = service.create_run(
         redis, tenant_id=tenant, session_id=session_id, scan_suspected_secrets=True

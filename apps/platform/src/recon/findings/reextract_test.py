@@ -177,21 +177,18 @@ def test_reextract_multi_asset_preserves_capture_map_path(redis, authorized_sess
     # map-recovered path, so re-extract must recover the SAME path — else the wrapper
     # endpoint lands under `input.js` with a divergent finding_hash (a duplicate, not
     # an update; §12 Imp 4). Before the fix, reextract hardcoded source_map_ref=None
-    # for assets. recover_sources is faked (no Go binary); the recovered source carries
+    # for assets. iter_recovered_files is faked (no Go binary; D37-L2 slice 3 streams recovery
+    # through it, and it underlies Phase A's recover_sources too); the recovered source carries
     # the wrapper call.
     from recon.findings import sourcemapper
 
     tenant, session_id = authorized_session
     recovered_src = b"const api = makeClient(); api.get('/w');"
 
-    def fake_recover(map_bytes, **_kwargs):
-        return sourcemapper.RecoveredSources(
-            files=[sourcemapper.RecoveredFile("app/src/api.js", recovered_src)],
-            status="ok",
-            origin="capture",
-        )
+    def fake_iter(_map_path, **_kwargs):
+        yield "app/src/api.js", recovered_src
 
-    monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", fake_iter)
 
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
     input_key = storage.put_blob(tenant, view.id, "input", recovered_src)

@@ -24,6 +24,7 @@ import os
 import re
 import tempfile
 import urllib.parse
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from recon.config import get_settings
@@ -107,6 +108,57 @@ def external_map_url(js: str) -> str | None:
     return url
 
 
+def iter_recovered_files(
+    map_path: str,
+    *,
+    max_recovered_bytes: int,
+    bin_path: str | None = None,
+    timeout_s: float | None = None,
+    memory_limit_bytes: int | None = None,
+) -> Iterator[tuple[str, bytes]]:
+    """Yield each recovered original ``(rel_path, raw_bytes)`` from the source map at the
+    LOCAL ``map_path``, in a stable total order, STREAMING one file at a time (D37-L2 slice 3).
+
+    Sourcemapper writes the whole recovered tree to a temp ``-output`` dir; this reads it back
+    and yields one file at a time, so a caller can process a 96 MiB map without ever holding the
+    whole ``list[RecoveredFile]`` in memory — the lift that lets analyze recover a WHOLE big map
+    instead of only its first ``engine_max_output_bytes``. ``max_recovered_bytes`` bounds the
+    CUMULATIVE bytes yielded, dropped at WHOLE-FILE granularity: a file that would cross the cap
+    is skipped and iteration stops — never a truncated file, so a re-analysis keeps the identical
+    set (REQ-A3 idempotency). Traversal order, containment, and the cap-sentinel are the same
+    ``_walk_recovered`` applied, lifted into the generator so :func:`recover_sources` (the list
+    form, still used by Phase A until slice 5) and this streaming form share ONE traversal.
+
+    Raises ``engines.EngineNotAvailable`` if the binary is missing (the caller's soft skip) and
+    ``engines.EngineError`` on an unparseable map — the same contract as :func:`recover_sources`.
+    The recovery child's virtual memory is bounded (``memory_limit_bytes`` -> RLIMIT_AS, D37-L0)
+    so a large map fails contained rather than OOM-ing the box."""
+    settings = get_settings()
+    bin_path = bin_path or settings.sourcemapper_bin
+    timeout_s = timeout_s if timeout_s is not None else settings.engine_timeout_seconds
+    mem_limit = (
+        memory_limit_bytes
+        if memory_limit_bytes is not None
+        else settings.sourcemapper_memory_limit_bytes
+    )
+    with tempfile.TemporaryDirectory(prefix="sm-") as workdir:
+        out_dir = os.path.join(workdir, "out")
+        os.makedirs(out_dir, exist_ok=True)
+        # -output is REQUIRED: without it sourcemapper prints usage, exits 0, and writes
+        # nothing — so always pass it and treat an empty tree as "none". run_engine's
+        # max_output_bytes caps sourcemapper's (small) STDOUT; max_recovered_bytes caps the
+        # tree bytes we read below — historically the same value, kept so for parity.
+        argv = [engines.resolve_bin(bin_path), "-url", map_path, "-output", out_dir]
+        engines.run_engine(
+            argv,
+            timeout_s=timeout_s,
+            max_output_bytes=max_recovered_bytes,
+            ok_returncodes=_OK_RETURNCODES,
+            memory_limit_bytes=mem_limit,
+        )
+        yield from _iter_recovered_tree(out_dir, max_recovered_bytes)
+
+
 def recover_sources(
     map_bytes: bytes,
     *,
@@ -116,50 +168,40 @@ def recover_sources(
     max_recovered_bytes: int | None = None,
     memory_limit_bytes: int | None = None,
 ) -> RecoveredSources:
-    """Recover a bundle's original sources from ``map_bytes`` via Sourcemapper.
+    """Recover a bundle's original sources from ``map_bytes`` via Sourcemapper (the LIST form).
 
-    Returns ``status="unavailable"`` (soft) if the binary is missing; a genuine
-    engine failure (bad map, or the D37-L0 memory ceiling tripping on an over-size
-    map) re-raises as ``EngineError`` so the analyze stage's per-origin fallback
-    decides (a crawl/inline map falls back to bundle analysis; an uploaded map
-    surfaces). Files are read back from an isolated temp dir; a recovered path that
-    resolves outside it is skipped (defense-in-depth — the tool already clamps
-    ``../``), and total recovered bytes are capped. The recovery child's virtual
-    memory is bounded (``memory_limit_bytes`` -> RLIMIT_AS, DEBT D37-L0) so a large
-    map fails contained rather than OOM-ing the box."""
+    A thin wrapper that buffers ``map_bytes`` to a temp file and materializes
+    :func:`iter_recovered_files` — kept (D37-L2 M1) so Phase A's export harvest
+    (``analyze._harvest_asset_exports``, migrated to the streaming form in slice 5) and the
+    adapter's existing tests keep the same signature + behavior. Returns
+    ``status="unavailable"`` (soft) if the binary is missing; a genuine engine failure (bad map,
+    or the D37-L0 memory ceiling tripping on an over-size map) re-raises as ``EngineError`` so the
+    analyze stage's per-origin fallback decides. A recovered path that resolves outside the temp
+    root is skipped (defense-in-depth — the tool already clamps ``../``), and total recovered bytes
+    are capped."""
     settings = get_settings()
-    bin_path = bin_path or settings.sourcemapper_bin
-    timeout_s = timeout_s if timeout_s is not None else settings.engine_timeout_seconds
+    resolved_bin = bin_path or settings.sourcemapper_bin
     cap = (
         max_recovered_bytes if max_recovered_bytes is not None else settings.engine_max_output_bytes
     )
-    mem_limit = (
-        memory_limit_bytes
-        if memory_limit_bytes is not None
-        else settings.sourcemapper_memory_limit_bytes
-    )
-
     with tempfile.TemporaryDirectory(prefix="sm-") as workdir:
         map_path = os.path.join(workdir, "in.map")
-        out_dir = os.path.join(workdir, "out")
-        os.makedirs(out_dir, exist_ok=True)
         with open(map_path, "wb") as handle:
             handle.write(map_bytes)
-        # -output is REQUIRED: without it sourcemapper prints usage, exits 0, and
-        # writes nothing — so always pass it and treat an empty tree as "none".
-        argv = [engines.resolve_bin(bin_path), "-url", map_path, "-output", out_dir]
         try:
-            engines.run_engine(
-                argv,
-                timeout_s=timeout_s,
-                max_output_bytes=cap,
-                ok_returncodes=_OK_RETURNCODES,
-                memory_limit_bytes=mem_limit,
-            )
+            files = [
+                RecoveredFile(path=rel, content=content)
+                for rel, content in iter_recovered_files(
+                    map_path,
+                    max_recovered_bytes=cap,
+                    bin_path=bin_path,
+                    timeout_s=timeout_s,
+                    memory_limit_bytes=memory_limit_bytes,
+                )
+            ]
         except engines.EngineNotAvailable:
-            log.warning("sourcemapper.unavailable", bin=bin_path)
+            log.warning("sourcemapper.unavailable", bin=resolved_bin)
             return RecoveredSources(status="unavailable", origin=origin)
-        files = _walk_recovered(out_dir, cap)
 
     log.info("sourcemapper.done", recovered=len(files), origin=origin)
     return RecoveredSources(files=files, status="ok", origin=origin)
@@ -231,9 +273,11 @@ def _read_recovered_file(out_dir: str, target_path: str) -> bytes | None:
         return handle.read()
 
 
-def _walk_recovered(out_dir: str, cap: int) -> list[RecoveredFile]:
+def _iter_recovered_tree(out_dir: str, cap: int) -> Iterator[tuple[str, bytes]]:
+    """Yield ``(rel_path, raw_bytes)`` for every recovered file under ``out_dir``, in a total
+    stable order, stopping at the cumulative byte ``cap`` (whole-file granularity). Shared by
+    :func:`iter_recovered_files` (streamed) and :func:`recover_sources` (materialized)."""
     root = os.path.realpath(out_dir)
-    files: list[RecoveredFile] = []
     total = 0
     for dirpath, dirnames, filenames in os.walk(out_dir, followlinks=False):
         # Total, stable traversal order so the set kept under the byte cap is
@@ -251,8 +295,9 @@ def _walk_recovered(out_dir: str, cap: int) -> list[RecoveredFile]:
                 content = handle.read(cap - total + 1)
             total += len(content)
             if total > cap:
+                # Whole-file granularity: drop the tripping file entirely and stop, so the
+                # kept set is byte-identical across retries (never a half-read file).
                 log.warning("sourcemapper.truncated", cap=cap)
-                return files
+                return
             rel = os.path.relpath(abspath, out_dir).replace(os.sep, "/")
-            files.append(RecoveredFile(path=rel, content=content))
-    return files
+            yield rel, content

@@ -335,10 +335,10 @@ def test_secret_in_js_produces_secret_finding(redis, authorized_session, engines
 
 def test_recovered_sources_get_real_paths(redis, authorized_session, monkeypatch):
     # With a source map, endpoints come from the RECOVERED source (real path),
-    # not the minified bundle. recover_sources is faked so no Go binary is needed;
-    # the analyze stage is exercised directly. The run is created WITHOUT enqueuing
-    # a stage, so the test leaves no stray message in the shared-Redis queues (the
-    # full worker pipeline is covered by other tests).
+    # not the minified bundle. iter_recovered_files is faked so no Go binary is needed
+    # (D37-L2 slice 3: analyze streams recovery through it); the analyze stage is exercised
+    # directly. The run is created WITHOUT enqueuing a stage, so the test leaves no stray
+    # message in the shared-Redis queues (the full worker pipeline is covered by other tests).
     from sqlalchemy import update
 
     from recon import storage
@@ -348,14 +348,10 @@ def test_recovered_sources_get_real_paths(redis, authorized_session, monkeypatch
 
     tenant, session_id = authorized_session
 
-    def fake_recover(map_bytes, **_kwargs):
-        return sourcemapper.RecoveredSources(
-            files=[sourcemapper.RecoveredFile("app/src/api.js", b'fetch("/api/widgets/7");')],
-            status="ok",
-            origin="uploaded",
-        )
+    def fake_iter(_map_path, **_kwargs):
+        yield "app/src/api.js", b'fetch("/api/widgets/7");'
 
-    monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", fake_iter)
 
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
     input_key = storage.put_blob(tenant, view.id, "input", b'fetch("/bundle/only");')
@@ -401,14 +397,10 @@ def test_recovered_source_secret_recorded_at_its_path(
             pytest.fail("kingfisher binary required (RECON_REQUIRE_ENGINES) but unavailable")
         pytest.skip("kingfisher binary not available")
 
-    def fake_recover(map_bytes, **_kwargs):
-        return sourcemapper.RecoveredSources(
-            files=[sourcemapper.RecoveredFile("app/src/config.js", recovered)],
-            status="ok",
-            origin="uploaded",
-        )
+    def fake_iter(_map_path, **_kwargs):
+        yield "app/src/config.js", recovered
 
-    monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", fake_iter)
 
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
     # The minified bundle carries NO secret — only an endpoint — so the token is
@@ -445,13 +437,13 @@ def test_malformed_inline_map_falls_back_to_bundle(redis, authorized_session, mo
 
     tenant, session_id = authorized_session
 
-    def boom(map_bytes, **_kwargs):
+    def boom(*_a, **_k):
         raise engines.EngineError("unparseable source map")
 
-    monkeypatch.setattr(sourcemapper, "recover_sources", boom)
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", boom)
 
     # Inline map is base64 of {"version":3} — passes the JSON sanity check, so it
-    # reaches recover_sources (which is stubbed to fail as the real tool would).
+    # reaches recovery (stubbed to fail as the real tool would).
     js = 'fetch("/api/health");\n//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ=='
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
     key = storage.put_blob(tenant, view.id, "input", js.encode("utf-8"))
@@ -479,17 +471,11 @@ def test_coverage_is_reported_per_file(redis, authorized_session, monkeypatch):
 
     tenant, session_id = authorized_session
 
-    def fake_recover(map_bytes, **_kwargs):
-        return sourcemapper.RecoveredSources(
-            files=[
-                sourcemapper.RecoveredFile("app/clean.js", b'fetch("/api/a");'),
-                sourcemapper.RecoveredFile("app/dynamic.js", b"fetch(runtimeUrl);"),
-            ],
-            status="ok",
-            origin="uploaded",
-        )
+    def fake_iter(_map_path, **_kwargs):
+        yield "app/clean.js", b'fetch("/api/a");'
+        yield "app/dynamic.js", b"fetch(runtimeUrl);"
 
-    monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", fake_iter)
 
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id)
     input_key = storage.put_blob(tenant, view.id, "input", b'fetch("/bundle");')
@@ -544,14 +530,10 @@ def test_capture_asset_recovers_sources_from_its_map(redis, authorized_session, 
 
     tenant, session_id = authorized_session
 
-    def fake_recover(map_bytes, **_kwargs):
-        return sourcemapper.RecoveredSources(
-            files=[sourcemapper.RecoveredFile("app/src/api.js", b'fetch("/api/widgets/7");')],
-            status="ok",
-            origin="capture",
-        )
+    def fake_iter(_map_path, **_kwargs):
+        yield "app/src/api.js", b'fetch("/api/widgets/7");'
 
-    monkeypatch.setattr(sourcemapper, "recover_sources", fake_recover)
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", fake_iter)
     run_id = _seed_capture_asset(
         redis, tenant, session_id, js=b'fetch("/bundle/only");', map_blob=b'{"version":3}'
     )
@@ -577,10 +559,10 @@ def test_capture_asset_bad_map_falls_back_and_asset_still_ok(
 
     tenant, session_id = authorized_session
 
-    def boom(map_bytes, **_kwargs):
+    def boom(*_a, **_k):
         raise engines.EngineError("unparseable capture map")
 
-    monkeypatch.setattr(sourcemapper, "recover_sources", boom)
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", boom)
     run_id = _seed_capture_asset(
         redis, tenant, session_id, js=b'fetch("/api/health");', map_blob=b'{"version":3}'
     )
@@ -755,7 +737,7 @@ def test_legacy_uploaded_bad_map_still_raises(redis, authorized_session, monkeyp
     tenant, session_id = authorized_session
     monkeypatch.setattr(
         sourcemapper,
-        "recover_sources",
+        "iter_recovered_files",
         lambda *a, **k: (_ for _ in ()).throw(engines.EngineError("bad map")),
     )
     view = service.create_run(redis, tenant_id=tenant, session_id=session_id)

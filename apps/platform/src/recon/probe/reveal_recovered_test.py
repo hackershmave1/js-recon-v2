@@ -1,10 +1,11 @@
 """D32-B1: a secret living only in a source map's recovered ``sourcesContent`` is
 revealed by re-deriving that recovered byte space (not the raw bundle).
 
-``recover_sources`` is faked (deterministic) so analyze and reveal reproduce identical
-bytes without a Go binary; Kingfisher is real — it detects the planted token and locates
-its offset. The fail-closed test then makes the map drift under the recorded offset and
-asserts reveal REFUSES rather than returning wrong plaintext (the security invariant).
+Recovery is faked (deterministic) so analyze and reveal reproduce identical bytes without a Go
+binary — analyze streams via ``iter_recovered_files`` (D37-L2 slice 3), reveal re-derives one file
+via ``recover_one_file`` (slice 2); Kingfisher is real — it detects the planted token and locates
+its offset. The fail-closed test then makes the map drift under the recorded offset and asserts
+reveal REFUSES rather than returning wrong plaintext (the security invariant).
 """
 
 from __future__ import annotations
@@ -38,15 +39,15 @@ def _skip_if_no_kingfisher(engines_required) -> None:
         pytest.skip("kingfisher binary not available")
 
 
-def _fake_recover(content: bytes):
-    def _recover(_map_bytes, **_kwargs):
-        return sourcemapper.RecoveredSources(
-            files=[sourcemapper.RecoveredFile("app/src/config.js", content)],
-            status="ok",
-            origin="uploaded",
-        )
+def _fake_iter(content: bytes):
+    """Fake analyze's streamed recovery (D37-L2 slice 3): yield the one recovered original so
+    analyze scans + locates the secret without the Go binary. It underlies Phase A's
+    ``recover_sources`` too, so the export-index pre-pass sees the same content."""
 
-    return _recover
+    def _iter(_map_path, **_kwargs):
+        yield "app/src/config.js", content
+
+    return _iter
 
 
 def _fake_recover_one(content: bytes):
@@ -86,7 +87,7 @@ def test_reveal_roundtrips_a_recovered_source_secret(
 ):
     _skip_if_no_kingfisher(engines_required)
     tenant, session_id = authorized_session
-    monkeypatch.setattr(sourcemapper, "recover_sources", _fake_recover(_RECOVERED))
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", _fake_iter(_RECOVERED))
     monkeypatch.setattr(sourcemapper, "recover_one_file", _fake_recover_one(_RECOVERED))
 
     run_id = _seed_run_with_recovered_secret(redis, tenant, session_id)
@@ -108,7 +109,7 @@ def test_reveal_recovered_secret_fails_closed_when_the_map_drifts(
     # no longer bounds the token.
     _skip_if_no_kingfisher(engines_required)
     tenant, session_id = authorized_session
-    monkeypatch.setattr(sourcemapper, "recover_sources", _fake_recover(_RECOVERED))
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", _fake_iter(_RECOVERED))
     run_id = _seed_run_with_recovered_secret(redis, tenant, session_id)
     secret = _the_secret(tenant, run_id)
 

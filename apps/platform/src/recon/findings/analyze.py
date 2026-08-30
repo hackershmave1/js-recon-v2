@@ -17,6 +17,8 @@ unit, unchanged. Both paths share the per-blob work via ``_analyze_blob``.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -27,6 +29,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from recon import storage
+from recon.config import get_settings
 from recon.db.base import tenant_session
 from recon.db.models import Run
 from recon.domain import AssetStatus, FindingType
@@ -125,6 +128,10 @@ class Coverage:
     # bounded its walk to a prefix and the tail was not examined. Surfaced so a partial extract
     # is never silent (REQ-C2); ORed across assets in `_merge_coverage`.
     curtailed: bool = False
+    # D37-L2 honesty: True when the source-map recovery hit the cumulative-write budget and stopped
+    # short of the whole map (a big-map coverage gap — some recovered originals were NOT scanned).
+    # Surfaced so this truncation is never silent (REQ-C2), like `curtailed`; ORed across assets.
+    recovered_partial: bool = False
 
 
 def analyze_run(
@@ -342,6 +349,23 @@ def _analyze_assets(
                 emit_event=False,  # lease renewal only — no progress event during the pre-pass
             )
 
+    def _asset_heartbeat() -> None:
+        # Mid-blob lease renewal (D37-L2 S4): recovering + scanning one asset's big source map can
+        # take a while, so beat between recovered files so a peer can't reclaim the RUNNING job mid-
+        # recovery. Lease-renewal only (emit_event=False) — the per-asset progress event fires once
+        # per asset below; `done` is read live so the renewal reflects the asset in flight.
+        run_queries.raise_if_control_requested(tenant_id, run_id)
+        if job_id:
+            progress.beat(
+                redis,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                job_id=job_id,
+                done=done,
+                total=total,
+                emit_event=False,
+            )
+
     cross_index = build_export_index(rows, heartbeat=_phase_a_heartbeat)
 
     for asset in rows:
@@ -380,8 +404,18 @@ def _analyze_assets(
                     wrappers=wrappers,
                     cross_index=cross_index,
                     scan_suspected=scan_suspected,
+                    heartbeat=_asset_heartbeat,
                 )
                 run_assets.set_analyze_ok(session, asset.id)
+        except retry.ControlInterrupt:
+            # A cooperative pause/cancel (REQ-A4) is NOT a per-asset failure. The per-asset
+            # heartbeat (`_asset_heartbeat`) now raises this from DEEP INSIDE `_analyze_blob`
+            # (between recovered files, D37-L2 S4) — i.e. inside this `try` — so it would
+            # otherwise be swallowed by the `except Exception` below and mark a paused asset
+            # permanently `analyze_failed` (terminal → the resume skip never revisits it →
+            # silent loss). Re-raise so it propagates out of the loop exactly as the pre-loop
+            # control check does, matching the fingerprint pass's `except ControlInterrupt: raise`.
+            raise
         except (ClientError, SQLAlchemyError):
             raise  # infra (storage/DB) -> job-level retry, matching fetch.py
         except Exception as exc:
@@ -424,13 +458,6 @@ class _EndpointExtraction:
     # D31: True if any unit's extract() hit the node budget (surfaced on coverage; also read by
     # the re-extract path to log its own tail-drop). Defaulted so older constructions stay valid.
     curtailed: bool = False
-    # D32-B1: the source-map-recovered `(source_path, unit_text)` pairs this pass analyzed —
-    # EMPTY for a no-map bundle (that single unit is the raw blob, already secret-scanned in
-    # `_analyze_blob`). `_analyze_blob` secret-scans these; the re-extract path ignores them
-    # (so re-extract still runs NO Kingfisher, spec §12 Blocker 2). The text is EXACTLY what
-    # was fed to `extract()`, so a secret offset located here round-trips through the reveal's
-    # identical `sources.recover_file_text` reproduction.
-    recovered_units: tuple[tuple[str, str], ...] = ()
 
 
 def _resolve_cross_module(
@@ -473,47 +500,42 @@ def _extract_endpoints(
     *,
     tenant_id: str,
     run_id: str,
-    source: str,
-    source_map_ref: str | None,
-    source_map_origin: str = "uploaded",
-    source_map_skipped: bool = False,
+    units: AnalysisUnits,
     run_asset_id: str | None,
     asset_url: str | None,
     wrappers: Sequence[WrapperRule] = (),
     cross_index: CrossModuleIndex | None = None,
+    heartbeat: Callable[[], None] | None = None,
 ) -> _EndpointExtraction:
-    """Extract + record ONLY endpoint/param findings for one blob.
+    """Extract + record ONLY endpoint/param findings for one blob's ``units``.
 
-    Shared core of the analyze stage (`_analyze_blob`, which additionally scans
-    secrets + emits coverage) and the out-of-band wrapper re-extract
-    (`recon.findings.reextract`, which calls this directly so a wrapper POST
-    records findings WITHOUT re-emitting the run's coverage counters — spec
-    §2.6/§12 Blocker 1 — and WITHOUT the Kingfisher subprocess — §12 Blocker 2).
-    Retains `_analysis_units(source_map_ref, source)` so a re-emitted native
-    endpoint keeps its source-map-recovered path and thus its stable
-    `finding_hash` (§12 Imp 4).
+    Shared core of the analyze stage (`_analyze_blob`, which additionally scans secrets + emits
+    coverage) and the out-of-band wrapper re-extract (`recon.findings.reextract`, which calls this
+    directly so a wrapper POST records findings WITHOUT re-emitting the run's coverage counters —
+    spec §2.6/§12 Blocker 1 — and WITHOUT the Kingfisher subprocess — §12 Blocker 2). Both callers
+    build the SAME ``AnalysisUnits`` so a re-emitted native endpoint keeps its source-map-recovered
+    path and thus its stable `finding_hash` (§12 Imp 4).
 
-    ``cross_index`` is the run-level cross-module index (`build_export_index`); when
-    supplied, each unit's ESM imports / webpack requires are resolved against it so a
-    cross-chunk `fetch(API_BASE + PATH)` / `fetch(r.t + r.M)` attributes. BOTH callers
-    pass the SAME index so the re-extract writes the identical resolved endpoint the
-    analyze pass did — never a contradictory unresolved skeleton."""
-    units, source_map_status, sources_recovered = _analysis_units(
-        source_map_ref, source, source_map_origin, source_map_skipped
-    )
+    Reads each recovered unit's text ONE AT A TIME from the on-disk beautified tree (D37-L2 slice 3)
+    and beats before each (S4) so a big map's per-file tree-sitter extract stays lease-safe.
+    ``cross_index`` is the run-level cross-module index (`build_export_index`); when supplied, each
+    unit's ESM imports / webpack requires are resolved against it so a cross-chunk
+    `fetch(API_BASE + PATH)` / `fetch(r.t + r.M)` attributes. BOTH callers pass the SAME index so the
+    re-extract writes the identical resolved endpoint the analyze pass did — never a contradictory
+    unresolved skeleton."""
     attributed = 0
     unattributed = 0
     written = 0
     # D31: any unit hitting the node budget makes the whole blob's extract partial.
     curtailed = False
     per_file: dict[str, list[int]] = {}
-    # A recovered asset yields >=1 units keyed by `f.path`; a no-map asset yields the
-    # single "input.js" bundle unit (sources_recovered == 0) whose module identity is
-    # the served URL, not a per-module path. Route on that explicit signal, not the
-    # sentinel string (a map's author-controlled `sources[]` could name a real file
-    # "input.js" and be mis-routed).
-    is_bundle = sources_recovered == 0
-    for source_name, unit_text in units:
+    # A recovered asset yields >=1 units keyed by `f.path`; a no-map asset yields the single
+    # "input.js" bundle unit whose module identity is the served URL, not a per-module path.
+    is_bundle = units.is_bundle
+    for source_name in units.names:
+        if heartbeat is not None:
+            heartbeat()  # lease renew + REQ-A4 control-check, before each unit's extract (S4)
+        unit_text = units.read_text(source_name)
         importer_key = (
             _modulegraph.url_module_key(asset_url)
             if is_bundle and asset_url is not None
@@ -604,14 +626,10 @@ def _extract_endpoints(
         written=written,
         attributed=attributed,
         unattributed=unattributed,
-        sources_recovered=sources_recovered,
-        source_map=source_map_status,
+        sources_recovered=units.sources_recovered,
+        source_map=units.source_map_status,
         files=files,
         curtailed=curtailed,
-        # D32-B1: hand the recovered units to `_analyze_blob` for secret scanning. Empty
-        # when `is_bundle` (sources_recovered == 0) — that single "input.js" unit is the raw
-        # blob, already scanned from `raw` there, so it must never be re-scanned as recovered.
-        recovered_units=tuple(units) if not is_bundle else (),
     )
 
 
@@ -629,6 +647,7 @@ def _analyze_blob(
     wrappers: Sequence[WrapperRule] = (),
     cross_index: CrossModuleIndex | None = None,
     scan_suspected: bool = False,
+    heartbeat: Callable[[], None] | None = None,
 ) -> tuple[Coverage, RecordedEvent]:
     """Analyze one blob — the legacy single input OR one crawled asset — and
     persist its findings inside the caller's OPEN ``session``.
@@ -654,20 +673,48 @@ def _analyze_blob(
     confidence = "low" if scan_suspected else None
     scan = kingfisher.scan(raw, confidence=confidence)
 
-    endpoints = _extract_endpoints(
-        session,
-        tenant_id=tenant_id,
-        run_id=run_id,
-        source=source,
-        source_map_ref=source_map_ref,
-        source_map_origin=source_map_origin,
-        source_map_skipped=source_map_skipped,
-        run_asset_id=run_asset_id,
-        asset_url=asset_url,
-        wrappers=wrappers,
-        cross_index=cross_index,
-    )
-    written = endpoints.written
+    # The recovered-source tree (if any) lives on disk under `units` for this block; the `with` frees
+    # it once endpoints, recovered secrets, and recovered internal-IPs are recorded (D37-L2 slice 3).
+    # A no-map bundle holds its single unit in RAM (no temp dir). `heartbeat` renews the worker lease
+    # between recovered files so a big map's per-file work stays lease-safe (S4). The recovered passes
+    # run FIRST (then the raw-bundle passes below); order is immaterial — each records into a distinct
+    # source_path/byte-space and the transactional-outbox upserts are idempotent.
+    with _analysis_units(
+        source_map_ref, source, source_map_origin, source_map_skipped, heartbeat=heartbeat
+    ) as units:
+        endpoints = _extract_endpoints(
+            session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            units=units,
+            run_asset_id=run_asset_id,
+            asset_url=asset_url,
+            wrappers=wrappers,
+            cross_index=cross_index,
+            heartbeat=heartbeat,
+        )
+        recovered_written, recovered_secrets, recovered_suspected = _record_recovered_secrets(
+            session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            units=units,
+            run_asset_id=run_asset_id,
+            asset_url=asset_url,
+            confidence=confidence,
+            heartbeat=heartbeat,
+        )
+        recovered_ip_written, recovered_ips = _record_recovered_internal_ips(
+            session,
+            units,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            run_asset_id=run_asset_id,
+            asset_url=asset_url,
+            heartbeat=heartbeat,
+        )
+        # Capture the honest partial flag before the tree (and `units`) is freed at the `with` exit.
+        recovered_partial = units.partial
+    written = endpoints.written + recovered_written + recovered_ip_written
     # D31 honesty: the node budget bounded this blob's extract to a prefix — never silent. Surfaced
     # durably on the coverage event/read model below; this operator log mirrors the convention of
     # the other soft-miss signals (`analyze.asset_failed`, `fetch.source_map_skipped`).
@@ -680,16 +727,20 @@ def _analyze_blob(
         )
 
     # Secrets are scanned on the raw minified bundle (this loop, source_path "input.js")
-    # AND on each source-map-recovered original (D32-B1, below). The bundle scan is the
-    # floor — everything a minified string literal exposes; the recovered scan adds what
+    # AND on each source-map-recovered original (D32-B1, in the `with` above). The bundle scan
+    # is the floor — everything a minified string literal exposes; the recovered scan adds what
     # lives ONLY in the original (a secret in a comment, or in code tree-shaken out of the
     # bundle) — the silent gap D32 closes. A token in both is 1 finding / 2 occurrences.
     secret_path = normalize.normalize_source_path(_SOURCE_NAME)
     # Per (rule, snippet) search cursor so N identical secret sightings map to N
     # distinct byte offsets (distinct occurrences, REQ-C2) instead of collapsing.
     secret_cursors: dict[tuple[str, str], int] = {}
-    secrets_sighted = 0
-    suspected_sighted = 0
+    # Seed the SIGHTING counts with the recovered lane's (REQ-C2 honesty: counts are sightings, so a
+    # recovered-only secret is never under-reported — the D32 silent-miss this closes — and a token
+    # in both counts twice). D33-B: the precision-first `secrets` count excludes the low-confidence
+    # lane, which keeps its own `secrets_suspected` count.
+    secrets_sighted = recovered_secrets
+    suspected_sighted = recovered_suspected
     for secret in scan.secrets:
         finding_type = _secret_finding_type(secret)
         written += _record_secret(
@@ -708,29 +759,11 @@ def _analyze_blob(
             suspected_sighted += 1
         else:
             secrets_sighted += 1
-    recovered_written, recovered_secrets, recovered_suspected = _record_recovered_secrets(
-        session,
-        tenant_id=tenant_id,
-        run_id=run_id,
-        recovered_units=endpoints.recovered_units,
-        run_asset_id=run_asset_id,
-        asset_url=asset_url,
-        confidence=confidence,
-    )
-    written += recovered_written
-    # REQ-C2 honesty: the coverage counts are SIGHTINGS (== occurrences), so a
-    # recovered-only secret is never under-reported (the D32 silent-miss this closes) and
-    # a token seen in both bundle and recovered counts as 2 sightings of its 1 finding.
-    # D33-B: the precision-first `secrets` count excludes the low-confidence lane, which
-    # gets its own `secrets_suspected` count — the ~50%-FP recall never inflates `secrets`.
-    secrets_sighted += recovered_secrets
-    suspected_sighted += recovered_suspected
-    # Cleartext internal-IP literals (info-disclosure, NOT secrets): scan the raw bundle
-    # (source_path "input.js") AND each source-map-recovered original, exactly like the two
-    # secret passes above — a token in both is 1 finding / 2 occurrences. Unlike a secret,
-    # the value is stored/shown CLEARTEXT (never hashed/redacted/revealable) and counted in
+    # Cleartext internal-IP literals (info-disclosure, NOT secrets): the raw bundle here + each
+    # recovered original in the `with` above — a token in both is 1 finding / 2 occurrences. Unlike a
+    # secret, the value is stored/shown CLEARTEXT (never hashed/redacted/revealable) and counted in
     # its OWN `internal_ips` total, so the ~precision `secrets` count is never inflated.
-    internal_ips_sighted = 0
+    internal_ips_sighted = recovered_ips
     for sighting in internal_ip.find_internal_ips(source):
         written += _record_internal_ip(
             session,
@@ -743,20 +776,6 @@ def _analyze_blob(
             asset_url=asset_url,
         )
         internal_ips_sighted += 1
-    for source_path, unit_text in endpoints.recovered_units:
-        finding_path = normalize.normalize_source_path(source_path)
-        for sighting in internal_ip.find_internal_ips(unit_text):
-            written += _record_internal_ip(
-                session,
-                tenant_id,
-                run_id,
-                finding_path,
-                source_path,
-                sighting,
-                run_asset_id=run_asset_id,
-                asset_url=asset_url,
-            )
-            internal_ips_sighted += 1
     # GraphQL operations (enrichment C, export-only): a run-level artifact, never a
     # finding — persisted separately so it never pollutes the HTTP-endpoints read model.
     _record_graphql_operations(
@@ -777,6 +796,7 @@ def _analyze_blob(
             "sources_recovered": endpoints.sources_recovered,
             "source_map": endpoints.source_map,
             "curtailed": endpoints.curtailed,
+            "recovered_partial": recovered_partial,
             "files": [
                 {"path": f.path, "attributed": f.attributed, "unattributed": f.unattributed}
                 for f in endpoints.files
@@ -795,6 +815,7 @@ def _analyze_blob(
         source_map=endpoints.source_map,
         files=endpoints.files,
         curtailed=endpoints.curtailed,
+        recovered_partial=recovered_partial,
     )
     return coverage, coverage_event
 
@@ -836,18 +857,118 @@ def _merge_coverage(a: Coverage, b: Coverage) -> Coverage:
         # and the payload-merge below); otherwise the latest asset's value is kept.
         source_map=("skipped" if "skipped" in (a.source_map, b.source_map) else b.source_map),
         curtailed=a.curtailed or b.curtailed,
+        recovered_partial=a.recovered_partial
+        or b.recovered_partial,  # any truncated recovery survives
     )
 
 
-def _bundle_unit(source: str) -> list[tuple[str, str]]:
-    """The whole bundle as one endpoint-analysis unit under ``input.js``, beautified
-    (deterministic, cap-guarded) when there is no per-file source-map recovery so
-    endpoint findings get distinct line numbers; ``recon.probe.sources`` serves the
-    same beautify so marks align. Falls back to the raw bundle when beautify is
-    over-cap/unavailable. Secrets are unaffected — they scan the raw bytes in
-    ``_analyze_blob`` (``recon.probe.reveal`` slices raw offsets)."""
-    beautified = deobfuscate.beautify(source)
-    return [(_SOURCE_NAME, beautified if beautified is not None else source)]
+class AnalysisUnits:
+    """What analyze scans for one blob: either the single in-RAM bundle unit (no usable map) or a
+    source-map-recovered, BEAUTIFIED tree materialized ON DISK (D37-L2 slice 3), read one file at a
+    time so a 96 MiB map is never held whole in RAM.
+
+    A CONTEXT MANAGER: ``__exit__`` removes the on-disk beautified tree (a no-op for the bundle
+    case), so the caller must ``with`` it. ``source_map_status`` / ``sources_recovered`` carry the
+    same honesty signals the old ``(units, status, count)`` tuple did (``is_bundle`` ==
+    ``sources_recovered == 0``). ``partial`` is True when the cumulative-write budget stopped
+    recovery short of the whole map (an honest coverage gap, REQ-C2)."""
+
+    def __init__(
+        self,
+        *,
+        source_map_status: str,
+        sources_recovered: int,
+        names: list[str],
+        tree_root: str | None,
+        bundle_text: str | None,
+        tree_bytes: int = 0,
+        partial: bool = False,
+        tmp: tempfile.TemporaryDirectory[str] | None = None,
+    ) -> None:
+        self.source_map_status = source_map_status
+        self.sources_recovered = sources_recovered
+        self.names = names
+        self.tree_root = tree_root
+        self.tree_bytes = tree_bytes
+        self.partial = partial
+        self._bundle_text = bundle_text
+        self._tmp = tmp
+
+    @property
+    def is_bundle(self) -> bool:
+        # 0 recovered == the lone "input.js" bundle unit; route on this explicit signal, not the
+        # sentinel string (a map's author-controlled sources[] could name a real file "input.js").
+        return self.sources_recovered == 0
+
+    def read_text(self, name: str) -> str:
+        """The unit text for ``name`` — the single bundle text, or ONE recovered file read back
+        from the on-disk beautified tree (utf-8; the bytes were written as ``text.encode("utf-8")``,
+        so this reproduces the exact text ``recon.probe.sources.recover_file_text`` beautifies at
+        reveal — the byte-exact both-sides invariant, D37-L2 M2)."""
+        if self.tree_root is None:
+            return self._bundle_text or ""
+        with open(os.path.join(self.tree_root, *name.split("/")), "rb") as handle:
+            return handle.read().decode("utf-8")
+
+    def __enter__(self) -> AnalysisUnits:
+        return self
+
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        if self._tmp is not None:
+            self._tmp.cleanup()
+
+
+def _beautify_recovered_to_disk(
+    map_path: str, tree_root: str, *, heartbeat: Callable[[], None] | None = None
+) -> tuple[list[str], int, bool]:
+    """Stream each recovered original from the map at ``map_path`` -> beautify it -> write
+    ``text.encode("utf-8")`` byte-exact to ``<tree_root>/<rel>`` (M2: binary, no added newline/BOM),
+    in the generator's stable order (REQ-A3). Returns ``(names, total_bytes, partial)``.
+
+    Beautify runs ``beautify_if_minified`` — the SAME function ``recon.probe.sources`` /
+    ``reveal`` reproduce, so the scanned/located bytes equal the reveal byte space (a minified
+    vendor original is pretty-printed; a real multi-line original passes through). The cumulative-
+    write budget stops at WHOLE-FILE granularity: a file that would cross it is skipped and recovery
+    stops (``partial=True``, honest gap; never a mid-file cut, which would desync reveal -> 409).
+    Beats before each file (S4) so one giant file's beautify+write can't outlast the 30s stall
+    window. Raises ``EngineNotAvailable``/``EngineError`` from
+    :func:`sourcemapper.iter_recovered_files` for the caller's fallback."""
+    settings = get_settings()
+    # The raw recovered tree is <= the map's sourcesContent, bounded by the input cap; beautify can
+    # EXPAND a minified original, so the on-disk budget is 2x that cap — headroom for expansion,
+    # still bounded so a pathological all-minified map trips an honest partial rather than filling
+    # the disk. NOT prlimit --fsize (RLIMIT_FSIZE is per-FILE, not cumulative — D37-L2 S1).
+    recovered_cap = settings.max_source_map_bytes
+    write_budget = 2 * settings.max_source_map_bytes
+    root_real = os.path.realpath(tree_root)
+    names: list[str] = []
+    total = 0
+    partial = False
+    # The generator owns the sourcemapper -output dir; it is finalized (dir cleaned) when this
+    # function returns and `files` goes out of scope — including an early budget break.
+    files = sourcemapper.iter_recovered_files(map_path, max_recovered_bytes=recovered_cap)
+    for rel, raw in files:
+        if heartbeat is not None:
+            heartbeat()  # lease renew + REQ-A4 control-check, before each file (S4)
+        text = deobfuscate.beautify_if_minified(raw.decode("utf-8", "replace"))
+        encoded = text.encode("utf-8")
+        if total + len(encoded) > write_budget:
+            partial = True
+            log.warning("analyze.recovered_tree_truncated", budget=write_budget, written=total)
+            break
+        dest = os.path.join(tree_root, *rel.split("/"))
+        real = os.path.realpath(dest)
+        # Containment on WRITE (defense-in-depth, mirrors sourcemapper._read_recovered_file): a
+        # recovered `rel` that would escape the tree root is dropped, never written.
+        if real != root_real and not real.startswith(root_real + os.sep):
+            log.warning("analyze.recovered_escaped_path", path=rel)
+            continue
+        os.makedirs(os.path.dirname(dest) or tree_root, exist_ok=True)
+        with open(dest, "wb") as handle:
+            handle.write(encoded)
+        names.append(rel)
+        total += len(encoded)
+    return names, total, partial
 
 
 def _analysis_units(
@@ -855,56 +976,90 @@ def _analysis_units(
     source: str,
     source_map_origin: str = "uploaded",
     source_map_skipped: bool = False,
-) -> tuple[list[tuple[str, str]], str, int]:
-    """Decide what to analyze: recovered original sources (real paths) if a source
-    map recovers any, else the bundle under ``input.js``. Returns the (name, text)
-    units, the source-map status, and the count of recovered files."""
-    map_bytes, origin = _resolve_source_map(source_map_ref, source, source_map_origin)
-    if not map_bytes:
-        # D32: a REFERENCED map the fetch stage couldn't retrieve (``source_map_skipped``)
-        # is an honest coverage gap reported as "skipped" — distinct from a bundle that
-        # had no map at all ("none"). Both fall back to bundle analysis; only the label
-        # differs, so the Overview surfaces a "Partial" banner and the gap is never silent.
-        # NOTE(DEBT D32): a future run-to-run diff MUST treat a "skipped" asset's absent
-        # recovered-source findings as UNKNOWN, not REMOVED (mirrors the D31 curtailment
-        # hazard) — a skipped map means we never looked, not that the source vanished.
-        return _bundle_unit(source), ("skipped" if source_map_skipped else "none"), 0
+    *,
+    heartbeat: Callable[[], None] | None = None,
+) -> AnalysisUnits:
+    """Decide what to analyze: source-map-recovered originals (real paths) if a map recovers any,
+    else the whole bundle under ``input.js``. Returns an :class:`AnalysisUnits` — a CONTEXT MANAGER
+    the caller must ``with`` so the on-disk beautified tree (recovered case) is cleaned up.
 
+    D37-L2 slice 3: the recovered originals are STREAMED (``sourcemapper.iter_recovered_files``),
+    beautified byte-exact, and written to an on-disk tree read one file at a time — so a 96 MiB map
+    is recovered whole (endpoints) without ever holding the tree in RAM (the old 32 MiB in-RAM cap).
+    The map itself is streamed to a temp file (never ``get_blob`` whole)."""
+
+    def _bundle(status: str) -> AnalysisUnits:
+        # The whole bundle as one endpoint unit under input.js, beautified (deterministic,
+        # cap-guarded) so findings get distinct line numbers and recon.probe.sources serves the
+        # same beautify; raw when beautify is over-cap/unavailable. Secrets scan the raw bytes in
+        # _analyze_blob (recon.probe.reveal slices raw offsets), unaffected.
+        beautified = deobfuscate.beautify(source)
+        return AnalysisUnits(
+            source_map_status=status,
+            sources_recovered=0,
+            names=[_SOURCE_NAME],
+            tree_root=None,
+            bundle_text=beautified if beautified is not None else source,
+        )
+
+    if source_map_ref:
+        origin = source_map_origin
+        inline_bytes: bytes | None = None
+    else:
+        # D32: a REFERENCED map the fetch stage couldn't retrieve (``source_map_skipped``) is an
+        # honest "skipped" gap — distinct from a bundle that had no map ("none"). Both fall back to
+        # bundle analysis; only the label differs (the Overview surfaces a "Partial" banner, never
+        # silent). NOTE(DEBT D32): a future run-to-run diff MUST treat a "skipped" asset's absent
+        # recovered-source findings as UNKNOWN, not REMOVED — we never looked, the source didn't
+        # vanish. Absent a stored ref, an inline data: map is opportunistic.
+        inline_bytes = sourcemapper.extract_inline_map(source)
+        if inline_bytes is None:
+            return _bundle("skipped" if source_map_skipped else "none")
+        origin = "inline"
+
+    tmp = tempfile.TemporaryDirectory(prefix="sm-beaut-")
+    ok = False
     try:
-        recovered = sourcemapper.recover_sources(map_bytes, origin=origin)
+        with tempfile.TemporaryDirectory(prefix="smmap-") as map_workdir:
+            map_path = os.path.join(map_workdir, "in.map")
+            if source_map_ref:
+                # Stream the map to the temp file — never get_blob it whole into RAM.
+                storage.download_blob_to_path(source_map_ref, map_path)
+            else:
+                assert inline_bytes is not None  # set in the else-branch above
+                with open(map_path, "wb") as handle:
+                    handle.write(inline_bytes)
+            names, tree_bytes, partial = _beautify_recovered_to_disk(
+                map_path, tmp.name, heartbeat=heartbeat
+            )
+        if not names:  # map present but nothing recovered (no sourcesContent, or all dropped)
+            return _bundle(origin)
+        ok = True
+        return AnalysisUnits(
+            source_map_status=origin,
+            sources_recovered=len(names),
+            names=names,
+            tree_root=tmp.name,
+            bundle_text=None,
+            tree_bytes=tree_bytes,
+            partial=partial,
+            tmp=tmp,
+        )
+    except engines.EngineNotAvailable:
+        # binary unavailable -> fall back to the bundle (matches the old recovered.status guard).
+        return _bundle("unavailable")
     except engines.EngineError:
-        # An inline map rides in the (untrusted) analyzed JS, and a "capture" map is
-        # the extension's best-effort post-auth grab — both are opportunistic, so a
-        # malformed one must NOT fail the run/asset: fall back to bundle analysis and
-        # record the honest "<origin>-error" status. A legacy "uploaded" map is a
-        # deliberate user upload, so its failure still surfaces (re-raise).
+        # An inline/capture map is opportunistic — a malformed one must NOT fail the run/asset:
+        # fall back to bundle analysis with the honest "<origin>-error" status. A legacy uploaded
+        # map is a deliberate user upload, so its failure surfaces (re-raise).
         if origin in ("inline", "capture"):
-            return _bundle_unit(source), f"{origin}-error", 0
+            return _bundle(f"{origin}-error")
         raise
-    if recovered.status != "ok":  # binary unavailable -> fall back to the bundle
-        return _bundle_unit(source), recovered.status, 0
-    if not recovered.files:  # map present but nothing recovered (e.g. no sourcesContent)
-        return _bundle_unit(source), origin, 0
-
-    # Beautify a recovered original ONLY when it is itself minified (some vendor libs
-    # ship minified sourcesContent) so its findings land on distinct, meaningful lines;
-    # a genuinely multi-line original keeps its real line numbers. recon.probe.sources
-    # runs the SAME beautify_if_minified when it serves the file, so the finding line
-    # matches the served text (the invariant _bundle_unit already holds for no-map
-    # bundles), and the web viewer never has to re-beautify it (which would renumber
-    # lines out from under the finding marks).
-    # NOTE(DEBT): each minified recovered file is beautified here (per-file 1 MiB cap),
-    # but a source map with many large minified sourcesContent entries can total up to
-    # ~engine_max_output_bytes per asset with no heartbeat between files (this loop and
-    # the tree-sitter extract that follows share the one per-asset heartbeat), so a
-    # pathological map could approach the 30s stall window and let a peer reclaim the
-    # RUNNING job — idempotent-safe double-work, not corruption. Follow-up: a per-asset
-    # cumulative-beautify budget (serve raw past it) or a heartbeat between files.
-    units = [
-        (f.path, deobfuscate.beautify_if_minified(f.content.decode("utf-8", "replace")))
-        for f in recovered.files
-    ]
-    return units, origin, len(recovered.files)
+    finally:
+        # Every exit that does NOT hand `tmp` to a returned AnalysisUnits (bundle fallback, an
+        # error, a control interrupt from the heartbeat) frees the tree here.
+        if not ok:
+            tmp.cleanup()
 
 
 def _resolve_source_map(
@@ -1013,6 +1168,16 @@ def build_export_index(
     small index persists, not recovered/source text); follow-up is to cache recovered
     units or fold the harvest into the main loop with deferred resolution (extends the
     recovery/stall note in ``_analysis_units``).
+
+    NOTE(DEBT D37-L2, interim): this pre-pass still uses ``recover_sources`` (whole-tree, the
+    default ``engine_max_output_bytes`` = 32 MiB cap), while ``_analysis_units`` now STREAMS up to
+    ``max_source_map_bytes`` = 96 MiB (D37-L2 slice 3). So for a recovered tree in the 32–96 MiB
+    range, the extract loop attributes endpoints for files this export index never harvested — a
+    cross-chunk ``fetch(API_BASE + PATH)`` whose operands live in the >32 MiB tail stays UNRESOLVED
+    (surfaced as ENDPOINT_UNRESOLVED, never dropped) rather than resolved. Deterministic + best-
+    effort, so idempotency holds; it is a resolution gap, not a regression (pre-slice the loop was
+    also 32 MiB-capped, so those endpoints weren't extracted at all). Slice 5 removes BOTH the double-
+    recover AND this divergence by reusing slice 3's streamed on-disk tree for the harvest.
     """
     index = CrossModuleIndex()
     for asset in rows:
@@ -1278,36 +1443,44 @@ def _record_recovered_secrets(
     *,
     tenant_id: str,
     run_id: str,
-    recovered_units: tuple[tuple[str, str], ...],
+    units: AnalysisUnits,
     run_asset_id: str | None,
     asset_url: str | None,
     confidence: str | None = None,
+    heartbeat: Callable[[], None] | None = None,
 ) -> tuple[int, int, int]:
-    """Secret-scan the source-map-recovered units (D32-B1); return
+    """Secret-scan the source-map-recovered originals (D32-B1); return
     (rows_written, secret_sightings, suspected_sightings).
 
-    ONE batched Kingfisher pass (`scan_many`) over every recovered unit — a single
-    subprocess, not one per file (a real bundle's map recovers dozens–hundreds). Each
-    sighting is recorded at its recovered `source_path`, with the offset located in the
-    SAME `beautify_if_minified` unit text `sources.recover_file_text` reproduces at reveal
-    time — so an audited reveal round-trips (and any drift fail-closes 409, never leaks).
-    A genuine engine failure still RAISES (via `scan_many`) to fail/retry the stage; an
-    absent binary yields no sightings (the bundle scan already reports the honest status).
+    ONE Kingfisher pass over the on-disk BEAUTIFIED tree (`scan_dir`, D37-L2 slice 3) — a single
+    subprocess, not one per file (a real bundle's map recovers dozens–hundreds), and never the whole
+    tree in RAM. Each sighting is attributed to its recovered `source_path` and located by re-reading
+    THAT one beautified file — the SAME `beautify_if_minified` text `sources.recover_file_text`
+    reproduces at reveal time — so an audited reveal round-trips (and any drift fail-closes 409, never
+    leaks). A genuine engine failure still RAISES (via `scan_dir`) to fail/retry the stage; an absent
+    binary yields no sightings (the bundle scan already reports the honest status).
 
-    D33-B: ``confidence`` matches the bundle scan's; each sighting is partitioned into
-    SECRET vs SECRET_SUSPECTED by its own confidence, and the two sighting counts are
-    returned separately so the caller keeps the precision `secrets` count clean."""
-    if not recovered_units:
+    D33-B: ``confidence`` matches the bundle scan's; each sighting is partitioned into SECRET vs
+    SECRET_SUSPECTED by its own confidence, and the two counts are returned separately so the caller
+    keeps the precision `secrets` count clean."""
+    if units.is_bundle or units.tree_root is None:
         return 0, 0, 0
-    by_index, _status = kingfisher.scan_many(
-        [(path, text.encode("utf-8")) for path, text in recovered_units],
-        confidence=confidence,
+    if heartbeat is not None:
+        heartbeat()  # before the (one, whole-tree) scan — S4
+    # M4: scale the buffered-output cap with the tree so a `--no-dedup` JSONL over a big recovered
+    # tree doesn't overflow engine_max_output_bytes and false-EngineError into the retry loop. The
+    # tree is itself bounded (the write budget), so this ceiling is bounded too.
+    scan_output_cap = max(get_settings().engine_max_output_bytes, units.tree_bytes)
+    by_path, _status = kingfisher.scan_dir(
+        units.tree_root, max_output_bytes=scan_output_cap, confidence=confidence
     )
+    if heartbeat is not None:
+        heartbeat()  # after the scan (a big tree's scan must not outlast the stall window) — S4
     written = 0
     sighted = 0
     suspected = 0
-    for index, secrets in by_index.items():
-        source_path, unit_text = recovered_units[index]
+    for source_path, secrets in by_path.items():
+        unit_text = units.read_text(source_path)  # ONE beautified file, for content-located offsets
         finding_path = normalize.normalize_source_path(source_path)
         # Fresh cursor per unit: offsets are located within THIS unit's own byte space,
         # so N identical sightings in one file still map to N distinct offsets (REQ-C2).
@@ -1332,6 +1505,44 @@ def _record_recovered_secrets(
             else:
                 sighted += 1
     return written, sighted, suspected
+
+
+def _record_recovered_internal_ips(
+    session: Session,
+    units: AnalysisUnits,
+    *,
+    tenant_id: str,
+    run_id: str,
+    run_asset_id: str | None,
+    asset_url: str | None,
+    heartbeat: Callable[[], None] | None = None,
+) -> tuple[int, int]:
+    """Record cleartext internal-IP literals in each source-map-recovered original (D33 gap 2),
+    reading ONE beautified file at a time from the on-disk tree (D37-L2 slice 3). Returns
+    (rows_written, sightings). A no-map bundle has no recovered units (its IPs scan the raw blob in
+    `_analyze_blob`). Beats before each file (S4) so a big tree's IP scan stays lease-safe."""
+    if units.is_bundle:
+        return 0, 0
+    written = 0
+    sighted = 0
+    for source_path in units.names:
+        if heartbeat is not None:
+            heartbeat()  # lease renew + REQ-A4, before each recovered file's IP scan (S4)
+        unit_text = units.read_text(source_path)
+        finding_path = normalize.normalize_source_path(source_path)
+        for sighting in internal_ip.find_internal_ips(unit_text):
+            written += _record_internal_ip(
+                session,
+                tenant_id,
+                run_id,
+                finding_path,
+                source_path,
+                sighting,
+                run_asset_id=run_asset_id,
+                asset_url=asset_url,
+            )
+            sighted += 1
+    return written, sighted
 
 
 def _secret_finding_type(secret: RawSecret) -> FindingType:
