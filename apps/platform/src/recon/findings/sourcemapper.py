@@ -114,19 +114,29 @@ def recover_sources(
     bin_path: str | None = None,
     timeout_s: float | None = None,
     max_recovered_bytes: int | None = None,
+    memory_limit_bytes: int | None = None,
 ) -> RecoveredSources:
     """Recover a bundle's original sources from ``map_bytes`` via Sourcemapper.
 
     Returns ``status="unavailable"`` (soft) if the binary is missing; a genuine
-    engine failure (bad map) re-raises so the analyze stage fails/retries. Files
-    are read back from an isolated temp dir; a recovered path that resolves
-    outside it is skipped (defense-in-depth — the tool already clamps ``../``),
-    and total recovered bytes are capped."""
+    engine failure (bad map, or the D37-L0 memory ceiling tripping on an over-size
+    map) re-raises as ``EngineError`` so the analyze stage's per-origin fallback
+    decides (a crawl/inline map falls back to bundle analysis; an uploaded map
+    surfaces). Files are read back from an isolated temp dir; a recovered path that
+    resolves outside it is skipped (defense-in-depth — the tool already clamps
+    ``../``), and total recovered bytes are capped. The recovery child's virtual
+    memory is bounded (``memory_limit_bytes`` -> RLIMIT_AS, DEBT D37-L0) so a large
+    map fails contained rather than OOM-ing the box."""
     settings = get_settings()
     bin_path = bin_path or settings.sourcemapper_bin
     timeout_s = timeout_s if timeout_s is not None else settings.engine_timeout_seconds
     cap = (
         max_recovered_bytes if max_recovered_bytes is not None else settings.engine_max_output_bytes
+    )
+    mem_limit = (
+        memory_limit_bytes
+        if memory_limit_bytes is not None
+        else settings.sourcemapper_memory_limit_bytes
     )
 
     with tempfile.TemporaryDirectory(prefix="sm-") as workdir:
@@ -140,7 +150,11 @@ def recover_sources(
         argv = [engines.resolve_bin(bin_path), "-url", map_path, "-output", out_dir]
         try:
             engines.run_engine(
-                argv, timeout_s=timeout_s, max_output_bytes=cap, ok_returncodes=_OK_RETURNCODES
+                argv,
+                timeout_s=timeout_s,
+                max_output_bytes=cap,
+                ok_returncodes=_OK_RETURNCODES,
+                memory_limit_bytes=mem_limit,
             )
         except engines.EngineNotAvailable:
             log.warning("sourcemapper.unavailable", bin=bin_path)

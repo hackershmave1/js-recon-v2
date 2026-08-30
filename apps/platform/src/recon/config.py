@@ -45,6 +45,24 @@ class Settings(BaseSettings):
     sourcemapper_bin: str = "sourcemapper"
     engine_timeout_seconds: float = 120.0
     engine_max_output_bytes: int = 32 * 1024 * 1024  # 32 MiB
+    # D37-L0: virtual-address-space (RLIMIT_AS) ceiling for the sourcemapper source-map
+    # recovery child, applied via an exec'd `prlimit --as=<bytes>` wrapper — NOT a fork-time
+    # preexec_fn, because the viewer/reveal API forks recovery from a thread pool where a
+    # fork-time Python callable can deadlock before exec (CPython subprocess docs). The Go
+    # recovery binary whole-loads the map (~2x its size) with no internal bound, so without
+    # this a large map OOMs the box (the host/cgroup OOM-killer can reap the worker parent,
+    # not just the child); the ceiling makes an over-size recovery die as a CONTAINED non-zero
+    # exit -> EngineError instead. Sized from measurement against the pinned Go 1.23 binary: it
+    # reserves ~0.5-0.75 GiB of virtual up front (RLIMIT_AS counts Go's PROT_NONE arenas;
+    # golang/go#38010), and a 32-96 MiB map needs ~2 GiB of virtual to unmarshal — so any
+    # ceiling <=1.5 GiB REGRESSES even a 32 MiB map that recovers today. 3 GiB clears the
+    # measured 2 GiB floor with headroom while still tripping a genuine runaway before the
+    # container mem_limit. Only sourcemapper passes it (Kingfisher is a self-contained,
+    # input-capped binary); the input cap (max_source_map_bytes) is the FIRST bound, this the
+    # safety net. No-op off-Linux (dev only); the Linux container enforces it. <=0 DISABLES the
+    # bound (recovery runs unbounded — still cgroup-capped by the container mem_limit), per the
+    # repo's "<=0 disables" convention. Env RECON_SOURCEMAPPER_MEMORY_LIMIT_BYTES.
+    sourcemapper_memory_limit_bytes: int = 3 * 1024 * 1024 * 1024  # 3 GiB (RLIMIT_AS / virtual)
 
     # Fetch stage: pulling a target asset through the egress guard (REQ-P2).
     # NOTE: keep fetch_timeout_seconds < heartbeat_stall_threshold_seconds — the
@@ -64,15 +82,16 @@ class Settings(BaseSettings):
     # D32-A1: the external source-map (.map) fetch gets its OWN byte cap, separate from
     # the bundle cap above. A real source map is 3-6x its minified bundle, so sharing the
     # bundle cap (default 10 MiB) soft-drops a large map (a 4.4 MB bundle's ~15-25 MB map)
-    # and its recovered original sources are lost silently. Defaulted to the 32 MiB engine
-    # output cap (== max_fetch_bytes_ceiling): the size the analyze path is already sized to
-    # survive, because recovered output is hard-capped at engine_max_output_bytes regardless
-    # of map size (sourcemapper._walk_recovered). An UNCLAMPED operator knob (no per-run
-    # override, no ceiling clamp) — raise it deliberately with worker RAM in mind (peak ~=
-    # map + recovered). Non-positive fails CLOSED: the streaming cap (fetch._fetch_hops)
-    # rejects every body, so a misconfigured 0/negative soft-misses each map (honest
-    # "skipped"), never an unbounded read. Env RECON_MAX_SOURCE_MAP_BYTES.
-    max_source_map_bytes: int = 32 * 1024 * 1024  # 32 MiB == engine_max_output_bytes
+    # and its recovered original sources are lost silently. D37-L1: raised 32 -> 96 MiB so a
+    # real >32 MiB enterprise-bundle map (seen in QA) is recovered, not skipped. Safe to raise
+    # ONLY because D37-L0 now bounds recovery memory (sourcemapper_memory_limit_bytes RLIMIT_AS
+    # + container mem_limit): a 96 MiB map was MEASURED to recover under that 3 GiB ceiling.
+    # An UNCLAMPED operator knob (no per-run override, no ceiling clamp) — raise further only
+    # with the recovery memory bound in mind (child virtual peak ~2 GiB at this cap; recovered
+    # output is still hard-capped at engine_max_output_bytes). Non-positive fails CLOSED: the
+    # streaming cap (fetch._fetch_hops) rejects every body, so a misconfigured 0/negative
+    # soft-misses each map (honest "skipped"), never an unbounded read. Env RECON_MAX_SOURCE_MAP_BYTES.
+    max_source_map_bytes: int = 96 * 1024 * 1024  # 96 MiB (D37-L1; recovery mem-bounded by L0)
 
     # SSRF guard override — DEFAULT OFF (REQ-CE3). When true, the egress guard also
     # permits loopback + private-range targets and single-label hosts (localhost) so

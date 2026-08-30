@@ -94,6 +94,12 @@ services:
 
   api:
     <<: *app-base
+    # D37-L0: coarse box-protection backstop (a cgroup RSS cap on THIS container). The
+    # tight per-child bound is sourcemapper's RLIMIT_AS (config.sourcemapper_memory_limit_bytes);
+    # this only guarantees a runaway can't exhaust the host — the OOM-killer never reaps
+    # across the cap. Sized above the API's peak: it forks source-map recovery on a viewer/
+    # reveal click (a whole-map load until D37-L2 streams it), so it needs recovery headroom.
+    mem_limit: 4g
     command: ["uvicorn", "recon.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
@@ -117,6 +123,12 @@ services:
 
   worker:
     <<: *app-base
+    # D37-L0 box-protection backstop (see api). Higher than the API because the worker
+    # also runs headless chromium (opt-in katana crawl / CDP capture) alongside analyze
+    # and the sourcemapper recovery child, so the cap must sit well above their combined
+    # peak — a limit that clipped a real crawl/capture would itself be the outage. Tune
+    # per deployment against an observed chromium-heavy peak.
+    mem_limit: 8g
     command: ["python", "-m", "recon.worker.main"]
     restart: unless-stopped
     depends_on:

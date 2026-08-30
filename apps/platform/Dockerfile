@@ -51,6 +51,11 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends chromium \
     && rm -rf /var/lib/apt/lists/*
 
+# D37-L0: the sourcemapper recovery child is memory-bounded via an exec'd `prlimit`
+# (util-linux, part of the slim base). Assert it at build time so its absence can't
+# silently degrade every source-map recovery into a soft "engine unavailable" skip.
+RUN command -v prlimit >/dev/null || { echo "prlimit (util-linux) missing — required for the D37 engine memory bound"; exit 1; }
+
 # Dependencies first for layer caching: install the exact locked set (exported
 # above from uv.lock), then the project itself NON-editably (--no-deps, a real wheel
 # build) so its packaged rule data (findings/rules/*.yml) is validated in the image
