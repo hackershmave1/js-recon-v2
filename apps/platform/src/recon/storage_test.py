@@ -8,10 +8,11 @@ content-addressed key shape is the invariant that extends tenant isolation to bl
 from __future__ import annotations
 
 import hashlib
+import os
 
 import pytest
 
-from recon.storage import BLOB_KINDS, object_key
+from recon.storage import BLOB_KINDS, object_key, object_key_for_file
 
 
 def test_object_key_shape_is_tenant_run_kind_sha256():
@@ -44,3 +45,33 @@ def test_object_key_accepts_every_known_kind(kind):
 def test_object_key_rejects_unknown_kind():
     with pytest.raises(ValueError, match="unknown blob kind"):
         object_key("t", "r", "not_a_kind", b"x")
+
+
+def test_object_key_for_file_matches_object_key(tmp_path):
+    # D37-L2 / R6: the streaming (file) hash must yield the SAME content-addressed key
+    # as one-shot hashing the bytes, so a streamed put dedups identically to a bytes put
+    # (content-addressing keys on the sha256, which is streaming-invariant).
+    content = b"console.log(42);\n" * 100
+    path = tmp_path / "blob.bin"
+    path.write_bytes(content)
+    assert object_key_for_file("t1", "r9", "source_map", str(path)) == object_key(
+        "t1", "r9", "source_map", content
+    )
+
+
+def test_object_key_for_file_hashes_across_chunk_boundaries(tmp_path):
+    # Content larger than the internal read chunk must hash identically — the incremental
+    # sha256 has to span chunk boundaries (the streaming property this whole slice rests on).
+    content = os.urandom(1024 * 1024 + 7)  # > 1 MiB, deliberately not chunk-aligned
+    path = tmp_path / "big.bin"
+    path.write_bytes(content)
+    assert object_key_for_file("t", "r", "reconstructed", str(path)) == object_key(
+        "t", "r", "reconstructed", content
+    )
+
+
+def test_object_key_for_file_rejects_unknown_kind(tmp_path):
+    path = tmp_path / "x.bin"
+    path.write_bytes(b"x")
+    with pytest.raises(ValueError, match="unknown blob kind"):
+        object_key_for_file("t", "r", "not_a_kind", str(path))
