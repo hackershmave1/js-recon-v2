@@ -281,3 +281,88 @@ def test_fetch_run_skips_non_url_target(redis, authorized_session):
 
     with tenant_session(tenant) as session:
         assert session.get(models.Run, view.id).input_ref is None
+
+
+# ---- D36: body-stream heartbeat + decoupled read-timeout handling ----
+
+
+def test_fetch_calls_on_progress(monkeypatch):
+    # The heartbeat wiring: on_progress fires (at least the post-headers beat) so a primary
+    # asset fetch renews the job lease mid-download and timeout_s may exceed the stall window.
+    _stub_public_dns(monkeypatch)
+    beats = {"n": 0}
+
+    def handler(request):
+        return httpx.Response(200, content=b"x" * 4096)
+
+    def on_progress():
+        beats["n"] += 1
+
+    fetch.fetch_url(
+        "https://acme.io/app.js",
+        _SCOPE,
+        timeout_s=120,
+        max_bytes=1_000_000,
+        transport=_mock(handler),
+        on_progress=on_progress,
+    )
+    assert beats["n"] >= 1
+
+
+def test_read_timeout_becomes_retryable_not_uncaught(monkeypatch):
+    # D36 headline: a per-read timeout (the decoupled read window elapsing on a stalled
+    # origin) must convert to retry.RetryableError — caught per-asset -> run PARTIAL — NOT
+    # escape uncaught to fail the whole fetch job (which would lose every sibling's findings).
+    _stub_public_dns(monkeypatch)
+
+    def handler(request):
+        raise httpx.ReadTimeout("stalled", request=request)
+
+    with pytest.raises(retry.RetryableError):
+        fetch.fetch_url(
+            "https://acme.io/app.js",
+            _SCOPE,
+            timeout_s=120,
+            max_bytes=1000,
+            transport=_mock(handler),
+        )
+
+
+def test_connect_error_becomes_retryable(monkeypatch):
+    # httpx.TransportError is the base for timeouts + network + protocol errors, so one
+    # except clause converts them all to a retryable fetch failure (never an uncaught crash).
+    _stub_public_dns(monkeypatch)
+
+    def handler(request):
+        raise httpx.ConnectError("refused", request=request)
+
+    with pytest.raises(retry.RetryableError):
+        fetch.fetch_url(
+            "https://acme.io/app.js", _SCOPE, timeout_s=5, max_bytes=1000, transport=_mock(handler)
+        )
+
+
+def test_on_progress_control_interrupt_is_not_swallowed(monkeypatch):
+    # A pause/cancel raised via on_progress (REQ-A4) must propagate — the httpx-transport
+    # except clause is narrow (only httpx errors convert), so a control interrupt is never
+    # mistaken for a transient fetch failure and swallowed into a retry.
+    _stub_public_dns(monkeypatch)
+
+    class _Cancelled(Exception):
+        pass
+
+    def handler(request):
+        return httpx.Response(200, content=b"x" * 4096)
+
+    def on_progress():
+        raise _Cancelled()
+
+    with pytest.raises(_Cancelled):
+        fetch.fetch_url(
+            "https://acme.io/app.js",
+            _SCOPE,
+            timeout_s=120,
+            max_bytes=1_000_000,
+            transport=_mock(handler),
+            on_progress=on_progress,
+        )
