@@ -88,6 +88,41 @@ def test_fetch_size_cap_enforced(monkeypatch):
         )
 
 
+def test_fetch_hops_streams_body_to_sink(monkeypatch):
+    # D37-L2 slice 4: with a `sink`, the body streams to it (a temp file for a big .map) and the
+    # returned _FetchedResponse.body is empty — RAM never holds the whole body.
+    _stub_public_dns(monkeypatch)
+    chunks: list[bytes] = []
+    result = fetch._fetch_hops(
+        "https://acme.io/app.js.map",
+        _SCOPE,
+        timeout_s=5,
+        max_bytes=1000,
+        transport=_mock(lambda r: httpx.Response(200, content=b"a" * 300 + b"b" * 300)),
+        sink=chunks.append,
+    )
+    assert result.body == b""  # not buffered into RAM on the sink path
+    assert b"".join(chunks) == b"a" * 300 + b"b" * 300  # streamed in full to the sink
+
+
+def test_fetch_hops_sink_still_enforces_size_cap(monkeypatch):
+    # The per-chunk decoded-byte cap holds on the sink path too (a giant .map still soft-caps), and
+    # the over-cap chunk is WITHHELD from the sink — the cap is checked BEFORE the write, so a temp
+    # file never exceeds max_bytes on disk.
+    _stub_public_dns(monkeypatch)
+    written: list[bytes] = []
+    with pytest.raises(retry.FatalError, match="exceeds"):
+        fetch._fetch_hops(
+            "https://acme.io/big.map",
+            _SCOPE,
+            timeout_s=5,
+            max_bytes=10,
+            transport=_mock(lambda r: httpx.Response(200, content=b"x" * 100)),
+            sink=written.append,
+        )
+    assert sum(len(chunk) for chunk in written) <= 10  # the tripping chunk never reached the sink
+
+
 def test_fetch_follows_redirect_to_in_scope(monkeypatch):
     _stub_public_dns(monkeypatch)
 

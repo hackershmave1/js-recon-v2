@@ -476,7 +476,16 @@ def _fetch_captured_source_map(
     taken: the browser already drove far more traffic at this host during capture, and the
     bounded, sequential ``.map`` GETs don't warrant the crawl's anti-hammer accounting —
     the load-bearing lease/cancel invariant is preserved by the pre-GET beat. Mirrors
-    ``fetch._fetch_and_store_source_map`` (REQ-CE2) through the same ``fetch_url`` guard."""
+    ``fetch._fetch_and_store_source_map`` (REQ-CE2) through the same ``fetch_url`` guard.
+
+    NOTE(DEBT D37-L2, follow-up): this capture-ingest sibling still buffers the whole ``.map``
+    in RAM (``fetch_url`` -> bytes -> ``put_blob``) and uses the unbeaten 20s secondary timeout —
+    the crawl path was streamed to a temp file (``_fetch_hops(sink=...)`` + ``put_blob_from_path``)
+    with a beaten ``fetch_source_map_timeout_seconds`` in D37-L2 slice 4, but the capture path was
+    left as-is (default-OFF ``RECON_ENABLE_CAPTURE_MODE``, so limited exposure; migrating it also
+    means moving this module's ``fetch_url``/``put_blob`` test seams). A big map here still costs
+    ~its own size in worker RAM and soft-skips at 20s on a slow origin. Follow-up: point this at the
+    same streaming pattern."""
     on_progress(0)
     try:
         map_url = urljoin(base, script.source_map_url or "")
