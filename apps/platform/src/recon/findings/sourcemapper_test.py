@@ -13,6 +13,7 @@ import urllib.parse
 
 import pytest
 
+from recon.config import get_settings
 from recon.findings import engines, sourcemapper
 
 _MAP = {"version": 3, "sources": ["app/src/api.js"], "mappings": "AAAA"}
@@ -128,6 +129,40 @@ def test_recover_sources_missing_binary_is_unavailable():
     )
     assert result.status == "unavailable"
     assert result.files == []
+
+
+def test_recover_sources_bounds_child_memory_from_settings(monkeypatch):
+    # D37-L0: the recovery child must run under the configured RLIMIT_AS so a large map
+    # fails contained rather than OOM-ing the box. Assert recover_sources forwards the
+    # settings default down to run_engine (the enforcement itself is tested in engines_test).
+    captured: dict[str, object] = {}
+
+    def fake_run_engine(argv, **kwargs):
+        captured.update(kwargs)
+        out_dir = argv[argv.index("-output") + 1]
+        os.makedirs(out_dir, exist_ok=True)
+        return engines.EngineResult(0, b"", b"")
+
+    monkeypatch.setattr(sourcemapper.engines, "run_engine", fake_run_engine)
+    sourcemapper.recover_sources(b'{"version":3}', bin_path="stub")
+
+    assert captured["memory_limit_bytes"] == get_settings().sourcemapper_memory_limit_bytes
+
+
+def test_recover_sources_memory_limit_override_wins(monkeypatch):
+    # An explicit override (used by tests/callers) takes precedence over the settings default.
+    captured: dict[str, object] = {}
+
+    def fake_run_engine(argv, **kwargs):
+        captured.update(kwargs)
+        out_dir = argv[argv.index("-output") + 1]
+        os.makedirs(out_dir, exist_ok=True)
+        return engines.EngineResult(0, b"", b"")
+
+    monkeypatch.setattr(sourcemapper.engines, "run_engine", fake_run_engine)
+    sourcemapper.recover_sources(b'{"version":3}', bin_path="stub", memory_limit_bytes=12345)
+
+    assert captured["memory_limit_bytes"] == 12345
 
 
 def test_recover_sources_total_bytes_capped(monkeypatch):

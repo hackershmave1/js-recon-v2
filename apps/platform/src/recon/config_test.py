@@ -46,10 +46,23 @@ def test_ceiling_bounds_even_the_global_default() -> None:
 
 
 def test_source_map_cap_default_is_larger_than_bundle_cap() -> None:
-    # D32-A1: the .map fetch gets its OWN declared-default cap (32 MiB engine bound),
-    # larger than the default bundle cap (10 MiB) — a real source map is 3-6x its bundle,
-    # so sharing a cap would soft-drop the map. Assert the DECLARED defaults, which is
-    # env-independent (a stray RECON_* env / .env can't flip this regression check).
+    # D32-A1: the .map fetch gets its OWN declared-default cap, larger than the default
+    # bundle cap (10 MiB) — a real source map is 3-6x its bundle, so sharing a cap would
+    # soft-drop the map. D37-L1: raised to 96 MiB so a real >32 MiB enterprise-bundle map
+    # is recovered, not skipped (safe only because D37-L0 now memory-bounds recovery).
+    # Assert the DECLARED defaults — env-independent (a stray RECON_* / .env can't flip it).
     fields = Settings.model_fields
-    assert fields["max_source_map_bytes"].default == 32 * 1024 * 1024
+    assert fields["max_source_map_bytes"].default == 96 * 1024 * 1024
     assert fields["max_source_map_bytes"].default > fields["max_fetch_bytes"].default
+
+
+def test_sourcemapper_memory_limit_default_clears_the_measured_go_floor() -> None:
+    # D37-L0: the recovery child's RLIMIT_AS ceiling. A 32-96 MiB map was MEASURED to need
+    # ~2 GiB of virtual under the pinned Go binary (Go over-reserves virtual; a <=1.5 GiB
+    # ceiling regresses even a 32 MiB map that recovers today). The default must clear that
+    # floor with headroom, AND stay above the (recovery-time) map cap it protects.
+    fields = Settings.model_fields
+    limit = fields["sourcemapper_memory_limit_bytes"].default
+    assert limit == 3 * 1024 * 1024 * 1024
+    assert limit > 2 * 1024 * 1024 * 1024  # the measured recover-vs-trip floor
+    assert limit > fields["max_source_map_bytes"].default

@@ -343,8 +343,8 @@ def _valid_source_map(f: dict, max_bytes: int) -> tuple[bytes | None, bool]:
     tolerated again at analyze time (the "capture" source-map origin).
 
     D17 blast-radius note (untrusted, shared-tenant ingress): ``max_bytes`` here is
-    ``max_source_map_bytes`` (32 MiB), larger than the 10 MiB it used to share with the
-    JS-content cap. This does NOT widen peak parse-time memory — Starlette has already
+    ``max_source_map_bytes`` (96 MiB since D37-L1), larger than the 10 MiB it used to share
+    with the JS-content cap. This does NOT widen peak parse-time memory — Starlette has already
     parsed the whole request body into ``smc`` (a dict) before this runs, so that
     allocation is spent regardless of the cap (a pre-existing, uncapped-at-app-layer
     property of this path; a hard body limit belongs at the ingress/reverse-proxy).
