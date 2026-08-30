@@ -45,6 +45,16 @@ def _hop(body: bytes, **kw) -> fetch._FetchedResponse:
     )
 
 
+def _map_hop(body: bytes, **kw) -> fetch._FetchedResponse:
+    """A ``.map`` hop result: D37-L2 slice 4 STREAMS the map body to the caller's ``sink`` (a temp
+    file), so write there rather than returning it (``_fetch_and_store_source_map`` ignores the
+    return's ``body`` for the map and stores the temp file via ``put_blob_from_path``)."""
+    sink = kw.get("sink")
+    if sink is not None:
+        sink(body)
+    return fetch._FetchedResponse(body=b"", status=200, headers={}, set_cookie=[])
+
+
 def test_fetch_loop_records_ok_and_failed_per_asset(redis, authorized_session, monkeypatch):
     tenant, session_id = authorized_session
     urls = ["https://acme.io/a.js", "https://acme.io/bad.js"]
@@ -258,9 +268,11 @@ def test_fetch_loop_links_external_source_map(redis, authorized_session, monkeyp
     tenant, session_id = authorized_session
     run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/app.js"])
 
+    map_bytes = b'{"version":3,"sources":["src/app.js"],"mappings":"AAAA"}'
+
     def fake_fetch(url, scope, **kw):
         if url.endswith(".map"):
-            return _hop(b'{"version":3,"sources":["src/app.js"],"mappings":"AAAA"}')
+            return _map_hop(map_bytes, **kw)  # D37-L2 slice 4: streamed to the sink (temp file)
         return _hop(b'fetch("/api/x");\n//# sourceMappingURL=app.js.map\n')
 
     monkeypatch.setattr(fetch, "_fetch_hops", fake_fetch)
@@ -271,6 +283,9 @@ def test_fetch_loop_links_external_source_map(redis, authorized_session, monkeyp
     assert row.input_ref is not None
     assert row.source_map_ref is not None  # the .map was fetched, stored, linked
     assert row.source_map_skipped is False  # D32: a recovered map is never flagged skipped
+    # D37-L2 slice 4: the STREAMED map (sink -> temp file -> put_blob_from_path) is byte-identical
+    # to a bytes put — the content-addressed key matches, so analyze recovers the real map.
+    assert storage.get_blob(row.source_map_ref) == map_bytes
 
 
 def test_fetch_loop_bad_source_map_is_soft_miss(redis, authorized_session, monkeypatch):
@@ -338,7 +353,7 @@ def test_fetch_loop_source_map_uses_its_own_larger_cap(redis, authorized_session
     def fake_fetch(url, scope, **kw):
         caps["map" if url.endswith(".map") else "bundle"] = kw["max_bytes"]
         if url.endswith(".map"):
-            return _hop(b'{"version":3,"sources":["src/app.js"],"mappings":"AAAA"}')
+            return _map_hop(b'{"version":3,"sources":["src/app.js"],"mappings":"AAAA"}', **kw)
         return _hop(b'fetch("/api/x");\n//# sourceMappingURL=app.js.map\n')
 
     monkeypatch.setattr(fetch, "_fetch_hops", fake_fetch)
@@ -371,6 +386,51 @@ def test_fetch_loop_source_map_generic_error_is_soft_miss(redis, authorized_sess
     assert row.fetch_status == "ok"
     assert row.source_map_ref is None
     assert row.source_map_skipped is True  # D32: any soft miss is flagged, not just fetch errors
+
+
+def test_fetch_loop_source_map_uses_its_own_beaten_timeout(redis, authorized_session, monkeypatch):
+    # D37-L2 slice 4: the .map fetch carries a mid-body heartbeat, so it uses its OWN (larger)
+    # deadline (fetch_source_map_timeout_seconds) — NOT the unbeaten lazy-chunk secondary cap — and
+    # passes an on_progress beat so a big map on a slow origin stays lease-safe past the stall window.
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/app.js"])
+    seen: dict[str, object] = {}
+
+    def fake_fetch(url, scope, **kw):
+        if url.endswith(".map"):
+            seen["timeout_s"] = kw["timeout_s"]
+            seen["has_beat"] = kw.get("on_progress") is not None
+            return _map_hop(b'{"version":3,"sources":["src/app.js"],"mappings":"AAAA"}', **kw)
+        return _hop(b'fetch("/api/x");\n//# sourceMappingURL=app.js.map\n')
+
+    monkeypatch.setattr(fetch, "_fetch_hops", fake_fetch)
+    fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+
+    s = get_settings()
+    assert seen["timeout_s"] == s.fetch_source_map_timeout_seconds
+    assert seen["timeout_s"] != s.fetch_secondary_timeout_seconds  # NOT the unbeaten lazy-chunk cap
+    assert seen["has_beat"] is True  # a mid-body heartbeat renews the lease during a long map DL
+
+
+def test_fetch_loop_source_map_cancel_propagates_not_soft_miss(
+    redis, authorized_session, monkeypatch
+):
+    # D37-L2 slice 4 (mirrors slice 3 §4): a cooperative cancel raised by the .map fetch's mid-body
+    # heartbeat must PROPAGATE — NOT be swallowed by the helper's `except Exception` and recorded as
+    # a spurious "skipped" while the run keeps going. The helper's `except ControlInterrupt: raise`
+    # (before `except Exception`) is what keeps a paused/cancelled run responsive during a big map DL.
+    tenant, session_id = authorized_session
+    run_id = _crawl_run(redis, tenant, session_id, ["https://acme.io/app.js"])
+
+    def fake_fetch(url, scope, **kw):
+        if url.endswith(".map"):
+            raise retry.ControlInterrupt("cancel")  # as _make_body_beat would raise mid-download
+        return _hop(b'fetch("/api/x");\n//# sourceMappingURL=app.js.map\n')
+
+    monkeypatch.setattr(fetch, "_fetch_hops", fake_fetch)
+    with pytest.raises(retry.ControlInterrupt) as ci:
+        fetch.fetch_run(redis, tenant_id=tenant, run_id=run_id, job_id=_JOB_ID)
+    assert ci.value.kind == "cancel"
 
 
 def _fingerprint_events(tenant, run_id):

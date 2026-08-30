@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import socket
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -230,11 +232,18 @@ def _fetch_hops(
     allow_local: bool = False,
     transport: httpx.BaseTransport | None = None,
     on_progress: Callable[[], None] | None = None,
+    sink: Callable[[bytes], None] | None = None,
 ) -> _FetchedResponse:
     """Fetch ``url`` under the full egress policy and return its bytes, status, and
     final-hop headers/Set-Cookie lines — the SHARED validated-hop core. ``fetch_url``
     is a thin bytes-only wrapper over this (its public signature and behavior are
     UNCHANGED; the SSRF crown jewel is not churned, T5).
+
+    ``sink`` (D37-L2 slice 4): when given, each body chunk is handed to it (e.g. a temp-file
+    ``.write`` for a big ``.map``) instead of accumulating in RAM, and the returned
+    ``_FetchedResponse.body`` is empty — the per-chunk decoded-byte cap + the egress/DNS/redirect
+    guard are UNCHANGED, only the body's destination differs. Default (None) buffers to bytes as
+    before, so ``fetch_url`` and every primary-asset fetch are untouched.
 
     ``on_progress`` (D36) is invoked once the response headers arrive and then, throttled
     to ``heartbeat_interval_seconds``, per body chunk — so a PRIMARY asset fetch can renew
@@ -305,6 +314,7 @@ def _fetch_hops(
                     if on_progress is not None:
                         on_progress()
                     body = bytearray()
+                    written = 0
                     for chunk in response.iter_bytes():
                         now = time.monotonic()
                         if now > deadline:
@@ -312,9 +322,15 @@ def _fetch_hops(
                         if on_progress is not None and now - last_beat >= beat_interval:
                             on_progress()  # renew the lease mid-download (D36)
                             last_beat = now
-                        body.extend(chunk)
-                        if len(body) > max_bytes:
+                        written += len(chunk)
+                        if written > max_bytes:
                             raise retry.FatalError(f"response exceeds {max_bytes} bytes")
+                        # D37-L2 slice 4: stream to the sink (a temp file for a big .map) instead of
+                        # buffering in RAM; the cap above is checked on the running total, not len(body).
+                        if sink is not None:
+                            sink(chunk)
+                        else:
+                            body.extend(chunk)
                     return _FetchedResponse(
                         body=bytes(body),
                         status=response.status_code,
@@ -880,16 +896,40 @@ def _fetch_and_store_source_map(
             _await_host_slot(
                 redis, host, tenant_id=tenant_id, run_id=run_id, job_id=job_id, settings=settings
             )
-        map_bytes = fetch_url(
-            map_url,
-            scope_hosts,
-            # D36: a best-effort SECONDARY fetch — a separate, sub-stall deadline (no mid-body
-            # heartbeat here), so it stays lease-safe even after fetch_timeout_seconds was raised.
-            timeout_s=settings.fetch_secondary_timeout_seconds,
-            max_bytes=max_bytes,
-            allow_local=settings.allow_local_egress,
-        )
-        return _SourceMapResult(ref=storage.put_blob(tenant_id, run_id, "source_map", map_bytes))
+        # D37-L2 slice 4: STREAM the .map body to a temp file and store it via put_blob_from_path,
+        # so a big map (up to max_source_map_bytes) never sits whole in the worker's RAM (fetch AND
+        # store). A mid-body heartbeat (_make_body_beat, exactly like the primary fetch) renews the
+        # job lease + observes pause/cancel, so the map's OWN deadline (fetch_source_map_timeout_
+        # seconds) can exceed the stall window: a big map on a SLOW origin finishes instead of
+        # soft-skipping at 20s. The egress guard + per-chunk byte cap are unchanged.
+        with tempfile.TemporaryDirectory(prefix="smmap-") as workdir:
+            map_path = os.path.join(workdir, "in.map")
+            with open(map_path, "wb") as handle:
+                _fetch_hops(
+                    map_url,
+                    scope_hosts,
+                    timeout_s=settings.fetch_source_map_timeout_seconds,
+                    max_bytes=max_bytes,
+                    allow_local=settings.allow_local_egress,
+                    on_progress=_make_body_beat(
+                        redis,
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        job_id=job_id,
+                        done=done,
+                        total=total,
+                    ),
+                    sink=handle.write,
+                )
+            ref = storage.put_blob_from_path(tenant_id, run_id, "source_map", map_path)
+        return _SourceMapResult(ref=ref)
+    except retry.ControlInterrupt:
+        # A cooperative pause/cancel raised by the mid-body heartbeat is NOT a soft map miss:
+        # propagate it (mirrors the analyze crawl loop, D37-L2 slice 3 §4) so the run pauses/cancels
+        # instead of recording a spurious "skipped" and continuing. MUST precede `except Exception`.
+        # The caller's per-asset `except` is narrow (EgressBlocked/FatalError/RetryableError) and this
+        # runs OUTSIDE it, so the interrupt propagates straight out of the fetch loop.
+        raise
     except Exception as exc:  # noqa: BLE001 — soft miss; a bad map must never fail the asset
         # D32: a REFERENCED map we couldn't retrieve (map_url set) is an honest coverage
         # gap the caller records durably; a decode/parse failure before ref resolution

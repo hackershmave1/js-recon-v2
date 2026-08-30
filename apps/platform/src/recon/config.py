@@ -78,12 +78,21 @@ class Settings(BaseSettings):
     # control to heartbeat before a peer reclaims the job. A read that exceeds this raises
     # httpx.ReadTimeout, converted to a retryable per-asset failure (never an uncaught crash).
     fetch_read_timeout_seconds: float = 10.0
-    # D36: overall deadline for BEST-EFFORT SECONDARY fetches (source maps, lazy-chunk URLs).
-    # These carry only a pre-fetch beat, no mid-body heartbeat, so their deadline must stay
-    # < heartbeat_stall_threshold_seconds to remain lease-safe. Exceeding it is a soft miss
-    # (the map/chunk is skipped; the primary asset is unaffected) — so a large map on a SLOW
-    # origin still soft-skips here (full big-map recovery on a slow origin is D37-L2, streaming).
+    # D36: overall deadline for a BEST-EFFORT SECONDARY fetch that carries only a pre-fetch beat and
+    # NO mid-body heartbeat — the lazy-chunk URL fetch. Its whole deadline must stay
+    # < heartbeat_stall_threshold_seconds to remain lease-safe (enforced by _check_fetch_lease_safety
+    # below). Exceeding it is a soft miss (the chunk is skipped; the primary asset is unaffected).
+    # NOTE: the .map fetch used to share this cap but now carries its own mid-body heartbeat and its
+    # own (larger) deadline — fetch_source_map_timeout_seconds — so it is no longer bounded here.
     fetch_secondary_timeout_seconds: float = 20.0
+    # D37-L2 slice 4: the external .map fetch gets its OWN deadline, decoupled from the unbeaten
+    # lazy-chunk timeout above. The .map fetch now STREAMS to disk with a mid-body heartbeat
+    # (fetch._make_body_beat renews the lease every heartbeat_interval_seconds), so — exactly like
+    # the primary fetch_timeout_seconds — it may safely exceed heartbeat_stall_threshold_seconds
+    # (hence it is deliberately NOT in _check_fetch_lease_safety's unbeaten-timeout guard). This lets
+    # a big map (up to max_source_map_bytes) finish on a SLOW origin instead of soft-skipping at 20s.
+    # Env RECON_FETCH_SOURCE_MAP_TIMEOUT_SECONDS.
+    fetch_source_map_timeout_seconds: float = 120.0  # == fetch_timeout_seconds (both beaten)
     # Default per-fetch decoded-byte cap. Bounds worker memory (REQ-Q5 — analyze reads
     # the whole blob). A run MAY raise this via run.max_fetch_bytes (edit-&-re-run), but
     # only UP TO max_fetch_bytes_ceiling; clamp_fetch_bytes() enforces min(override-or-
