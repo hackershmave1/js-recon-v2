@@ -388,7 +388,7 @@ raised; (b) STOPGAP [S] — raise `RECON_FETCH_TIMEOUT_SECONDS` **and** `RECON_H
 together so `timeout < stall` still holds. Files: `fetch/fetch.py` (`_fetch_once` body-stream deadline),
 `config.py` (`fetch_timeout_seconds`, `heartbeat_stall_threshold_seconds`).
 
-#### D37 · Large source-map recovery is memory-unsafe: the sourcemapper subprocess + container are unbounded [M–L] — ⏳ PARTIAL 2026-08-30 (L0 + L1 shipped; L2 streaming deferred by decision)  ·  reliability
+#### D37 · Large source-map recovery is memory-unsafe: the sourcemapper subprocess + container are unbounded [M–L] — ✅ RESOLVED 2026-08-31 (L0 + L1 + L2 streaming shipped; D28 double-recover perf + capture-path map RAM tracked as follow-ups)  ·  reliability
 ✅ **L0 + L1 RESOLVED 2026-08-30.** The recovery subprocess and both app containers are now memory-bounded, and
 the map cap is raised. **L0 — subprocess bound:** `engines.run_engine` gained an opt-in `memory_limit_bytes` that
 wraps the child in an exec'd `prlimit --as=<bytes>` guard, so an over-size recovery dies as a CONTAINED non-zero
@@ -423,6 +423,28 @@ first ~32 MiB of sources (a partial recovery — still a strict win over the pre
 disk-tree bound, and per-file heartbeat all remain L2. Files: `findings/{engines,sourcemapper}.py`, `config.py`,
 `docker-compose.yml`, `Dockerfile`, `api/capture_router.py` (stale comment). Original analysis (the full layered
 plan; L2 is what remains) below.
+
+✅ **L2 RESOLVED 2026-08-31 (streaming, 5 isolated slices).** Recovery no longer holds the whole map or the whole
+recovered tree in RAM anywhere, so the 32 MiB in-RAM output cap is lifted and the WHOLE 96 MiB map is recovered.
+**s1** streaming blob primitives (`storage.put_blob_from_path`/`download_blob_to_path`, streamed sha256 == one-shot
+key). **s2** viewer/reveal recover ONE file from an on-disk map (`sourcemapper.recover_one_file`), bounding the API
+parent to a single file, not the whole tree. **s3** the analyze recovery streams to an on-disk BEAUTIFIED tree read
+one file at a time (`analyze.AnalysisUnits`, `sourcemapper.iter_recovered_files`, `kingfisher.scan_dir` with
+realpath-relpath attribution, a whole-file cumulative-write budget → honest `recovered_partial` coverage, a per-file
+heartbeat) — byte-exact so the reveal 409-on-drift invariant holds (validated vs the real Go binary in-container).
+**s4** the `.map` fetch streams to a temp file (`_fetch_hops(sink=...)` + `put_blob_from_path`) with a mid-body
+heartbeat + a beaten `fetch_source_map_timeout_seconds` so a big map on a slow origin finishes. **s5** the export
+pre-pass (Phase A) streams at the same 96 MiB cap, closing the slice-3-review cross-chunk recall gap (#3). Each
+slice: isolated commit + adversarial design + higher-model code review (all CLEAN / SHIP-WITH-fixes-folded). Residual
+(a) is now RESOLVED (whole map recovered), (b) is RESOLVED (viewer/reveal file-by-file). **Remaining follow-ups
+(tracked, NOT memory-unsafe):** the **D28 double-recover** (Phase A + the loop each spawn `sourcemapper` per mapped
+asset — s5 streamed both but did NOT fold them; a recover-once bounded-disk reuse cache is its own slice, perf-only,
+deterministic so never wrong output) and the **capture-ingest sibling** `capture/stage._fetch_captured_source_map`
+(still whole-map-in-RAM + 20s, default-OFF `RECON_ENABLE_CAPTURE_MODE`; `NOTE(DEBT D37-L2, follow-up)` in place).
+A per-file read cap on a viewer of a large NO-finding recovered file (s2 M5-optional) also remains. Files (L2):
+`storage.py`, `config.py`, `findings/{sourcemapper,kingfisher,deobfuscate,analyze,queries}.py`, `probe/{sources,
+reveal}.py`, `fetch/fetch.py`, `capture/stage.py` (+ colocated tests). Design spec + folded §4 reviews:
+`apps/platform/docs/superpowers/specs/2026-08-30-d37-l2-streaming-map-recovery-design.md`.
 
 A source map larger than `max_source_map_bytes` (32 MiB) is SKIPPED (visibly — D32), so its original sources (and
 any secrets in them) are never scanned. **Raising the cap to recover big maps is UNSAFE today**, and "it didn't
