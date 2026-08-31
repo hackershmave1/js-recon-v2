@@ -439,8 +439,11 @@ slice: isolated commit + adversarial design + higher-model code review (all CLEA
 (a) is now RESOLVED (whole map recovered), (b) is RESOLVED (viewer/reveal file-by-file). **Remaining follow-ups
 (tracked, NOT memory-unsafe):** the **D28 double-recover** (Phase A + the loop each spawn `sourcemapper` per mapped
 asset — s5 streamed both but did NOT fold them; a recover-once bounded-disk reuse cache is its own slice, perf-only,
-deterministic so never wrong output) and the **capture-ingest sibling** `capture/stage._fetch_captured_source_map`
-(still whole-map-in-RAM + 20s, default-OFF `RECON_ENABLE_CAPTURE_MODE`; `NOTE(DEBT D37-L2, follow-up)` in place).
+deterministic so never wrong output) — the last remaining D37-L2 streaming follow-up. The **capture-ingest sibling**
+`capture/stage._fetch_captured_source_map` (was whole-map-in-RAM + 20s, default-OFF `RECON_ENABLE_CAPTURE_MODE`) is
+**FIXED 2026-08-31** (`fix/d37-phase-a-stream-map`): it now mirrors the crawl path, streaming the `.map` to a temp
+file (`_fetch_hops(sink=...)` + `put_blob_from_path`) on the beaten `fetch_source_map_timeout_seconds` + a mid-body
+cancel beat, so a big/slow captured map no longer buffers whole in RAM or soft-skips at 20s.
 **Phase A map-input whole-load — FIXED 2026-08-31** (`fix/d37-phase-a-stream-map`): the export pre-pass
 `_harvest_asset_exports` now STREAMS the stored map to a temp file (`download_blob_to_path`) instead of
 `get_blob`-ing the whole <=96 MiB map into RAM — the last whole-map-in-RAM load left in the recovery path,
