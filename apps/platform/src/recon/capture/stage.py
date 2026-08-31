@@ -26,6 +26,8 @@ the existing event and never re-launches the browser.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from collections import Counter
 from collections.abc import Callable
 from urllib.parse import urljoin, urlsplit
@@ -467,38 +469,46 @@ def _fetch_captured_source_map(
     driver's oversize-source truncation) rather than re-deriving it from a source comment.
 
     ``on_progress`` (a job-lease beat folded with the REQ-A4 pause/cancel check) fires
-    BEFORE the outbound GET, so a cancel during seeding is observed per-map (not once per
-    25 rows) and can propagate; it is deliberately OUTSIDE the try, so a genuine cancel is
-    never swallowed as a soft miss. Everything after — the raise-prone ``urljoin`` and the
-    ``fetch_url`` GET — is a NON-RAISING soft miss (a crafted/blocked/oversized/malformed
-    map leaves ``source_map_ref`` null and analyze falls back to the minified bundle; the
-    script's own blob is already stored and unaffected). No per-host politeness slot is
-    taken: the browser already drove far more traffic at this host during capture, and the
-    bounded, sequential ``.map`` GETs don't warrant the crawl's anti-hammer accounting —
-    the load-bearing lease/cancel invariant is preserved by the pre-GET beat. Mirrors
-    ``fetch._fetch_and_store_source_map`` (REQ-CE2) through the same ``fetch_url`` guard.
+    BEFORE the outbound GET and again per body chunk during the streamed download, so a
+    cancel is observed per-map AND mid-body and can propagate. The pre-GET beat is
+    deliberately OUTSIDE the try, so a cancel there is never swallowed as a soft miss; a
+    cancel raised by the MID-BODY beat is re-raised explicitly (it must NOT read as a soft
+    miss). Everything else after — the raise-prone ``urljoin`` and the ``_fetch_hops`` GET —
+    is a NON-RAISING soft miss (a crafted/blocked/oversized/malformed map leaves
+    ``source_map_ref`` null and analyze falls back to the minified bundle; the script's own
+    blob is already stored and unaffected). No per-host politeness slot is taken: the browser
+    already drove far more traffic at this host during capture, and the bounded, sequential
+    ``.map`` GETs don't warrant the crawl's anti-hammer accounting — the load-bearing
+    lease/cancel invariant is preserved by the pre-GET + mid-body beats.
 
-    NOTE(DEBT D37-L2, follow-up): this capture-ingest sibling still buffers the whole ``.map``
-    in RAM (``fetch_url`` -> bytes -> ``put_blob``) and uses the unbeaten 20s secondary timeout —
-    the crawl path was streamed to a temp file (``_fetch_hops(sink=...)`` + ``put_blob_from_path``)
-    with a beaten ``fetch_source_map_timeout_seconds`` in D37-L2 slice 4, but the capture path was
-    left as-is (default-OFF ``RECON_ENABLE_CAPTURE_MODE``, so limited exposure; migrating it also
-    means moving this module's ``fetch_url``/``put_blob`` test seams). A big map here still costs
-    ~its own size in worker RAM and soft-skips at 20s on a slow origin. Follow-up: point this at the
-    same streaming pattern."""
+    D37-L2 (capture follow-up): mirrors ``fetch._fetch_and_store_source_map`` (slice 4) — the
+    ``.map`` body is STREAMED to a temp file (``_fetch_hops(sink=...)``) and stored via
+    ``put_blob_from_path``, so a big map never sits whole in the worker's RAM (fetch AND store).
+    The mid-body beat lets the map's OWN beaten deadline (``fetch_source_map_timeout_seconds``)
+    exceed the stall window, so a big map on a SLOW origin finishes instead of soft-skipping at
+    the 20s secondary timeout. The egress guard + per-chunk byte cap are unchanged (REQ-CE2)."""
     on_progress(0)
     try:
         map_url = urljoin(base, script.source_map_url or "")
-        map_bytes = fetch.fetch_url(
-            map_url,
-            scope_hosts,
-            # D36: best-effort SECONDARY fetch — a separate sub-stall deadline (no mid-body
-            # heartbeat), lease-safe even after fetch_timeout_seconds was raised for primary assets.
-            timeout_s=settings.fetch_secondary_timeout_seconds,
-            max_bytes=max_bytes,
-            allow_local=settings.allow_local_egress,
-        )
-        return storage.put_blob(tenant_id, run_id, "source_map", map_bytes)
+        with tempfile.TemporaryDirectory(prefix="smmap-") as workdir:
+            map_path = os.path.join(workdir, "in.map")
+            with open(map_path, "wb") as handle:
+                fetch._fetch_hops(
+                    map_url,
+                    scope_hosts,
+                    timeout_s=settings.fetch_source_map_timeout_seconds,
+                    max_bytes=max_bytes,
+                    allow_local=settings.allow_local_egress,
+                    # Mid-body lease beat + REQ-A4 cancel check, throttled by _fetch_hops so the
+                    # beaten deadline stays lease-safe (mirrors _make_body_beat on the crawl path).
+                    on_progress=lambda: on_progress(0),
+                    sink=handle.write,
+                )
+            return storage.put_blob_from_path(tenant_id, run_id, "source_map", map_path)
+    except retry.ControlInterrupt:
+        # A cancel raised by the mid-body beat is NOT a soft map miss — propagate it (mirrors
+        # fetch._fetch_and_store_source_map, D37-L2 slice 4). MUST precede `except Exception`.
+        raise
     except Exception as exc:  # noqa: BLE001 — soft miss; a bad map must never fail capture
         log.info(
             "capture.source_map_skipped",
