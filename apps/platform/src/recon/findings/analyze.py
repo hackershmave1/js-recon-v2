@@ -1116,24 +1116,43 @@ def _harvest_asset_exports(
       keyed per build id, and minified-ESM `export{local as Name}` keyed by URL path.
     """
     if source_map_ref:
-        map_bytes, origin = _resolve_source_map(source_map_ref, "", source_map_origin)
+        # `origin` (the map-provenance label) only ever fed `recover_sources`' return value, which
+        # this harvest never read — dropped now that recovery streams (D37-L2 slice 5).
+        map_bytes, _origin = _resolve_source_map(source_map_ref, "", source_map_origin)
         source: str | None = None
     else:  # no stored ref -> read the blob (an inline `data:` map may still contribute)
         source = storage.get_blob(input_ref).decode("utf-8", "replace")
-        map_bytes, origin = _resolve_source_map(None, source, source_map_origin)
+        map_bytes, _origin = _resolve_source_map(None, source, source_map_origin)
     if map_bytes:
+        recovered_any = False
         try:
-            recovered = sourcemapper.recover_sources(map_bytes, origin=origin)
+            with tempfile.TemporaryDirectory(prefix="sm-idx-") as workdir:
+                map_path = os.path.join(workdir, "in.map")
+                with open(map_path, "wb") as handle:
+                    handle.write(map_bytes)
+                # D37-L2 slice 5: STREAM the recovery one file at a time at the SAME cap the per-asset
+                # loop uses (max_source_map_bytes = 96 MiB), so this pre-pass harvests exports from
+                # EVERY file the loop will extract — closing the 32-vs-96 MiB divergence (slice-3 §4
+                # review) — WITHOUT holding the whole recovered tree in RAM. Exports parse from raw
+                # bytes, in the same stable order recover_sources materialized, so the index is
+                # unchanged (only the tail beyond 32 MiB is now covered). NOTE(DEBT D28): this still
+                # recovers the map a SECOND time (the loop re-recovers it for extraction); a
+                # recover-once reuse cache is its own tracked slice.
+                for rel_path, raw in sourcemapper.iter_recovered_files(
+                    map_path, max_recovered_bytes=get_settings().max_source_map_bytes
+                ):
+                    recovered_any = True
+                    _merge_module_exports(index.exports, rel_path, raw)
         except engines.EngineError:
-            # A malformed map: `_analysis_units` falls back to BUNDLE analysis for an
-            # inline/capture map (so the loop keys this asset by its URL — populate that
-            # below); an uploaded/legacy map has no asset_url, so the URL branch no-ops
-            # and the extract loop fails the asset anyway. Either way, fall through.
-            recovered = None
-        if recovered is not None and recovered.status == "ok" and recovered.files:
-            for recovered_file in recovered.files:
-                _merge_module_exports(index.exports, recovered_file.path, recovered_file.content)
-            return  # recovered -> f.path ESM keys (matches _analysis_units's recovered branch)
+            # Malformed map, or the binary is absent (EngineNotAvailable subclasses EngineError):
+            # `_analysis_units` falls back to BUNDLE analysis for an inline/capture map (so the loop
+            # keys this asset by its URL — populate that below); an uploaded/legacy map has no
+            # asset_url, so the URL branch no-ops and the extract loop fails the asset anyway. Either
+            # way, fall through. (The sourcemapper subprocess fails all-or-nothing BEFORE any file is
+            # yielded, so no partial index is left behind.)
+            recovered_any = False
+        if recovered_any:
+            return  # recovered -> rel_path ESM keys (matches _analysis_units's recovered branch)
     # No usable map: the loop analyzes this asset as one bundle unit. Harvest webpack
     # modules (by build id — cross-chunk sibling) and/or minified-ESM exports (by URL).
     if source is None:
@@ -1165,19 +1184,12 @@ def build_export_index(
     the per-asset extract loop recovers it again for full extraction, so a large crawl
     pays 2x sourcemapper subprocess spawns per mapped asset; a no-map asset is likewise
     tree-sitter-parsed here AND again in the loop. Correct and memory-bounded (only the
-    small index persists, not recovered/source text); follow-up is to cache recovered
-    units or fold the harvest into the main loop with deferred resolution (extends the
-    recovery/stall note in ``_analysis_units``).
-
-    NOTE(DEBT D37-L2, interim): this pre-pass still uses ``recover_sources`` (whole-tree, the
-    default ``engine_max_output_bytes`` = 32 MiB cap), while ``_analysis_units`` now STREAMS up to
-    ``max_source_map_bytes`` = 96 MiB (D37-L2 slice 3). So for a recovered tree in the 32–96 MiB
-    range, the extract loop attributes endpoints for files this export index never harvested — a
-    cross-chunk ``fetch(API_BASE + PATH)`` whose operands live in the >32 MiB tail stays UNRESOLVED
-    (surfaced as ENDPOINT_UNRESOLVED, never dropped) rather than resolved. Deterministic + best-
-    effort, so idempotency holds; it is a resolution gap, not a regression (pre-slice the loop was
-    also 32 MiB-capped, so those endpoints weren't extracted at all). Slice 5 removes BOTH the double-
-    recover AND this divergence by reusing slice 3's streamed on-disk tree for the harvest.
+    small index persists, not recovered/source text). D37-L2 slice 5 STREAMED this harvest
+    (``_harvest_asset_exports`` now iterates ``iter_recovered_files`` at the loop's 96 MiB cap —
+    closing the 32-vs-96 MiB divergence the slice-3 §4 review found, so cross-chunk refs into the
+    >32 MiB tail now resolve) but deliberately did NOT remove the double-recover: a recover-once
+    reuse cache spanning this pre-pass and the loop is entangled (bounded-disk cache + tree-ownership
+    across the Phase-A/loop boundary), perf-only, and stays tracked as D28 for its own slice.
     """
     index = CrossModuleIndex()
     for asset in rows:
