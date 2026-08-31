@@ -754,6 +754,25 @@ a bounded intraprocedural + single-call-site fold ONLY (never a full taint port)
 the real corpus, index-once / no per-sink re-traversal (D21 discipline). Related: the deferred exec
 engine (D29) and `apps/platform/docs/superpowers/thorough-endpoint-recovery-design.md`.
 
+#### D38 · Native-ESM static-import chunk discovery shipped; dynamic-import() deferred [S] — ⏳ PARTIAL 2026-08-31 (static shipped; dynamic deferred)  ·  correctness
+Modern Vite/Rollup/Rolldown apps split code via NATIVE ESM static imports (`import "./app-Cp.js"`),
+resolved by the browser's own module loader — no `<script>` tag and no `__webpack_require__.u`
+builder, so BOTH the katana crawl and the webpack-only `chunkenum` missed those sibling chunks (the
+app's real code + endpoints). VERIFIED on a real Rolldown target: a 210-byte entry whose whole body
+was three static imports (`runtime`/`vendor`/`app`) — the tool found the entry and missed all three.
+**SHIPPED (static, recursive):** `findings/esmimports.py` statically extracts `import` / `export …
+from` literal specifiers via the shared tree-sitter (a top-level scan — static ESM declarations are
+top-level-only per the ES spec, so O(top-level statements), not a full-tree walk); `fetch.
+_enumerate_and_seed_esm_chunks` does a bounded recursive BFS that fetches each sibling chunk THROUGH
+THE EGRESS GUARD and seeds it (mirrors the webpack `_enumerate_and_seed_chunks`: content-derived URLs
+are never a scope-widening lever — REQ-P2; cycle-safe via one visited set; total rows AND fetch
+attempts bounded by `crawl_max_assets`; REQ-A4 + soft-miss). Gated to non-webpack assets so exactly
+one enumerator parses any bundle.
+**DEFERRED (follow-up):** DYNAMIC `import("./route.js")` — nestable anywhere (a full-tree walk, unlike
+static's cheap top-level scan) and already partly covered by katana's `-jc` dynamic-import crawl. The
+follow-up is a bounded dynamic-import pass, gated on first MEASURING katana's real dynamic-import
+recall on live Rolldown/Vite targets. Related: D29 (webpack-chunk SES exec), D30 (param-URL ceiling).
+
 #### D9 · Test-pyramid inversion [L, ongoing]  ·  maintainability
 58 of 123 backend test files carry an integration marker (need live PG/Redis/MinIO); the fast
 hermetic layer is now ~half (≈65 files) — grown by the D9 slices below, no longer the clear
