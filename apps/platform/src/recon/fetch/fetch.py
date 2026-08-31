@@ -28,6 +28,7 @@ import os
 import socket
 import tempfile
 import time
+from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit
@@ -43,7 +44,7 @@ from recon.db.models import Run
 from recon.domain import AssetStatus
 from recon.events.log import record_event
 from recon.fetch import egress, politeness
-from recon.findings import chunkenum, sourcemapper
+from recon.findings import chunkenum, esmimports, sourcemapper
 from recon.observability import get_logger
 from recon.progress import heartbeat as progress
 from recon.queue import retry
@@ -784,6 +785,26 @@ def _fetch_assets(
             if settings.crawl_enumerate_chunks
             else 0
         )
+        # Native-ESM (Vite/Rollup/Rolldown) sibling-chunk discovery — self-gated to non-webpack
+        # assets, so exactly one enumerator parses any bundle. Same non-re-raising soft-miss
+        # contract as the webpack path + the .map recovery above.
+        esm_chunks = (
+            _enumerate_and_seed_esm_chunks(
+                redis,
+                js=content,
+                asset_url=asset.url,
+                scope_hosts=engagement.scope_hosts,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                job_id=job_id,
+                done=i,
+                total=total,
+                settings=settings,
+                max_bytes=cap,
+            )
+            if settings.crawl_enumerate_chunks
+            else 0
+        )
         log.info(
             "fetch.asset_done",
             run_id=run_id,
@@ -791,6 +812,7 @@ def _fetch_assets(
             bytes=len(content),
             source_map=bool(map_result.ref),
             chunks=chunks,
+            esm_chunks=esm_chunks,
         )
     _write_fingerprint_signal(redis, tenant_id=tenant_id, run_id=run_id, signal=signal)
 
@@ -1046,6 +1068,143 @@ def _enumerate_and_seed_chunks(
         raise  # REQ-A4: pause/cancel must propagate, never be eaten by the soft-miss guard below
     except Exception as exc:  # noqa: BLE001 — soft miss; enumeration must never fail the asset
         log.info("fetch.chunk_enum_skipped", run_id=run_id, url=asset_url, error=str(exc))
+        return len(seeded)
+
+
+def _enumerate_and_seed_esm_chunks(
+    redis: Redis,
+    *,
+    js: bytes,
+    asset_url: str,
+    scope_hosts: list[str],
+    tenant_id: str,
+    run_id: str,
+    job_id: str | None,
+    done: int,
+    total: int,
+    settings: Settings,
+    max_bytes: int,
+) -> int:
+    """Best-effort: statically enumerate a native-ESM module graph from ``js`` (Vite/Rollup/
+    Rolldown ``import "./chunk.js"`` specifiers — NO execution, ``recon.findings.esmimports``),
+    RECURSIVELY fetch each sibling chunk THROUGH THE EGRESS GUARD, and seed it as an
+    already-fetched (OK) asset so analyze recovers its endpoints. Returns the number seeded.
+
+    A transitive BFS (an ESM graph is deep: entry -> app -> app's own siblings), unlike the flat
+    webpack ``.u`` map (:func:`_enumerate_and_seed_chunks`). Bounded + safe like that sibling:
+    - **One enumerator per asset**: gated to NON-webpack JS (``b"webpack" not in js``) so a
+      webpack bundle is parsed only by ``_enumerate_and_seed_chunks``, never both.
+    - **Scope is never widened** (REQ-P2): a chunk URL is content-derived, therefore UNTRUSTED —
+      it is fetched only via ``fetch_url`` (``egress.validate_target`` on every hop), so an
+      out-of-scope chunk raises ``EgressBlocked`` and is DROPPED (mirrors the crawl's
+      ``_revalidate``). The relative/``.js`` filter in the enumerator is noise-reduction, not the
+      boundary.
+    - **Cycle-safe + capped**: one ``known`` set (the run's existing assets incl. the parent, then
+      every URL touched) breaks ``a -> b -> a`` and diamonds; the total SEEDED is bounded by
+      ``crawl_max_assets`` against the live count, and the total fetch ATTEMPTS by the same
+      ceiling — a hostile/huge graph (even all-out-of-scope) can neither flood the run with rows
+      nor with requests.
+    - **Polite + interruptible (REQ-A4)**: each GET renews the lease + takes a host slot; a
+      pause/cancel is honored before each module's parse AND before each fetch, and the
+      ``ControlInterrupt`` is re-raised past the soft-miss guard; the ``finally`` seeds
+      whatever was already fetched so an interrupt mid-burst never orphans a blob.
+
+    NEVER raises (soft miss): a bad/blocked/oversized chunk must not reach the caller's outer
+    handler, which would mark the PARENT asset fetch_failed and drop its JS finding."""
+    if b"webpack" in js:
+        return 0  # a webpack runtime is _enumerate_and_seed_chunks' job — one parse per asset
+    if b"import" not in js and b"export" not in js:
+        return 0  # cheap gate: no static import/export substring -> nothing to enumerate
+    seeded: list[dict[str, str]] = []
+    try:
+        known = {row.url for row in run_assets.list_for_run(tenant_id, run_id)}
+        remaining = settings.crawl_max_assets - len(known)
+        if remaining <= 0:
+            return 0
+        attempts = 0
+        # BFS worklist of (module_bytes, module_url) whose imports are not yet enumerated. The
+        # parent is already fetched (its bytes are `js`); recurse into each fetched child.
+        queue: deque[tuple[bytes, str]] = deque([(js, asset_url)])
+        try:
+            while queue and len(seeded) < remaining and attempts < settings.crawl_max_assets:
+                run_queries.raise_if_control_requested(tenant_id, run_id)  # REQ-A4 (before parse)
+                module_bytes, base = queue.popleft()
+                if job_id:  # beat BEFORE the (cheap, top-level) parse so it can't outlast the lease
+                    progress.beat(
+                        redis,
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        job_id=job_id,
+                        done=done,
+                        total=total,
+                    )
+                for ref in esmimports.enumerate_import_urls(
+                    module_bytes.decode("utf-8", "replace"), max_urls=settings.crawl_max_assets
+                ):
+                    if len(seeded) >= remaining or attempts >= settings.crawl_max_assets:
+                        break
+                    run_queries.raise_if_control_requested(
+                        tenant_id, run_id
+                    )  # REQ-A4 (must propagate)
+                    try:
+                        # urljoin + host extraction + politeness + fetch under ONE guard: a malformed
+                        # specifier (`//[/x.js` -> urljoin/urlsplit raises ValueError) or a
+                        # bad/blocked/oversized chunk (EgressBlocked/Fatal/Retryable) is a per-chunk soft
+                        # miss — skip THIS chunk, never a BFS abort that would drop the queued siblings.
+                        # ControlInterrupt is NOT in the tuple, so a cancel still propagates (REQ-A4).
+                        chunk_url = urljoin(base, ref)
+                        if chunk_url in known:
+                            continue  # already a row / already tried -> no duplicate, breaks cycles
+                        known.add(chunk_url)  # mark BEFORE the fetch so a diamond can't refetch it
+                        attempts += 1
+                        if job_id:
+                            progress.beat(
+                                redis,
+                                tenant_id=tenant_id,
+                                run_id=run_id,
+                                job_id=job_id,
+                                done=done,
+                                total=total,
+                            )
+                        host = (urlsplit(chunk_url).hostname or "").lower()
+                        if host:
+                            _await_host_slot(
+                                redis,
+                                host,
+                                tenant_id=tenant_id,
+                                run_id=run_id,
+                                job_id=job_id,
+                                settings=settings,
+                            )
+                        chunk_bytes = fetch_url(
+                            chunk_url,
+                            scope_hosts,
+                            # D36: best-effort SECONDARY fetch — sub-stall deadline (no mid-body
+                            # beat), lease-safe even after fetch_timeout_seconds was raised.
+                            timeout_s=settings.fetch_secondary_timeout_seconds,
+                            max_bytes=max_bytes,
+                            allow_local=settings.allow_local_egress,
+                        )
+                    except (
+                        egress.EgressBlocked,
+                        retry.FatalError,
+                        retry.RetryableError,
+                        ValueError,
+                    ) as exc:
+                        log.info("fetch.esm_chunk_skipped", run_id=run_id, url=ref, error=str(exc))
+                        continue  # out-of-scope/blocked/malformed -> dropped
+                    chunk_key = storage.put_blob(tenant_id, run_id, "input", chunk_bytes)
+                    seeded.append({"url": chunk_url, "input_ref": chunk_key})
+                    queue.append((chunk_bytes, chunk_url))  # recurse into this chunk's own imports
+        finally:
+            if seeded:  # persist fetched-so-far on EVERY exit (normal / interrupt / soft-miss)
+                with tenant_session(tenant_id) as s:
+                    run_assets.seed_captured(s, tenant_id=tenant_id, run_id=run_id, rows=seeded)
+        return len(seeded)
+    except retry.ControlInterrupt:
+        raise  # REQ-A4: pause/cancel must propagate, never be eaten by the soft-miss guard below
+    except Exception as exc:  # noqa: BLE001 — soft miss; enumeration must never fail the asset
+        log.info("fetch.esm_enum_skipped", run_id=run_id, url=asset_url, error=str(exc))
         return len(seeded)
 
 
