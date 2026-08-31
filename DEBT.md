@@ -441,6 +441,13 @@ slice: isolated commit + adversarial design + higher-model code review (all CLEA
 asset — s5 streamed both but did NOT fold them; a recover-once bounded-disk reuse cache is its own slice, perf-only,
 deterministic so never wrong output) and the **capture-ingest sibling** `capture/stage._fetch_captured_source_map`
 (still whole-map-in-RAM + 20s, default-OFF `RECON_ENABLE_CAPTURE_MODE`; `NOTE(DEBT D37-L2, follow-up)` in place).
+**Phase A map-input whole-load — FIXED 2026-08-31** (`fix/d37-phase-a-stream-map`): the export pre-pass
+`_harvest_asset_exports` now STREAMS the stored map to a temp file (`download_blob_to_path`) instead of
+`get_blob`-ing the whole <=96 MiB map into RAM — the last whole-map-in-RAM load left in the recovery path,
+an L2 residue surfaced by the D28 adversarial design review. That review also recommended AGAINST building
+the perf recover-once reuse cache: measured, it removes only the redundant sourcemapper SPAWN (not the
+duplicate parse) for real machinery + a contained partial-boundary/temp-dir risk, so **the D28 double-recover
+stays deliberately open** (correct + memory-bounded today).
 A per-file read cap on a viewer of a large NO-finding recovered file (s2 M5-optional) also remains. Files (L2):
 `storage.py`, `config.py`, `findings/{sourcemapper,kingfisher,deobfuscate,analyze,queries}.py`, `probe/{sources,
 reveal}.py`, `fetch/fetch.py`, `capture/stage.py` (+ colocated tests). Design spec + folded §4 reviews:

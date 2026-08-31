@@ -220,7 +220,7 @@ def _analyze_legacy(
     try:
         # asset_url=None: a legacy single blob has no sibling chunk to cross-reference
         # by URL, so only its source-map-recovered modules / in-blob webpack modules contribute.
-        _harvest_asset_exports(input_ref, source_map_ref, None, "uploaded", cross_index)
+        _harvest_asset_exports(input_ref, source_map_ref, None, cross_index)
     except Exception as exc:  # noqa: BLE001 - best-effort enrichment
         log.warning("analyze.export_index_legacy_failed", run_id=run_id, error=str(exc))
 
@@ -1062,20 +1062,6 @@ def _analysis_units(
             tmp.cleanup()
 
 
-def _resolve_source_map(
-    source_map_ref: str | None, source: str, source_map_origin: str = "uploaded"
-) -> tuple[bytes | None, str]:
-    # A stored ref is the explicit map for this unit; its origin ("uploaded" legacy,
-    # "capture" from the extension) decides whether a parse failure surfaces or falls
-    # back (see _analysis_units). Absent a ref, an inline data: map is opportunistic.
-    if source_map_ref:
-        return storage.get_blob(source_map_ref), source_map_origin
-    inline = sourcemapper.extract_inline_map(source)
-    if inline:
-        return inline, "inline"
-    return None, "none"
-
-
 def _merge_module_exports(exports: dict[str, dict[str, str]], key: str, content: bytes) -> None:
     module_exports = _modulegraph.collect_module_exports(_modulegraph.parse(content))
     if module_exports:
@@ -1103,7 +1089,6 @@ def _harvest_asset_exports(
     input_ref: str,
     source_map_ref: str | None,
     asset_url: str | None,
-    source_map_origin: str,
     index: CrossModuleIndex,
 ) -> None:
     """Merge one asset's cross-module exports into ``index``, keyed to MIRROR the
@@ -1115,21 +1100,29 @@ def _harvest_asset_exports(
       asset as one ``input.js`` bundle unit) -> `_harvest_minified`: webpack modules
       keyed per build id, and minified-ESM `export{local as Name}` keyed by URL path.
     """
-    if source_map_ref:
-        # `origin` (the map-provenance label) only ever fed `recover_sources`' return value, which
-        # this harvest never read — dropped now that recovery streams (D37-L2 slice 5).
-        map_bytes, _origin = _resolve_source_map(source_map_ref, "", source_map_origin)
-        source: str | None = None
-    else:  # no stored ref -> read the blob (an inline `data:` map may still contribute)
+    source: str | None = None
+    inline_bytes: bytes | None = None
+    if not source_map_ref:
+        # No stored ref -> read the bundle (needed by _harvest_minified below anyway); an inline
+        # `data:` map embedded in it may still contribute.
         source = storage.get_blob(input_ref).decode("utf-8", "replace")
-        map_bytes, _origin = _resolve_source_map(None, source, source_map_origin)
-    if map_bytes:
+        inline_bytes = sourcemapper.extract_inline_map(source)
+    if source_map_ref or inline_bytes is not None:
         recovered_any = False
         try:
             with tempfile.TemporaryDirectory(prefix="sm-idx-") as workdir:
                 map_path = os.path.join(workdir, "in.map")
-                with open(map_path, "wb") as handle:
-                    handle.write(map_bytes)
+                if source_map_ref:
+                    # STREAM the stored map to the temp file — never get_blob it whole into RAM
+                    # (mirrors _analysis_units' download_blob_to_path). The pre-pass otherwise held
+                    # the whole <=96 MiB map in the worker's RAM, defeating D37-L2's streaming bound
+                    # on the one map path the extract loop already streams (D37-L2 follow-up,
+                    # D28-adjacent — the perf double-recover stays tracked as D28).
+                    storage.download_blob_to_path(source_map_ref, map_path)
+                else:
+                    assert inline_bytes is not None  # implied by the branch condition above
+                    with open(map_path, "wb") as handle:
+                        handle.write(inline_bytes)
                 # D37-L2 slice 5: STREAM the recovery one file at a time at the SAME cap the per-asset
                 # loop uses (max_source_map_bytes = 96 MiB), so this pre-pass harvests exports from
                 # EVERY file the loop will extract — closing the 32-vs-96 MiB divergence (slice-3 §4
@@ -1163,7 +1156,6 @@ def _harvest_asset_exports(
 def build_export_index(
     rows: Sequence[run_assets.AssetRow],
     *,
-    source_map_origin: str = "capture",
     heartbeat: Callable[[], None] | None = None,
 ) -> CrossModuleIndex:
     """Run-level `CrossModuleIndex` so the per-asset extract loop can resolve a
@@ -1189,7 +1181,9 @@ def build_export_index(
     closing the 32-vs-96 MiB divergence the slice-3 §4 review found, so cross-chunk refs into the
     >32 MiB tail now resolve) but deliberately did NOT remove the double-recover: a recover-once
     reuse cache spanning this pre-pass and the loop is entangled (bounded-disk cache + tree-ownership
-    across the Phase-A/loop boundary), perf-only, and stays tracked as D28 for its own slice.
+    across the Phase-A/loop boundary), perf-only, and stays tracked as D28 for its own slice. The
+    stored map INPUT is now streamed to a temp file (``download_blob_to_path``), never ``get_blob``'d
+    whole into RAM (D37-L2 follow-up) — so no whole-map load remains in this pre-pass.
     """
     index = CrossModuleIndex()
     for asset in rows:
@@ -1198,9 +1192,7 @@ def build_export_index(
         if heartbeat is not None:
             heartbeat()  # lease renew + REQ-A4 control-check (may raise ControlInterrupt)
         try:
-            _harvest_asset_exports(
-                asset.input_ref, asset.source_map_ref, asset.url, source_map_origin, index
-            )
+            _harvest_asset_exports(asset.input_ref, asset.source_map_ref, asset.url, index)
         except Exception as exc:  # noqa: BLE001 - best-effort; a bad asset just yields nothing
             log.warning("analyze.export_index_asset_failed", url=asset.url, error=str(exc))
     return index

@@ -73,10 +73,15 @@ _RECOVERED = {
 
 
 def _stub_recovery(monkeypatch, recovered: dict[bytes, list[RecoveredFile]]) -> None:
-    # D37-L2 slice 5: Phase A now STREAMS via iter_recovered_files(map_path) (not recover_sources);
-    # the map bytes are written to that temp file, so recover the dict key by reading it back and
-    # yield each file's (path, content) — the same pairs recover_sources materialized.
-    monkeypatch.setattr(storage, "get_blob", lambda ref: ref.encode())
+    # Phase A STREAMS the stored map to a temp file via storage.download_blob_to_path (D37-L2
+    # follow-up: never get_blob the whole map into RAM), then recovery streams via
+    # iter_recovered_files(map_path). Write the map bytes (== ref.encode()) to that temp file so
+    # iter reads them back to recover the dict key, yielding the same (path, content) pairs.
+    def _download(ref: str, dest: str) -> None:
+        with open(dest, "wb") as handle:
+            handle.write(ref.encode())
+
+    monkeypatch.setattr(storage, "download_blob_to_path", _download)
 
     def _iter(map_path, **kw):
         with open(map_path, "rb") as handle:
@@ -94,12 +99,48 @@ def test_build_export_index_keys_esm_by_recovered_path(monkeypatch):
     assert index.webpack == {}
 
 
+def test_build_export_index_streams_stored_map_to_disk(monkeypatch):
+    # D37-L2 follow-up (D28-adjacent): the export pre-pass must STREAM a stored source map to a
+    # temp file (storage.download_blob_to_path) exactly like _analysis_units, and NEVER get_blob
+    # the whole <=96 MiB map into the worker's RAM — the one map path the pre-pass still
+    # whole-loaded, defeating L2's streaming bound. Assert it takes the streaming route.
+    calls = {"download": 0, "get_blob": 0}
+
+    def _download(ref: str, dest: str) -> None:
+        calls["download"] += 1
+        with open(dest, "wb") as handle:
+            handle.write(ref.encode())
+
+    def _get_blob(ref: str) -> bytes:
+        calls["get_blob"] += 1
+        return ref.encode()
+
+    monkeypatch.setattr(storage, "download_blob_to_path", _download)
+    monkeypatch.setattr(storage, "get_blob", _get_blob)
+
+    def _iter(map_path, **kw):
+        with open(map_path, "rb") as handle:
+            map_bytes = handle.read()
+        for recovered_file in _RECOVERED.get(map_bytes, []):
+            yield recovered_file.path, recovered_file.content
+
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", _iter)
+
+    index = analyze.build_export_index([_row(source_map_ref="entry")])
+
+    assert index.exports == _EXPORTS
+    assert calls["download"] == 1  # streamed the stored map to disk
+    assert calls["get_blob"] == 0  # never whole-loaded the map into RAM
+
+
 def test_build_export_index_harvests_at_the_full_map_cap(monkeypatch):
     # D37-L2 slice 5 (closes the slice-3 §4 review's #3): the export pre-pass now STREAMS recovery at
     # the SAME cap the per-asset loop uses (max_source_map_bytes = 96 MiB), NOT the old 32 MiB
     # engine_max_output_bytes — so a cross-chunk export in the 32-96 MiB tail is harvested, matching
     # the files the loop will extract (no more silently-unresolved cross-chunk refs on a big map).
-    monkeypatch.setattr(storage, "get_blob", lambda ref: ref.encode())
+    monkeypatch.setattr(
+        storage, "download_blob_to_path", lambda ref, dest: open(dest, "wb").close()
+    )
     seen: dict[str, object] = {}
 
     def _iter(map_path, **kw):
@@ -141,6 +182,9 @@ def test_build_export_index_bad_capture_map_falls_back_to_url_key(monkeypatch):
     # fall through to the URL-key (minified-ESM) branch (LOW-1).
     entry = b'const S="https://api.acme.com",T="/api/v3/orders";export{S as A,T as O};'
     monkeypatch.setattr(storage, "get_blob", lambda ref: entry)
+    monkeypatch.setattr(
+        storage, "download_blob_to_path", lambda ref, dest: open(dest, "wb").close()
+    )
 
     def _boom(*_a, **_k):
         raise sourcemapper.engines.EngineError("bad map")
@@ -148,7 +192,6 @@ def test_build_export_index_bad_capture_map_falls_back_to_url_key(monkeypatch):
     monkeypatch.setattr(sourcemapper, "iter_recovered_files", _boom)
     index = analyze.build_export_index(
         [_row(source_map_ref="cap", url="http://h/assets/index-abc.js")],
-        source_map_origin="capture",
     )
     assert index.exports == {
         "/assets/index-abc.js": {"A": "https://api.acme.com", "O": "/api/v3/orders"}
