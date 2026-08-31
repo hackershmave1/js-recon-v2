@@ -12,10 +12,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from recon import storage
+from recon.config import get_settings
 from recon.domain import AssetStatus
 from recon.findings import analyze, sourcemapper
 from recon.findings.analyze import CrossModuleIndex
-from recon.findings.sourcemapper import RecoveredFile, RecoveredSources
+from recon.findings.sourcemapper import RecoveredFile
 
 _EXPORTS = {
     "src/api/base.js": {"API_BASE": "https://api.acme.com", "ORDERS_PATH": "/api/v3/orders"}
@@ -72,12 +73,18 @@ _RECOVERED = {
 
 
 def _stub_recovery(monkeypatch, recovered: dict[bytes, list[RecoveredFile]]) -> None:
+    # D37-L2 slice 5: Phase A now STREAMS via iter_recovered_files(map_path) (not recover_sources);
+    # the map bytes are written to that temp file, so recover the dict key by reading it back and
+    # yield each file's (path, content) — the same pairs recover_sources materialized.
     monkeypatch.setattr(storage, "get_blob", lambda ref: ref.encode())
-    monkeypatch.setattr(
-        sourcemapper,
-        "recover_sources",
-        lambda map_bytes, **kw: RecoveredSources(files=recovered.get(map_bytes, []), status="ok"),
-    )
+
+    def _iter(map_path, **kw):
+        with open(map_path, "rb") as handle:
+            map_bytes = handle.read()
+        for recovered_file in recovered.get(map_bytes, []):
+            yield recovered_file.path, recovered_file.content
+
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", _iter)
 
 
 def test_build_export_index_keys_esm_by_recovered_path(monkeypatch):
@@ -85,6 +92,28 @@ def test_build_export_index_keys_esm_by_recovered_path(monkeypatch):
     index = analyze.build_export_index([_row(source_map_ref="entry")])
     assert index.exports == _EXPORTS
     assert index.webpack == {}
+
+
+def test_build_export_index_harvests_at_the_full_map_cap(monkeypatch):
+    # D37-L2 slice 5 (closes the slice-3 §4 review's #3): the export pre-pass now STREAMS recovery at
+    # the SAME cap the per-asset loop uses (max_source_map_bytes = 96 MiB), NOT the old 32 MiB
+    # engine_max_output_bytes — so a cross-chunk export in the 32-96 MiB tail is harvested, matching
+    # the files the loop will extract (no more silently-unresolved cross-chunk refs on a big map).
+    monkeypatch.setattr(storage, "get_blob", lambda ref: ref.encode())
+    seen: dict[str, object] = {}
+
+    def _iter(map_path, **kw):
+        seen["cap"] = kw["max_recovered_bytes"]
+        yield "src/api/base.js", b'export const API_BASE = "https://api.acme.com";'
+
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", _iter)
+    analyze.build_export_index([_row(source_map_ref="entry")])
+
+    settings = get_settings()
+    assert seen["cap"] == settings.max_source_map_bytes
+    assert (
+        seen["cap"] > settings.engine_max_output_bytes
+    )  # strictly past the old 32 MiB pre-pass cap
 
 
 def test_build_export_index_skips_non_ok_and_missing_ref(monkeypatch):
@@ -113,10 +142,10 @@ def test_build_export_index_bad_capture_map_falls_back_to_url_key(monkeypatch):
     entry = b'const S="https://api.acme.com",T="/api/v3/orders";export{S as A,T as O};'
     monkeypatch.setattr(storage, "get_blob", lambda ref: entry)
 
-    def _boom(map_bytes, **kw):
+    def _boom(*_a, **_k):
         raise sourcemapper.engines.EngineError("bad map")
 
-    monkeypatch.setattr(sourcemapper, "recover_sources", _boom)
+    monkeypatch.setattr(sourcemapper, "iter_recovered_files", _boom)
     index = analyze.build_export_index(
         [_row(source_map_ref="cap", url="http://h/assets/index-abc.js")],
         source_map_origin="capture",
