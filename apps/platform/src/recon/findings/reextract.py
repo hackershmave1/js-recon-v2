@@ -87,7 +87,7 @@ def reextract_run(tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]) 
             # `fetch(API_BASE + PATH)` / `fetch(r.t + r.M)` resolves to the IDENTICAL
             # endpoint the analyze pass wrote — never a contradictory ENDPOINT_UNRESOLVED
             # skeleton beside it (best-effort; a bad asset just yields nothing).
-            cross_index = build_export_index(rows, source_map_origin="capture")
+            cross_index = build_export_index(rows)
             for asset in rows:
                 if asset.fetch_status != AssetStatus.OK.value or not asset.input_ref:
                     continue
@@ -113,7 +113,7 @@ def reextract_run(tenant_id: str, run_id: str, wrappers: Sequence[WrapperRule]) 
         elif input_ref:  # legacy single-blob run (with its own source map, if any)
             legacy_index = CrossModuleIndex()
             try:
-                _harvest_asset_exports(input_ref, source_map_ref, None, "uploaded", legacy_index)
+                _harvest_asset_exports(input_ref, source_map_ref, None, legacy_index)
             except Exception:  # noqa: BLE001 - best-effort; no cross-module on failure
                 legacy_index = CrossModuleIndex()
             with tenant_session(tenant_id) as session:
