@@ -1,8 +1,13 @@
 # D37 Layer 2 — streaming big source-map recovery (design)
 
-Status: REVIEWED — §4 adversarial gate = **SHIP-WITH-CHANGES** (2026-08-30); all 6 must-fixes + 4
-should-fixes folded (see "Adversarial review outcome" below) · branch `feat/d37-l2-streaming-map-recovery`
-Scope confirmed by user: **all 5 slices** (close the D37 DEBT item fully).
+Status: **BUILT** (2026-08-31) — all 5 slices shipped + committed on `feat/d37-l2-streaming-map-recovery`, each an
+isolated commit with an adversarial design + higher-model code review (all CLEAN / fixes-folded), full host fast
+lane + integration lane green, and the real-binary streaming chain validated in-container. §4 DESIGN gate =
+**SHIP-WITH-CHANGES** (2026-08-30); all 6 must-fixes + 4 should-fixes folded (see "Adversarial review outcome").
+Scope confirmed by user: **all 5 slices**. **Slice-5 scope decision (2026-08-31, via subagent design discussion +
+§4):** slice 5 ships as "streamed Phase A" — it closes the slice-3-review cross-chunk cap divergence (#3) but
+DEFERS the D28 double-recover (a bounded-disk recover-once reuse cache; perf-only, entangled, deterministic so
+never wrong output) to its own tracked slice; see `DEBT.md` D37/D28.
 Supersedes the "L2" plan block in `DEBT.md` D37. Related: D32 (map recovery), D36 (fetch
 heartbeat), D28 (double-recover), D23 (heartbeat family), REQ-D3/D5/C2/A3, REQ-S2.
 
