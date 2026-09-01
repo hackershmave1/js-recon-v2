@@ -37,6 +37,8 @@ fetch("/api/me", {headers:{Authorization:"Bearer " + token}});
 
 _JS_GRAPHQL = """
 const Me = gql`query Me { me { id email } }`;
+const Me2 = gql`query Me { me { id email } }`;
+const Card = gql`fragment UserCard on User { id name }`;
 fetch("/api/health");
 """
 
@@ -254,12 +256,13 @@ def test_endpoint_finding_carries_auth_headers(redis, authorized_session):
     ]
 
 
-def test_graphql_operation_exported_but_never_a_finding(redis, authorized_session):
-    """Enrichment C (export-only): a gql`` document surfaces as a GraphQL operation in the
-    OpenAPI export but NEVER as an endpoint/param finding — a GraphQL op is not an HTTP call,
-    so it must not pollute the HTTP-endpoints read model. The real fetch in the same bundle
-    is still extracted normally. Exercises the exact chain the export router runs (analyze
-    persist -> queries.graphql_operations union -> build_openapi emit)."""
+def test_graphql_definitions_are_located_findings_and_still_exported(redis, authorized_session):
+    """GraphQL documents are now first-class ``FindingType.GRAPHQL`` findings — LOCATED to their
+    bundle call-site, with fragments surfaced and the same op at two sites kept as two occurrences
+    — AND still carried by the OpenAPI export, but NEVER an endpoint/param finding or an HTTP path
+    (a GraphQL op is not an HTTP call). The real fetch in the same bundle is still extracted
+    normally. Exercises the analyze finding-write (location + fragment + multi-occurrence) plus the
+    unchanged export chain (queries.graphql_operations union -> build_openapi emit)."""
     from openapi_spec_validator import validate
 
     from recon.findings import queries as findings_queries
@@ -273,12 +276,41 @@ def test_graphql_operation_exported_but_never_a_finding(redis, authorized_sessio
     assert _drive(redis, view.id, tenant) == RunState.DONE.value
 
     findings = _findings(tenant, view.id)
-    # The gql`` document created NO endpoint/param finding — only the real fetch did.
+    # No endpoint/param pollution — only the real fetch is an endpoint.
     assert {f.value for f in findings if f.type == "endpoint"} == {"GET /api/health"}
     assert [f for f in findings if f.type == "param"] == []
+    # A query operation AND a fragment both became first-class graphql findings.
+    assert {f.value for f in findings if f.type == "graphql"} == {
+        "query Me",
+        "fragment UserCard on User",
+    }
 
-    # ...but the operation IS carried by the export (source_path = bundle fallback for an
-    # upload run, where there is no per-asset URL).
+    # Location survives persistence, and the op seen at two call sites is ONE finding with TWO
+    # occurrences at distinct byte offsets — asserted inside a session so occurrences load.
+    with tenant_session(tenant) as session:
+        rows = (
+            session.execute(
+                select(models.Finding).where(
+                    models.Finding.run_id == view.id, models.Finding.type == "graphql"
+                )
+            )
+            .scalars()
+            .all()
+        )
+        by_value = {f.value: f for f in rows}
+        me = by_value["query Me"]
+        assert me.attributes["kind"] == "query"
+        assert me.attributes["fields"] == ["me"]
+        assert len(me.occurrences) == 2  # two call sites -> two occurrences (REQ-C2)
+        assert all(o.line is not None and o.offset_start is not None for o in me.occurrences)
+        assert len({o.offset_start for o in me.occurrences}) == 2  # distinct call-site offsets
+        fragment = by_value["fragment UserCard on User"]
+        assert fragment.attributes["kind"] == "fragment"
+        assert fragment.attributes["on_type"] == "User"
+        assert fragment.attributes["fields"] == ["id", "name"]
+
+    # ...and operations are still carried by the export, byte-for-byte (op_type key, fragment
+    # excluded, the two identical ops deduped to one).
     ops = findings_queries.graphql_operations(tenant, view.id)
     assert ops == [{"op_type": "query", "name": "Me", "fields": ["me"], "source_path": "input.js"}]
 

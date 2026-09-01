@@ -38,6 +38,7 @@ export function OverviewPanel(
   const attributedTotal = c ? c.attributed + c.unattributed : 0;
   const attributionPct = attributedTotal > 0 ? Math.round((c!.attributed / attributedTotal) * 100) : null;
   const endpoints = countType(data.findings, "endpoint");
+  const graphql = countType(data.findings, "graphql");
   const secrets = c ? c.secrets : countType(data.findings, "secret");
   // D33-B: the opt-in recall count, surfaced on the Secrets card so an operator who
   // turned the lane on sees it (distinct from the precision `secrets` headline value).
@@ -61,6 +62,9 @@ export function OverviewPanel(
     { key: "endpoints", label: "Endpoints", section: "findings",
       value: String(endpoints),
       sub: data.spec ? `${data.spec.shadow} shadow` : "API surface" },
+    { key: "graphql", label: "GraphQL", section: "graphql",
+      value: String(graphql),
+      sub: "operations · fragments" },
     { key: "hosts", label: "Hosts", section: "hosts",
       value: hostCount == null ? DASH : String(hostCount),
       sub: hosts ? `${hosts.in_scope} in scope · ${hostsOut} out` : "attack surface" },

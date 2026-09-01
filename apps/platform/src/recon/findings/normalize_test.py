@@ -292,3 +292,31 @@ def test_operation_helpers_roundtrip_from_builders():
     param_value = nz.normalize_param_value(operation, "body", "name")
     assert nz.operation_of_endpoint_value(endpoint_value) == operation
     assert nz.operation_of_param_value(param_value) == operation
+
+
+# --- GraphQL value normalization ---------------------------------------------
+
+
+def test_graphql_named_operation_value():
+    assert nz.normalize_graphql_value("mutation", "CreateApiToken") == "mutation CreateApiToken"
+
+
+def test_graphql_fragment_value_includes_on_type():
+    assert (
+        nz.normalize_graphql_value("fragment", "UserFields", on_type="User")
+        == "fragment UserFields on User"
+    )
+
+
+def test_graphql_anonymous_ops_differ_by_body_digest():
+    # A spread-only anonymous op has empty top-level fields; the body digest keeps identity apart.
+    a = nz.normalize_graphql_value("query", None, body_digest="aaaaaaaaaaaa")
+    b = nz.normalize_graphql_value("query", None, body_digest="bbbbbbbbbbbb")
+    assert a == "query · aaaaaaaaaaaa"
+    assert a != b
+
+
+def test_graphql_value_feeds_stable_path_free_finding_hash():
+    value = nz.normalize_graphql_value("query", "Me")
+    assert nz.finding_hash("graphql", value) == nz.finding_hash("graphql", value)
+    assert nz.finding_hash("graphql", value) != nz.finding_hash("graphql", "mutation Me")

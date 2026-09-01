@@ -776,10 +776,16 @@ def _analyze_blob(
             asset_url=asset_url,
         )
         internal_ips_sighted += 1
-    # GraphQL operations (enrichment C, export-only): a run-level artifact, never a
-    # finding — persisted separately so it never pollutes the HTTP-endpoints read model.
-    _record_graphql_operations(
-        session, tenant_id=tenant_id, run_id=run_id, source=source, asset_url=asset_url
+    # GraphQL definitions (query/mutation/subscription + fragments): located FindingType.GRAPHQL
+    # findings AND the unchanged operations-only export artifact (decision 2 = both). A distinct
+    # type keeps them out of the HTTP-endpoints read model and the REQ-C2 coverage counters.
+    written += _record_graphql(
+        session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        source=source,
+        run_asset_id=run_asset_id,
+        asset_url=asset_url,
     )
     coverage_event = record_event(
         session,
@@ -1557,32 +1563,94 @@ def _secret_finding_type(secret: RawSecret) -> FindingType:
     return FindingType.SECRET_SUSPECTED if secret.confidence == "low" else FindingType.SECRET
 
 
-def _record_graphql_operations(
+def _record_graphql(
     session: Session,
     *,
     tenant_id: str,
     run_id: str,
     source: str,
+    run_asset_id: str | None,
+    asset_url: str | None,
+) -> int:
+    """Persist a bundle's GraphQL definitions as located ``FindingType.GRAPHQL`` findings AND the
+    run-level export artifact (decision 2 = both). ONE parse (``collect_definitions``) fans out:
+    every operation and fragment becomes a located finding (its JS call-site line/offset on the
+    occurrence), while operations-only feed the unchanged ``graphql`` export blob (see
+    ``_record_graphql_export``) so the OpenAPI ``x-recon-graphql-operations`` annotation is
+    byte-for-byte identical.
+
+    A GraphQL op is NOT an HTTP endpoint (it rides one POST to a ``/graphql`` route), so the
+    distinct ``FindingType.GRAPHQL`` keeps it out of every ``type == 'endpoint'`` read model and
+    the REQ-C2 coverage counters automatically — no coverage counter is touched here. Empty → no
+    findings, no blob, no event.
+    """
+    definitions = graphql_ops.collect_definitions(source)
+    if not definitions:
+        return 0
+    finding_path = normalize.normalize_source_path(asset_url or _SOURCE_NAME)
+    written = 0
+    for definition in definitions:
+        attributes: dict[str, Any] = {
+            "kind": definition.kind,
+            "name": definition.name,
+            "fields": list(definition.fields),
+        }
+        if definition.on_type:
+            attributes["on_type"] = definition.on_type
+        written += _write(
+            session,
+            tenant_id,
+            run_id,
+            FindingType.GRAPHQL,
+            normalize.normalize_graphql_value(
+                definition.kind, definition.name, definition.on_type, definition.body_digest
+            ),
+            finding_path,
+            occurrence=store.Occurrence(
+                source_path=finding_path,
+                line=definition.line,
+                col=definition.col,
+                offset_start=definition.offset_start,
+                offset_end=definition.offset_end,
+                engine="vespasian",
+                run_asset_id=run_asset_id,
+                asset_url=asset_url,
+            ),
+            attributes=attributes,
+        )
+    _record_graphql_export(
+        session, tenant_id=tenant_id, run_id=run_id, definitions=definitions, asset_url=asset_url
+    )
+    return written
+
+
+def _record_graphql_export(
+    session: Session,
+    *,
+    tenant_id: str,
+    run_id: str,
+    definitions: tuple[graphql_ops.GraphQLDefinition, ...],
     asset_url: str | None,
 ) -> None:
-    """Persist this blob's GraphQL operations as a run-level export artifact (enrichment C).
+    """The unchanged export-only artifact (enrichment C): an operations-only ``graphql`` blob +
+    ``analyze.graphql`` event, whose sole consumer is the OpenAPI ``x-recon-graphql-operations``
+    annotation (via ``queries.graphql_operations``). Fragments are excluded and the ``op_type``
+    key preserved so the exported document stays byte-for-byte. ``source_path`` is the asset URL
+    when known, else the bundle fallback. Empty (no operations) → no blob, no event.
 
-    Mirrors the discover assets-manifest (``crawl.py``): store a content-addressed
-    ``graphql`` blob and index it with an ``analyze.graphql`` event. Export-only — a GraphQL
-    operation is NOT an HTTP endpoint (it rides one POST to a ``/graphql`` route), so it is
-    never written as a finding or an OpenAPI path and never pollutes the HTTP-endpoints read
-    model (locked decision 1). ``source_path`` is the asset URL when known, else the bundle
-    fallback. Empty → no blob, no event.
-
-    A crawl run analyzes once PER asset, so each asset emits its OWN ``analyze.graphql``
-    event/blob; the export UNIONs them (``queries.graphql_operations``), so this deliberately
-    does not aggregate run-wide. Not published to Redis: the sole consumer is the OpenAPI
-    export, which reads the durable ``run_event`` log — there is no live GraphQL UI.
+    A crawl run analyzes once PER asset, so each asset emits its OWN ``analyze.graphql`` event;
+    the export UNIONs them (``queries.graphql_operations``), so this does not aggregate run-wide.
     """
-    operations = graphql_ops.collect_operations(source)
+    source_path = asset_url or _SOURCE_NAME
+    operations = tuple(
+        dict.fromkeys(
+            graphql_ops.GraphQLOperation(op_type=d.kind, name=d.name, fields=d.fields)
+            for d in definitions
+            if d.kind != "fragment"
+        )
+    )
     if not operations:
         return
-    source_path = asset_url or _SOURCE_NAME
     entries: list[dict[str, Any]] = [
         {
             "op_type": op.op_type,

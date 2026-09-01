@@ -65,7 +65,8 @@ class JobState(StrEnum):
 class FindingType(StrEnum):
     """The content-addressed finding kinds (REQ-D3): the API-surface lanes
     (``endpoint`` + the suspected ``endpoint_unresolved`` / ``endpoint_generic``),
-    the client-navigation ``page_route`` lane, plus ``secret`` and ``param``."""
+    the client-navigation ``page_route`` lane, the ``graphql`` operation lane, plus
+    ``secret`` and ``param``."""
 
     ENDPOINT = "endpoint"
     SECRET = "secret"
@@ -108,6 +109,12 @@ class FindingType(StrEnum):
     # diff (that diff is scoped to `secret` + confirmed endpoint lanes). A DISTINCT type, for
     # the same auto-exclusion + provenance-in-identity rationale as the other lanes above.
     INTERNAL_IP = "internal_ip"
+    # A GraphQL operation (query/mutation/subscription) or fragment definition located in a
+    # bundle. A DISTINCT type: a GraphQL op is not an HTTP endpoint (it rides one POST to a
+    # `/graphql` route), so it is excluded from every `type == 'endpoint'` read model and the
+    # REQ-C2 coverage counters automatically, and never collides with an endpoint on one
+    # `finding_hash`. Surfaced as first-class located findings + a dedicated workspace tab.
+    GRAPHQL = "graphql"
 
 
 class AssetStatus(StrEnum):
