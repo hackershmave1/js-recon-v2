@@ -232,9 +232,7 @@ def list_findings(
         # back (the Findings view toggle) with no re-analysis.
         if not include_noise:
             findings = [
-                f
-                for f in findings
-                if not noise_hosts.is_all_noise({o.host for o in f.occurrences})
+                f for f in findings if not noise_hosts.is_all_noise({o.host for o in f.occurrences})
             ]
         # Slice Y: a crawl run's bytes live per-asset (run.input_ref is NULL for
         # those runs), so `revealable` must be computed from each occurrence's own
