@@ -1630,7 +1630,14 @@ def _record_graphql(
     the REQ-C2 coverage counters automatically — no coverage counter is touched here. Empty → no
     findings, no blob, no event.
     """
-    definitions = graphql_ops.collect_definitions(source)
+    # Locate GraphQL documents against the SAME beautified text the endpoint lane extracts from
+    # and recon.probe.sources serves as `input.js` (both use `deobfuscate.beautify`). Reading the
+    # RAW bundle instead gives every definition the minified bundle's line/offset — line 1 on a
+    # one-physical-line bundle — so the Sources "jump to finding" lands on line 1 while the
+    # endpoint findings map correctly. Fall back to raw when beautify is unavailable/over-cap,
+    # matching `_bundle`'s bundle_text choice so the located text stays what the viewer shows.
+    beautified = deobfuscate.beautify(source)
+    definitions = graphql_ops.collect_definitions(beautified if beautified is not None else source)
     if not definitions:
         return 0
     finding_path = normalize.normalize_source_path(asset_url or _SOURCE_NAME)
