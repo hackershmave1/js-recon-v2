@@ -570,38 +570,39 @@ def _extract_endpoints(
                 run_asset_id=run_asset_id,
                 asset_url=asset_url,
             )
-        # Tier 4 (unconfirmed lane): surface the SAME unresolved sinks already counted
-        # in `unattributed` above, as a distinct ENDPOINT_UNRESOLVED finding. Deliberately
-        # OUTSIDE the attributed/unattributed accounting (REQ-C2 honesty is unchanged) and,
-        # being a distinct type, excluded from every `type == 'endpoint'` read model.
-        for unresolved in extraction.unresolved:
-            written += _record_unresolved_endpoint(
-                session,
-                tenant_id,
-                run_id,
-                path,
-                source_name,
-                unresolved,
-                run_asset_id=run_asset_id,
-                asset_url=asset_url,
-            )
-        # Tier 5 (generic-call): a SUSPECTED sink — a verb call on an unrecognised HTTP-client-
-        # shaped receiver. A distinct ENDPOINT_GENERIC type (auto-excluded from every
-        # type=='endpoint' read model, same as Tier 4) and, being only suspected rather than
-        # detected, deliberately OUTSIDE the attributed/unattributed accounting — it must never
-        # move the REQ-C2 coverage counters.
-        for generic in extraction.generic:
-            written += _record_unresolved_endpoint(
-                session,
-                tenant_id,
-                run_id,
-                path,
-                source_name,
-                generic,
-                run_asset_id=run_asset_id,
-                asset_url=asset_url,
-                finding_type=FindingType.ENDPOINT_GENERIC,
-            )
+        # Promotion gate (endpoint-model): an unresolved sink (Tier 4) OR a generic-client call
+        # (Tier 5) whose collapsed URL still carries a real path (>=1 static segment) is a valid,
+        # if partial, ENDPOINT_SUSPECTED — normalized + host-split so it UNIONS into the
+        # total-endpoints consumers (headline count, OpenAPI export, probe, threat-model feed).
+        # An all-placeholder / pure-variable path (`${e.id}/${t}`, bare `EXPR`) stays the
+        # unconfirmed ENDPOINT_UNRESOLVED lane. Both are a DISTINCT type from the confirmed
+        # `endpoint`, and — being suspected/unresolved rather than a resolved sink — BOTH stay
+        # OUTSIDE the attributed/unattributed accounting above (REQ-C2 recall unchanged).
+        for suspect in (*extraction.unresolved, *extraction.generic):
+            normalized_suspect = normalize.normalize_suspected_endpoint(suspect.method, suspect.url)
+            if normalized_suspect is not None:
+                written += _record_suspected_endpoint(
+                    session,
+                    tenant_id,
+                    run_id,
+                    path,
+                    source_name,
+                    suspect,
+                    normalized_suspect,
+                    run_asset_id=run_asset_id,
+                    asset_url=asset_url,
+                )
+            else:
+                written += _record_unresolved_endpoint(
+                    session,
+                    tenant_id,
+                    run_id,
+                    path,
+                    source_name,
+                    suspect,
+                    run_asset_id=run_asset_id,
+                    asset_url=asset_url,
+                )
         # Page routes (Phase 2): client-side navigation targets. A DISTINCT PAGE_ROUTE type
         # (auto-excluded from every type=='endpoint' read model) and, like the generic lane,
         # deliberately OUTSIDE the attributed/unattributed accounting — a referenced route is
@@ -1324,6 +1325,51 @@ def _record_unresolved_endpoint(
             # than the confirmed path (validates the host) because this lane also carries
             # unresolved/mangled junk; a relative path or template literal stays host-less.
             host=egress.attributed_host(ep.url),
+            raw_url=ep.url,
+            source_path=source_path,
+            line=ep.line,
+            col=ep.col,
+            offset_start=ep.start_byte,
+            offset_end=ep.end_byte,
+            evidence=ep.snippet,
+            engine="vespasian",
+            run_asset_id=run_asset_id,
+            asset_url=asset_url,
+        ),
+        attributes=attributes,
+    )
+
+
+def _record_suspected_endpoint(
+    session: Session,
+    tenant_id: str,
+    run_id: str,
+    path: str,
+    source_path: str,
+    ep: RawEndpoint,
+    normalized: normalize.Endpoint,
+    *,
+    run_asset_id: str | None = None,
+    asset_url: str | None = None,
+) -> int:
+    """Write a promoted SUSPECTED endpoint (a generic/unresolved sink whose collapsed URL has
+    >=1 static path segment) as ``FindingType.ENDPOINT_SUSPECTED``: a normalized ``value`` +
+    ``host`` mirroring a confirmed endpoint, so it UNIONS into the total-endpoints read models,
+    but a DISTINCT type so the confirmed-only consumers still exclude it. ``normalized`` is the
+    (non-None) :func:`normalize.normalize_suspected_endpoint` result. No PARAM findings are
+    recorded — the query is partial/unknown, so a param would be fabricated."""
+    attributes: dict[str, Any] = {"kind": ep.kind, "method": ep.method}
+    if ep.wrapper:  # provenance: the taught wrapper / receiver this sink came through
+        attributes["wrapper"] = ep.wrapper
+    return _write(
+        session,
+        tenant_id,
+        run_id,
+        FindingType.ENDPOINT_SUSPECTED,
+        normalized.value,
+        path,
+        occurrence=store.Occurrence(
+            host=normalized.host,
             raw_url=ep.url,
             source_path=source_path,
             line=ep.line,
