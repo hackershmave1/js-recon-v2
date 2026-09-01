@@ -6,9 +6,12 @@ Pure unit tests — parse JS/GraphQL strings, assert the located operations. No 
 from __future__ import annotations
 
 from recon.findings.graphql_ops import (
+    GraphQLDefinition,
     GraphQLOperation,
+    collect_definitions,
     collect_operations,
     extract_documents,
+    parse_definitions,
     parse_operations,
 )
 
@@ -129,3 +132,97 @@ def test_collect_operations_soft_misses_unparseable_without_dropping_others():
 
 def test_collect_operations_empty_source():
     assert collect_operations("const x = 1;") == ()
+
+
+def test_collect_operations_excludes_fragments_export_unchanged():
+    # The export path stays operations-only even though collect_definitions now surfaces fragments.
+    src = "const d = gql`query Me { ...F } fragment F on User { id }`;"
+    assert {o.op_type for o in collect_operations(src)} == {"query"}
+
+
+# --- parse_definitions: operations AND fragments (fragments were dropped) ------- #
+
+
+def test_parse_definitions_surfaces_fragment_with_on_type():
+    (d,) = parse_definitions("fragment UserFields on User { id name }")
+    assert d == GraphQLDefinition(
+        kind="fragment", name="UserFields", fields=("id", "name"), on_type="User"
+    )
+
+
+def test_parse_definitions_operation_has_no_on_type():
+    (d,) = parse_definitions("query Me { me { id } profile }")
+    assert d.kind == "query"
+    assert d.name == "Me"
+    assert d.fields == ("me", "profile")
+    assert d.on_type is None
+
+
+def test_parse_definitions_operations_and_fragments_together():
+    defs = parse_definitions("query Me { me { ...UserFields } } fragment UserFields on User { id }")
+    assert [(d.kind, d.name) for d in defs] == [("query", "Me"), ("fragment", "UserFields")]
+
+
+def test_parse_definitions_soft_miss_is_empty():
+    # T2 holds for definitions too: never raise on a malformed/interpolated document.
+    assert parse_definitions("query { unterminated ") == ()
+    assert parse_definitions("query Foo { me { ${sel} } }") == ()
+
+
+# --- collect_definitions: located operations + fragments for FindingType.GRAPHQL --- #
+
+
+def test_collect_definitions_captures_call_site_location():
+    src = "\nconst q = gql`query Me { me { id } }`;\n"
+    (d,) = collect_definitions(src)
+    assert (d.kind, d.name, d.fields) == ("query", "Me", ("me",))
+    assert d.line == 2  # the gql`` call sits on the second line (1-based)
+    assert d.col == 10  # 0-based column where `gql` starts
+    assert d.offset_start is not None and d.offset_end is not None
+    assert d.offset_end > d.offset_start
+
+
+def test_collect_definitions_emits_fragment_with_on_type():
+    (d,) = collect_definitions("const f = gql`fragment UserFields on User { id name }`;")
+    assert d.kind == "fragment"
+    assert d.name == "UserFields"
+    assert d.on_type == "User"
+    assert d.fields == ("id", "name")
+
+
+def test_collect_definitions_returns_ops_and_fragments_together():
+    src = "const d = gql`query Me { me { ...UserFields } } fragment UserFields on User { id }`;"
+    assert {(x.kind, x.name) for x in collect_definitions(src)} == {
+        ("query", "Me"),
+        ("fragment", "UserFields"),
+    }
+
+
+def test_collect_definitions_subscription_body_key():
+    (d,) = collect_definitions("const body = { subscription: `subscription S { onTick }` };")
+    assert (d.kind, d.name, d.fields) == ("subscription", "S", ("onTick",))
+
+
+def test_collect_definitions_object_body_key_location_points_at_value():
+    (d,) = collect_definitions("const body = { query: `query Q { a }` };")
+    assert (d.kind, d.name) == ("query", "Q")
+    assert d.line == 1
+    assert d.offset_start is not None
+
+
+def test_collect_definitions_distinct_call_sites_are_separate_occurrences():
+    # Same operation at two call sites → two located definitions → two occurrences downstream.
+    src = "const a = gql`query Me { id }`;\nconst b = gql`query Me { id }`;"
+    defs = collect_definitions(src)
+    assert len(defs) == 2
+    assert {d.name for d in defs} == {"Me"}
+    assert defs[0].offset_start != defs[1].offset_start
+
+
+def test_collect_definitions_soft_misses_unparseable_without_dropping_others():
+    src = "const bad = gql`query { ${x} }`; const ok = gql`query Ok { ok }`;"
+    assert [(d.kind, d.name) for d in collect_definitions(src)] == [("query", "Ok")]
+
+
+def test_collect_definitions_empty_source():
+    assert collect_definitions("const x = 1;") == ()
