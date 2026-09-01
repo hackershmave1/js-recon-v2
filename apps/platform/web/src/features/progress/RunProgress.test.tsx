@@ -223,6 +223,22 @@ describe("RunProgress", () => {
     expect(screen.getByText(/3 failed — target returned HTTP 403/)).toBeInTheDocument();
   });
 
+  it("warns when discovery hit the asset ceiling (capped) so a partial run isn't read as complete (QA #1)", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "partial", stage: "correlating", done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(api, "getAssets").mockResolvedValue({
+      domain: "big-spa.test", status: "capped",
+      assets: [
+        { url: "https://big-spa.test/a.js", source: "html", fetch_status: "ok", analyze_status: "ok" },
+        { url: "https://big-spa.test/b.js", source: "html", fetch_status: "ok", analyze_status: "ok" },
+      ],
+    });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => { h.onOpen?.(); });
+    renderRun(<RunProgress />);
+    await waitFor(() => expect(screen.getByText(/Discovery hit the 2-asset ceiling/)).toBeInTheDocument());
+    expect(screen.getByText(/RECON_CRAWL_MAX_ASSETS/)).toBeInTheDocument();  // the actionable knob
+  });
+
   it("refetches findings on a live terminal transition so results appear without a reload", async () => {
     // The dashboard reads findings only from refresh(). The live SSE terminal
     // transition previously updated the badge but never refetched, so the panel

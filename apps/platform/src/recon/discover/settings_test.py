@@ -5,7 +5,7 @@ from recon.config import get_settings
 def test_crawl_settings_have_defaults():
     s = get_settings()
     assert s.crawl_depth == 3
-    assert s.crawl_max_assets == 500
+    assert s.crawl_max_assets == 2000
     assert s.katana_bin == "katana"
     # Lease renewal invariant: a heartbeat must fire well within the stall window.
     assert s.crawl_heartbeat_interval_seconds < s.heartbeat_stall_threshold_seconds

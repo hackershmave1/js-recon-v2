@@ -6,11 +6,13 @@ import { RunPipeline } from "./RunPipeline";
 import { EditRerunPanel } from "../newRun/EditRerunPanel";
 import { SessionRunsSwitcher } from "./SessionRunsSwitcher";
 
-interface FetchSummary { total: number; fetched: number; failed: number; pending: number; reason: string | null; }
+interface FetchSummary { total: number; fetched: number; failed: number; pending: number; reason: string | null; capped: boolean; }
 
 // Aggregate a crawl's per-asset fetch outcome so a blocked run (e.g. a Cloudflare
 // 403 on every asset) reads as "blocked", not an empty success. Returns null for a
-// non-crawl run (no assets). `reason` is the most common failure message.
+// non-crawl run (no assets). `reason` is the most common failure message. `capped`
+// (QA #1) carries the discover-stage ceiling hit so the run never SILENTLY drops
+// assets — the operator is told, and told how to recover the rest.
 function summarizeFetch(m: AssetsManifest | null): FetchSummary | null {
   if (!m || m.assets.length === 0) return null;
   let fetched = 0;
@@ -28,7 +30,7 @@ function summarizeFetch(m: AssetsManifest | null): FetchSummary | null {
   let reason: string | null = null;
   let max = 0;
   for (const [r, n] of reasons) if (n > max) { max = n; reason = r; }
-  return { total: m.assets.length, fetched, failed, pending, reason };
+  return { total: m.assets.length, fetched, failed, pending, reason, capped: m.status === "capped" };
 }
 
 // Presentational: the run's live pipeline card — state chip + run controls + the
@@ -109,6 +111,15 @@ export function RunProgress() {
             </span>
           )}
           {fetchSummary.pending > 0 && <> · {fetchSummary.pending} pending</>}
+        </p>
+      )}
+
+      {/* QA #1: discovery hit the asset ceiling — say so, and how to recover the rest,
+          so a capped run is never mistaken for a complete one. */}
+      {fetchSummary?.capped && (
+        <p className="rp-capped" role="status">
+          Discovery hit the {fetchSummary.total}-asset ceiling — more assets existed than were
+          recovered. Raise <code>RECON_CRAWL_MAX_ASSETS</code> and re-run to capture the rest.
         </p>
       )}
 
