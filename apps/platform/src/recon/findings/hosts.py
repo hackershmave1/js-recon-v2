@@ -61,6 +61,7 @@ from recon.db.models import (
 )
 from recon.domain import FindingType
 from recon.fetch import egress
+from recon.findings import noise_hosts
 
 
 @dataclass(frozen=True)
@@ -143,6 +144,7 @@ def _aggregate_hosts(
     scope_hosts: list[str],
     *,
     allow_local: bool,
+    include_noise: bool = False,
 ) -> HostsView:
     """Pure roll-up (no DB/network) so the host-universe + scope logic is unit
     testable. ``endpoint_occurrences`` / ``suspected_occurrences`` / ``route_occurrences``
@@ -195,6 +197,11 @@ def _aggregate_hosts(
         | set(routes_by_host)
         | declared
     )
+    if not include_noise:
+        # #3: drop third-party analytics/telemetry/vendor hosts (amplitude, sentry, stripe, ...)
+        # from the inventory by DEFAULT — reversible via the toggle. A declared/in-scope host is
+        # never on the denylist, so this removes only vendor noise, never the target's own surface.
+        universe = {h for h in universe if not noise_hosts.is_noise_host(h)}
     rows = [
         HostRow(
             host=h,
@@ -218,7 +225,7 @@ def _aggregate_hosts(
     )
 
 
-def list_hosts(tenant_id: str, run_id: str) -> HostsView | None:
+def list_hosts(tenant_id: str, run_id: str, *, include_noise: bool = False) -> HostsView | None:
     """The run's discovered-host inventory, or ``None`` if the run does not exist
     for this tenant (RLS-invisible → 404). Bounded run-scoped reads (each covered
     by an existing index: ix_run_asset_run, ix_finding_run, ix_occurrence_finding,
@@ -306,4 +313,5 @@ def list_hosts(tenant_id: str, run_id: str) -> HostsView | None:
         declared_hosts,
         list(scope_hosts),
         allow_local=get_settings().allow_local_egress,
+        include_noise=include_noise,
     )

@@ -34,6 +34,7 @@ from recon.db.models import (
     SessionWrapper,
 )
 from recon.domain import FindingType
+from recon.findings import noise_hosts
 from recon.findings.base_url import BaseUrlRule
 from recon.findings.wrappers import WrapperRule
 from recon.spec.classify import Classification, SpecSummary, summarize
@@ -174,7 +175,9 @@ class _AssetRef:
     url: str
 
 
-def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
+def list_findings(
+    tenant_id: str, run_id: str, *, include_noise: bool = False
+) -> FindingsView | None:
     """Every finding for a run with its occurrences and the analyze coverage
     counters, or ``None`` if the run does not exist for this tenant. Ordered
     deterministically for stable output."""
@@ -222,6 +225,17 @@ def list_findings(tenant_id: str, run_id: str) -> FindingsView | None:
             .order_by(Finding.type, Finding.value, Finding.finding_hash)
             .options(selectinload(Finding.occurrences))
         ).all()
+        # #3: hide third-party analytics/telemetry/vendor noise (amplitude, google-analytics,
+        # sentry, stripe, ...) by DEFAULT — a READ-TIME, reversible overlay (nothing is deleted).
+        # A finding is dropped only when it HAS an attributed host and EVERY one is a known noise
+        # host; a relative/in-scope finding is always kept. `include_noise` brings the hidden ones
+        # back (the Findings view toggle) with no re-analysis.
+        if not include_noise:
+            findings = [
+                f
+                for f in findings
+                if not noise_hosts.is_all_noise({o.host for o in f.occurrences})
+            ]
         # Slice Y: a crawl run's bytes live per-asset (run.input_ref is NULL for
         # those runs), so `revealable` must be computed from each occurrence's own
         # asset blob, not the run-level ref — and the FE needs the asset's URL for

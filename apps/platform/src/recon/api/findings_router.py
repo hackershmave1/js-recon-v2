@@ -19,8 +19,12 @@ router = APIRouter(tags=["findings"])
 def get_run_findings(
     run_id: str,
     tenant_id: str = Depends(get_tenant_id),
+    # #3: third-party analytics/telemetry/vendor hosts are hidden by DEFAULT; the Findings
+    # view's "show analytics" toggle passes ?include_noise=true to bring them back. A reversible
+    # read overlay — the findings are stored either way, never deleted.
+    include_noise: bool = False,
 ) -> dict:
-    result = queries.list_findings(tenant_id, run_id)
+    result = queries.list_findings(tenant_id, run_id, include_noise=include_noise)
     if result is None:
         raise HTTPException(status_code=404, detail="run not found")
     return {

@@ -195,8 +195,14 @@ export function getSourceContent(
   );
 }
 
-export function getFindings(tenantId: string, runId: string): Promise<FindingsResponse> {
-  return request(`/runs/${encodeURIComponent(runId)}/findings`, {}, tenantId);
+export function getFindings(
+  tenantId: string,
+  runId: string,
+  includeNoise = false,
+): Promise<FindingsResponse> {
+  // #3: analytics/telemetry/vendor hosts are hidden by default; include_noise=true shows them.
+  const q = includeNoise ? "?include_noise=true" : "";
+  return request(`/runs/${encodeURIComponent(runId)}/findings${q}`, {}, tenantId);
 }
 
 export function getTechnologies(tenantId: string, runId: string): Promise<TechnologiesResponse> {
