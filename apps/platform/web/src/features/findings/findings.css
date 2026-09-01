@@ -17,6 +17,9 @@
 .fp-rail-title { font-family: var(--font-display); font-weight: 700; font-size: 18px; margin: 0 0 2px; }
 .fp-count { font-size: 12px; color: var(--faint); margin-bottom: 12px; }
 .fp-count b { color: var(--accent); font-family: var(--font-mono); font-weight: 500; }
+/* #3: the analytics-noise override toggle — vendor hosts are hidden by default. */
+.fp-noise { display: flex; align-items: center; gap: 7px; margin: 0 0 14px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.fp-noise input { accent-color: var(--accent); flex: 0 0 auto; }
 .fp-facet-label { font-size: 10.5px; color: var(--faint); font-weight: 700; letter-spacing: .8px; margin: 16px 0 8px; }
 .fp-opt { display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 9px; margin-bottom: 2px; border: none; border-radius: var(--r); background: transparent; color: var(--text-2); cursor: pointer; font-size: 12.5px; text-align: left; }
 .fp-opt:hover { background: var(--surface); }

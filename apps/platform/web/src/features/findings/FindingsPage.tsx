@@ -1,6 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FindingsResponse, Finding, SourceJump } from "../../api/types";
 import { typeLabel } from "../../api/findingLabels";
+import { getFindings } from "../../api/apiClient";
+import { useTenant } from "../../tenant/TenantContext";
 import { FindingDrawer } from "./FindingDrawer";
 import { SpecUpload } from "./SpecUpload";
 import { BaseUrlPanel } from "./BaseUrlPanel";
@@ -55,23 +57,35 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Finding | null>(null);
   const { width: railWidth, collapsed: railCollapsed, toggleCollapsed: toggleRail, resizerProps } = useResizableRail("findings");
+  // #3: analytics/telemetry/vendor hosts are hidden by default; this toggle re-fetches the run's
+  // findings WITH the noise (include_noise=true) so an operator can audit what was filtered out.
+  const { tenantId } = useTenant();
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [withNoise, setWithNoise] = useState<FindingsResponse | null>(null);
+  useEffect(() => {
+    if (!showAnalytics || !tenantId) { setWithNoise(null); return; }
+    let live = true;
+    getFindings(tenantId, runId, true).then((r) => { if (live) setWithNoise(r); }).catch(() => {});
+    return () => { live = false; };
+  }, [showAnalytics, tenantId, runId]);
+  const view = showAnalytics && withNoise ? withNoise : data;
 
   const facets = useMemo(() =>
     FACET_KEYS.map((key) => {
       const counts = new Map<string, number>();
-      for (const f of data.findings) for (const v of facetValues(f, key)) counts.set(v, (counts.get(v) ?? 0) + 1);
+      for (const f of view.findings) for (const v of facetValues(f, key)) counts.set(v, (counts.get(v) ?? 0) + 1);
       const options = [...counts.entries()].map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count);
       return { key, label: FACET_LABELS[key], options };
     }).filter((facet) => facet.options.length > 0),
-  [data.findings]);
+  [view.findings]);
 
-  const visible = useMemo(() => data.findings.filter((f) => {
+  const visible = useMemo(() => view.findings.filter((f) => {
     for (const key of FACET_KEYS) {
       const chosen = sel[key];
       if (chosen && chosen.size > 0 && !facetValues(f, key).some((v) => chosen.has(v))) return false;
     }
     return matchesQuery(f, query);
-  }), [data.findings, sel, query]);
+  }), [view.findings, sel, query]);
 
   const anyFilter = query !== "" || Object.values(sel).some((s) => s.size > 0);
 
@@ -79,7 +93,7 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
   // sightings === null on every finding (never a counts object). Surface that as a
   // hint instead of silently showing no badges, so an ungrouped run doesn't read as
   // "no duplicates". `=== null` (not falsy) keeps a pre-slice-4 `undefined` silent.
-  const ungrouped = data.findings.length > 0 && data.findings.every((f) => f.sightings === null);
+  const ungrouped = view.findings.length > 0 && view.findings.every((f) => f.sightings === null);
 
   function toggle(key: string, value: string) {
     setSel((prev) => {
@@ -100,7 +114,12 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
             <button type="button" className="fp-rail-toggle" onClick={toggleRail}
               title="Collapse filters" aria-label="Collapse filters panel"><Icon name="panel" size={15} /></button>
           </div>
-          <div className="fp-count"><b>{visible.length}</b> of {data.findings.length} shown</div>
+          <div className="fp-count"><b>{visible.length}</b> of {view.findings.length} shown</div>
+          <label className="fp-noise" title="Third-party analytics/telemetry/vendor hosts (amplitude, sentry, stripe, …) are hidden by default">
+            <input type="checkbox" checked={showAnalytics}
+              onChange={(e) => setShowAnalytics(e.target.checked)} />
+            <span>Show analytics hosts</span>
+          </label>
           {facets.map((facet) => (
             <div key={facet.key}>
               <div className="fp-facet-label">{facet.label}</div>
