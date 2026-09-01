@@ -2,8 +2,9 @@ import { describe, it, expect } from "vitest";
 import { typeLabel } from "./findingLabels";
 
 describe("typeLabel", () => {
-  it("relabels the confirmed endpoint lane as API and the nav lane as page route", () => {
+  it("relabels the confirmed endpoint lane as API, the promoted lane as endpoint, and the nav lane as page route", () => {
     expect(typeLabel("endpoint")).toBe("API");
+    expect(typeLabel("endpoint_suspected")).toBe("endpoint");
     expect(typeLabel("page_route")).toBe("page route");
   });
 

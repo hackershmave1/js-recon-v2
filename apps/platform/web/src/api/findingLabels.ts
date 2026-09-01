@@ -1,13 +1,15 @@
 // Human labels for wire-level finding types, shared so every surface that shows a
 // finding type renders it the same way (and none leak the raw wire token). The confirmed
-// `endpoint` lane reads as "API" to contrast it with the "page route" lane (`page_route` —
-// a client-side navigation target, not a backend call). The unconfirmed lane rides the wire
-// as two distinct confidence tiers: `endpoint_unresolved` (Tier 4 — a network sink we
-// detected but whose URL wasn't statically resolvable) shows as "unconfirmed", and
-// `endpoint_generic` (Tier 5 — a verb call on an unrecognised but HTTP-client-shaped
-// receiver, a suspected untaught client) shows as "generic call".
+// `endpoint` lane reads as "API" (a proven HTTP sink) and the promoted `endpoint_suspected`
+// lane reads as "Endpoint" (a valid path recovered from a generic/unresolved sink) — both roll
+// up into "total endpoints found". They contrast with the "page route" lane (`page_route` — a
+// client-side navigation target, not a backend call). The still-unconfirmed lane is
+// `endpoint_unresolved` (Tier 4 — a sink whose URL had no static path at all), shown as
+// "unconfirmed". `endpoint_generic` (legacy — no longer produced; retained for older runs)
+// shows as "generic call".
 export const TYPE_LABELS: Record<string, string> = {
   endpoint: "API",
+  endpoint_suspected: "endpoint",
   endpoint_unresolved: "unconfirmed",
   endpoint_generic: "generic call",
   page_route: "page route",

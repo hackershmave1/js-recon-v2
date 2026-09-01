@@ -66,6 +66,20 @@ describe("OverviewPanel", () => {
     expect(within(card("Attribution")).getByText("75%")).toBeInTheDocument(); // 3 / (3+1)
   });
 
+  it("counts total endpoints as API + promoted (suspected) and shows the split", () => {
+    renderPanel({
+      run_id: "r", count: 3, coverage: null, spec: null,
+      findings: [
+        finding({ finding_hash: "e1", type: "endpoint", value: "GET /api/real" }),
+        finding({ finding_hash: "e2", type: "endpoint", value: "GET /api/health" }),
+        finding({ finding_hash: "s1", type: "endpoint_suspected", value: "GET /inbox/subjects" }),
+      ],
+    });
+    // Headline = total (2 API + 1 promoted valid-path endpoint); the sub shows the split.
+    expect(within(card("Endpoints")).getByText("3")).toBeInTheDocument();
+    expect(within(card("Endpoints")).getByText("2 API · 1 endpoint")).toBeInTheDocument();
+  });
+
   it("counts cleartext internal-IP findings on the Internal IPs card", () => {
     // No coverage field backs this metric — the card must tally it client-side from the
     // findings list (like suspected secrets), showing the real count and no fabrication.

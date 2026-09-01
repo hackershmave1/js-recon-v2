@@ -21,7 +21,7 @@ function priorityRank(f: Finding): number {
   // Cleartext internal-IP disclosure: a security-relevant info leak, ranked just below the
   // credential-shaped secrets lanes and above generic endpoints.
   if (f.type === "internal_ip") return 3;
-  if (f.type === "endpoint") return 4;
+  if (f.type === "endpoint" || f.type === "endpoint_suspected") return 4;
   return 5;
 }
 
@@ -37,7 +37,10 @@ export function OverviewPanel(
   const c = data.coverage;
   const attributedTotal = c ? c.attributed + c.unattributed : 0;
   const attributionPct = attributedTotal > 0 ? Math.round((c!.attributed / attributedTotal) * 100) : null;
-  const endpoints = countType(data.findings, "endpoint");
+  // "Total endpoints found" = the confirmed API lane + the promoted valid-path (suspected) lane.
+  const apiEndpoints = countType(data.findings, "endpoint");
+  const suspectedEndpoints = countType(data.findings, "endpoint_suspected");
+  const endpoints = apiEndpoints + suspectedEndpoints;
   const graphql = countType(data.findings, "graphql");
   const secrets = c ? c.secrets : countType(data.findings, "secret");
   // D33-B: the opt-in recall count, surfaced on the Secrets card so an operator who
@@ -61,7 +64,9 @@ export function OverviewPanel(
       sub: c ? `${c.sources_recovered} via source maps` : "awaiting analysis" },
     { key: "endpoints", label: "Endpoints", section: "findings",
       value: String(endpoints),
-      sub: data.spec ? `${data.spec.shadow} shadow` : "API surface" },
+      sub: suspectedEndpoints > 0
+        ? `${apiEndpoints} API · ${suspectedEndpoints} endpoint`
+        : data.spec ? `${data.spec.shadow} shadow` : "API surface" },
     { key: "graphql", label: "GraphQL", section: "graphql",
       value: String(graphql),
       sub: "operations · fragments" },
