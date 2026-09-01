@@ -627,6 +627,25 @@ enterprise-hygiene cleanup (so the "later" doesn't become "never"):
 
 **Tier-1 facet:** the "Popup bundle is not compiled in CI" bullet was the user-facing risk (a broken capture popup could merge green) — ✅ RESOLVED 2026-08-22 (above); the remaining bullets are housekeeping. Kept together as one register entry.
 
+#### D39 · GraphQL detection is tag-name-gated — most fragments/subscriptions missed on minified bundles [M]  ·  correctness
+The GraphQL-findings slice (2026-09-01) promotes located operations/fragments to first-class
+findings, but detection is deliberately v1-scoped ("promote only", user decision): `_call_document`
+matches only the literal callee `gql`/`graphql` (`findings/graphql_ops.py`), and documents are read
+from `gql`…`` / `graphql(`…`)` calls plus `{query|mutation|subscription: …}` body keys. **Impact
+(measured — hackerone run `a552c014`, 499 assets):** 128 operations recovered, but only **27 of
+~1,355 fragment definitions (~2%)** and **0 of 24 subscriptions** — production minifiers rename the
+`gql` tag to a single char, which the name gate rejects, and Relay/persisted-query bundles embed
+operations as compiled `DocumentNode` objects the call/body reader never sees. The GraphQL count is
+therefore a **floor, not a ceiling** (the workspace tab states this). **Fix (recommended, [M]):**
+detect a GraphQL document by template/string CONTENT — sniff a leading
+`query|mutation|subscription|fragment` keyword (or a leading `{`) and validate with `graphql.parse()`
+— instead of by callee name; one change recovers minified/renamed tags, plain-string operations, and
+subscriptions. **Follow-ons (separate, larger):** Relay compiled-`DocumentNode` rehydration +
+persisted-query (APQ `sha256Hash`) detection; cross-bundle fragment stitching (resolve `...spreads`
+to their definitions); precise per-definition source offsets (v1 records the document call-site).
+Prior art: `pdstat/graphqlextractor` (AST-object rehydration + fragment stitching). Full plan:
+`apps/platform/docs/superpowers/specs/2026-09-01-graphql-findings-design.md` (Fast-follows).
+
 ### Tier 2 · fix before it scales up
 
 Safe now for a single trusted operator. Each has a concrete future trigger - untrusted /
