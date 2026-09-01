@@ -480,6 +480,13 @@ def test_value_holder_uses_last_member_identifier():
     assert extract("fetch(g.downloadUrl)").unresolved[0].url == ":downloadUrl"
 
 
+def test_value_holder_falls_back_to_readable_ancestor():
+    # #6 (kill EXPR): when the LEAF segment is a minifier mangle (`u`) but an ANCESTOR reads
+    # like a real name, surface the ancestor (`:data`) instead of a blind EXPR — the whole
+    # dotted chain is scanned leaf-inward, not just its last segment.
+    assert extract("fetch(resp.data.u)").unresolved[0].url == ":data"
+
+
 def test_minified_holder_stays_expr():
     assert extract("fetch(u)").unresolved[0].url == "EXPR"  # 1-char mangle
     assert extract('fetch("/x/".concat(xr))').unresolved[0].url == "/x/EXPR"  # vowelless 2-char
