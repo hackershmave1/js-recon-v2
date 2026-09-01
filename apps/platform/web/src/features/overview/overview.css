@@ -60,6 +60,9 @@
 /* Unconfirmed lane (Tier 4): lower-confidence than a real endpoint — dashed + warning tint. */
 .ov-type-endpoint_unresolved { color: var(--warn, var(--muted)); border-style: dashed; }
 .ov-type-endpoint_generic { color: var(--warn, var(--muted)); border-style: dashed; }
+/* Promoted valid-path endpoint (suspected): a real endpoint, SOLID + positive tone (counts toward
+   total endpoints), distinct from the confirmed API blue and the dashed low-confidence lanes. */
+.ov-type-endpoint_suspected { color: var(--ok); }
 /* Page route (Phase 2): a confident navigation-target category — distinct teal, non-dashed. */
 .ov-type-page_route { color: var(--teal); }
 /* GraphQL (Slice 6): its own confident hue (orange), distinct from the other lanes. */

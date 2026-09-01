@@ -46,6 +46,10 @@
    border + warning tint mark it as lower-confidence than a real endpoint. */
 .fp-type-endpoint_unresolved { color: var(--warn, var(--muted)); border-style: dashed; }
 .fp-type-endpoint_generic { color: var(--warn, var(--muted)); border-style: dashed; }
+/* Promoted valid-path endpoint (suspected): a real endpoint recovered from a generic/unresolved
+   sink — lower-confidence than a confirmed API, but a confident category, so SOLID (not dashed)
+   in a distinct positive tone. Counts toward "total endpoints found". */
+.fp-type-endpoint_suspected { color: var(--ok); }
 /* Page route (Phase 2): a client-side navigation target. A confident category — solid
    border + distinct teal — not a lower-confidence dashed API lane. */
 .fp-type-page_route { color: var(--teal); }
