@@ -373,9 +373,14 @@ def _expr_token(node: Node | None) -> str:
     if len(segments) >= 2 and segments[-1] in ("origin", "href") and segments[-2] == "location":
         return ""
     if node.type in ("identifier", "member_expression", "property_identifier"):
-        last = segments[-1]
-        if _is_readable_name(last):
-            return ":" + last
+        # Prefer the developer's own name for the value. Scan the dotted chain from the LEAF
+        # inward and surface the first READABLE segment (so `resp.data.downloadUrl` -> `:downloadUrl`
+        # even if a NEARER segment is a minifier mangle, and `t.serverUrl` -> `:serverUrl`) — a named
+        # holder a triager recognizes rather than a blind EXPR. Only an all-mangled / all-computed
+        # chain stays EXPR (QA #6: fewer unexplainable tokens; the call snippet carries the rest).
+        for segment in reversed(segments):
+            if _is_readable_name(segment):
+                return ":" + segment
     return _EXPR
 
 

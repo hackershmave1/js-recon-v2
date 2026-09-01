@@ -168,19 +168,32 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                 const host = f.occurrences.find((o) => o.host)?.host;
                 const triage = f.triage?.status ?? "untriaged";
                 const sight = sightingsLabel(f.sightings);
+                // #6: the unconfirmed lane's value is a placeholder (`GET EXPR`, `POST :serverUrl`)
+                // — surface the actual call snippet inline so a triager sees where to dig without
+                // opening every drawer.
+                const evidence = f.type === "endpoint_unresolved"
+                  ? f.occurrences.find((o) => o.evidence)?.evidence
+                  : null;
                 return (
                   <li key={f.finding_hash}>
                     <button type="button"
                       className={"fp-rowbtn" + (selected?.finding_hash === f.finding_hash ? " sel" : "")}
                       onClick={() => setSelected(f)}>
-                      <span className={`fp-type fp-type-${f.type}`}>{typeLabel(f.type)}</span>
-                      <span className={`chip chip-${cls}`}>{cls}</span>
-                      <span className="fp-val">{f.value ?? f.path ?? "(unnamed)"}</span>
-                      {host && <span className="fp-host">{host}</span>}
-                      <span className="chip">{triage}</span>
-                      {sight && (
-                        <span className="chip chip-sightings"
-                          title="Same finding in other runs of this engagement">{sight}</span>
+                      <span className="fp-row-top">
+                        <span className={`fp-type fp-type-${f.type}`}>{typeLabel(f.type)}</span>
+                        <span className={`chip chip-${cls}`}>{cls}</span>
+                        <span className="fp-val">{f.value ?? f.path ?? "(unnamed)"}</span>
+                        {host && <span className="fp-host">{host}</span>}
+                        <span className="chip">{triage}</span>
+                        {sight && (
+                          <span className="chip chip-sightings"
+                            title="Same finding in other runs of this engagement">{sight}</span>
+                        )}
+                      </span>
+                      {evidence && (
+                        <span className="fp-evidence" title="The call site — where to dig deeper">
+                          {evidence}
+                        </span>
                       )}
                     </button>
                   </li>
