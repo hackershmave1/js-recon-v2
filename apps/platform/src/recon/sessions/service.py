@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
 from recon.db.models import Engagement, EngagementSession, Finding, Run, RunAsset, Tenant
-from recon.domain import FindingType
+from recon.domain import TOTAL_ENDPOINT_TYPES, FindingType
 from recon.fetch import egress
 from recon.findings.queries import _latest_coverage
 
@@ -389,7 +389,10 @@ def _run_stats(db: Session, run: Run) -> tuple[int, int, int, int | None]:
             .group_by(Finding.type)
         ).all()
     )
-    endpoints = int(type_counts.get(FindingType.ENDPOINT.value, 0))
+    # "Total endpoints found" = the confirmed API lane + the promoted valid-path suspected lane.
+    # The API-vs-Endpoint breakdown lives in the findings list; coverage_pct below stays
+    # confirmed-only (it is attribution recall, never inflated by a suspected promotion).
+    endpoints = sum(int(type_counts.get(t.value, 0)) for t in TOTAL_ENDPOINT_TYPES)
     secrets = int(type_counts.get(FindingType.SECRET.value, 0))
     # files (§4 fold M1): the run's discovered-asset count for a crawl; 1 for a
     # single-blob upload; else 0. NOT coverage.files (which is per-source-path and

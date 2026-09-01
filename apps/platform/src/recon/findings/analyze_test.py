@@ -119,15 +119,15 @@ def test_unresolved_sink_surfaced_as_unconfirmed_and_excluded_from_endpoints(
     assert reqs is not None and len(reqs) == 1
 
 
-def test_generic_call_surfaced_as_endpoint_generic_and_excluded_from_endpoints(
+def test_generic_call_promoted_to_endpoint_suspected_and_excluded_from_confirmed(
     redis, authorized_session
 ):
-    """Tier 5 (generic-call): a verb call on an unrecognised HTTP-client-shaped receiver is
-    surfaced as a distinct ENDPOINT_GENERIC finding — separate from the confirmed lane AND from
-    the Tier-4 ENDPOINT_UNRESOLVED lane — while (a) the REQ-C2 coverage counters are UNTOUCHED
-    (a suspected call is neither attributed nor unattributed, unlike a Tier-4 sink which bumps
-    `unattributed`), and (b) it is excluded from the endpoint read model + the OpenAPI/probe
-    reconstruction, both of which key on ``type == 'endpoint'``."""
+    """A verb call on an unrecognised HTTP-client-shaped receiver whose path has a static segment
+    (`/api/generic`) is PROMOTED to a distinct ENDPOINT_SUSPECTED finding — normalized like a
+    confirmed endpoint so it unions into the total-endpoints consumers — while (a) the REQ-C2
+    coverage counters stay UNTOUCHED (a suspected call is neither attributed nor unattributed),
+    and (b) it stays OUT of the confirmed ``type == 'endpoint'`` read model. ENDPOINT_GENERIC
+    production is retired (a no-static-path junk call would instead fall to ENDPOINT_UNRESOLVED)."""
     from recon.findings import queries as findings_queries
     from recon.probe.reconstruct import reconstruct_run
 
@@ -140,18 +140,20 @@ def test_generic_call_surfaced_as_endpoint_generic_and_excluded_from_endpoints(
 
     findings = _findings(tenant, view.id)
     assert {f.value for f in findings if f.type == "endpoint"} == {"GET /api/real"}
-    assert {f.value for f in findings if f.type == "endpoint_generic"} == {"GET /api/generic"}
+    # Promoted to the suspected lane (a distinct type), normalized like a real endpoint.
+    assert {f.value for f in findings if f.type == "endpoint_suspected"} == {"GET /api/generic"}
+    assert not [f for f in findings if f.type == "endpoint_generic"]  # generic production retired
 
-    # REQ-C2 honesty: the suspected generic call moves NEITHER counter (1 real fetch attributed,
-    # nothing unattributed — a Tier-4 sink WOULD have bumped `unattributed`).
+    # REQ-C2 honesty: the promoted call moves NEITHER counter (1 real fetch attributed, nothing
+    # unattributed — coverage% stays confirmed-only).
     coverage = findings_queries.list_findings(tenant, view.id).coverage
     assert coverage is not None
     assert (coverage.attributed, coverage.unattributed) == (1, 0)
 
-    # Excluded from OpenAPI/probe reconstruction (keys on type == 'endpoint'): only the one
-    # confirmed endpoint yields a probeable request — never a generic-call skeleton.
+    # Total-endpoints reconstruction (the OpenAPI/probe/threat-model feed): BOTH the confirmed
+    # endpoint AND the promoted suspected endpoint reconstruct into a probeable request.
     reqs = reconstruct_run(tenant, view.id)
-    assert reqs is not None and len(reqs) == 1
+    assert reqs is not None and len(reqs) == 2
 
 
 def test_page_route_surfaced_as_distinct_type_excluded_from_endpoints(redis, authorized_session):
@@ -188,12 +190,12 @@ def test_page_route_surfaced_as_distinct_type_excluded_from_endpoints(redis, aut
     assert reqs is not None and len(reqs) == 1
 
 
-def test_unconfirmed_lane_attributes_host_from_absolute_url(redis, authorized_session):
-    """DEBT D24: an unconfirmed-lane finding (generic / page_route) whose value is an absolute
-    URL literal now carries that URL's host on its occurrence, so the Findings host facet can
-    pivot on the backend/asset hosts capture recovers — while a relative/host-less literal in the
-    SAME lane stays ``host=None``. The host is occurrence-only: ``value`` (which keeps the raw URL
-    for the analyst) and thus ``finding_hash`` are unchanged (no REQ-D3/D5 churn)."""
+def test_suspected_lane_splits_host_and_path_from_absolute_url(redis, authorized_session):
+    """A promoted ENDPOINT_SUSPECTED finding whose sink was an absolute URL SPLITS the host off
+    onto the occurrence and keeps the normalized PATH as its value (item #5) — so the host facet
+    can pivot on the backend host while the value is a clean endpoint; a relative literal in the
+    SAME lane stays ``host=None``. page_route (still an unconfirmed lane) instead keeps its raw
+    URL in value + lifts the host (DEBT D24), so the two behaviours are contrasted here."""
     from recon.findings import queries as findings_queries
 
     tenant, session_id = authorized_session
@@ -210,17 +212,17 @@ def test_unconfirmed_lane_attributes_host_from_absolute_url(redis, authorized_se
 
     by_value = {f.value: f for f in findings_queries.list_findings(tenant, view.id).findings}
 
-    generic_abs = by_value["GET https://api.nhle.com/stats/rest/en"]
-    assert generic_abs.type == "endpoint_generic"
-    assert {o.host for o in generic_abs.occurrences} == {"api.nhle.com"}  # host lifted from literal
-    assert "api.nhle.com" in generic_abs.value  # value NOT host-stripped (identity unchanged)
+    suspected_abs = by_value["GET /stats/rest/en"]  # promoted: host SPLIT out of the value
+    assert suspected_abs.type == "endpoint_suspected"
+    assert {o.host for o in suspected_abs.occurrences} == {"api.nhle.com"}  # host on the occurrence
+    assert "api.nhle.com" not in suspected_abs.value  # value IS host-stripped now (#5 split)
 
-    generic_rel = by_value["GET /api/relative"]
-    assert generic_rel.type == "endpoint_generic"
-    assert {o.host for o in generic_rel.occurrences} == {None}  # relative literal -> host-less
+    suspected_rel = by_value["GET /api/relative"]
+    assert suspected_rel.type == "endpoint_suspected"
+    assert {o.host for o in suspected_rel.occurrences} == {None}  # relative literal -> host-less
 
-    # All three unconfirmed lanes share one write path, so page_route gets the same treatment
-    # (the type chip disambiguates a nav host from a backend one in the facet).
+    # page_route stays an unconfirmed lane (raw URL in value + host lifted, DEBT D24) — unlike the
+    # promoted suspected lane above which normalizes + splits — so its host is lifted the same way.
     route_abs = by_value["https://assets.nhle.com/mugs/latest"]
     assert route_abs.type == "page_route"
     assert {o.host for o in route_abs.occurrences} == {"assets.nhle.com"}

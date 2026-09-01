@@ -132,6 +132,62 @@ def test_endpoint_websocket():
     assert ep.host == "rt.acme.io"
 
 
+# --- suspected-endpoint promotion (endpoint-model rework) -------------------
+
+
+def test_suspected_promotes_relative_path_with_static_segment():
+    ep = nz.normalize_suspected_endpoint("GET", "/inbox/subjects")
+    assert ep is not None
+    assert ep.value == "GET /inbox/subjects"
+    assert ep.host is None
+
+
+def test_suspected_keeps_placeholders_when_one_segment_is_static():
+    # >=1 static segment (`inbox_views`) promotes; the `:holder`/`${...}` placeholders survive.
+    a = nz.normalize_suspected_endpoint("GET", "/:handle/inbox_views")
+    b = nz.normalize_suspected_endpoint("GET", "/${this.props.handle}/inbox_views")
+    assert a is not None and a.value == "GET /:handle/inbox_views"
+    assert b is not None and b.value == "GET /${this.props.handle}/inbox_views"
+
+
+def test_suspected_rejects_all_placeholder_path():
+    # Pure junk: every segment is a placeholder -> not an endpoint (stays unconfirmed).
+    assert nz.normalize_suspected_endpoint("GET", "${e.id}/${t}") is None
+    assert nz.normalize_suspected_endpoint("GET", "/:a/:b") is None
+    assert nz.normalize_suspected_endpoint("GET", "EXPR") is None
+
+
+def test_suspected_splits_host_from_full_url_path():
+    # A full URL promotes to its templated PATH; the host lands on the occurrence attribute.
+    ep = nz.normalize_suspected_endpoint(
+        "GET", "https://api.hackerone.com/v1/organizations/${id}/scim_v2"
+    )
+    assert ep is not None
+    assert ep.value == "GET /v1/organizations/${id}/scim_v2"
+    assert ep.host == "api.hackerone.com"
+
+
+def test_suspected_guards_protocol_relative_authority_swallow():
+    # A leading `//` must NOT eat the first path segment as a host (urlsplit's trap).
+    ep = nz.normalize_suspected_endpoint("GET", "//foo/bar/list")
+    assert ep is not None
+    assert ep.value == "GET /foo/bar/list"  # `foo` stays a path segment, not a host
+    assert ep.host is None
+
+
+def test_suspected_keeps_partial_query_and_uppercases_method():
+    ep = nz.normalize_suspected_endpoint("post", "/bugs/count?${e.queryString}")
+    assert ep is not None
+    assert ep.value.startswith("POST /bugs/count?")
+
+
+def test_suspected_templates_concrete_id_segments():
+    # A concrete numeric segment still templates (shared identity with the confirmed lane).
+    ep = nz.normalize_suspected_endpoint("GET", "/users/4821/profile")
+    assert ep is not None
+    assert ep.value == "GET /users/{id}/profile"
+
+
 # --- param normalization (§4.3) ---------------------------------------------
 
 

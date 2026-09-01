@@ -258,6 +258,54 @@ def normalize_endpoint(method: str, url: str) -> Endpoint:
     return Endpoint(value=value, host=split.hostname)
 
 
+# Placeholder token forms in a `_collapse_url` skeleton (mirrors recon.findings._jsast's
+# `${...}` template subs, `:holder` dynamic-leaf names, and the `EXPR` sentinel). Redefined
+# here — NOT imported — to keep this module stdlib-only + dependency-free (see module docstring:
+# _jsast pulls in tree-sitter). The token contract is stable (part of the collapse-URL shape).
+_SUSPECTED_TEMPLATE_SUB = re.compile(r"\$\{[^}]*\}")
+_SUSPECTED_HOLDER = re.compile(r":[A-Za-z_][A-Za-z0-9_]*")
+_SUSPECTED_EXPR = "EXPR"
+
+
+def _path_static_segment_count(path: str) -> int:
+    """Count path segments carrying LITERAL (non-placeholder) text.
+
+    A placeholder is a ``${...}`` sub, a ``:holder``, or the bare ``EXPR`` sentinel; a segment
+    is static iff stripping those leaves a non-empty residue. ``/inbox/subjects`` -> 2;
+    ``/:handle/inbox_views`` -> 1 (``inbox_views``); ``${e.id}/${t}`` -> 0. This gates the
+    suspected-endpoint lane: >=1 static segment is a real (if partial) endpoint; an
+    all-placeholder path is not (it stays unconfirmed)."""
+    count = 0
+    for segment in path.split("/"):
+        residue = _SUSPECTED_HOLDER.sub("", _SUSPECTED_TEMPLATE_SUB.sub("", segment)).strip()
+        if residue and residue != _SUSPECTED_EXPR:
+            count += 1
+    return count
+
+
+def normalize_suspected_endpoint(method: str, url: str) -> Endpoint | None:
+    """Normalize a SUSPECTED sink skeleton (a generic-client call, or an unresolved sink whose
+    collapsed URL still carries a real path) into a counted endpoint ``value`` + ``host``,
+    mirroring :func:`normalize_endpoint` — or ``None`` when the path is all-placeholder /
+    pure-variable, which stays in the unconfirmed lane. Placeholders (``${...}``/``:holder``/
+    ``EXPR``) survive templating verbatim (``template_segment`` only rewrites int/UUID/hash).
+
+    Guards the ``urlsplit`` ``//``-authority swallow: a leading ``//`` (a protocol-relative
+    literal or a ``_collapse_url`` artifact) would otherwise eat the first PATH segment as a
+    host, so it is collapsed to a single ``/`` before splitting — no path segment is lost, while
+    a real ``http(s)://`` URL still splits its host out normally into the occurrence attribute."""
+    guarded = "/" + url.lstrip("/") if url.startswith("//") else url
+    split = urlsplit(guarded)
+    path = split.path or "/"
+    if _path_static_segment_count(path) < 1:
+        return None
+    query = _normalize_query(split.query)
+    value = f"{method.strip().upper()} {_templatize_path(path)}".strip()
+    if query:
+        value += f"?{query}"
+    return Endpoint(value=value, host=split.hostname)
+
+
 def normalize_param_value(operation: str, location: str, name: str) -> str:
     """`operation + location:name` (§4.3). Build ``operation`` via
     ``endpoint_operation``."""

@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from urllib.parse import parse_qsl, urlsplit
 
+from recon.domain import TOTAL_ENDPOINT_TYPE_VALUES
 from recon.fetch import egress
 from recon.findings import base_url, normalize, queries
 
@@ -143,7 +144,9 @@ def build_requests(
     endpoints: dict[str, list[queries.FindingView]] = {}
     params: dict[str, list[queries.FindingView]] = {}
     for finding in findings:
-        if finding.type == "endpoint":
+        # "Total endpoints" feed (OpenAPI export + probe + threat-model): confirmed `endpoint`
+        # AND promoted valid-path `endpoint_suspected` both reconstruct into a probeable request.
+        if finding.type in TOTAL_ENDPOINT_TYPE_VALUES:
             key = normalize.operation_of_endpoint_value(finding.value)
             endpoints.setdefault(key, []).append(finding)
         elif finding.type == "param":

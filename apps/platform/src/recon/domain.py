@@ -115,6 +115,30 @@ class FindingType(StrEnum):
     # REQ-C2 coverage counters automatically, and never collides with an endpoint on one
     # `finding_hash`. Surfaced as first-class located findings + a dedicated workspace tab.
     GRAPHQL = "graphql"
+    # A SUSPECTED endpoint promoted from a generic-client call, or an unresolved sink whose
+    # collapsed URL still carries a real path (>=1 static path segment) — normalized like a
+    # confirmed ENDPOINT (host stripped to the occurrence, path templated, `${...}`/`:holder`
+    # placeholders kept). A DISTINCT type, NOT a `confidence` attribute on ENDPOINT, precisely
+    # so the fail-closed default holds: an unaudited `type == 'endpoint'` read model still
+    # EXCLUDES it. The "total endpoints found" headline, the OpenAPI export, probe, the
+    # threat-model feed, and classify/correlate opt IN by unioning {endpoint, endpoint_suspected};
+    # the confirmed-only consumers (the `hosts` confirmed inventory, the REQ-C2 `coverage_pct`
+    # attribution recall, and the future REQ-D5 removal diff) deliberately stay endpoint-only.
+    # Same distinct-type-per-confidence-tier pattern as SECRET_SUSPECTED.
+    ENDPOINT_SUSPECTED = "endpoint_suspected"
+
+
+# The finding types that roll up into the "total endpoints found" headline — the confirmed
+# `endpoint` (API) lane PLUS the promoted valid-path `endpoint_suspected` lane. The union is
+# opted INTO explicitly at the total consumers (the run's endpoint count, the OpenAPI/probe
+# reconstruction, and capture correlation); the confirmed-only consumers (the `hosts` confirmed
+# inventory, the REQ-C2 `coverage_pct` attribution recall, and the future REQ-D5 removal diff)
+# deliberately use FindingType.ENDPOINT alone so the fail-closed default holds.
+TOTAL_ENDPOINT_TYPES: tuple[FindingType, ...] = (
+    FindingType.ENDPOINT,
+    FindingType.ENDPOINT_SUSPECTED,
+)
+TOTAL_ENDPOINT_TYPE_VALUES: frozenset[str] = frozenset(t.value for t in TOTAL_ENDPOINT_TYPES)
 
 
 class AssetStatus(StrEnum):

@@ -263,6 +263,7 @@ def list_hosts(tenant_id: str, run_id: str) -> HostsView | None:
                     Finding.run_id == str(run_id),
                     Finding.type.in_(
                         [
+                            FindingType.ENDPOINT_SUSPECTED.value,
                             FindingType.ENDPOINT_GENERIC.value,
                             FindingType.ENDPOINT_UNRESOLVED.value,
                         ]

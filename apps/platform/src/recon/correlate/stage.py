@@ -24,6 +24,7 @@ from recon import storage
 from recon.correlate import match
 from recon.db.base import tenant_session
 from recon.discover import queries as discover_queries
+from recon.domain import TOTAL_ENDPOINT_TYPE_VALUES
 from recon.events.log import publish, record_event
 from recon.findings import normalize, store
 from recon.findings import queries as findings_queries
@@ -74,7 +75,11 @@ def correlate_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> 
                 session,
                 tenant_id=tenant_id,
                 run_id=run_id,
-                finding_type="endpoint",
+                # The MATCHED finding's OWN type — `endpoint` or the promoted `endpoint_suspected`
+                # — so the capture occurrence attaches to that finding (same hash) rather than
+                # forging a phantom confirmed one; a suspected op keeps its lane but gains a real
+                # host + runtime URL.
+                finding_type=finding.type,
                 value=finding.value,  # the MATCHED finding's own value/path — no new finding
                 path=finding.path,
                 occurrence=store.Occurrence(
@@ -109,7 +114,11 @@ def _resolvable_endpoints(findings: list[findings_queries.FindingView]) -> list[
     host is absolute — resolved — so it is left alone, which also makes a re-run a no-op)."""
     endpoints: list[match.Endpoint] = []
     for finding in findings:
-        if finding.type != "endpoint" or any(o.host for o in finding.occurrences):
+        # Correlate the confirmed AND promoted-suspected endpoints (a suspected op gains a real
+        # host + file:line from a matched capture request); a host-bearing op is already resolved.
+        if finding.type not in TOTAL_ENDPOINT_TYPE_VALUES or any(
+            o.host for o in finding.occurrences
+        ):
             continue
         parsed = _method_path(finding.value)
         if parsed is None:
