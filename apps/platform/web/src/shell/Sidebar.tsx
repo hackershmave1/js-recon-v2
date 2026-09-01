@@ -36,6 +36,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "overview", label: "Overview", icon: "grid" },
   { id: "findings", label: "Findings", icon: "alert" },
   { id: "api-spec", label: "API Spec", icon: "code" },
+  { id: "graphql", label: "GraphQL", icon: "link" },
   { id: "probe", label: "Probe", icon: "target" },
   { id: "tech", label: "Tech stack", icon: "layers" },
   { id: "hosts", label: "Hosts", icon: "globe" },

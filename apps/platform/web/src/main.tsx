@@ -5,7 +5,7 @@ import { RouterProvider } from "react-router/dom";
 import { AppProviders } from "./AppProviders";
 import { AuthProvider } from "./auth/AuthProvider";
 import { AuthGate } from "./auth/AuthGate";
-import { Home, RunWorkspace, OverviewRoute, SourcesRoute, FindingsRoute, ApiSpecRoute, ProbeRoute, TechRoute, HostsRoute } from "./app";
+import { Home, RunWorkspace, OverviewRoute, SourcesRoute, FindingsRoute, ApiSpecRoute, ProbeRoute, TechRoute, GraphQLRoute, HostsRoute } from "./app";
 import { SessionsView } from "./features/sessions/SessionsView";
 import { installPerfObserver } from "./shell/observability";
 // Self-hosted fonts (a recon tool shouldn't phone home to a font CDN). Imported
@@ -30,6 +30,7 @@ const router = createBrowserRouter([
       { path: "sources", Component: SourcesRoute },
       { path: "findings", Component: FindingsRoute },
       { path: "api-spec", Component: ApiSpecRoute },
+      { path: "graphql", Component: GraphQLRoute },
       { path: "probe", Component: ProbeRoute },
       { path: "tech", Component: TechRoute },
       { path: "hosts", Component: HostsRoute },

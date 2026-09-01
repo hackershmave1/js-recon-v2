@@ -17,5 +17,6 @@ export const TYPE_LABELS: Record<string, string> = {
   // Cleartext internal-IP info-disclosure (e.g. "10.0.0.1"): NOT a secret — shown in
   // cleartext, never redacted/revealable. Labelled "internal IP".
   internal_ip: "internal IP",
+  graphql: "GraphQL",
 };
 export const typeLabel = (t: string): string => TYPE_LABELS[t] ?? t;

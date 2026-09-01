@@ -9,6 +9,7 @@ import { SourcesPage } from "./features/sources/SourcesPage";
 import { ApiSpecPage } from "./features/apispec/ApiSpecPage";
 import { ProbePanel } from "./features/probe/ProbePanel";
 import { TechPage } from "./features/tech/TechPage";
+import { GraphQLPage } from "./features/graphql/GraphQLPage";
 import { HostsPage } from "./features/hosts/HostsPage";
 import { OverviewPanel } from "./features/overview/OverviewPanel";
 import { DiscoveryEmpty } from "./features/discovery/DiscoveryEmpty";
@@ -100,6 +101,22 @@ export function TechRoute() {
   if (!loaded) return <NotReady title="Loading…" body="Fetching this run's technologies." />;
   if (!technologies) return <NotReady title="No tech stack yet" body="Technologies appear here once analysis has run." />;
   return <TechPage data={technologies} />;
+}
+
+// GraphQL findings ride the same findings payload as the Findings page, so this reads
+// from the shared run data and (like Findings) wires occurrence → Sources navigation.
+export function GraphQLRoute() {
+  const { findings, loaded } = useRunData();
+  const { id } = useParams();
+  const navigate = useNavigate();
+  if (!loaded) return <NotReady title="Loading…" body="Fetching this run's findings." />;
+  if (!findings) return <NotReady title="No findings yet" body="GraphQL operations appear here once analysis has run." />;
+  return (
+    <GraphQLPage
+      data={findings}
+      onJumpToSource={(j) => navigate(`/runs/${id}/sources`, { state: { jump: j } })}
+    />
+  );
 }
 
 export function HostsRoute() {
