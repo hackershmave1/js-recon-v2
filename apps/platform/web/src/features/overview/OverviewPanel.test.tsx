@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import { createMemoryRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { OverviewPanel } from "./OverviewPanel";
-import type { FindingsResponse, Finding, Occurrence } from "../../api/types";
+import type { FindingsResponse, Finding, Occurrence, HostsResponse } from "../../api/types";
 
 // The tiles navigate via react-router now, so the panel must render inside a router
 // (with a :id param) for useNavigate/useParams to resolve.
@@ -78,6 +78,38 @@ describe("OverviewPanel", () => {
     // Headline = total (2 API + 1 promoted valid-path endpoint); the sub shows the split.
     expect(within(card("Endpoints")).getByText("3")).toBeInTheDocument();
     expect(within(card("Endpoints")).getByText("2 API · 1 endpoint")).toBeInTheDocument();
+  });
+
+  it("rolls IN-SCOPE page routes into the reachable-surface total, excluding out-of-scope links (QA #5)", () => {
+    const data: FindingsResponse = {
+      run_id: "r", count: 4, coverage: null, spec: null,
+      findings: [
+        finding({ finding_hash: "e1", type: "endpoint", value: "POST /apiproxy/v1" }),
+        // relative route (no host) -> same-origin -> counts
+        finding({ finding_hash: "r1", type: "page_route", value: "/account/cards", occurrences: [occ()] }),
+        // absolute route on an in-scope host -> counts
+        finding({ finding_hash: "r2", type: "page_route", value: "https://www.starbucks.com/menu",
+          occurrences: [occ({ host: "www.starbucks.com" })] }),
+        // absolute route on an OUT-of-scope sibling host -> a finding, but NOT this target's surface
+        finding({ finding_hash: "r3", type: "page_route", value: "https://careers.starbucks.ca/",
+          occurrences: [occ({ host: "careers.starbucks.ca" })] }),
+      ],
+    };
+    const hostsResp: HostsResponse = {
+      run_id: "r", count: 2, in_scope: 1, endpoints_unattributed: 0, suspected_unattributed: 0,
+      hosts: [
+        { host: "www.starbucks.com", in_scope: true, declared: false, assets: 0, endpoints: 0, suspected: 0, routes: 1, techs: 0 },
+        { host: "careers.starbucks.ca", in_scope: false, declared: false, assets: 0, endpoints: 0, suspected: 0, routes: 1, techs: 0 },
+      ],
+    };
+    const router = createMemoryRouter(
+      [{ path: "/runs/:id", element: <OverviewPanel data={data} hosts={hostsResp} /> }],
+      { initialEntries: ["/runs/r1"] },
+    );
+    render(<RouterProvider router={router} />);
+    // surface = 1 API + 2 in-scope routes (relative + in-scope host); the .ca link is excluded.
+    expect(within(card("Endpoints")).getByText("3")).toBeInTheDocument();
+    expect(within(card("Endpoints")).getByText("1 API · 2 pages")).toBeInTheDocument();
   });
 
   it("counts cleartext internal-IP findings on the Internal IPs card", () => {
