@@ -254,12 +254,13 @@ def test_endpoint_finding_carries_auth_headers(redis, authorized_session):
     ]
 
 
-def test_graphql_operation_exported_but_never_a_finding(redis, authorized_session):
-    """Enrichment C (export-only): a gql`` document surfaces as a GraphQL operation in the
-    OpenAPI export but NEVER as an endpoint/param finding — a GraphQL op is not an HTTP call,
-    so it must not pollute the HTTP-endpoints read model. The real fetch in the same bundle
-    is still extracted normally. Exercises the exact chain the export router runs (analyze
-    persist -> queries.graphql_operations union -> build_openapi emit)."""
+def test_graphql_definition_is_a_finding_and_still_exported(redis, authorized_session):
+    """A gql`` document is now a first-class ``FindingType.GRAPHQL`` finding (located to its
+    bundle call-site) AND is still carried by the OpenAPI export — but NEVER an endpoint/param
+    finding or an HTTP path (a GraphQL op is not an HTTP call, so a distinct type keeps it out of
+    the HTTP-endpoints read model). The real fetch in the same bundle is still extracted normally.
+    Exercises the new analyze finding-write plus the export chain (analyze persist ->
+    queries.graphql_operations union -> build_openapi emit)."""
     from openapi_spec_validator import validate
 
     from recon.findings import queries as findings_queries
@@ -273,12 +274,17 @@ def test_graphql_operation_exported_but_never_a_finding(redis, authorized_sessio
     assert _drive(redis, view.id, tenant) == RunState.DONE.value
 
     findings = _findings(tenant, view.id)
-    # The gql`` document created NO endpoint/param finding — only the real fetch did.
+    # No endpoint/param pollution — only the real fetch is an endpoint.
     assert {f.value for f in findings if f.type == "endpoint"} == {"GET /api/health"}
     assert [f for f in findings if f.type == "param"] == []
 
-    # ...but the operation IS carried by the export (source_path = bundle fallback for an
-    # upload run, where there is no per-asset URL).
+    # The gql`` document IS a first-class GraphQL finding carrying its kind + top-level fields.
+    graphql_findings = [f for f in findings if f.type == "graphql"]
+    assert {f.value for f in graphql_findings} == {"query Me"}
+    assert graphql_findings[0].attributes["kind"] == "query"
+    assert graphql_findings[0].attributes["fields"] == ["me"]
+
+    # ...and it is still carried by the export, byte-for-byte (op_type key, fragments excluded).
     ops = findings_queries.graphql_operations(tenant, view.id)
     assert ops == [{"op_type": "query", "name": "Me", "fields": ["me"], "source_path": "input.js"}]
 
