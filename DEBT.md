@@ -18,9 +18,19 @@ nothing is lost in the regrouping. Nothing is currently parked.
 
 ## Open debt - by user impact
 
+> **Status update (2026-09-01):** the product owner has accepted every remaining item in this section as
+> 🚫 **WON'T FIX** — recorded, not fixed. Each entry keeps its full original analysis and its revisit trigger;
+> several (D18, D19, D17, D23) are security/correctness acceptances that ACCEPT a stated residual risk rather
+> than eliminate it. **D38** (native-ESM dynamic-import chunk discovery) was the sole remaining active
+> item and is now ✅ RESOLVED 2026-09-01 — nothing in this register is open. The three-tier grouping is
+> preserved as a record.
+
 ### Tier 1 · you'd feel this
 
 Visible in results today, on the real targets you point the tool at. Fix these first.
+
+> **2026-09-01:** the still-open Tier-1 items (D22, D20, D16) are now accepted 🚫 **WON'T FIX**; their
+> already-shipped slices stay shipped and only the remaining owed work is closed. (D31–D37 were already resolved.)
 
 **D31–D35 added 2026-08-23 from a dogfood audit** against a real ~4.4 MB minified React SPA
 (an Azure-AD-fronted app). The tool reported "2 files, 0 secrets, 10 hosts"; manual review found
@@ -493,7 +503,8 @@ secrets live) stayed unreachable. Files: `findings/{sourcemapper,engines}.py`, `
 `probe/sources.py`, `config.py` (`max_source_map_bytes`, `engine_max_output_bytes`), `docker-compose.yml`.
 Related: D32, D36, D28, D23.
 
-#### D22 · Tech detection JS-runtime + header-allowlist gaps [M] — ⏳ PARTIAL 2026-08-22 (js + header allowlist shipped; html/dom remain)  ·  correctness
+#### D22 · Tech detection JS-runtime + header-allowlist gaps [M] — ⏳ PARTIAL 2026-08-22 (js + header allowlist shipped; html/dom remain)  ·  correctness  — 🚫 WON'T FIX (accepted 2026-09-01)
+> 🚫 **WON'T FIX (accepted 2026-09-01):** The shipped js-global + header-allowlist surfaces stay shipped; the remaining html/dom surfaces need the raw HTML / rendered DOM the allowlist signal omits, and a widening blind spot is observable (not silent) via the `analyze.technologies` event, so skipping them is acceptable today — revisit if "site X still shows no `<framework>`" becomes a recurring operator complaint.
 - ✅ **RESOLVED 2026-08-19 — the `js` (window-global) surface now fires (PR #85).** Bundled
   SPAs (Next.js `__NEXT_DATA__`, Nuxt `$nuxt`, React) were invisible; the matcher now
   presence-matches enthec's `js` global names in stored bundle source via one RE2 `Set`
@@ -535,7 +546,8 @@ still shows no `<framework>`" becomes a recurring operator complaint. **Detectio
 `analyze.technologies` event carries per-host detection counts + `skipped_patterns`, so a
 widening blind spot is observable, not silent.
 
-#### D20 · Slice-Y multi-asset scale/robustness deferrals [M–L, ongoing]  ·  maintainability
+#### D20 · Slice-Y multi-asset scale/robustness deferrals [M–L, ongoing]  ·  maintainability  — 🚫 WON'T FIX (accepted 2026-09-01)
+> 🚫 **WON'T FIX (accepted 2026-09-01):** The shipped per-asset fetch-retry bullet stays shipped; the remaining at-scale robustness strands are safe at bounded single-host scale (idempotent-safe double-work, not data loss), so closing them is acceptable today — revisit at M3 / multi-tenant scale.
 Consciously-deferred SHOULDs from the multi-asset (Slice Y) build — safe now at bounded
 single-host scale, revisit at M3/scale. Design spec:
 `apps/platform/docs/superpowers/specs/2026-07-26-slice-y-multi-asset-design.md`.
@@ -576,7 +588,8 @@ single-host scale, revisit at M3/scale. Design spec:
 
 **Tier-1 facet:** the per-asset fetch-retry bullet (a transient 5xx/429 during a crawl drops that asset -> run PARTIAL) was the one a user feels on a real target — ✅ RESOLVED 2026-08-22 (above); the remaining bullets are at-scale robustness (Tier-2), kept together as one register entry.
 
-#### D16 · Capture extension deferred items [S] — ⏳ PARTIAL 2026-08-17 (CI test gate added)  ·  maintainability
+#### D16 · Capture extension deferred items [S] — ⏳ PARTIAL 2026-08-17 (CI test gate added)  ·  maintainability  — 🚫 WON'T FIX (accepted 2026-09-01)
+> 🚫 **WON'T FIX (accepted 2026-09-01):** The shipped CI test-gate and popup-compile bullets stay shipped; the remaining bullets are housekeeping (over-cap `background.js`, synchronous upload-time sourcemap reconstruction, lingering unread legacy setting keys, and a rare display-only counter undercount that self-heals), so leaving them is acceptable today — revisit if a lingering bullet starts causing real breakage or the extension gets a substantial rework.
 Small deferred work in the MV3 capture extension (`apps/capture/chrome-extension/`), recorded here
 when the point-in-time `REFACTOR-NOTES.md` was folded into the capture app README (`apps/capture/README.md`) during the
 enterprise-hygiene cleanup (so the "later" doesn't become "never"):
@@ -619,7 +632,11 @@ enterprise-hygiene cleanup (so the "later" doesn't become "never"):
 Safe now for a single trusted operator. Each has a concrete future trigger - untrusted /
 multi-tenant load, or the first upgrade against a database that holds live data.
 
-#### D18 · OS/network-level egress isolation [L]  ·  supply-chain/security
+> **2026-09-01:** all Tier-2 items (D18, D19, D23, D17) are now accepted 🚫 **WON'T FIX** — the residual
+> risk each names is ACCEPTED, not eliminated; each keeps its revisit trigger below.
+
+#### D18 · OS/network-level egress isolation [L]  ·  supply-chain/security  — 🚫 WON'T FIX (accepted 2026-09-01)
+> 🚫 **WON'T FIX (accepted 2026-09-01):** The application-level SSRF guard defeats the actual threat for our only outbound traffic (the fetch stage) today, but this ACCEPTS a real residual risk — OS-level egress isolation and the crawl-time subresource-SSRF gap remain unmitigated, not eliminated — revisit before exposing the fetcher/crawler to untrusted multi-tenant load.
 REQ-P2 (metadata/RFC1918 blocked at the **network layer**) and REQ-T2 (net-emitting engines
 in a scoped egress sandbox) are only partially met. Enforcement today is **application-level**
 (`recon/fetch/egress.py`, ADR-0005): scheme + in-scope host + all-resolved-IPs-globally-
@@ -635,7 +652,8 @@ control (no route to metadata/RFC1918) → forced egress proxy enforcing `egress
 netns/nftables. **Trigger:** before exposing the fetcher/crawler to untrusted multi-tenant
 load. (Migrated 2026-08-15 from the retired `slice2-deferred-debt.md`.)
 
-#### D19 · Migrations build tables with `create_all`, not frozen snapshots [M]  ·  correctness
+#### D19 · Migrations build tables with `create_all`, not frozen snapshots [M]  ·  correctness  — 🚫 WON'T FIX (accepted 2026-09-01)
+> 🚫 **WON'T FIX (accepted 2026-09-01):** With the build pre-prod (no data to preserve) and `ADD COLUMN IF NOT EXISTS` mitigating fresh-DB builds this is acceptable today, but it ACCEPTS that safe incremental upgrades against live tenant data are NOT guaranteed — revisit before the first live-data schema upgrade.
 `0001_initial`/`0002_findings` (and later new-table revisions) call
 `Base.metadata.create_all(bind)` from the LIVE model metadata, not an explicit
 column-by-column snapshot. On a from-scratch `alembic upgrade head`, 0001 already stands
@@ -651,7 +669,8 @@ RLS). **Detection note:** CI catches a broken migration because api/worker `depe
 migrate: service_completed_successfully`; `docker compose up -d migrate` alone swallows the
 exit code. (Migrated 2026-08-15 from the retired `slice2-deferred-debt.md`.)
 
-#### D23 · Per-asset cumulative beautify has no budget/heartbeat [S]  ·  correctness
+#### D23 · Per-asset cumulative beautify has no budget/heartbeat [S]  ·  correctness  — 🚫 WON'T FIX (accepted 2026-09-01)
+> 🚫 **WON'T FIX (accepted 2026-09-01):** A pathological many-`sourcesContent` map's worst case is idempotent-safe double-work (a peer reclaim re-runs the loop, not data loss) and real source maps are nowhere near that shape, so skipping the per-asset beautify budget/heartbeat is acceptable today — revisit before exposing analyze to untrusted multi-tenant load at scale.
 `findings/analyze._analysis_units` beautifies each source-map-recovered *minified* file before
 extraction (`deobfuscate.beautify_if_minified`, per-file 1 MiB cap) so its findings land on
 distinct lines that match what `probe/sources` later serves — the byte-identical invariant that
@@ -668,7 +687,8 @@ or a heartbeat between files — same heartbeat family as D20 ("Analyze mid-scan
 (extractor linear-but-unbounded). **Trigger:** before exposing analyze to untrusted multi-tenant
 load at scale. Anchor: the `# NOTE(DEBT)` in `findings/analyze.py::_analysis_units`.
 
-#### D17 · Capture Origin-lock allows a `null` Origin [S]  ·  supply-chain/security
+#### D17 · Capture Origin-lock allows a `null` Origin [S]  ·  supply-chain/security  — 🚫 WON'T FIX (accepted 2026-09-01)
+> 🚫 **WON'T FIX (accepted 2026-09-01):** The blast radius is bounded to the throwaway shared `capture-spike` tenant (central login re-homes a real operator's captures into their own tenant), so this is acceptable today, but it ACCEPTS that an opaque `Origin: null` remains allowed at capture ingest — revisit before multi-tenant / untrusted load.
 The capture-ingest Origin-lock (`capture_router.py` `_enforce_origin_lock`) rejects a
 web-page `http(s)` Origin but ALLOWS an opaque `Origin: null` (a sandboxed iframe /
 `data:` document), because the MV3 worker may itself emit `null` and we won't risk
@@ -685,7 +705,13 @@ flipped silently.
 Developer-facing hygiene - it keeps contributors fast and the trunk healthy, but a user
 never sees it directly.
 
-#### D28 · Cross-chunk export index double-recovers source maps [S]  ·  performance
+> **2026-09-01:** every Tier-3 item (D28, D29, D30, D9, D11, D5) is now accepted 🚫 **WON'T FIX**;
+> **D38** (native-ESM chunk discovery) was the last active item and shipped ✅ RESOLVED 2026-09-01, so
+> the whole register is now either resolved or accepted-won't-fix. For D5 the `--cov-fail-under=60` gate
+> REMAINS enforced — only the ratchet-up effort is dropped.
+
+#### D28 · Cross-chunk export index double-recovers source maps [S]  ·  performance  — 🚫 WON'T FIX (accepted 2026-09-01)
+> 🚫 **WON'T FIX (accepted 2026-09-01):** The duplicate per-asset sourcemapper spawns are idempotent-safe bounded work (not corruption) and deterministic so never wrong output — and the D37 adversarial design review recommended against building the recover-once reuse cache — so this is acceptable today; revisit if the 2× per-asset spawn cost becomes a measured bottleneck on real crawls.
 The cross-module endpoint resolver (`findings/analyze.py::build_export_index`) runs a
 run-level pre-pass that recovers each mapped asset's source map to harvest its exported
 string consts, then the existing per-asset extract loop recovers the SAME maps again for
@@ -701,7 +727,8 @@ lease. Follow-up: cache the recovered units for reuse across the two passes, or 
 export harvest into the main loop with deferred (post-loop) resolution. Extends the
 recovery/stall note in `_analysis_units`. `# NOTE(DEBT)` marks the site.
 
-#### D29 · Deferred SES/Node exec engine for webpack chunk-URL enumeration [L]  ·  supply-chain/security
+#### D29 · Deferred SES/Node exec engine for webpack chunk-URL enumeration [L]  ·  supply-chain/security  — 🚫 WON'T FIX (accepted 2026-09-01)
+> 🚫 **WON'T FIX (accepted 2026-09-01):** The pure-Python static-template slice already covers the standard chunk-URL form with zero new attack surface and content-derived URLs cannot widen egress, so the sandboxed SES/Node exec engine will NOT be built — revisit only if executing arbitrary/obfuscated chunk-URL builders becomes a needed recall lever, at which point the six-point security contract documented below still gates any exec-path code.
 The static cross-chunk resolver (Increments 1/2a/2b, main @ `93d2fd8`) resolves fetch/axios
 URLs split across chunks, but does NOT yet **enumerate lazy-chunk URLs** by executing the
 bundle's own `__webpack_require__.u` builder — the recall edge `js-recon` gets via `ses`/`lockdown`.
@@ -732,7 +759,8 @@ sandbox) + an ADR-0005 note, and its own §4 gates. **Already safe (no work owed
 from content), so the static slice and any future engine both inherit that guard by routing URLs
 exclusively through the seed→fetch path.
 
-#### D30 · Deferred interprocedural param-URL resolution (static recall ceiling) [L]  ·  correctness
+#### D30 · Deferred interprocedural param-URL resolution (static recall ceiling) [L]  ·  correctness  — 🚫 WON'T FIX (accepted 2026-09-01)
+> 🚫 **WON'T FIX (accepted 2026-09-01):** Unattributed param-URLs are REQ-C2-honest (never guessed) and the interprocedural lever only ever pays on readable / source-map-recovered source, so this deliberate static-recall ceiling is acceptable today — revisit only if measuring the shipped static path across more real bundles shows single-unshadowed-call-site foldable URLs are a material population.
 The static extractor resolves a sink URL held in / built from a single-unshadowed local binding
 (Phase 2 for fetch/axios; extended by S1 to `XMLHttpRequest.open`, jQuery, and `new WebSocket` so
 the same `const u = "…"; sink(u)` folds at every sink). What stays `unattributed` is a URL that
@@ -754,7 +782,7 @@ a bounded intraprocedural + single-call-site fold ONLY (never a full taint port)
 the real corpus, index-once / no per-sink re-traversal (D21 discipline). Related: the deferred exec
 engine (D29) and `apps/platform/docs/superpowers/thorough-endpoint-recovery-design.md`.
 
-#### D38 · Native-ESM static-import chunk discovery shipped; dynamic-import() deferred [S] — ⏳ PARTIAL 2026-08-31 (static shipped; dynamic deferred)  ·  correctness
+#### D38 · Native-ESM chunk discovery — static + dynamic import() [S] — ✅ RESOLVED 2026-09-01 (static #121; dynamic 2026-09-01)  ·  correctness
 Modern Vite/Rollup/Rolldown apps split code via NATIVE ESM static imports (`import "./app-Cp.js"`),
 resolved by the browser's own module loader — no `<script>` tag and no `__webpack_require__.u`
 builder, so BOTH the katana crawl and the webpack-only `chunkenum` missed those sibling chunks (the
@@ -768,12 +796,28 @@ THE EGRESS GUARD and seeds it (mirrors the webpack `_enumerate_and_seed_chunks`:
 are never a scope-widening lever — REQ-P2; cycle-safe via one visited set; total rows AND fetch
 attempts bounded by `crawl_max_assets`; REQ-A4 + soft-miss). Gated to non-webpack assets so exactly
 one enumerator parses any bundle.
-**DEFERRED (follow-up):** DYNAMIC `import("./route.js")` — nestable anywhere (a full-tree walk, unlike
-static's cheap top-level scan) and already partly covered by katana's `-jc` dynamic-import crawl. The
-follow-up is a bounded dynamic-import pass, gated on first MEASURING katana's real dynamic-import
-recall on live Rolldown/Vite targets. Related: D29 (webpack-chunk SES exec), D30 (param-URL ceiling).
+✅ **DYNAMIC `import()` RESOLVED 2026-09-01.** The measure-first gate ran against a live hackerone
+crawl: the recovered app chunk dynamic-imports **133** lazy route/feature chunks via
+`` import(`./page-hash.js`) `` (template literals) and katana caught **0** — a large real gap, not
+marginal. Shipped: the enumerator (renamed `esmimports.enumerate_esm_chunk_urls`) now does ONE bounded
+full-tree walk (`_jsast._walk`, capped at `_MAX_AST_NODES`) catching static `import`/`export … from`
+AND dynamic `import()` whose specifier is a static string OR a no-substitution template literal
+(`_dynamic_import_source`; a `${…}` template, a variable, or `import.meta` yields nothing — honest,
+never guessed). The fetch BFS follows them through the same egress guard + `crawl_max_assets` cap +
+cycle set as the static ones. Lease-safe by measurement (~8 s parse+walk on the real 8.5 MiB monolith;
+~12 s worst case at the 10 MiB fetch cap, under the 30 s lease with the pre-walk beat). §4: adversarial
+design self-review (full-walk DoS, interpolated-template rejection, volume) + higher-model code review =
+SHIP (invariants empirically verified; the `enumerate_chunk_urls`→`enumerate_esm_chunk_urls`
+disambiguation nit folded). **E2E on hackerone:** the run fanned out **10 → 500 assets** (493
+feature-page chunks, capped at `crawl_max_assets`) and **290 → 567 findings**, surfacing endpoints
+invisible before (`POST /graphql`, `GET /sample_report_templates.json`, `GET /invitations/${token}.json`).
+Tests: 21 extractor + 9 fetch-BFS (incl. the real Rolldown dynamic shape). **Accepted residuals (NOT
+owed):** recall is bounded by the 500-asset cap (tunable) and much of the deep route-chunk API surface
+lands in the unresolved/generic lanes — the D30 param-URL ceiling (accepted WON'T FIX); the fan-out
+makes a run heavier (~19 min). Related: D29, D30.
 
-#### D9 · Test-pyramid inversion [L, ongoing]  ·  maintainability
+#### D9 · Test-pyramid inversion [L, ongoing]  ·  maintainability  — 🚫 WON'T FIX (accepted 2026-09-01)
+> 🚫 **WON'T FIX (accepted 2026-09-01):** The fast hermetic layer is now ~half the suite and the heavy integration lane still catches most real bugs, so continuing to grow the small-test layer is acceptable to drop today — revisit if the integration-heavy suite's cost or flakiness starts slowing contributors.
 58 of 123 backend test files carry an integration marker (need live PG/Redis/MinIO); the fast
 hermetic layer is now ~half (≈65 files) — grown by the D9 slices below, no longer the clear
 minority — but the heavy lane still catches most real bugs. Grow the small-test layer.
@@ -796,7 +840,8 @@ uncovered lines are DB/queue semantics where a hermetic test buys mock-fiction):
 `spec/service.py`, `spec/base_url_service.py`, `findings/wrapper_service.py`,
 `findings/reextract.py`, `runs/service.py`, `runs/coordinator.py`, `probe/triage.py`.
 
-#### D11 · Files over the ~300-line cap [M] — ⏳ PARTIAL 2026-08-07 (extract.py split)  ·  maintainability
+#### D11 · Files over the ~300-line cap [M] — ⏳ PARTIAL 2026-08-07 (extract.py split)  ·  maintainability  — 🚫 WON'T FIX (accepted 2026-09-01)
+> 🚫 **WON'T FIX (accepted 2026-09-01):** The shipped `extract.py` split stays shipped; the remaining over-cap files are deliberately deferred with evidence (ORM-registration fragility in `db/models.py`, monkeypatch-breaking risk in `capture_router.py`, invariant-dense `analyze.py`) for near-zero behavior gain, so leaving them over the line cap is acceptable today — revisit if a file's size starts causing real merge/maintenance pain or a test-aware re-split is undertaken.
 `findings/extract.py` (639, 2.1x) was split into a 3-module import DAG — `_jsast.py`
 (leaf: tree-sitter parser/AST helpers + value dataclasses + param builders) ← `_base_env.py`
 (REQ-C2 base-URL resolution) ← `extract.py` (network-sink handlers + `extract()`).
@@ -824,7 +869,8 @@ Since the split, cross-chunk resolution + dataflow work has regrown all three ba
   D20/D22/source-map work): low priority (fetch is SSRF-fail-closed-critical — don't fragment).
 (Line counts re-measured 2026-08-23.)
 
-#### D5 · Coverage ratchet [ongoing]  ·  enforcement/tooling
+#### D5 · Coverage ratchet [ongoing]  ·  enforcement/tooling  — 🚫 WON'T FIX (accepted 2026-09-01)
+> 🚫 **WON'T FIX (accepted 2026-09-01):** The `--cov-fail-under=60` CI gate REMAINS enforced and is not removed or lowered; only the ongoing effort to ratchet the floor upward as coverage grows is being dropped — revisit if fast-lane coverage materially outgrows the 60% floor and locking in the gain is wanted.
 Floor is `--cov-fail-under=60` (fast-lane coverage is ~61%, grown by the D9 slice-1
 hermetic tests). **Ratcheted 55→58, then 58→60 on 2026-08-09** to lock in the gains.
 Ratchet the floor up as coverage grows; never lower it. (`.github/workflows/ci.yml` is
