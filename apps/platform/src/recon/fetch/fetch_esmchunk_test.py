@@ -98,6 +98,14 @@ def test_seeds_and_recurses_the_transitive_graph(wired: _Recorder) -> None:
     assert _MAIN_URL not in wired.fetched
 
 
+def test_follows_dynamic_import_route_chunk(wired: _Recorder) -> None:
+    # D38: a lazily-loaded route chunk reached only by a DYNAMIC import (template literal, nested
+    # in an arrow — the verified Rolldown shape) is now fetched + seeded by the BFS, not just a
+    # static `import "./x"`. route.js has no further imports, so exactly one chunk is seeded.
+    assert _call(b"const load=()=>import(`./route.js`);") == 1
+    assert [r["url"] for r in wired.seeded] == ["https://acme.test/static/route.js"]
+
+
 def test_out_of_scope_import_dropped_via_guard(wired: _Recorder) -> None:
     # An absolute cross-origin import -> fetch_url raises EgressBlocked -> dropped, but it WAS
     # routed through the guarded fetch (never seeded off a raw content URL); the in-scope

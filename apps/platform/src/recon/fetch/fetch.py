@@ -1086,9 +1086,10 @@ def _enumerate_and_seed_esm_chunks(
     max_bytes: int,
 ) -> int:
     """Best-effort: statically enumerate a native-ESM module graph from ``js`` (Vite/Rollup/
-    Rolldown ``import "./chunk.js"`` specifiers — NO execution, ``recon.findings.esmimports``),
-    RECURSIVELY fetch each sibling chunk THROUGH THE EGRESS GUARD, and seed it as an
-    already-fetched (OK) asset so analyze recovers its endpoints. Returns the number seeded.
+    Rolldown ``import "./chunk.js"`` static imports AND lazily-loaded ``import("./route.js")``
+    dynamic imports — NO execution, ``recon.findings.esmimports``), RECURSIVELY fetch each
+    sibling chunk THROUGH THE EGRESS GUARD, and seed it as an already-fetched (OK) asset so
+    analyze recovers its endpoints. Returns the number seeded.
 
     A transitive BFS (an ESM graph is deep: entry -> app -> app's own siblings), unlike the flat
     webpack ``.u`` map (:func:`_enumerate_and_seed_chunks`). Bounded + safe like that sibling:
@@ -1129,7 +1130,7 @@ def _enumerate_and_seed_esm_chunks(
             while queue and len(seeded) < remaining and attempts < settings.crawl_max_assets:
                 run_queries.raise_if_control_requested(tenant_id, run_id)  # REQ-A4 (before parse)
                 module_bytes, base = queue.popleft()
-                if job_id:  # beat BEFORE the (cheap, top-level) parse so it can't outlast the lease
+                if job_id:  # beat BEFORE the parse+walk (bounded) so it can't outlast the lease
                     progress.beat(
                         redis,
                         tenant_id=tenant_id,
@@ -1138,7 +1139,7 @@ def _enumerate_and_seed_esm_chunks(
                         done=done,
                         total=total,
                     )
-                for ref in esmimports.enumerate_import_urls(
+                for ref in esmimports.enumerate_esm_chunk_urls(
                     module_bytes.decode("utf-8", "replace"), max_urls=settings.crawl_max_assets
                 ):
                     if len(seeded) >= remaining or attempts >= settings.crawl_max_assets:
