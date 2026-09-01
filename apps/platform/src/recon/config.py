@@ -162,7 +162,13 @@ class Settings(BaseSettings):
     crawl_enumerate_chunks: bool = True  # env: RECON_CRAWL_ENUMERATE_CHUNKS
     crawl_depth: int = 3
     crawl_duration_seconds: float = 120.0
-    crawl_max_assets: int = 500
+    # Ceiling on assets fetched + analyzed per run. This is a SECONDARY fail-closed bound: the
+    # PRIMARY runaway guards are crawl_duration_seconds + crawl_max_output_bytes + the global
+    # outbound fetch-rate budget, which bound the work by time and bytes regardless of the count.
+    # 500 was too low for large bundle-split SPAs (a run that hits it marks DISCOVER "capped" and
+    # the run "partial"), so it is raised to 2000. A genuinely larger target lifts it via env with
+    # no rebuild — env: RECON_CRAWL_MAX_ASSETS. Non-positive is not special-cased; keep it > 0.
+    crawl_max_assets: int = 2000
     crawl_max_output_bytes: int = 32 * 1024 * 1024  # 32 MiB
     crawl_heartbeat_interval_seconds: float = 10.0
     crawl_kill_grace_seconds: float = 15.0
