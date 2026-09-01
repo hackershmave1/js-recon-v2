@@ -226,3 +226,25 @@ def test_collect_definitions_soft_misses_unparseable_without_dropping_others():
 
 def test_collect_definitions_empty_source():
     assert collect_definitions("const x = 1;") == ()
+
+
+# --- body_digest: anonymous-operation identity disambiguator (review fix #2) ---- #
+
+
+def test_parse_definitions_anonymous_op_has_body_digest():
+    (d,) = parse_definitions("{ health }")
+    assert d.kind == "query"
+    assert d.name is None
+    assert d.body_digest is not None
+    assert len(d.body_digest) == 12
+
+
+def test_parse_definitions_named_op_has_no_body_digest():
+    (d,) = parse_definitions("query Me { me }")
+    assert d.body_digest is None
+
+
+def test_parse_definitions_distinct_anonymous_ops_get_distinct_digests():
+    (a,) = parse_definitions("{ health }")
+    (b,) = parse_definitions("{ status }")
+    assert a.body_digest != b.body_digest

@@ -28,6 +28,7 @@ pure (no DB, no storage, no network); analyze persists the result and the export
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, replace
 
 from graphql import (
@@ -36,6 +37,7 @@ from graphql import (
     GraphQLSyntaxError,
     OperationDefinitionNode,
     parse,
+    print_ast,
 )
 from tree_sitter import Node, Parser
 
@@ -71,6 +73,7 @@ class GraphQLDefinition:
     name: str | None  # operation/fragment name, or None for an anonymous operation
     fields: tuple[str, ...]  # top-level selection field names
     on_type: str | None = None  # fragment type condition; None for an operation
+    body_digest: str | None = None  # print_ast digest of an anonymous op body (identity)
     line: int | None = None  # 1-based line of the call-site in the JS bundle
     col: int | None = None  # 0-based column of the call-site
     offset_start: int | None = None  # byte offsets of the document node in the JS bundle
@@ -178,14 +181,22 @@ def parse_definitions(document: str) -> tuple[GraphQLDefinition, ...]:
     definitions: list[GraphQLDefinition] = []
     for definition in document_node.definitions:
         if isinstance(definition, OperationDefinitionNode):
+            op_name = definition.name.value if definition.name else None
             definitions.append(
                 GraphQLDefinition(
                     kind=definition.operation.value,
-                    name=definition.name.value if definition.name else None,
+                    name=op_name,
                     fields=tuple(
                         selection.name.value
                         for selection in definition.selection_set.selections
                         if isinstance(selection, FieldNode)
+                    ),
+                    # An anonymous op has no name; a print_ast digest of its body keeps its
+                    # identity distinct (S2 can leave `fields` empty for a spread-only op).
+                    body_digest=(
+                        None
+                        if op_name
+                        else hashlib.sha256(print_ast(definition).encode("utf-8")).hexdigest()[:12]
                     ),
                 )
             )

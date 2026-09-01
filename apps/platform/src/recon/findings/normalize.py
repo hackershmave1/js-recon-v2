@@ -317,6 +317,34 @@ def normalize_secret_value(raw_token: str, rule_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# GraphQL value normalization
+# ---------------------------------------------------------------------------
+
+
+def normalize_graphql_value(
+    kind: str, name: str | None, on_type: str | None = None, body_digest: str | None = None
+) -> str:
+    """Path-free identity ``value`` for a GraphQL definition finding.
+
+    - fragment: ``fragment <name> on <on_type>``
+    - named operation: ``<kind> <name>`` (e.g. ``mutation CreateOrganizationApiToken``)
+    - anonymous operation: ``<kind> · <body_digest>`` — a short print_ast digest of the op
+      body, supplied by the caller (this module stays graphql-core-free). It disambiguates
+      spread-only anonymous ops, whose top-level FieldNode set is empty and would otherwise all
+      collapse to one identity (review fix #2).
+
+    GraphQL op names are conventionally unique, so two ops sharing a name but with different
+    selections deliberately merge to one finding (only ``attributes.fields`` differs) — the same
+    accepted identity behavior as the endpoint same-path merge.
+    """
+    if kind == "fragment":
+        return f"fragment {name} on {on_type}"
+    if name:
+        return f"{kind} {name}"
+    return f"{kind} · {body_digest or 'anonymous'}"
+
+
+# ---------------------------------------------------------------------------
 # Hashing (§5)
 # ---------------------------------------------------------------------------
 
