@@ -177,6 +177,21 @@ export function App() {
     refresh();
   }
 
+  // Add a host observed serving out-of-scope scripts to the scope (D44) — the one-click fix for a
+  // CDN-apex / separate host that the operator wants to pull in. Appends (doesn't replace) so the
+  // existing scope is preserved.
+  async function addScopeHost(host) {
+    const h = String(host || '').trim().replace(/^\*\./, '');
+    if (!h) return;
+    const current = settings?.domainScopes || [];
+    if (current.includes(h)) { showToast(`${h} already in scope`); return; }
+    const patch = { domainScopes: [...current, h], useDomainScope: true };
+    setSettings((prev) => ({ ...(prev || {}), ...patch }));
+    await api.updateSettings(patch);
+    showToast(`Added ${h} to scope`);
+    refresh();
+  }
+
   // Central login: authenticate to the workspace, then mirror the identity into local
   // settings so the popup reflects it immediately (adoptSettings won't re-pull from the
   // worker once settings is the edit source of truth). Returns the raw result for the form.
@@ -397,6 +412,17 @@ export function App() {
   // (testing/fail); otherwise the health comes from actual upload/skip/failure outcomes.
   const delivery = deriveDelivery(status);
   const deliveryVm = { ...delivery, lastFile: delivery.lastUrl ? basename(delivery.lastUrl) : '' };
+  // Out-of-scope script hosts to suggest (D44), minus any already covered by the current scope so a
+  // host disappears from the list once added (mirrors the isInScope exact/suffix gate).
+  const scopedSet = new Set((settings.domainScopes || []).map((s) => s.toLowerCase()));
+  const withSubs = settings.includeSubdomains !== false;
+  const outOfScopeHosts = (status.outOfScopeHosts || []).filter(({ host }) => {
+    const h = String(host || '').toLowerCase();
+    if (!h || scopedSet.has(h)) return false;
+    if (withSubs) { for (const s of scopedSet) if (h.endsWith('.' + s)) return false; }
+    return true;
+  });
+
   const health = connState === 'testing' ? 'testing' : connState === 'fail' ? 'fail' : delivery.health;
   const connectionLabel =
     health === 'testing' ? 'testing…'
@@ -416,6 +442,8 @@ export function App() {
     scopeMode,
     activeHost,
     armScope,
+    outOfScopeHosts,
+    addScopeHost,
     includeSubdomains: settings.includeSubdomains !== false,
     startNewSession,
     startScopeDefault: (settings.domainScopes || []).join(', ') || activeHost || '',

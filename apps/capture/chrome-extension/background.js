@@ -45,6 +45,10 @@ class JSExtractor {
     // one; overwritten in initialize() before any capture/message listener attaches.
     this.sessionId = this.sessionStore.generate();
     this.totalCapturedBytes = 0;
+    // Out-of-scope script hosts observed this session (host -> hit count). A discovery aid (D44):
+    // app JS served from a separate apex (e.g. a CDN) falls outside the target root and is dropped;
+    // surfacing the host lets the operator one-click add it instead of silently missing that bundle.
+    this.outOfScopeHosts = new Map();
     this.processingStats = {
       processedFiles: 0,
       failedFiles: 0,
@@ -52,6 +56,7 @@ class JSExtractor {
       lastFailureUrl: null,
       lastFailureMessage: null
     };
+    this.outOfScopeHosts.clear();
 
     this.limits = {
       // NOTE: must not exceed the backend's per-file cap (SecurityValidator.
@@ -276,8 +281,14 @@ class JSExtractor {
 
   async handleRequest(details) {
     if (!this.isCapturing) return;
-    if (!this.isInScope(details.url)) return;
     if (this.isExtensionRequest(details)) return;
+    if (!this.isInScope(details.url)) {
+      // Out-of-scope SCRIPT (the webRequest listener filters types:["script"], so every drop here
+      // is a script the page loaded). Record the host as a discovery hint (D44) before dropping, so
+      // the popup can surface a CDN-apex/separate host that served app JS and offer a one-click add.
+      this.noteOutOfScopeScript(details.url);
+      return;
+    }
     if (this.shouldSkipUrl(details.url, details.documentUrl)) return;
 
     const authContext = this.authTracker.consume(details.requestId, details.url);
@@ -727,8 +738,22 @@ class JSExtractor {
   }
 
   isExtensionRequest(details) {
-    return details.initiator && 
+    return details.initiator &&
            details.initiator.startsWith('chrome-extension://');
+  }
+
+  // Record an out-of-scope script host as a discovery hint (D44). Skips the workspace's own origin
+  // and denylisted hosts (trackers/CMS noise) so the popup only suggests plausible target hosts.
+  // Bounded at 50 distinct hosts so a busy tab can't grow this unboundedly.
+  noteOutOfScopeScript(url) {
+    try {
+      if (this.isWorkspaceUrl(url)) return;
+      if (matchesDenylist(url, this.settings.denyRules || [], this.settings.denyDefaultProfile !== false)) return;
+      const host = new URL(url).hostname.toLowerCase();
+      if (!host) return;
+      if (!this.outOfScopeHosts.has(host) && this.outOfScopeHosts.size >= 50) return;
+      this.outOfScopeHosts.set(host, (this.outOfScopeHosts.get(host) || 0) + 1);
+    } catch (e) { /* ignore malformed URL */ }
   }
 
   scheduleQueueProcessing() {
@@ -1045,6 +1070,7 @@ class JSExtractor {
       lastFailureUrl: null,
       lastFailureMessage: null
     };
+    this.outOfScopeHosts.clear();
     // Drop the engagement binding: clear the live uploader config AND the persisted snapshot so a
     // respawn can't re-bind the fresh session to the old engagement.
     this.batchUploader.setConfig(null);
@@ -1087,6 +1113,7 @@ class JSExtractor {
       lastFailureUrl: null,
       lastFailureMessage: null
     };
+    this.outOfScopeHosts.clear();
 
     // Apply the client-resolved effective config. The popup resolved (project.defaults +
     // per-session overrides) and sent the snapshot; here we map it onto the flat capture-gate
@@ -1178,6 +1205,7 @@ class JSExtractor {
       lastFailureUrl: null,
       lastFailureMessage: null
     };
+    this.outOfScopeHosts.clear();
     sendResponse({ success: true });
   }
 
@@ -1200,6 +1228,7 @@ class JSExtractor {
       secretCount,
       queueLength: this.processingQueue.length,
       processingStats: this.processingStats,
+      outOfScopeHosts: [...this.outOfScopeHosts.entries()].map(([host, count]) => ({ host, count })),
       uploader: uploaderStats,
       projectId: uploaderStats.projectId || null,
       standalone: !uploaderStats.projectId,

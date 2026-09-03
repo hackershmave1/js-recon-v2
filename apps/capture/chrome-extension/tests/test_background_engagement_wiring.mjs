@@ -21,7 +21,7 @@ assert.match(bg, /standalone:\s*!uploaderStats\.projectId,/, 'getStatus returns 
 // captured state, and clear BOTH the live uploader config and the persisted snapshot.
 const resetStart = bg.indexOf('async resetCaptureSession(');
 assert.ok(resetStart >= 0, 'resetCaptureSession() is defined');
-const resetBody = bg.slice(resetStart, resetStart + 1600);
+const resetBody = bg.slice(resetStart, resetStart + 1800);
 assert.match(resetBody, /this\.sessionStore\.rotate\(\)/, 'reset rotates to a fresh session id');
 assert.match(resetBody, /this\.batchUploader\.setConfig\(null\)/, 'reset clears the live uploader binding');
 assert.match(resetBody, /remove\('pendingSessionConfig'\)/, 'reset clears the persisted binding snapshot');
