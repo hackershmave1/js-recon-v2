@@ -202,6 +202,9 @@ export function HomeView({ vm }) {
   // Scope-badge colour tracks the real capture-gate state: red = wide open (all tabs),
   // amber = no scope (capturing nothing), lime = scoped.
   const scopeColor = vm.scopeMode === 'open' ? C.orange : vm.scopeMode === 'none' ? C.amber : C.lime;
+  // Connection dot/label colour = real delivery health (D42), no longer a fake constant green.
+  const healthColor = { ok: C.lime, warn: C.amber, fail: C.orange, testing: C.blue }[vm.deliveryHealth] || C.lime;
+  const d = vm.delivery || { uploaded: 0, pending: 0, failedTotal: 0, paired: null, lastReason: '', lastFile: '' };
   const statBox = (value, label, color) => (
     <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: '11px', padding: '12px' }}>
       <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: '22px', lineHeight: 1, color: color || C.text }}>{value}</div>
@@ -229,8 +232,8 @@ export function HomeView({ vm }) {
         }}><SearchIcon /></div>
         <div style={{ flex: 1, lineHeight: 1.05 }}>
           <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: '14px', letterSpacing: '-0.2px' }}>RECON Capture</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10.5px', color: C.lime, fontFamily: F.mono, marginTop: '1px' }}>
-            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: C.lime, boxShadow: `0 0 6px ${C.lime}` }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10.5px', color: healthColor, fontFamily: F.mono, marginTop: '1px' }}>
+            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: healthColor, boxShadow: `0 0 6px ${healthColor}` }} />
             {vm.connectionLabel}
           </div>
         </div>
@@ -302,6 +305,33 @@ export function HomeView({ vm }) {
         {statBox(vm.stats.js, 'scripts')}
         {statBox(vm.stats.maps, 'maps', C.teal)}
         {statBox(vm.stats.secrets, 'secrets', C.pink)}
+      </div>
+
+      {/* delivery — real upload/skip/failure health, not just captured counts (D42) */}
+      <div style={{ padding: '0 17px 15px' }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '10px', background: C.inset,
+          border: `1px solid ${C.lineStrong}`, borderRadius: '10px', padding: '9px 12px'
+        }}>
+          <span style={{ fontSize: '10px', color: C.faint, fontWeight: 700, letterSpacing: '0.6px' }}>DELIVERY</span>
+          <span style={{
+            flex: 1, minWidth: 0, display: 'flex', gap: '13px', fontFamily: F.mono, fontSize: '11px',
+            whiteSpace: 'nowrap', overflow: 'hidden'
+          }}>
+            <span style={{ color: C.teal }}>{d.uploaded} sent</span>
+            <span style={{ color: d.pending > 0 ? C.textSoft : C.dim }}>{d.pending} pending</span>
+            <span style={{ color: d.failedTotal > 0 ? C.orange : C.dim }}>{d.failedTotal} failed</span>
+            {d.paired === false && <span style={{ color: C.orange }}>not paired</span>}
+          </span>
+        </div>
+        {d.failedTotal > 0 && d.lastReason && (
+          <div style={{
+            fontSize: '10px', color: C.faint, marginTop: '6px',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+          }}>
+            last: {d.lastReason}{d.lastFile ? ` · ${d.lastFile}` : ''}
+          </div>
+        )}
       </div>
 
       {/* analyze on demand (decoupled from capture) */}

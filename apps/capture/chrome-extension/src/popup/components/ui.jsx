@@ -39,21 +39,36 @@ export function Dot({ color, size = 8, pulse = false }) {
   );
 }
 
-// Bottom-centred confirmation toast.
-export function Toast({ message }) {
-  if (!message) return null;
+// Bottom-centred toast. `toast` is { msg, tone } — tone drives colour + icon so a failure no
+// longer reads as a green success (D42): 'ok' = lime check, 'warn' = amber alert, 'error' =
+// orange alert. Errors/warnings also linger longer (set by the caller's timeout).
+const TOAST_TONE = {
+  ok: { color: C.lime, border: C.lineHover },
+  warn: { color: C.amber, border: 'rgba(240,199,94,0.45)' },
+  error: { color: C.orange, border: 'rgba(255,138,71,0.45)' }
+};
+
+export function Toast({ toast }) {
+  if (!toast) return null;
+  const { msg, tone = 'ok' } = toast;
+  const t = TOAST_TONE[tone] || TOAST_TONE.ok;
+  const alert = tone === 'error' || tone === 'warn';
   return (
-    <div style={{
+    <div role="status" style={{
       position: 'absolute', bottom: '12px', left: '50%', transform: 'translateX(-50%)',
-      background: '#1a1f2c', border: `1px solid ${C.lineHover}`, borderRadius: '9px',
-      padding: '9px 15px', fontSize: '11.5px', color: C.lime, display: 'flex',
-      alignItems: 'center', gap: '7px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)', zIndex: 10
+      background: '#1a1f2c', border: `1px solid ${t.border}`, borderRadius: '9px',
+      padding: '9px 15px', fontSize: '11.5px', color: t.color, display: 'flex',
+      alignItems: 'center', gap: '7px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)', zIndex: 10,
+      maxWidth: '340px'
     }}>
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-           stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M20 6 9 17l-5-5" />
+           stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+           style={{ flex: '0 0 auto' }}>
+        {alert
+          ? <g><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4" /><path d="M12 17h.01" /></g>
+          : <path d="M20 6 9 17l-5-5" />}
       </svg>
-      {message}
+      {msg}
     </div>
   );
 }

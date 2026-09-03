@@ -9,6 +9,7 @@ import { LoginView } from './components/LoginView.jsx';
 import * as api from './api.js';
 import { resolveEffectiveConfig, splitEffective, configFromSettings } from '../../modules/project-config.js';
 import { reconcileActiveProject, activeProjectName } from '../../modules/active-engagement.js';
+import { deriveDelivery } from '../../modules/delivery-health.js';
 
 const NOISE = new Set(['lib', 'cms', 'tracker']);
 
@@ -121,10 +122,12 @@ export function App() {
     return () => { alive = false; clearInterval(id); };
   }, [analysis.status]);
 
-  function showToast(msg) {
-    setToast(msg);
+  // toast holds { msg, tone }; tone ∈ ok|warn|error drives colour/icon (ui.jsx). Failures linger
+  // longer than the 2.2s success flash so an error can actually be read (D42).
+  function showToast(msg, tone = 'ok') {
+    setToast({ msg, tone });
     clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 2200);
+    toastTimer.current = setTimeout(() => setToast(null), tone === 'ok' ? 2200 : 4200);
   }
 
   function patchSettings(patch) {
@@ -139,7 +142,7 @@ export function App() {
     // fail-closed backend (or leaks into the shared tenant), so send the operator to
     // sign in first instead of piling doomed captures into the outbox.
     if (next && !settings?.authToken) {
-      showToast('Sign in to capture');
+      showToast('Sign in to capture', 'warn');
       setView('settings');
       return;
     }
@@ -221,7 +224,7 @@ export function App() {
       setOverrides({});
       showToast(selected ? `New session · ${selected.name}` : 'New standalone session');
     } else {
-      showToast('Could not start session');
+      showToast('Could not start session', 'error');
     }
     refresh();
   }
@@ -232,7 +235,7 @@ export function App() {
       api.downloadJson(res.exportData, res.filename || 'js-extraction.json');
       showToast('Export downloaded');
     } else {
-      showToast(res?.error ? 'Export failed' : 'Nothing to export');
+      showToast(res?.error ? 'Export failed' : 'Nothing to export', res?.error ? 'error' : 'warn');
     }
   }
 
@@ -247,7 +250,7 @@ export function App() {
       setAnalysis((a) => ({ ...a, status: 'running' }));
     } else {
       setAnalysis((a) => ({ ...a, status: 'idle' }));
-      showToast(res?.error === 'timeout' ? 'Analyze timed out' : 'Analyze failed');
+      showToast(res?.error === 'timeout' ? 'Analyze timed out' : 'Analyze failed', 'error');
     }
   }
 
@@ -272,7 +275,7 @@ export function App() {
       showToast(`Connection OK · ${res.latencyMs} ms`);
     } else {
       setConnState('fail'); setLatency('timeout');
-      showToast('Connection failed');
+      showToast('Connection failed', 'error');
     }
   }
 
@@ -316,7 +319,7 @@ export function App() {
         borderRadius: '0', overflow: 'hidden', color: C.text, position: 'relative'
       }}>
         <LoginView vm={loginVm} />
-        <Toast message={toast} />
+        <Toast toast={toast} />
       </div>
     );
   }
@@ -363,9 +366,24 @@ export function App() {
   // against the fetched list so a deleted / different-tenant id renders as Solo, not a phantom.
   const activeProjectId = reconcileActiveProject(status.projectId, projects);
 
+  // Real delivery health from the worker's uploader + processing stats — the D42 fix for a popup
+  // that hid "captured nothing" / "never uploaded". A manual connection test still overrides
+  // (testing/fail); otherwise the health comes from actual upload/skip/failure outcomes.
+  const delivery = deriveDelivery(status);
+  const deliveryVm = { ...delivery, lastFile: delivery.lastUrl ? basename(delivery.lastUrl) : '' };
+  const health = connState === 'testing' ? 'testing' : connState === 'fail' ? 'fail' : delivery.health;
+  const connectionLabel =
+    health === 'testing' ? 'testing…'
+      : health === 'fail'
+        ? (delivery.paired === false && !delivery.lastReason ? 'not paired · check sign-in' : 'delivery failing')
+        : health === 'warn' ? `${delivery.skipped} skipped`
+          : delivery.paired === true ? 'connected · delivering' : 'connected to workspace';
+
   const homeVm = {
     capturing: status.isCapturing,
-    connectionLabel: connState === 'fail' ? 'workspace unreachable' : 'connected to workspace',
+    connectionLabel,
+    deliveryHealth: health,
+    delivery: deliveryVm,
     host: status.host || activeHost || '—',
     session: (status.sessionId || '').slice(0, 8) || '—',
     scope: scopeText,
@@ -392,7 +410,7 @@ export function App() {
       }),
     createProject: async (name, rootDomains) => {
       const cleanName = String(name || '').trim();
-      if (!cleanName) { showToast('Project name required'); return { success: false }; }
+      if (!cleanName) { showToast('Project name required', 'warn'); return { success: false }; }
       const res = await api.createProject({
         name: cleanName,
         defaults: { scope: { rootDomains: String(rootDomains || '').split(/[\s,]+/).filter(Boolean) } }
@@ -403,7 +421,7 @@ export function App() {
         setOverrides({});
         showToast(`Project created · ${res.project.name}`);
       } else {
-        showToast(res?.error ? `Create failed: ${res.error}` : 'Could not create project');
+        showToast(res?.error ? `Create failed: ${res.error}` : 'Could not create project', 'error');
       }
       return res;
     },
