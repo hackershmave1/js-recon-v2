@@ -48,7 +48,9 @@ export interface SpecStatus {
 export interface Sightings { capture: number; platform: number; }
 export interface Finding {
   finding_hash: string; type: string; value: string | null; path: string | null;
-  severity: string | null; attributes: Record<string, unknown>; first_stage: string | null;
+  // D49: read-time priority 0-100 (type + risk tags); `severity` is its label. Optional so
+  // pre-D49 fixtures/responses stay valid.
+  severity: string | null; priority?: number; attributes: Record<string, unknown>; first_stage: string | null;
   revealable: boolean; triage: Triage | null; spec_status: SpecStatus | null;
   sightings?: Sightings | null; occurrences: Occurrence[];
 }

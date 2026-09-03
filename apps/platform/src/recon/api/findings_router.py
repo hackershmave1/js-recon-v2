@@ -43,6 +43,8 @@ def get_run_findings(
                 "value": finding.value,
                 "path": finding.path,
                 "severity": finding.severity,
+                # D49: 0-100 read-time priority (type + risk tags); `severity` is its label.
+                "priority": finding.priority,
                 "attributes": finding.attributes,
                 "first_stage": finding.first_stage,
                 "revealable": finding.revealable,

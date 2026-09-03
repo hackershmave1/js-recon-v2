@@ -142,4 +142,32 @@ describe("FindingsPage", () => {
     withFindings([f({ finding_hash: "x", value: "GET /a", sightings: { capture: 0, platform: 0 } })]);
     expect(screen.queryByText(/group its session under an engagement/i)).toBeNull();
   });
+
+  // D49: prioritization — severity pills, risk-tag chips + facet, and priority-first default sort.
+  it("shows severity pills + risk-tag chips and a Risk facet", () => {
+    withFindings([
+      f({ finding_hash: "crit", type: "secret", value: "aws:sha256:z", severity: "critical", priority: 100 }),
+      f({ finding_hash: "risk", type: "endpoint", value: "GET /api/admins", severity: "high", priority: 70, attributes: { risk_tags: ["admin"] } }),
+    ]);
+    expect(screen.getByText("critical")).toBeInTheDocument();
+    expect(screen.getByText("high")).toBeInTheDocument();
+    // "admin" renders both as a row chip and as a Risk facet option
+    expect(screen.getAllByText("admin").length).toBeGreaterThan(0);
+    expect(within(rail()).getByText("Risk")).toBeInTheDocument();
+  });
+
+  it("defaults to priority sort (highest first) and can switch to source order", async () => {
+    withFindings([
+      f({ finding_hash: "low", type: "page_route", value: "/home", severity: "low", priority: 15 }),
+      f({ finding_hash: "crit", type: "secret", value: "SECRETVAL", severity: "critical", priority: 100 }),
+    ]);
+    const order = () => [...document.querySelectorAll(".fp-rowbtn")].map((r) => r.textContent || "");
+    // default sort=priority: the critical secret precedes the low page route even though it's 2nd in the data
+    let rows = order();
+    expect(rows.findIndex((t) => t.includes("SECRETVAL"))).toBeLessThan(rows.findIndex((t) => t.includes("/home")));
+    // switching to Default restores source order (low first)
+    await userEvent.selectOptions(screen.getByLabelText(/sort findings/i), "default");
+    rows = order();
+    expect(rows.findIndex((t) => t.includes("/home"))).toBeLessThan(rows.findIndex((t) => t.includes("SECRETVAL")));
+  });
 });

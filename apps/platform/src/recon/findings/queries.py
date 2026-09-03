@@ -34,7 +34,7 @@ from recon.db.models import (
     SessionWrapper,
 )
 from recon.domain import FindingType
-from recon.findings import noise_hosts
+from recon.findings import noise_hosts, priority
 from recon.findings.base_url import BaseUrlRule
 from recon.findings.wrappers import WrapperRule
 from recon.spec.classify import Classification, SpecSummary, summarize
@@ -103,6 +103,9 @@ class FindingView:
     attributes: dict[str, Any]
     first_stage: str | None
     occurrences: list[OccurrenceView]
+    # D49: a deterministic 0-100 priority derived at read time from type + risk tags, so an
+    # operator has a real sort key on a big run. `severity` carries the matching label.
+    priority: int = 0
     triage: TriageView | None = None
     revealable: bool = False
     spec_status: SpecStatusView | None = None
@@ -602,15 +605,19 @@ def _finding_view(
             for o in finding.occurrences
         )
     )
+    # D49: derive a read-time priority (score + label) from type + risk tags. Prefer any stored
+    # severity if a future pipeline ever sets it; otherwise the derived label fills the column.
+    score, label = priority.derive_priority(finding.type, finding.attributes or {})
     return FindingView(
         finding_hash=finding.finding_hash,
         type=finding.type,
         value=finding.value,
         path=finding.path,
-        severity=finding.severity,
+        severity=finding.severity or label,
         attributes=dict(finding.attributes or {}),
         first_stage=finding.first_stage,
         occurrences=occurrences,
+        priority=score,
         triage=_triage_view(triage_row),
         revealable=revealable,
         spec_status=_spec_status_view(spec_status_row),

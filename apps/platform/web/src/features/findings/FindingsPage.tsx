@@ -11,14 +11,20 @@ import { useResizableRail } from "../../shell/useResizableRail";
 import { Icon } from "../../shell/icons";
 import "./findings.css";
 
-// Real-field facets only. The design also offers Severity / Scope / Detection-engine /
-// Confidence filters; those are omitted because production findings carry
-// severity = null and the backend doesn't classify scope/engine-plurality yet.
-type FacetKey = "type" | "class" | "triage" | "host";
-const FACET_KEYS: FacetKey[] = ["type", "class", "triage", "host"];
+// Real-field facets only. Severity/Scope/Detection-engine/Confidence were omitted while findings
+// carried severity = null; D49 now derives a priority + surfaces risk tags, so "Risk" is a real
+// facet and severity drives the default sort. Scope/engine-plurality remain unclassified.
+type FacetKey = "type" | "class" | "triage" | "host" | "risk";
+const FACET_KEYS: FacetKey[] = ["type", "class", "triage", "host", "risk"];
 const FACET_LABELS: Record<FacetKey, string> = {
-  type: "Type", class: "Classification", triage: "Triage", host: "Host",
+  type: "Type", class: "Classification", triage: "Triage", host: "Host", risk: "Risk",
 };
+
+// D49: risk tags (auth/admin/idor/flag) ride in `attributes.risk_tags` — pull them out defensively.
+function riskTags(f: Finding): string[] {
+  const raw = (f.attributes as { risk_tags?: unknown })?.risk_tags;
+  return Array.isArray(raw) ? raw.filter((t): t is string => typeof t === "string") : [];
+}
 
 function facetValues(f: Finding, key: FacetKey): string[] {
   switch (key) {
@@ -28,6 +34,8 @@ function facetValues(f: Finding, key: FacetKey): string[] {
     case "triage": return [f.triage?.status ?? "untriaged"];
     // multi-valued: a finding matches the Host facet if ANY sighting is on a chosen host.
     case "host": return f.occurrences.map((o) => o.host).filter((h): h is string => !!h);
+    // multi-valued: a finding matches the Risk facet if it carries ANY chosen risk tag.
+    case "risk": return riskTags(f);
   }
 }
 
@@ -55,6 +63,8 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
 }) {
   const [sel, setSel] = useState<Record<string, Set<string>>>({});
   const [query, setQuery] = useState("");
+  // D49: default to priority order so the highest-risk surface is at the top of a big run.
+  const [sortBy, setSortBy] = useState<"priority" | "default">("priority");
   const [selected, setSelected] = useState<Finding | null>(null);
   const { width: railWidth, collapsed: railCollapsed, toggleCollapsed: toggleRail, resizerProps } = useResizableRail("findings");
   // #3: analytics/telemetry/vendor hosts are hidden by default; this toggle re-fetches the run's
@@ -86,6 +96,15 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
     }
     return matchesQuery(f, query);
   }), [view.findings, sel, query]);
+
+  // D49: priority sort (highest first), stable on ties so the natural order is preserved within a band.
+  const sorted = useMemo(() => {
+    if (sortBy === "default") return visible;
+    return visible
+      .map((f, i) => [f, i] as const)
+      .sort((a, b) => (b[0].priority ?? 0) - (a[0].priority ?? 0) || a[1] - b[1])
+      .map(([f]) => f);
+  }, [visible, sortBy]);
 
   const anyFilter = query !== "" || Object.values(sel).some((s) => s.size > 0);
 
@@ -152,6 +171,12 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
             )}
             <input value={query} onChange={(e) => setQuery(e.target.value)}
               placeholder="Search value, path, host…" aria-label="Search findings" />
+            <select className="fp-sort" value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as "priority" | "default")}
+              aria-label="Sort findings">
+              <option value="priority">Sort: Priority</option>
+              <option value="default">Sort: Default</option>
+            </select>
           </div>
           {ungrouped && (
             <div className="fp-sightings-hint">
@@ -163,7 +188,7 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
             <div className="fp-empty">No findings match.</div>
           ) : (
             <ul className="fp-list">
-              {visible.map((f) => {
+              {sorted.map((f) => {
                 const cls = f.spec_status?.status ?? "unclassified";
                 const host = f.occurrences.find((o) => o.host)?.host;
                 const triage = f.triage?.status ?? "untriaged";
@@ -180,10 +205,18 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                       className={"fp-rowbtn" + (selected?.finding_hash === f.finding_hash ? " sel" : "")}
                       onClick={() => setSelected(f)}>
                       <span className="fp-row-top">
+                        {f.severity && (
+                          <span className={`fp-sev fp-sev-${f.severity}`}
+                            title={`Priority ${f.priority ?? 0}/100`}>{f.severity}</span>
+                        )}
                         <span className={`fp-type fp-type-${f.type}`}>{typeLabel(f.type)}</span>
                         <span className={`chip chip-${cls}`}>{cls}</span>
                         <span className="fp-val">{f.value ?? f.path ?? "(unnamed)"}</span>
                         {host && <span className="fp-host">{host}</span>}
+                        {riskTags(f).map((t) => (
+                          <span key={t} className={`fp-risk fp-risk-${t}`}
+                            title={`Risk: ${t}`}>{t}</span>
+                        ))}
                         <span className="chip">{triage}</span>
                         {sight && (
                           <span className="chip chip-sightings"
