@@ -95,11 +95,15 @@ def reveal_secret_value(
 
 
 def _request_dict(request: ReconstructedRequest) -> dict:
-    artifacts = (
-        None
-        if not request.probeable
-        else {"curl": serialize.to_curl(request), "http": serialize.to_http(request)}
-    )
+    if request.probeable:
+        artifacts: dict[str, str | None] | None = {
+            "curl": serialize.to_curl(request),
+            "http": serialize.to_http(request),
+        }
+    else:
+        # D51: a WS/WSS op isn't HTTP-probeable, but emit a websocat scaffold instead of a dead end.
+        websocat = serialize.to_websocat(request)
+        artifacts = {"websocat": websocat} if websocat else None
     return {
         "operation": request.operation,
         "method": request.method,

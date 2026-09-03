@@ -112,13 +112,14 @@ export interface WrapperRule {
 }
 export interface WrapperRuleResult { rule: WrapperRule; recovered: number; }
 // One reconstructed request from GET /runs/{id}/requests (probe_router::_request_dict).
-// `artifacts` is null when `probeable` is false.
+// `artifacts` is null when there's nothing to run. A probeable HTTP request carries
+// { curl, http }; a WS/WSS op carries { websocat } (D51) instead of dead-ending.
 export interface ReconstructedRequest {
   operation: string; method: string; path: string; hosts: string[];
   query_params: { name: string; example: string | null }[];
   body_params: string[]; content_type: string | null; example_url: string | null;
   probeable: boolean; endpoint_hashes: string[];
-  artifacts: { curl: string; http: string } | null;
+  artifacts: { curl?: string; http?: string; websocat?: string } | null;
 }
 export interface RequestsResponse { run_id: string; count: number; requests: ReconstructedRequest[]; }
 // One stored source file for a run (GET /runs/{id}/sources). `path` is "input.js"

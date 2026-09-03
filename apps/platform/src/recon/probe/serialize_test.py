@@ -85,6 +85,65 @@ def test_curl_caps_oversized_url():
     assert huge_host not in out  # the oversized host should not appear in full
 
 
+# --- D51: emit the observed auth header + a websocat scaffold ---
+
+
+def test_curl_emits_observed_bearer_auth_and_drops_the_stub_comment():
+    out = serialize.to_curl(_req(auth=(("Authorization", "bearer"),)))
+    assert "-H 'Authorization: Bearer <token>'" in out
+    assert "# add auth/headers here" not in out  # the stub is replaced by a real header
+
+
+def test_http_emits_observed_auth_header():
+    out = serialize.to_http(_req(auth=(("Authorization", "bearer"), ("X-Api-Key", None))))
+    assert "Authorization: Bearer <token>" in out
+    assert "X-Api-Key: <X-Api-Key>" in out  # unknown scheme -> a named placeholder slot
+    assert "# add auth/headers here" not in out
+
+
+def test_auth_header_name_is_control_free():
+    # header name is attacker-influenced (JS literal) — CR/LF must not inject a new line.
+    out = serialize.to_http(_req(auth=(("X-Evil\r\nInjected", "bearer"),)))
+    assert "\r" not in out
+    assert "\nInjected" not in out
+
+
+def test_websocat_scaffold_for_a_ws_operation():
+    req = _req(
+        operation="WSS /socket",
+        method="WSS",
+        path="/socket",
+        example_url="wss://api.acme.io/socket",
+        body_params=(),
+        content_type=None,
+        probeable=False,
+        auth=(("Authorization", "bearer"),),
+    )
+    out = serialize.to_websocat(req)
+    assert out is not None
+    assert "websocat " in out
+    assert "'wss://api.acme.io/socket'" in out
+    assert "-H 'Authorization: Bearer <token>'" in out
+
+
+def test_websocat_forces_ws_scheme_when_url_is_httpish():
+    req = _req(
+        operation="WS /s",
+        method="WS",
+        path="/s",
+        example_url="http://h/s",
+        body_params=(),
+        content_type=None,
+        probeable=False,
+    )
+    out = serialize.to_websocat(req)
+    assert "ws://h/s" in out and "http://" not in out
+
+
+def test_websocat_is_none_for_a_normal_http_request():
+    assert serialize.to_websocat(_req()) is None
+
+
 def test_curl_neutralizes_hostile_method():
     # Cross-cover: verify to_curl also strips method CR/LF (was only tested in to_http).
     out = serialize.to_curl(_req(method="GET\r\nX-Injected: 1", body_params=(), content_type=None))

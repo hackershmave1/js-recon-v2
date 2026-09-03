@@ -67,6 +67,19 @@ describe("ProbePanel", () => {
     expect(await screen.findByText(/not probeable/i)).toBeInTheDocument();
   });
 
+  it("offers a websocat scaffold for a WS operation instead of a dead-end (D51)", async () => {
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    const WS: ReconstructedRequest = {
+      ...REQ, operation: "WSS /socket", method: "WSS", path: "/socket", probeable: false,
+      artifacts: { websocat: "websocat 'wss://api.acme.io/socket'" },
+    };
+    ui([WS]);
+    await screen.findByText("/socket");
+    expect(screen.queryByText(/not probeable/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /copy websocat/i }));
+    expect(writeText).toHaveBeenCalledWith(WS.artifacts!.websocat);
+  });
+
   it("shows an empty message when there are no requests", async () => {
     ui([]);
     expect(await screen.findByText(/no probeable requests/i)).toBeInTheDocument();
