@@ -5,1163 +5,222 @@ the next session) instead of living only in an AI's memory. Add here when you de
 something on purpose; link the code with a `# NOTE(DEBT):` comment where it helps.
 Effort: S (hours) · M (a day-ish) · L (multi-day).
 
-**Organized by user impact (2026-08-18).** Open items are grouped into three tiers by
-how much a user actually feels them - most-impactful first, then ranked within each
-tier. Resolved items are kept below as a record. Each item keeps its original category
-tag (correctness · enforcement/tooling · supply-chain/security · maintainability) so
-nothing is lost in the regrouping. Nothing is currently parked.
-
-- **Tier 1 - you'd feel this:** visible in results today, on real targets.
-- **Tier 2 - fix before it scales up:** safe now for a single trusted operator; matters
-  before untrusted / multi-tenant load or a live-data upgrade.
-- **Tier 3 - behind the scenes:** developer-facing hygiene; a user never sees it.
-
-## Open debt - by user impact
-
-> **Status update (2026-09-01):** the product owner has accepted every remaining item in this section as
-> 🚫 **WON'T FIX** — recorded, not fixed. Each entry keeps its full original analysis and its revisit trigger;
-> several (D18, D19, D17, D23) are security/correctness acceptances that ACCEPT a stated residual risk rather
-> than eliminate it. **D38** (native-ESM dynamic-import chunk discovery) was the sole remaining active
-> item and is now ✅ RESOLVED 2026-09-01 — nothing in this register is open. The three-tier grouping is
-> preserved as a record.
-
-### Tier 1 · you'd feel this
-
-Visible in results today, on the real targets you point the tool at. Fix these first.
-
-> **2026-09-01:** the still-open Tier-1 items (D22, D20, D16) are now accepted 🚫 **WON'T FIX**; their
-> already-shipped slices stay shipped and only the remaining owed work is closed. (D31–D37 were already resolved.)
-
-**D31–D35 added 2026-08-23 from a dogfood audit** against a real ~4.4 MB minified React SPA
-(an Azure-AD-fronted app). The tool reported "2 files, 0 secrets, 10 hosts"; manual review found
-a source map, real config secrets, real in-scope hosts in the file tail, and a host inventory that
-was ~95% library boilerplate. Each item below is root-caused with a fix path (four-agent research
-swarm, evidence-backed). Cross-cutting theme: **two of these are SILENT** (D31, D32) — the run
-finalizes DONE with no partial-coverage signal, which is the honesty (REQ-C2/REQ-D5) half of the bug.
-
-#### D31 · Large-file AST node-budget silently curtails endpoint/host recovery [S–M] — ✅ RESOLVED 2026-08-23  ·  correctness
-✅ **RESOLVED 2026-08-23.** Shipped both halves. **Honesty:** an `Extraction.curtailed` flag, set in
-`extract()` whenever the node budget bounds the walk, is threaded through `_EndpointExtraction` →
-`Coverage` + the `analyze.coverage` event payload + a `log.warning("analyze.extract_curtailed")`, the
-`_merge_coverage`/`_merge_coverage_payloads` roll-ups, the `CoverageView` read model, the
-`/runs/{id}/findings` API, and a `--warn` "Partial" banner on the Overview page; the out-of-band
-re-extract (which emits no coverage event) logs its own curtailment. A curtailed extract is now
-surfaced everywhere, never silent (REQ-C2). **Recall:** `_MAX_AST_NODES` raised 2M → **6M** — above a
-DEFAULT-cap (10 MiB ≈ ~5.5M-node) real bundle, so genuine default runs no longer curtail (recovers the
-dogfood 31→88 sinks + tail hosts). **Deliberate deviations from the sketch below:** (a) kept 6M FIXED
-rather than byte-keyed, to keep `extract()` pure (no settings dependency) — a run that raises its byte
-cap toward the 32 MiB ceiling (~18M nodes) can still curtail, but is now FLAGGED, which is exactly what
-the honesty flag is for; (b) the "never silent" signal is the flag on the existing `analyze.coverage`
-event + a `log.warning`, NOT a new persisted run event — matching the actual
-`analyze.asset_failed`/`fetch.source_map_skipped` convention (both are log lines) and avoiding a
-redundant event + second merge site; (c) the run is NOT finalized PARTIAL on curtailment (it is not an
-asset FAILURE; `_finalize_state` keys off asset status, not coverage) — a `# NOTE(DEBT D31)` at the flag
-records the REQ-D5 hazard so a future run-to-run diff downgrades a "removed" endpoint/host to "unknown"
-on a curtailed run. **DoS (honest):** raising the cap re-admits 2M–6M-node crafted inputs to a full
-sink+harvest, forfeiting the ~15s the 2M cap saved on the D21 nested-concat shape (~25s → ~40s, crossing
-the 30s lease); tolerable only because the lease breach is idempotent self-healing double-work (REQ-A3 +
-analyze-terminal skip) and the densest inputs already breach it inside the unbounded `collect_base_env`.
-**Still owed (deferred, [M–L]):** the strategic follow-up below — a heartbeat threaded through ALL passes
-— remains the real DoS fix and is NOT closed by this change. Tests: new hermetic
-`findings/node_budget_honesty_test.py`; fast lane + frontend green; ruff + mypy-strict clean. Both §4
-gates passed (design: BUILD-WITH-CHANGES, all must-fixes folded; code: SHIP-WITH-NITS, the substantive
-nit folded). Original analysis below.
-
-The static extractor caps its two expensive AST walks (the sink walk + the off-sink route harvest)
-at `_MAX_AST_NODES = 2_000_000` nodes once `tree.root_node.descendant_count` exceeds it
-(`findings/extract.py:116`, `_jsast.py:209`, enforced by node-count in `_jsast._walk`). The base-env
-poison/const pre-pass is deliberately NOT curtailed — it must see the whole tree for soundness (a name
-shadowed past the prefix could fold to a stale value = a false-positive URL; `extract.py:111-115`,
-`_base_env.py:39-52`). **Impact (measured, 4.4 MB bundle = 2.36M nodes):** the 2-millionth preorder node
-sits at 83.8% of the file, so all sink/harvest work over the final ~16% is dropped **silently** (no log,
-event, or completeness flag). Recall fell **88 → 31** unresolved network sinks (~65% lost) and two real
-in-scope hosts in the file tail were dropped entirely. Any bundle over ~2M nodes (~3.5 MB minified —
-common for real SPAs) reports a fraction of its surface with no warning. **The budget barely helps DoS
-(measured):** the crafted-input worst case is dominated by the UNBOUNDED parse (~10.7s @ 10 MiB) +
-`collect_base_env` (~30.6s @ 10 MiB — already over the 30s job lease), which the node cap never touches;
-what actually bounds crafted input is D21's algorithmic `_merge_spans` O(n²)→O(n log n) fix + idempotent
-at-least-once reclaim (D23), not the cap (it saves ~0–2s of noise on a real file). Real-file `extract()`
-runs ~13s uncurtailed — half the lease. **Fix (recommended, both S, ship together):** (1) *honesty* — add
-a `curtailed`/completeness field to `Extraction` (`_jsast.py:154-173`), set at `extract.py:116`, surface
-it on asset coverage + a `job.warning` event so a partial extract is never silent (REQ-C2); (2) *recall* —
-raise/re-key `_MAX_AST_NODES` above the real-file ceiling (~6M; a real 10 MiB file ≈ ≤5.5M nodes at
-~0.53 nodes/byte) or key it to the 10 MiB ingest byte cap (recovers 31→88 + the tail hosts). **Strategic
-follow-up [M–L]:** thread a heartbeat callback through ALL passes (base-env's two walks + sink + harvest),
-renewing the lease every N nodes, so even a 40s+ crafted extract stays lease-safe — the invariant the node
-budget only pretended to hold (the pre-existing base-env/parse lease breach on crafted 10 MiB+ input is
-orthogonal and is not worsened by raising the cap). **Trigger:** any target bundle > ~2M AST nodes.
-
-#### D32 · Source-map recovery: oversized-map soft-drop + recovered sources not secret-scanned, both silent [S / M–L] — ✅ RESOLVED (slices C + A1 + A2 + B1 shipped)  ·  correctness
-✅ **Slice C (honesty-first) RESOLVED 2026-08-23.** A soft-missed source map is no longer SILENT.
-New per-asset `run_asset.source_map_skipped` BOOLEAN (migration `0019_run_asset_source_map_skip`,
-guarded `ADD COLUMN IF NOT EXISTS`) carries the fetch-detected miss across the fetch→analyze worker
-boundary — symmetric with `source_map_ref`, the success twin. `fetch._fetch_and_store_source_map`
-now returns a `_SourceMapResult(ref|skipped|map_url|reason)`; the caller sets the flag AND records a
-durable `fetch.source_map_skipped` run event (was `log.info`-only) in the asset's fetch_ok tx
-(recorded-not-published, like `fingerprint.signal`; the same-tx write makes it effectively
-exactly-once under redelivery). `analyze._analysis_units` reports coverage `source_map:"skipped"`
-(distinct from a genuinely map-less "none"); `queries._merge_coverage_payloads` makes "skipped"
-DOMINATE the run-wide roll-up. The capture path (`capture.stage`) sets the same flag on its own
-captured-map soft-miss (via `seed_captured`), so capture runs aren't a second silent hole. Web: the
-coverage `source_map` type was corrected `boolean`→`string` (a latent mistype no consumer read) and
-the Overview shows a "Partial" banner when `source_map === "skipped"`. **DECISION (adversarial review
-+ user):** the run finalize state is deliberately LEFT DONE (not PARTIAL) — mirrors the D31
-curtailment precedent that `_finalize_state` keys off asset FAILURE, not coverage quality; honesty
-rides the coverage status + event + banner + a `# NOTE(DEBT D32)` recording the future run-to-run
-diff hazard (a "skipped" asset's absent recovered-source findings must diff as UNKNOWN, never
-REMOVED). §4 gates: adversarial design = SHIP-WITH-CHANGES (capture parity + finalize reconciliation
-both folded); higher-model code review passed. Tests: fast-lane `findings/source_map_honesty_test.py`
-(the `_analysis_units`/merge/read-model glue, no stack) + integration additions in
-`fetch/fetch_multi_test.py` (flag + event round-trip) and `findings/analyze_test.py` (end-to-end
-"skipped" coverage).
-✅ **Slice A1 RESOLVED (#112).** A dedicated `max_source_map_bytes` (=32 MiB, the engine output cap)
-now caps the `.map` fetch on BOTH the crawl (`fetch.py`) and capture-driver (`capture/stage.py`)
-paths, so an oversized map is actually FETCHED, not just honestly skipped — the bundle/chunk caps stay
-at the shared 10 MiB. Tests: `config_test.py` (env-independent default assertion) + wiring tests in
-`capture/stage_test.py` and `fetch/fetch_multi_test.py`.
-✅ **Slice A2 RESOLVED.** The extension-upload ingest (`capture_router.py::save_files`) was the THIRD
-`.map` path — it capped uploaded maps at `max_upload_bytes` (10 MiB) and dropped an oversized map
-SILENTLY (analyze → coverage `"none"`). It now uses `max_source_map_bytes` and flags
-`source_map_skipped` (via `set_source_map_skipped`, inside `_seed_fetched_assets`' first-wins fetch_ok
-tx so a retry never flips a recovered map to skipped or vice-versa) + a `capture.source_map_skipped`
-log — parity with the capture-driver path. `_valid_source_map` now returns `(bytes|None, skipped)` so
-a present-but-oversized map (a real coverage gap) is distinguished from an absent/malformed one
-(nothing to recover → not flagged). §4 gates: adversarial design = SHIP-WITH-CHANGES (test-lever +
-skip-assertion folded), higher-model code review = SHIP (all 7 invariants verified). D17 (untrusted,
-shared-tenant ingress): the 10→32 MiB cap raise does NOT widen peak parse-time memory — Starlette
-parses the whole body into a dict before the handler, so the cap only bounds the transient
-`json.dumps` + blob PUT; documented at the cap site.
-✅ **Slice B1 RESOLVED.** Secrets that live ONLY in a source map's recovered `sourcesContent` — a
-token in a comment, or in code tree-shaken out of the minified bundle — are now caught. `analyze`
-secret-scans each recovered unit IN ADDITION to the raw bundle (the bundle stays the floor: zero
-regression, a token in both is 1 finding / 2 occurrences) via a new `kingfisher.scan_many` that runs
-ONE subprocess over all recovered units (a real map recovers dozens–hundreds of files; one-fork-per-
-file would be a per-asset DoS). Each recovered sighting is recorded at its real per-source path
-(`occurrence.source_path`), and the coverage `secrets` count now sums bundle + recovered sightings
-(no silent under-report — the honesty this epic targets). `probe/reveal._derive` re-derives a
-recovered secret's byte space from its source map via a shared `probe/sources.recover_file_text` (the
-SINGLE definition of the recovered bytes, so analyze's offsets, the Sources viewer, and reveal all
-reproduce byte-identical text); the existing integrity re-check still fail-closes (409) on any drift,
-so a reproduction bug is un-revealable, never wrong-bytes. Reveal routes to the recovered path only
-when the occurrence has BOTH a real `source_path` AND a resolvable map (a bundle secret on a mapped
-asset keeps the `input.js` sentinel → bundle slice; a purged map → fail-closed). No migration
-(reuses `source_path`/offsets/`run_asset_id`). §4 gates: adversarial design = SHIP-WITH-CHANGES (the
-`_record_secret` source_path wiring + coverage-count under-report both folded; the sentinel-collision
-should-fix hardened via the map-present guard); higher-model code review = pending. Tests:
-`findings/kingfisher_test.py` (scan_many batching + per-unit attribution + path capture),
-`findings/analyze_test.py` (recovered-only secret recorded at its path + counted), and
-`probe/reveal_recovered_test.py` (reveal round-trips a recovered secret; drift fails closed 409).
-**Known residual (inline maps, fail-closed):** a secret recovered from an INLINE `data:` source map
-has no persisted `source_map_ref` (the map rode in the bundle, never stored), so reveal slices the
-bundle → integrity 409 and the Sources viewer can't re-derive it either — a PRE-EXISTING systemic
-limitation (inline maps aren't persisted), consistent across both surfaces and fail-closed (the
-finding is still surfaced; only the JIT plaintext reveal is unavailable). Rare in practice (inline
-maps bloat a bundle, so production ships external `.map`); a full fix would persist the inline map at
-analyze time. Higher-model code review = SHIP-WITH-CHANGES (this residual documented, not a blocker).
-Original analysis below.
-
-Two independent gaps hide everything that lives only in a JS source map (the recovered original source,
-plus any secrets in `sourcesContent`). **(a)** The `.map` fetch inherits the *shared* bundle byte cap: the
-crawl stage reads `//# sourceMappingURL=` and GETs the map, but passes the same per-run
-`cap = min(max_fetch_bytes 10 MiB, ceiling 32 MiB)` as `max_bytes` (`fetch.py:575,631,751-757`). A real map
-is 3–6× the minified bundle, so a 4.4 MB bundle's ~15–25 MB map trips the streamed cap (`fetch.py:277-282`)
-and is swallowed as a soft miss (`fetch.py:759-761`, logged `fetch.source_map_skipped`, verbatim
-`response exceeds 10485760 bytes`) → no `source_map_ref` → analyze `source_map:"none"`. **(b)** Kingfisher
-runs once on the raw bundle only (`analyze.py:576,581`); recovered source-map units are fed only to
-`extract()` for endpoints (`analyze.py:466`), never to `kingfisher.scan` (explicit deferral,
-`analyze.py:597-599`) — so a recovered map's `sourcesContent` secrets (e.g. a hardcoded JWT, which
-`kingfisher.jwt.1` WOULD flag) are missed. **Silent (REQ-D5 hole):** a soft-missed map leaves the asset
-`fetch_ok`+`analyze_ok` → run finalizes DONE, not PARTIAL (`coordinator.py:376-378`), and `source_map:"none"`
-is indistinguishable from "no map existed", so a "complete" run that skipped a map could later license a
-"secret removed" diff. **Fix (recommended order):** (C, S — honesty first) record a `fetch.source_map_skipped`
-run event + a distinct `source_map:"skipped"` coverage status and finalize the run PARTIAL (zero
-memory/DoS/egress change); (A1, S) add a separate `max_source_map_bytes` (default = engine cap, 32 MiB) and
-pass it — not the shared bundle cap — to the map `fetch_url`; (B1, M–L) scan recovered sources through
-`kingfisher.scan` with `source_path=f.path` AND teach `probe/reveal.py::_derive` to re-derive recovered
-content from `source_map_ref` (mirroring `probe/sources.py:207-234`) so a recovered-source secret round-trips
-(else audited reveal 409s) — dedup is free (same finding, extra occurrence). **Invariants:** egress
-re-validated on every map hop (intact today, `fetch.py:242`); content-addressed blobs; no silent under-report
-(REQ-D5). **Note:** the single-URL/upload fetch path has NO source-map logic at all (only crawl + capture do).
-
-#### D33 · Secret detection misses config-key / GUID exposure (precision-first ruleset) [S + M] — ✅ RESOLVED (slices A + B + the RFC1918 info-disclosure family)  ·  correctness
-✅ **Slice A RESOLVED 2026-08-24.** Shipped a `visible:true` custom rule `custom.config.guid_assignment`
-(`findings/rules/custom_rules.yml`) that EMITS a UUID assigned to a readable config identifier —
-camelCase/snake `tenant`/`client`/`appid`/`app_id` or snake `*_KEY` — closing gap (1). It emits alongside the
-built-ins with no double-count (azure.7/8 stay summary-tally-only), snippet = the bare UUID (REQ-S2:
-sha256-hashed, never stored cleartext), provider pinned to `"config"` in `normalize._PROVIDER_BY_RULE` (NOT
-"azure" — the rule also catches non-Azure `*_API_KEY` GUIDs and the slug prefixes the user-visible
-`finding.value`). The two custom rules now share ONE `--rules-path` file (renamed
-`aws_access_key_id.yml`→`custom_rules.yml`) so a stray/malformed rule can't hard-fail every scan; wheel
-packaging verified (the `rules/*.yml` glob ships it). Verified against real `kingfisher-bin==1.106.0` on a
-12-pos/9-neg fixture (boundary traps `lieutenant_rank`/`monkey`/bare `key`/`recipientId`/minified `{clientId:t}`
-rejected; Kingfisher's example-filter auto-suppresses placeholder UUIDs). **Scope correction to the original
-below:** the shape is snake `*_KEY` + camel/snake identity keys; **kebab** (`client-key`) and camelCase
-`apiKey`/`applicationId` are NOT matched (deferred to slice B), and the 0-FP claim is minified-JS-only — on
-hand-written config a hardcoded UUID on a non-credential `*_key` (`idempotency_key`, `cache_key`, …) or a
-degenerate value (nil/all-same) can also match, accepted under the medium lane + honest `config:` slug + this
-repo's over-report bias. A `# NOTE(DEBT D33)` marks the no-double-emit dependency on azure.7/8 `visible:false`
-under the 1.106.0 pin — re-verify on any Kingfisher bump. Both §4 gates passed (adversarial design =
-SHIP-WITH-CHANGES — single-file over a rules-dir, provider "config", `examples:`+`.gitleaks.toml` wiring all
-folded; code review = SHIP-WITH-NITS — FP-comment honesty, a negative boundary test, `visible` symmetry, and
-this stale-comment refresh all folded).
-✅ **Slice B (BACKEND) RESOLVED.** The opt-in `--confidence low` "suspected secret" recall tier is a new
-`FindingType.SECRET_SUSPECTED` (migration `0021`, `ck_finding_type` widened like 0018/page_route), mirroring the
-endpoint `*_unresolved`/`*_generic` lanes. Per-run opt-in `run.scan_suspected_secrets` (nullable, migration
-`0020`) threads StartRunBody/RerunBody/upload → coordinator → service exactly like `max_fetch_bytes`; NULL =
-unchanged medium scan. `kingfisher.scan`/`scan_many` gained a `confidence` arg → `--confidence low` (a MINIMUM
-threshold, verified against 1.106.0: a `confidence: low` rule is silent at the default scan and emits only at
-low). `analyze._analyze_blob` scans at low when opted in and PARTITIONS by the engine-reported confidence —
-`low` → SECRET_SUSPECTED, medium/high/None → SECRET — so the precision lane is byte-identical opted-in-or-not.
-A new `custom.config.guid_assignment_low` rule (`confidence: low`, provider "config") catches the kebab
-(`client-key`) + camelCase (`apiKey`/`applicationId`) GUID keys slice A's medium rule deliberately doesn't.
-The suspected tier reuses SECRET's reveal/redaction machinery (widened together: `queries._finding_view`
-redaction + `revealable`, `reveal._load_target` query) but is counted SEPARATELY (`coverage.secrets_suspected`,
-never inflating `secrets`) and, because `finding_hash` includes the type, is kept OUT of the (still-unbuilt)
-REQ-D5 removal diff — documented on the enum member so the diff is scoped to `secret` + confirmed endpoints when
-built. §4 gates: adversarial design = SHIP-WITH-CHANGES (count-vs-security gate split, D5-diff-scoping, and the
-RFC1918-is-a-category-error descope all folded); higher-model code review = pending.
-✅ **Slice B (UI) RESOLVED.** The workspace now surfaces the tier: `secret_suspected` renders as a distinct
-amber, dashed "suspected" pill (findings list + overview, mirroring the endpoint unconfirmed lanes, NOT the
-solid-pink `secret`); `FindingDetail`'s `isSecret` covers it so its value stays server-redacted and it gets the
-same audited reveal button when revealable; the Overview Secrets card shows "+N suspected (low-confidence)" and
-ranks suspected just below confirmed secrets. A "Scan for suspected secrets" opt-in checkbox on both NewRunPanel
-(upload + crawl) and EditRerunPanel (prefilled from the source run, inherited on re-run) drives the backend flag
-— sent only when set so default request bodies stay lean. Higher-model code review = pending. Note: the Browser
-pane didn't composite in the build environment, so verification was via the vitest suite (221 pass — the panels
-+ pill + toggle render + behave), oxlint+tsc, and a clean production build rather than a pixel screenshot.
-✅ **Gap (2) RESOLVED 2026-08-24 — the RFC1918 internal-IP info-disclosure family shipped.** A NEW
-`FindingType.INTERNAL_IP` (migration `0022_finding_internal_ip`, `ck_finding_type` widened like 0018/0021) —
-the first member of a CLEARTEXT info-disclosure family, deliberately NOT in the secret tier (the §4 review
-flagged hashing a plainly-visible internal IP + gating an audited reveal on it as a REQ-S2 category error).
-A pure detector (`findings/internal_ip.py`) finds IPv4 literals in the five locked ranges (10/8, 172.16/12,
-192.168/16 → `rfc1918`; 127/8 → `loopback`; 169.254/16 → `link-local`) via a boundary-guarded `re` dotted-quad
-(`(?<![\w.])…(?![\w.])`) + explicit-CIDR classify (NOT `ipaddress.is_private`, which over-matches), capped
-5000/blob. `analyze._record_internal_ip` emits it over the raw bundle AND recovered source-map units with the
-RAW cleartext IP as `finding.value` (never `normalize_secret_value`), `engine="internal-ip"`, category in
-attributes, counted separately (`coverage.internal_ips`, never inflating `secrets`). It is left OUT of the
-`queries._finding_view` is_secret tuple + the `reveal.py` type filter, so it renders cleartext, is never
-server-redacted, and the reveal endpoint refuses it. UI: an `--info` (blue) SOLID "internal IP" pill (findings
-list + `FindingDetail`, excluded from `isSecret`) + an Overview "Internal IPs" card counted client-side. Known
-accepted FP: a software version like `10.0.0.1` is indistinguishable from an IP (over-report bias, info lane).
-§4: the descope was settled at the D33-B review; higher-model code review PASSED (verified the non-secret emit
-path + that the redaction/reveal gates were left untouched). Backend host ruff/mypy + 27 hermetic detector
-tests green; frontend vitest/lint/build green. Original analysis below.
-
-Secret scanning = Kingfisher 1.106.0 built-in provider ruleset (~930 rules) + one custom AWS-AKIA rule, at
-default `--confidence medium` (`kingfisher.py:211-227`) — precision-first by design. Two structural COVERAGE
-gaps (not entropy): **(1)** config identifiers named `*_KEY` don't match — Kingfisher's Azure GUID rules
-(`azure.7` Entra Tenant ID, `azure.8` Client ID) are keyword-anchored on `..._ID`/`client_id`/`appId`, so a
-`*_TENANT_KEY/*_CLIENT_KEY/*_API_KEY: '<guid>'` assignment never matches (verified 0 hits on a real Azure-AD
-`config.js`), and `azure.7/8` are additionally `visible:false` under `--no-validate` (tallied but not emitted —
-the same non-emission the custom AKIA rule was written to work around); **(2)** info-disclosure classes
-(RFC1918 internal IPs) have no built-in rule. (A well-formed JWT is NOT a gap — `kingfisher.jwt.1` is
-`visible:true` and emits at medium; the audit's JWT was missed only because it lived in an un-fetched `.map`
-— see D32.) **Fix — precision-first default + opt-in recall lane (a product decision):** (A, S, ~0-FP, ship
-now) one `visible:true` custom rule for a UUID assigned to a `TENANT/CLIENT/APPID/APP_ID/*_KEY` identifier —
-verified **19/19** real config GUIDs (incl. commented env blocks), **0 FP** across 4.4 MB of minified JS (the
-readable-identifier + quoted-UUID shape can't match minified output); pin provider in
-`normalize._PROVIDER_BY_RULE`; respect the custom-rule gotchas (`pattern: |-`, omit `min_entropy`, wheel
-`package-data` for `rules/*.yml`, `--rules-path` cache key). (B, M, opt-in) a broader
-keyword/`*_KEY=UUID`/RFC1918 heuristic lane at `--confidence low`, surfaced as a NEW **suspected-secret** tier
-(mirroring `endpoint_unresolved`/`endpoint_generic`) so recall rises (~50% FP like generic scanners) WITHOUT
-polluting the high-precision default lane or the REQ-D5 diff — requires a new `FindingType`. **Reject C**
-(lowering the global `--confidence`): turns the ~50%-FP generic lane on for every scan, contradicting the
-honesty/precision stance. **Invariants:** REQ-S2 (raw value never in identity cleartext —
-`normalize_secret_value` sha256); REQ-D5 (opt-in recall must be a distinct surface); fail-closed engine contract.
-
-#### D34 · Endpoint/host inventory polluted by off-sink library-boilerplate URLs [S] — ✅ RESOLVED 2026-08-23  ·  correctness
-✅ **RESOLVED 2026-08-23.** Shipped a layered `_harvest_denied` predicate at the single harvest
-chokepoint (`findings/extract.py`): (1) a scheme allow-list (`http/https/ws/wss`) drops `file://…`
-junk; (2) an EXACT host-or-dot-suffix denylist of namespace registrars + JS-library PROJECT
-domains (replacing the broken 5-substring test); (3) an `http://` XML-namespace shape rule (no
-query/fragment, a NON-TERMINAL `/YYYY/` segment, not API-ish) that generalizes to unlisted
-registrars. On the real bundle the harvested Hosts inventory went from ~10 library-noise hosts to
-**0** (the real `login.microsoftonline.com` + two `*.accenture.com` hosts survive); confirmed-`endpoint`
-lane untouched by construction. Colocated tests in `findings/harvest_filter_test.py` (11). §4
-adversarial review = SHIP-WITH-NITS → all three nits folded: dropped bare public-suffix
-`github.io` / third-party `fb.me` / `npms.io` (a bare public suffix could shadow a target's own
-`*.github.io` host); required a non-terminal year so a trailing id segment (`/products/2020`) is
-not mistaken for a namespace year; and claim the denied builder's span so a denied composite can't
-leak a truncated sub-literal. Fast lane + mypy-strict + ruff clean. Residual (documented): a few
-host-LESS route literals (`http://`, `http://macVmlSchemaUri`) remain but never reach the Hosts
-inventory (no ≥2-label host). Original analysis below.
-
-The off-sink route harvest (`findings/extract.py::_harvest_routes`, :316-374) turns ANY absolute-URL string
-literal (has `://`, passes `_looks_like_route`, not `_looks_api_ish`) into a `page_route`/`endpoint_generic`
-by SHAPE ALONE — no requirement it flow to a network/nav sink. The only host filter is `_HARVEST_HOST_DENY`
-(:193), a 5-entry raw SUBSTRING test that is near-empty AND wrong both ways: `schema.org` is not a substring
-of `schemas.openxmlformats.org` (misses it), and `example.com` IS a substring of `notexample.com` (would
-false-drop a real host). Host attribution (`egress.attributed_host`) then launders any valid ≥2-label host
-into the Hosts inventory (`hosts.py` route roll-up). **Impact (real bundle w/ SheetJS + React):** of 63
-unique harvested routes, ~95% are OOXML/ODF XML-namespace + library doc URLs (`schemas.openxmlformats.org`,
-`schemas.microsoft.com`, `openoffice.org`, `purl.oclc.org`, `reactjs.org`, …); only one was a genuine host.
-The confirmed-`endpoint` lane is IMMUNE by construction (it emits only from resolved sink URLs via
-`normalize_endpoint`), so the fix is safe — it touches only the harvest lane. **Fix (recommended, S — one
-predicate at the `extract.py:366` chokepoint, layered):** (a) replace the substring test with EXACT
-host-or-dot-suffix match (`host==d or host.endswith("."+d)`, mirroring `egress.host_in_scope`), seeded with
-namespace registrars + lib-doc hosts; (b) a self-maintaining XML-namespace shape rule — drop an off-sink
-literal with no query, no fragment, a dated path segment (`/(19|20)\d\d/`), and not API-ish (matches 50/63
-with no per-library upkeep); plus a scheme allow-list (`http/https/ws/wss`) to kill `file://`/mangled-ident
-junk. This preserves the `.concat()` page-route differentiator (real absolute client routes are neither
-denylisted nor namespace-shaped) and needs no read-model change. **Optional layer (d):** exclude harvested-`low`
-route hosts from the Hosts `universe` roll-up (`hosts.py:190-197`) unless the host also appears via
-asset/endpoint/tech — a read-time lever, no re-extract. **Invariant:** never drop a real in-scope host (both
-(a) and (b) are strictly safer than today's over-matching substring); keep the confirmed-endpoint lane untouched.
-
-#### D35 · Sources viewer can't display large bundles [M] — ✅ RESOLVED 2026-08-24  ·  performance
-✅ **RESOLVED 2026-08-24 (Path A — extend the windower).** A multi-MB minified bundle is now viewable.
-A 4-agent source-grounded research swarm (Monaco/CodeMirror, Chrome DevTools, GitHub/Sourcegraph)
-converged on three settled points: beautify is the PRECONDITION (a minified bundle is one physical
-line; nothing virtualizes until it is split), render + highlight the VIEWPORT ONLY (whole-file Prism on
-10 MB = 150-400 MB of token objects + GB of DOM — the actual freeze), and the 2 MiB server truncation is
-a correctness hazard (the operator audited a silently corrupted bundle). **Measure-first pivot:** Python
-`jsbeautifier` benchmarked at ~30 s for a 4.4 MB bundle (80-97 s at 8-10 MB) — over the 30 s worker lease
-AND typical proxy timeouts — so server-side beautify was rejected; beautify moved to a client **Web
-Worker** (`beautify.worker.ts` + `beautifyClient.ts`), off the main thread (the freeze that forced the
-old 200 KB cap is gone). The code body is **virtualized** (spacer-based fixed-height windowing in
-`CodeViewer.tsx`, reusing the file-tree pattern; long lines still scroll horizontally under a sticky
-gutter), highlighting is **viewport-scoped** (per-line Prism on the ~visible rows via
-`highlight.loadPrism`/`highlightLine`; lines > 20 K chars skipped), and the client clamps (`RENDER_MAX_*`,
-`BEAUTIFY_MAX_CHARS`, `HIGHLIGHT_MAX_CHARS`) are deleted. Server: `probe/sources._MAX_CONTENT_BYTES`
-2 MiB → 12 MiB (the full raw bundle, ≤ the 10 MiB ingest cap, reaches the client); the analyze/serve
-beautify caps stay at 1 MiB, so the D23 lease bound is unchanged (the client formats big files now).
-Auto-pretty keys on `isMinified(served)` alone: a server-beautified file (multi-line) keeps its aligned
-finding marks; a still-minified served file (a big raw bundle) is worker-formatted with its useless
-line-~1 marks dropped. Tests: new `CodeViewer.test.tsx` (windowing + per-line render cap + jump-to-line +
-marks + truncation) + rewritten `SourcesPage.test.tsx` large-file cases (frontend 229 green); host ruff +
-mypy clean. CodeMirror 6 (Path B — the DevTools/Sourcegraph editor-grade route) was weighed and held as
-the escape hatch if flawless highlighting / search / folding is ever wanted. Original analysis below.
-
-A multi-MB minified bundle is effectively unviewable in the Sources page: `CodeViewer` clamps to 512 K chars /
-10 K lines and `SourcesPage` disables pretty-print above `BEAUTIFY_MAX_CHARS` = 200 K (js-beautify runs
-synchronously on the main thread and froze the tab on a large bundle in past QA — the reason for the cap) and
-highlighting above 200 K, so a 4.4 MB bundle renders as one truncated 512 K single line with only a "Download"
-affordance. **Fix:** move beautify off the main thread (Web Worker) behind an explicit "expand / format"
-affordance with an in-progress spinner, and virtualize the resulting ~100 K formatted lines (the CodeViewer
-already virtualizes the file TREE but not the code body). Files:
-`web/src/features/sources/{CodeViewer,SourcesPage}.tsx`. (User-reported 2026-08-23.)
-
-#### D36 · Large/slow in-scope asset (and its whole source map) dropped by the 20 s per-asset fetch deadline [S–M] — ✅ RESOLVED 2026-08-30  ·  correctness
-✅ **RESOLVED 2026-08-30 (option (a) — heartbeat the body stream, then raise the deadline).** The primary asset
-fetch now renews the job lease mid-download, so `fetch_timeout_seconds` was raised **20 → 120 s** without widening
-the peer-reclaim window. `fetch._fetch_hops` gained an `on_progress` callback invoked once the response headers
-arrive and then throttled to `heartbeat_interval_seconds` per body chunk; the two PRIMARY call sites
-(`_fetch_asset_with_retry` crawl asset + the single-URL `fetch_run` path) pass a `_make_body_beat` closure that
-renews the lease AND checks pause/cancel (REQ-A4, closing the long-fetch cancel blind spot). **Design refinements
-the §4 adversarial review forced (all folded):** (1) the httpx per-read timeout is DECOUPLED from the overall
-deadline — a new `fetch_read_timeout_seconds` (10 s) + `_CONNECT_TIMEOUT_SECONDS` (8 s), both < the 30 s stall, so
-a stalled socket can't block `iter_bytes()` unbeaten (raising the unified 120 s timeout would have re-introduced the
-very reclaim bug); (2) **the headline bug** — a per-read `httpx.ReadTimeout`/`TransportError` was previously
-UNCAUGHT (there is no `except httpx.*` in `src/recon`), so on a stalled origin it escaped the per-asset handler and
-failed the WHOLE fetch job (every sibling's findings lost) → now converted to a `retry.RetryableError` in
-`_fetch_hops` (caught per-asset → run PARTIAL; also fixes a pre-existing latent crash); (3) the global knob has 5
-readers but only the 2 primary ones are safe to run long — the 3 BEST-EFFORT secondary fetches (crawl `.map`,
-lazy-chunk URLs, capture `.map`) now use a separate `fetch_secondary_timeout_seconds` (20 s, < stall) with NO
-mid-body beat, so they stay lease-safe (a large map on a SLOW origin still soft-skips — full big-map recovery is
-D37-L2); (4) a post-headers beat covers the connect+TTFB gap so the first mid-body beat can't outlast the lease.
-**Load-bearing invariant documented** (`_make_body_beat`): the mid-stream beat is safe inside `_pin_dns` only
-because psycopg2 resolves DNS in C (bypassing the pin's `socket.getaddrinfo` monkeypatch) and `emit_event=False`
-keeps it off pure-Python redis-py — a driver swap or `emit_event=True` would break it. **Known interaction (D20):**
-a 120 s fetch makes the fetch a "long stage" now subject to the pre-existing stream-reclaim strand (a peer reclaims
-at 30 s idle and acks on the live lease → removed from the PEL → if the original then crashes the job can strand,
-no redelivery) — the real fix is D20's owed work (refresh the Redis stream in `beat`, or reclaim off the DB lease
-not Redis idle), tracked there. §4 gates: adversarial design = SHIP-WITH-CHANGES (must-fixes 1–5 folded); code
-review = SHIP-WITH-NITS — egress path verified byte-for-byte unchanged (T5); NIT-1 folded = a `Settings`
-`@model_validator` (`_check_fetch_lease_safety`) now FAILS LOUD at startup if `heartbeat_interval_seconds`,
-`fetch_read_timeout_seconds`, or `fetch_secondary_timeout_seconds` reaches `heartbeat_stall_threshold_seconds`
-(the three env-tunable knobs D36 lease-safety silently depends on), so an operator can't reintroduce the
-double-fetch race by raising one. Tests: `fetch_test.py` (on_progress fires, ReadTimeout/ConnectError →
-RetryableError, control interrupt not swallowed), `config_test.py` (timing defaults lease-safe + over-stall
-override fails closed), a `stage_test.py` fake-settings field. Host ruff + mypy(findings/spec) + full fast lane
-green. Files: `fetch/fetch.py`, `capture/stage.py`, `config.py`. Original analysis below.
-
-A large or slow in-scope JS asset can exceed the per-asset fetch deadline (`config.fetch_timeout_seconds`,
-default **20 s**) and be marked `run_asset.fetch_status = 'failed'` with `"overall fetch deadline exceeded"`
-(`fetch.py:278` — the deadline is checked inside the `response.iter_bytes()` body-stream loop, because httpx's
-read timeout bounds only the gap between chunks, not total wall-clock). The asset is then absent from analysis —
-and because source-map discovery is DOWNSTREAM of a successful fetch → analyze (the analyzer reads the
-`//# sourceMappingURL=` pointer from the fetched body, then fetches the `.map`), the asset's ENTIRE source map,
-its recovered original sources, and any secrets / config GUIDs / internal-IPs therein are lost with it. It is
-VISIBLE (the asset row reads `failed`, REQ-C2), NOT a silent under-report — but a real recall gap.
-**Why the cap is low:** `fetch_timeout_seconds` is deliberately held below `heartbeat_stall_threshold_seconds`
-(30 s) because the blocking fetch does NOT heartbeat during body streaming — a longer fetch would let a peer
-worker judge the job stalled, reclaim the stream message, and double-fetch (`config.py:50-53`). So the deadline
-cannot simply be raised without also widening the stall window (slower peer-failover detection). A deadline
-failure is also deliberately NOT retried (the budget is already spent, `fetch.py:211`). Same
-heartbeat-through-a-blocking-pass family as D31's owed heartbeat work and D23.
-**Evidence (2026-08-30 QA, sanitized — repo is PUBLIC):** a real 5-asset crawl of an in-scope host fetched 4
-and dropped the one large enterprise bundle on a slow origin (its four small sibling language bundles fetched
-fine); the dropped bundle's source map and any findings inside it never surfaced.
-**Fix options:** (a) PROPER [M] — thread a heartbeat through the fetch body-stream loop (renew the lease
-mid-download), after which the default `fetch_timeout_seconds` can safely exceed the stall threshold and be
-raised; (b) STOPGAP [S] — raise `RECON_FETCH_TIMEOUT_SECONDS` **and** `RECON_HEARTBEAT_STALL_THRESHOLD_SECONDS`
-together so `timeout < stall` still holds. Files: `fetch/fetch.py` (`_fetch_once` body-stream deadline),
-`config.py` (`fetch_timeout_seconds`, `heartbeat_stall_threshold_seconds`).
-
-#### D37 · Large source-map recovery is memory-unsafe: the sourcemapper subprocess + container are unbounded [M–L] — ✅ RESOLVED 2026-08-31 (L0 + L1 + L2 streaming shipped; D28 double-recover perf + capture-path map RAM tracked as follow-ups)  ·  reliability
-✅ **L0 + L1 RESOLVED 2026-08-30.** The recovery subprocess and both app containers are now memory-bounded, and
-the map cap is raised. **L0 — subprocess bound:** `engines.run_engine` gained an opt-in `memory_limit_bytes` that
-wraps the child in an exec'd `prlimit --as=<bytes>` guard, so an over-size recovery dies as a CONTAINED non-zero
-exit → `EngineError` instead of OOM-ing the box. **Deliberately `prlimit`, NOT the DEBT sketch's `setrlimit` via
-`preexec_fn`** — the §4 adversarial design review falsified `preexec_fn`: recovery is also forked from the
-multi-threaded viewer/reveal API (uvicorn threadpool), where a fork-time Python callable "is NOT SAFE to use in
-the presence of threads" (CPython subprocess docs) and can deadlock before exec; an exec'd wrapper runs no Python
-post-fork, so it is thread-safe on the worker AND the API (and also bounds the API viewer/reveal OOM vector). Only
-`sourcemapper.recover_sources` passes it (Kingfisher unchanged). **L0 — container bound:** `docker-compose.yml`
-now sets `mem_limit` on worker (8g — also runs chromium) + api (4g), a coarse box-protection cgroup backstop (the
-`prlimit` is the tight per-child bound). A Dockerfile `command -v prlimit` build guard fails loud if util-linux is
-absent. **L1 — cap raise:** `max_source_map_bytes` 32 → 96 MiB, safe ONLY because L0 now bounds recovery memory.
-**Value chosen by MEASUREMENT against the real pinned Go 1.23 binary** (the naïve fix would have regressed): Go
-over-reserves virtual address space (RLIMIT_AS counts its PROT_NONE arenas; golang/go#38010), so a 127-byte map
-needs >768 MiB just to start, and BOTH a 32 MiB map (recoverable today — regression guard) and a 96 MiB map trip
-at ≤1.5 GiB but recover at 2 GiB → default `sourcemapper_memory_limit_bytes` = **3 GiB** (clears the 2 GiB floor
-with headroom, still trips a runaway before the 8g container cap; `<=0` disables, off-Linux no-op). Verified
-end-to-end in the live container: a 96 MiB map recovers `status=ok` under the 3 GiB limit via the real
-`prlimit`-wrapped binary (no false-trip), and a 32 MiB map forced under 512 MiB dies as a contained `EngineError`.
-**Containment is honest + free for the path that matters:** a crawl-fetched map (origin `capture`) that trips →
-`EngineError` → `analyze._analysis_units` soft-falls-back to bundle analysis + a visible `capture-error` coverage
-status → the run CONTINUES, gap surfaced (REQ-C2), not silent. §4 gates: design = SHIP-WITH-CHANGES (the
-`preexec_fn`→`prlimit` switch + the measured value were both its catches, folded); code = SHIP-WITH-NITS (F1 the
-Linux gate `== "win32"`→`!= "linux"` + the `<=0`-disables guard folded). Tests: `engines_test.py` (wrapper
-construction incl. win32/darwin no-op + `<=0`-disabled + a Linux-gated real RLIMIT_AS trip/pass),
-`sourcemapper_test.py` (settings passthrough + override), `config_test.py` (the new defaults). Host ruff +
-mypy-strict + fast lane green. **Accepted L0+L1 residuals (all L2 territory, deferred by decision):** (a) the
-recovered *output* is still hard-capped at `engine_max_output_bytes` (32 MiB), so a >32 MiB map recovers only its
-first ~32 MiB of sources (a partial recovery — still a strict win over the pre-L1 total skip; logged
-`sourcemapper.truncated`); (b) the viewer/reveal path still WHOLE-LOADS the map on a click — now CONTAINED by the
-`prlimit` + api `mem_limit`, but not eliminated (that is L2's file-by-file streaming); (c) the D28 double-recover,
-disk-tree bound, and per-file heartbeat all remain L2. Files: `findings/{engines,sourcemapper}.py`, `config.py`,
-`docker-compose.yml`, `Dockerfile`, `api/capture_router.py` (stale comment). Original analysis (the full layered
-plan; L2 is what remains) below.
-
-✅ **L2 RESOLVED 2026-08-31 (streaming, 5 isolated slices).** Recovery no longer holds the whole map or the whole
-recovered tree in RAM anywhere, so the 32 MiB in-RAM output cap is lifted and the WHOLE 96 MiB map is recovered.
-**s1** streaming blob primitives (`storage.put_blob_from_path`/`download_blob_to_path`, streamed sha256 == one-shot
-key). **s2** viewer/reveal recover ONE file from an on-disk map (`sourcemapper.recover_one_file`), bounding the API
-parent to a single file, not the whole tree. **s3** the analyze recovery streams to an on-disk BEAUTIFIED tree read
-one file at a time (`analyze.AnalysisUnits`, `sourcemapper.iter_recovered_files`, `kingfisher.scan_dir` with
-realpath-relpath attribution, a whole-file cumulative-write budget → honest `recovered_partial` coverage, a per-file
-heartbeat) — byte-exact so the reveal 409-on-drift invariant holds (validated vs the real Go binary in-container).
-**s4** the `.map` fetch streams to a temp file (`_fetch_hops(sink=...)` + `put_blob_from_path`) with a mid-body
-heartbeat + a beaten `fetch_source_map_timeout_seconds` so a big map on a slow origin finishes. **s5** the export
-pre-pass (Phase A) streams at the same 96 MiB cap, closing the slice-3-review cross-chunk recall gap (#3). Each
-slice: isolated commit + adversarial design + higher-model code review (all CLEAN / SHIP-WITH-fixes-folded). Residual
-(a) is now RESOLVED (whole map recovered), (b) is RESOLVED (viewer/reveal file-by-file). **Remaining follow-ups
-(tracked, NOT memory-unsafe):** the **D28 double-recover** (Phase A + the loop each spawn `sourcemapper` per mapped
-asset — s5 streamed both but did NOT fold them; a recover-once bounded-disk reuse cache is its own slice, perf-only,
-deterministic so never wrong output) — the last remaining D37-L2 streaming follow-up. The **capture-ingest sibling**
-`capture/stage._fetch_captured_source_map` (was whole-map-in-RAM + 20s, default-OFF `RECON_ENABLE_CAPTURE_MODE`) is
-**FIXED 2026-08-31** (`fix/d37-phase-a-stream-map`): it now mirrors the crawl path, streaming the `.map` to a temp
-file (`_fetch_hops(sink=...)` + `put_blob_from_path`) on the beaten `fetch_source_map_timeout_seconds` + a mid-body
-cancel beat, so a big/slow captured map no longer buffers whole in RAM or soft-skips at 20s.
-**Phase A map-input whole-load — FIXED 2026-08-31** (`fix/d37-phase-a-stream-map`): the export pre-pass
-`_harvest_asset_exports` now STREAMS the stored map to a temp file (`download_blob_to_path`) instead of
-`get_blob`-ing the whole <=96 MiB map into RAM — the last whole-map-in-RAM load left in the recovery path,
-an L2 residue surfaced by the D28 adversarial design review. That review also recommended AGAINST building
-the perf recover-once reuse cache: measured, it removes only the redundant sourcemapper SPAWN (not the
-duplicate parse) for real machinery + a contained partial-boundary/temp-dir risk, so **the D28 double-recover
-stays deliberately open** (correct + memory-bounded today).
-A per-file read cap on a viewer of a large NO-finding recovered file (s2 M5-optional) also remains. Files (L2):
-`storage.py`, `config.py`, `findings/{sourcemapper,kingfisher,deobfuscate,analyze,queries}.py`, `probe/{sources,
-reveal}.py`, `fetch/fetch.py`, `capture/stage.py` (+ colocated tests). Design spec + folded §4 reviews:
-`apps/platform/docs/superpowers/specs/2026-08-30-d37-l2-streaming-map-recovery-design.md`.
-
-A source map larger than `max_source_map_bytes` (32 MiB) is SKIPPED (visibly — D32), so its original sources (and
-any secrets in them) are never scanned. **Raising the cap to recover big maps is UNSAFE today**, and "it didn't
-crash" is misleading — it didn't crash because the map was skipped (never recovered). A source-grounded
-adversarial review located the real memory hog and three missing bounds:
-- **The `sourcemapper` Go child whole-loads the map** — `os.ReadFile`/`io.ReadAll` + `json.Unmarshal` into structs
-  holding `sources` + `sourcesContent` (pinned commit `442aed28…`), so its peak ≈ **~2× map size**; no streaming,
-  no size guard. `findings/sourcemapper.py:110-142` writes the whole map to a temp file and runs the binary on it.
-- **No memory bound on the subprocess**: `run_engine` is `subprocess.run` with no `setrlimit`/cgroup; the timeout
-  kills only the DIRECT child; `max_output_bytes` bounds STDOUT, not memory. `engines.py:9-20,96-117` already
-  flags this bound as DEFERRED, resting on the input cap this item would raise.
-- **No memory bound on the container**: `docker-compose.yml` sets no `mem_limit`/`deploy.resources` on api or
-  worker; there are no k8s manifests. A subprocess OOM is left to the host kernel OOM-killer, which can reap the
-  worker parent, not just the child.
-- **The viewer/reveal path re-recovers the WHOLE map on a user CLICK, in the API process** (`probe/sources.py:234-271`)
-  — so a giant-map run can OOM the API on demand, not just the worker.
-**Correct fix is layered (in order):**
-1. **Layer 0 — bound the subprocess + container (must-do FIRST, S–M).** `setrlimit(RLIMIT_AS)` via `preexec_fn`
-   on the recovery child (or `systemd-run --scope -p MemoryMax=` / a memory-capped sidecar) AND a `mem_limit` on
-   api+worker (compose) / k8s limits — so an over-size map fails as a CONTAINED `EngineError`, not a box-wide OOM.
-   Retires the deferred `engines.py:9-13` memory-bound note. This is the real "handle it correctly" step.
-2. **Layer 1 — raise `max_source_map_bytes` modestly (S), only AFTER Layer 0** (e.g. 32 → 64–96 MiB; child peak ≈ 2× map).
-3. **Layer 2 — stream + fix the viewer, to go bigger (M–L).** Stream the map fetch→disk (stream-hash then boto3
-   `upload_fileobj` — content-addressing needs the whole stream consumed to form the sha256 key, so buffer to a
-   temp FILE, not RAM: a real `storage.put_blob`/`object_key` change); scan the recovered tree file-by-file
-   (discard each) in BOTH `analyze.py` AND `probe/sources.py`; bound the recovered tree on disk (cumulative-write
-   cap or a size-limited `tmpfs` engine workdir — `_walk_recovered`'s read-cap does NOT stop sourcemapper writing
-   the whole tree); add a heartbeat between recovered files (the follow-up `analyze.py:896-902` already prescribes;
-   D23/D36 family); and fix the D28 double-recover (recover once, reuse).
-**Rejected — ijson `sourcesContent` scan-only:** fixes ONLY the secret scan (endpoints/IPs + viewer still
-whole-load) and diverging from `recover_file_text`'s normalization relocates analyze-time offsets → the D32-B1
-audited-reveal round-trip fails closed (systematic 409s). A niche fast-path at best, not a substitute.
-**Evidence:** 2026-08-30 QA — a real large in-scope bundle's map exceeded 32 MiB and was skipped; the raw-bundle
-analysis still surfaced endpoints + a real internal IP, but the map's original sources (where confirmed config
-secrets live) stayed unreachable. Files: `findings/{sourcemapper,engines}.py`, `storage.py`, `fetch/fetch.py`,
-`probe/sources.py`, `config.py` (`max_source_map_bytes`, `engine_max_output_bytes`), `docker-compose.yml`.
-Related: D32, D36, D28, D23.
-
-#### D22 · Tech detection JS-runtime + header-allowlist gaps [M] — ⏳ PARTIAL 2026-08-22 (js + header allowlist shipped; html/dom remain)  ·  correctness  — 🚫 WON'T FIX (accepted 2026-09-01)
-> 🚫 **WON'T FIX (accepted 2026-09-01):** The shipped js-global + header-allowlist surfaces stay shipped; the remaining html/dom surfaces need the raw HTML / rendered DOM the allowlist signal omits, and a widening blind spot is observable (not silent) via the `analyze.technologies` event, so skipping them is acceptable today — revisit if "site X still shows no `<framework>`" becomes a recurring operator complaint.
-- ✅ **RESOLVED 2026-08-19 — the `js` (window-global) surface now fires (PR #85).** Bundled
-  SPAs (Next.js `__NEXT_DATA__`, Nuxt `$nuxt`, React) were invisible; the matcher now
-  presence-matches enthec's `js` global names in stored bundle source via one RE2 `Set`
-  (`compile.compile_js_surface`; the naive per-pattern loop measured ~50s/host, the Set ~0.01s).
-  Static source has no runtime value, so `version` is `None` and each tech's js contribution is
-  capped (`match._JS_SURFACE_CEILING`) so a js-only detection reads "suspected", never "certain".
-  A distinctiveness filter (`_keep_js_key`) drops the false-positive band (<4 chars, bare words
-  <8). Both §4 gates passed. **html/dom stay unimplemented** (they need raw HTML / rendered DOM
-  the allowlist signal omits); the **header-allowlist review is now resolved** (below).
-- ✅ **RESOLVED 2026-08-22 — the curated header allowlist is widened (data-driven).**
-  `fetch.py::_HEADER_ALLOWLIST` grew from ~14 to ~28 keys + a CORS `access-control-allow-*` prefix
-  rule, chosen by measuring the enthec dataset's real header keys (665/7586 techs carry a header
-  fingerprint; 324 distinct keys). The adds are CSP + CORS + vendor/CDN/CMS identifiers —
-  architecture signal, not credentials — so ~158 more techs can fire on a header. Privacy held:
-  `link` is excluded (its URLs carry signed-CDN query tokens, REQ-S2/S4), `www-authenticate` stores
-  only its scheme token (no NTLM/Negotiate challenge blob), each kept value is size-capped (16 KiB in
-  the shared `_allowlisted_headers`, covering both the fetch and capture producers), and
-  `set-cookie`/`authorization`/`cookie`/`proxy-authorization` stay excluded (cookie NAMES only). Both
-  §4 gates passed (design: BUILD-WITH-CHANGES — drop `link`, narrow `www-authenticate`, cap in the
-  shared helper, add `platform`; code: see PR).
-
-The fingerprint matcher (`findings/techdetect/match.py`) originally implemented only the Phase-1
-signal surfaces — response headers, cookie names, `scriptSrc` URLs, `scripts` (JS source text), and
-`<meta generator>` — and NOT enthec's `js` (window-global; now shipped above), `html`, or `dom`
-surfaces. Consequence after the full-dataset re-pin (`techdetect_data/commit.txt` =
-`1b9eee8…`, 7586 techs): ~25% of the dataset (≈1900 techs) has *zero* Phase-1-matchable
-surface, and detection that relies on runtime globals/markup misses on bundled SPAs — e.g.
-**Next.js** fires only via `x-powered-by: Next.js` (often disabled in prod) or a `NEXT_LOCALE`
-cookie, and **React** (bundled into `_next/static/*` chunks, no standalone `react.js` URL)
-does not fire at all. Separately, `fetch.py::_HEADER_ALLOWLIST` keeps only ~14 fingerprint
-headers (a T1 privacy control), so header-keyed techs outside that set never fire. **Why
-deferred:** the re-pin already resolves the reported "0 techs on modern sites" bug (vercel.com
-0 → Next.js + Vercel); the `js`/`html` surface (Phase 2) and any allowlist widening are
-separate, larger slices each needing their own privacy/perf review. **Still owed:** ~~(a) a
-Phase-2 `js`-global surface so bundled SPA frameworks fire~~ (shipped, PR #85); ~~(b) a data-driven
-review of the header allowlist against the full dataset's header keys~~ (shipped 2026-08-22, above).
-Remaining: the `html`/`dom` surfaces (need raw HTML / rendered DOM). **Trigger:** if "site X
-still shows no `<framework>`" becomes a recurring operator complaint. **Detection note:** the
-`analyze.technologies` event carries per-host detection counts + `skipped_patterns`, so a
-widening blind spot is observable, not silent.
-
-#### D20 · Slice-Y multi-asset scale/robustness deferrals [M–L, ongoing]  ·  maintainability  — 🚫 WON'T FIX (accepted 2026-09-01)
-> 🚫 **WON'T FIX (accepted 2026-09-01):** The shipped per-asset fetch-retry bullet stays shipped; the remaining at-scale robustness strands are safe at bounded single-host scale (idempotent-safe double-work, not data loss), so closing them is acceptable today — revisit at M3 / multi-tenant scale.
-Consciously-deferred SHOULDs from the multi-asset (Slice Y) build — safe now at bounded
-single-host scale, revisit at M3/scale. Design spec:
-`apps/platform/docs/superpowers/specs/2026-07-26-slice-y-multi-asset-design.md`.
-- ✅ **RESOLVED 2026-08-22 — per-asset fetch retry (transient 5xx/429).** The crawl fetch loop
-  now retries a transient 429/5xx per asset via `fetch._fetch_asset_with_retry` before dropping it
-  to `failed` (→ run `PARTIAL`), bounded by `fetch_asset_retry_attempts` (default 2) with
-  heartbeat-aware backoff capped at `fetch_asset_retry_max_delay_seconds` (default 5.0s). Only a
-  `_TransientStatus` (429/5xx) retries — a deadline-exceeded `RetryableError`, `FatalError`, and
-  `EgressBlocked` still fail fast. Every attempt heartbeats first, so the retry can't outrun the
-  30s job lease (no peer reclaim / double-fetch); the retry is synchronous in the worker thread, so
-  the DNS-pin single-thread invariant holds. `attempts=0` reproduces the pre-D20 behavior. Both §4
-  gates passed (design: BUILD-WITH-CHANGES — the per-attempt-beat lease fix folded; code: SHIP-WITH-NITS
-  — cap-clamp + heartbeat-cadence tests and a between-retries REQ-A4 control check folded). Residual
-  (pre-existing, low-probability): `_beat_sleep` does not heartbeat a wait shorter than
-  `crawl_heartbeat_interval_seconds`, so sustained host-slot contention narrows the lease margin —
-  a heartbeat-family property shared with the at-scale bullets below, not introduced by this fix.
-- **Analyze mid-scan heartbeat:** a long per-asset `kingfisher.scan` (≤ `engine_timeout_
-  seconds`=120s) can exceed the 30s job lease with no mid-scan beat, so a peer can reclaim and
-  re-run the analyze loop. Correctness-safe (idempotent REQ-A3 outbox upserts + analyze-
-  terminal assets skipped), only wasteful; fix mirrors the crawl harness's in-subprocess beat.
-- **Long-stage stream-reclaim strand:** `progress.beat` renews the DB job lease but never
-  touches the Redis stream, so `reclaim_stalled` can hand a long stage's message to a peer; if
-  the original then crashes the job can strand.
-- **Commit-time DB error inside a per-asset analyze txn:** recorded as a permanent
-  `analyze_failed` (→ `PARTIAL`) rather than job-level retry — structural tension with the
-  per-asset-commit requirement (findings + status share one txn).
-- **Dual asset-list source of truth:** the discovery manifest blob (URL list) and the
-  `run_asset` rows (per-asset state) both list assets; unify only if drift is observed.
-- **Queue fan-out / per-asset parallelism (model C):** fetch/analyze loop assets sequentially
-  in one job (the fetch DNS-pin single-thread invariant); parallel per-asset jobs deferred.
-- **Per-asset secret scanning of recovered source-map files.**
-- **Multi-asset e2e is host-partial:** a real katana crawl→fetch→findings e2e can't be
-  automated locally (`egress.validate_target` rejects the fixture's private Docker IP; we must
-  not auto-crawl a public domain). `multi_asset_integration_test.py` Part A proves the pipeline
-  stubbed (host-green); Part B is engine-gated in CI — run it against a gated staging env with
-  real domain access.
-(Migrated 2026-08-15 from the retired `slice2-deferred-debt.md`.)
-
-**Tier-1 facet:** the per-asset fetch-retry bullet (a transient 5xx/429 during a crawl drops that asset -> run PARTIAL) was the one a user feels on a real target — ✅ RESOLVED 2026-08-22 (above); the remaining bullets are at-scale robustness (Tier-2), kept together as one register entry.
-
-#### D16 · Capture extension deferred items [S] — ⏳ PARTIAL 2026-08-17 (CI test gate added)  ·  maintainability  — 🚫 WON'T FIX (accepted 2026-09-01)
-> 🚫 **WON'T FIX (accepted 2026-09-01):** The shipped CI test-gate and popup-compile bullets stay shipped; the remaining bullets are housekeeping (over-cap `background.js`, synchronous upload-time sourcemap reconstruction, lingering unread legacy setting keys, and a rare display-only counter undercount that self-heals), so leaving them is acceptable today — revisit if a lingering bullet starts causing real breakage or the extension gets a substantial rework.
-Small deferred work in the MV3 capture extension (`apps/capture/chrome-extension/`), recorded here
-when the point-in-time `REFACTOR-NOTES.md` was folded into the capture app README (`apps/capture/README.md`) during the
-enterprise-hygiene cleanup (so the "later" doesn't become "never"):
-- ✅ **RESOLVED 2026-08-17 — Live `tests/*.mjs` suites are now gated in CI.** Added a dedicated
-  `extension` job to `.github/workflows/ci.yml` that runs all `tests/test_*.mjs` Node suites on every
-  push/PR (previously `security.yml` only `npm audit`ed the package, so a broken suite couldn't fail
-  the build). The job needs no `npm ci`/build — the suites import only `node:` builtins + local
-  modules. Fail-closed: an empty glob is a hard error (no silent zero-test pass), and every suite runs
-  so one failure can't mask another. Both §4 gates passed (design: SHIP AS-IS; code: see PR).
-- ✅ **RESOLVED 2026-08-22 — the popup bundle is now compiled in CI.** The `extension` lane now runs
-  `npm ci` + `npm run build` (with npm caching keyed to the extension lockfile), mirroring the
-  `frontend` lane, so a broken popup import/JSX fails the build instead of merging green. The build
-  only asserts the popup COMPILES; the emitted `dist/` is not diffed against the force-committed
-  bundle (minified output isn't a stable equality target). This also pulls the `modules/*` files
-  (imported only by the previously-never-compiled popup) into a compiled path for the first time.
-  Verified: `npm ci && npm run build` → exit 0 (dist/popup.js 55kb + dist/popup.css); no
-  `.npmrc`/ignore-scripts gotcha blocks esbuild's binary fetch in CI. (Originally surfaced by the
-  D16 code-review gate 2026-08-17.)
-- **`background.js` is well over 1,000 lines** (~3× the ~300 cap) — the message router +
-  `processFile` could extract further. Same class as D11; test-aware (the service worker is the
-  capture entry point), so a careful slice, low priority.
-- **Sourcemap reconstruction runs synchronously at upload** for map-bearing files — the uploaded map
-  content is ephemeral, so deferring it risks losing it. Turning off "capture source maps" is the
-  current escape hatch for maximum bulk-capture speed.
-- **Legacy removed-setting keys linger unread** in `chrome.storage.local` (`API Key`, `autoStart`,
-  `useLocalApi`, `exportIncludeContent`, `allowSourceMapFallback`, `authContextDomains`) — no
-  migration was written; harmless, cleanup only.
-- **(Optional, not a gap)** a workspace-SPA "Analyze" button — the popup already triggers analysis,
-  so this is a convenience feature, not missing behavior.
-- **Counter can undercount the final ≤750ms burst before an MV3 teardown** (added by the
-  counter-persistence fix, PR #55): a file captured in that window lands in the dedup store but not
-  the debounced `capturedFilesMeta`, so on respawn it is dedup-suppressed and never re-enters the
-  count. Rare, display-only, self-heals on the next capture — still a strict improvement over the
-  reset-to-0 bug it fixed. Optional close: eager-persist the projection in `stopCapture`.
-
-**Tier-1 facet:** the "Popup bundle is not compiled in CI" bullet was the user-facing risk (a broken capture popup could merge green) — ✅ RESOLVED 2026-08-22 (above); the remaining bullets are housekeeping. Kept together as one register entry.
-
-#### D39 · GraphQL detection is tag-name-gated — most fragments/subscriptions missed on minified bundles [M]  ·  correctness
-The GraphQL-findings slice (2026-09-01) promotes located operations/fragments to first-class
-findings, but detection is deliberately v1-scoped ("promote only", user decision): `_call_document`
-matches only the literal callee `gql`/`graphql` (`findings/graphql_ops.py`), and documents are read
-from `gql`…`` / `graphql(`…`)` calls plus `{query|mutation|subscription: …}` body keys. **Impact
-(measured — hackerone run `a552c014`, 499 assets):** 128 operations recovered, but only **27 of
-~1,355 fragment definitions (~2%)** and **0 of 24 subscriptions** — production minifiers rename the
-`gql` tag to a single char, which the name gate rejects, and Relay/persisted-query bundles embed
-operations as compiled `DocumentNode` objects the call/body reader never sees. The GraphQL count is
-therefore a **floor, not a ceiling** (the workspace tab states this). **Fix (recommended, [M]):**
-detect a GraphQL document by template/string CONTENT — sniff a leading
-`query|mutation|subscription|fragment` keyword (or a leading `{`) and validate with `graphql.parse()`
-— instead of by callee name; one change recovers minified/renamed tags, plain-string operations, and
-subscriptions. **Follow-ons (separate, larger):** Relay compiled-`DocumentNode` rehydration +
-persisted-query (APQ `sha256Hash`) detection; cross-bundle fragment stitching (resolve `...spreads`
-to their definitions); precise per-definition source offsets (v1 records the document call-site).
-Prior art: `pdstat/graphqlextractor` (AST-object rehydration + fragment stitching). Full plan:
-`apps/platform/docs/superpowers/specs/2026-09-01-graphql-findings-design.md` (Fast-follows).
-
-### Tier 2 · fix before it scales up
-
-Safe now for a single trusted operator. Each has a concrete future trigger - untrusted /
-multi-tenant load, or the first upgrade against a database that holds live data.
-
-> **2026-09-01:** all Tier-2 items (D18, D19, D23, D17) are now accepted 🚫 **WON'T FIX** — the residual
-> risk each names is ACCEPTED, not eliminated; each keeps its revisit trigger below.
-
-#### D18 · OS/network-level egress isolation [L]  ·  supply-chain/security  — 🚫 WON'T FIX (accepted 2026-09-01)
-> 🚫 **WON'T FIX (accepted 2026-09-01):** The application-level SSRF guard defeats the actual threat for our only outbound traffic (the fetch stage) today, but this ACCEPTS a real residual risk — OS-level egress isolation and the crawl-time subresource-SSRF gap remain unmitigated, not eliminated — revisit before exposing the fetcher/crawler to untrusted multi-tenant load.
-REQ-P2 (metadata/RFC1918 blocked at the **network layer**) and REQ-T2 (net-emitting engines
-in a scoped egress sandbox) are only partially met. Enforcement today is **application-level**
-(`recon/fetch/egress.py`, ADR-0005): scheme + in-scope host + all-resolved-IPs-globally-
-routable, DNS-pinned per request, redirects re-validated per hop, scope never derived from
-crawled URLs. **Why safe now:** the app guard defeats the actual SSRF threat for the only
-outbound traffic we make (the fetch stage); Kingfisher runs `--no-validate` (no network).
-**Still owed (defense-in-depth):** OS-level isolation (network namespace + egress firewall /
-seccomp / nsjail) against a compromised worker or a shelled-out engine that ignores our host
-argument — the spec's "network layer" wording — plus the crawl-time subresource-SSRF gap
-(headless Chrome loads subresources outside `egress.py`; app-level scope flags + per-URL
-`egress.validate_target` on manifest entries only). **Hardening path:** deployment network
-control (no route to metadata/RFC1918) → forced egress proxy enforcing `egress.py` →
-netns/nftables. **Trigger:** before exposing the fetcher/crawler to untrusted multi-tenant
-load. (Migrated 2026-08-15 from the retired `slice2-deferred-debt.md`.)
-
-#### D19 · Migrations build tables with `create_all`, not frozen snapshots [M]  ·  correctness  — 🚫 WON'T FIX (accepted 2026-09-01)
-> 🚫 **WON'T FIX (accepted 2026-09-01):** With the build pre-prod (no data to preserve) and `ADD COLUMN IF NOT EXISTS` mitigating fresh-DB builds this is acceptable today, but it ACCEPTS that safe incremental upgrades against live tenant data are NOT guaranteed — revisit before the first live-data schema upgrade.
-`0001_initial`/`0002_findings` (and later new-table revisions) call
-`Base.metadata.create_all(bind)` from the LIVE model metadata, not an explicit
-column-by-column snapshot. On a from-scratch `alembic upgrade head`, 0001 already stands
-up the entire *current* schema (including columns that later revisions "add"), so a plain
-`op.add_column` in a later revision hits `DuplicateColumn` on a fresh DB — this bit CI when
-`0003` added `run.source_map_ref`. **Mitigation in place:** incremental column-adds use
-`ADD COLUMN IF NOT EXISTS` (see `0003`, `0005`). **Still owed:** freeze `0001` to an
-explicit `op.create_table` snapshot and stop calling `create_all` inside migrations, so each
-revision is an immutable historical step and plain `add_column` is safe. Do this before real
-incremental upgrades against live tenant data (M3); deferred because the build is pre-prod
-(no data to preserve) and the rewrite must exactly mirror the models (columns/FKs/indexes/
-RLS). **Detection note:** CI catches a broken migration because api/worker `depends_on
-migrate: service_completed_successfully`; `docker compose up -d migrate` alone swallows the
-exit code. (Migrated 2026-08-15 from the retired `slice2-deferred-debt.md`.)
-
-#### D23 · Per-asset cumulative beautify has no budget/heartbeat [S]  ·  correctness  — 🚫 WON'T FIX (accepted 2026-09-01)
-> 🚫 **WON'T FIX (accepted 2026-09-01):** A pathological many-`sourcesContent` map's worst case is idempotent-safe double-work (a peer reclaim re-runs the loop, not data loss) and real source maps are nowhere near that shape, so skipping the per-asset beautify budget/heartbeat is acceptable today — revisit before exposing analyze to untrusted multi-tenant load at scale.
-`findings/analyze._analysis_units` beautifies each source-map-recovered *minified* file before
-extraction (`deobfuscate.beautify_if_minified`, per-file 1 MiB cap) so its findings land on
-distinct lines that match what `probe/sources` later serves — the byte-identical invariant that
-fixed jump-to-finding for recovered minified vendor sources (PR #76, 2026-08-17). **Residual:**
-the per-file cap bounds each file, but a single source map with many large minified
-`sourcesContent` entries can total up to ~`engine_max_output_bytes` of beautify work per asset
-with **no heartbeat between files** — this loop and the tree-sitter `extract()` that follows share
-the one per-asset `progress.beat`, so a pathological map could approach the 30 s job-lease stall
-window and let a peer reclaim the RUNNING job. **Why safe now:** the outcome is idempotent-safe
-double-work (the reclaiming peer re-runs the analyze loop; REQ-A3 outbox upserts + analyze-
-terminal-asset skipping make it wasteful, not corrupting), not data loss, and real source maps are
-nowhere near this shape. **Still owed:** a per-asset cumulative-beautify budget (serve raw past it)
-or a heartbeat between files — same heartbeat family as D20 ("Analyze mid-scan heartbeat") and D21
-(extractor linear-but-unbounded). **Trigger:** before exposing analyze to untrusted multi-tenant
-load at scale. Anchor: the `# NOTE(DEBT)` in `findings/analyze.py::_analysis_units`.
-
-#### D17 · Capture Origin-lock allows a `null` Origin [S]  ·  supply-chain/security  — 🚫 WON'T FIX (accepted 2026-09-01)
-> 🚫 **WON'T FIX (accepted 2026-09-01):** The blast radius is bounded to the throwaway shared `capture-spike` tenant (central login re-homes a real operator's captures into their own tenant), so this is acceptable today, but it ACCEPTS that an opaque `Origin: null` remains allowed at capture ingest — revisit before multi-tenant / untrusted load.
-The capture-ingest Origin-lock (`capture_router.py` `_enforce_origin_lock`) rejects a
-web-page `http(s)` Origin but ALLOWS an opaque `Origin: null` (a sandboxed iframe /
-`data:` document), because the MV3 worker may itself emit `null` and we won't risk
-dropping real capture. The blast radius is bounded to the SHARED `capture-spike` tenant:
-central login re-homes a logged-in operator's real captures into their OWN tenant (the
-auth session token in `_resolve_ingest_tenant`), so a `null`-Origin write can only land
-fake findings / storage-worker DoS in the throwaway shared tenant, never an operator's.
-Optionally also reject `Origin: null` once the extension worker's real Origin is
-confirmed live. The decision is pinned by `capture_origin_lock_test.py` so it can't be
-flipped silently.
-
-### Tier 3 · behind the scenes
-
-Developer-facing hygiene - it keeps contributors fast and the trunk healthy, but a user
-never sees it directly.
-
-> **2026-09-01:** every Tier-3 item (D28, D29, D30, D9, D11, D5) is now accepted 🚫 **WON'T FIX**;
-> **D38** (native-ESM chunk discovery) was the last active item and shipped ✅ RESOLVED 2026-09-01, so
-> the whole register is now either resolved or accepted-won't-fix. For D5 the `--cov-fail-under=60` gate
-> REMAINS enforced — only the ratchet-up effort is dropped.
-
-#### D28 · Cross-chunk export index double-recovers source maps [S]  ·  performance  — 🚫 WON'T FIX (accepted 2026-09-01)
-> 🚫 **WON'T FIX (accepted 2026-09-01):** The duplicate per-asset sourcemapper spawns are idempotent-safe bounded work (not corruption) and deterministic so never wrong output — and the D37 adversarial design review recommended against building the recover-once reuse cache — so this is acceptable today; revisit if the 2× per-asset spawn cost becomes a measured bottleneck on real crawls.
-The cross-module endpoint resolver (`findings/analyze.py::build_export_index`) runs a
-run-level pre-pass that recovers each mapped asset's source map to harvest its exported
-string consts, then the existing per-asset extract loop recovers the SAME maps again for
-full extraction — so a mapped crawl pays **2× sourcemapper subprocess spawns per asset**
-(and a no-map asset is likewise tree-sitter-parsed twice: once to harvest exports, once
-in the loop to extract).
-Chosen deliberately: it keeps the pre-pass memory-bounded (only the small export index
-persists, not recovered source) and guarantees the index keys match the loop's recovered
-`f.path` by construction (they come from the identical `recover_sources` call), which is
-what makes cross-chunk resolution correct at all. The extra spawns are idempotent-safe
-bounded work, not corruption, and the pre-pass heartbeats per asset so it can't lose the
-lease. Follow-up: cache the recovered units for reuse across the two passes, or fold the
-export harvest into the main loop with deferred (post-loop) resolution. Extends the
-recovery/stall note in `_analysis_units`. `# NOTE(DEBT)` marks the site.
-
-#### D29 · Deferred SES/Node exec engine for webpack chunk-URL enumeration [L]  ·  supply-chain/security  — 🚫 WON'T FIX (accepted 2026-09-01)
-> 🚫 **WON'T FIX (accepted 2026-09-01):** The pure-Python static-template slice already covers the standard chunk-URL form with zero new attack surface and content-derived URLs cannot widen egress, so the sandboxed SES/Node exec engine will NOT be built — revisit only if executing arbitrary/obfuscated chunk-URL builders becomes a needed recall lever, at which point the six-point security contract documented below still gates any exec-path code.
-The static cross-chunk resolver (Increments 1/2a/2b, main @ `93d2fd8`) resolves fetch/axios
-URLs split across chunks, but does NOT yet **enumerate lazy-chunk URLs** by executing the
-bundle's own `__webpack_require__.u` builder — the recall edge `js-recon` gets via `ses`/`lockdown`.
-The user approved that execution as a **posture change** (static-only → local sandboxed execution
-of target code), but we **sequenced it behind** a pure-Python static-template-emulation slice
-(covers the standard `"static/chunks/"+id+"."+map[id]+".js"` form with zero new attack surface,
-no posture change). The exec engine (executing *arbitrary/obfuscated* builders in a Node sandbox)
-is deferred to its own hardening slice. Design spec:
-`apps/platform/docs/superpowers/p4-ses-chunk-enumeration-design.md`.
-**§4 adversarial security review (2026-08-20) = PROCEED-WITH-CHANGES.** These six are a hard
-security contract that gates ANY exec-path code (SES `lockdown` is a JavaScript boundary only —
-if V8/SES is escaped the process has ambient OS authority):
-1. **Network namespace, no interfaces** — the real "no traffic" guarantee. `engines.py:15-20`
-   documents that the `subprocess.run` timeout kills only the DIRECT child, not grandchildren,
-   so escaped code could fork a detached grandchild that outlives the kill and does network I/O.
-2. **Kill the whole process tree** — `start_new_session=True` + `os.killpg`, or let nsjail reap.
-3. **Explicit minimal env** — `run_engine`'s `env` defaults to `None` → `subprocess.run` inherits
-   the worker's secret-bearing environment (auth signing key, S3, DB creds). Never inherit; test it.
-4. **Memory + pids caps** — `node --max-old-space-size` + `ulimit -v`/cgroup + `pids_limit`. SES
-   by its own docs "does not protect availability"; `run_engine`'s output cap is post-hoc
-   (`engines.py:111-117` bounds what we *process*, not peak RAM).
-5. **Cap enumerated URL count + length** before seeding — the builder output is attacker-controlled.
-6. **Pin the whole `@endo` tree with integrity**; treat SES as defense-in-depth, never the sole boundary.
-Also requires an ADR-0006 posture amendment (local sandboxed execution of extracted target code, no-network
-sandbox) + an ADR-0005 note, and its own §4 gates. **Already safe (no work owed):** enumerated
-(content-derived) URLs cannot widen egress — every fetch hop re-runs `egress.validate_target`
-(out-of-scope host / `data:`+`file:` scheme / userinfo all rejected; `scope_hosts` never populated
-from content), so the static slice and any future engine both inherit that guard by routing URLs
-exclusively through the seed→fetch path.
-
-#### D30 · Deferred interprocedural param-URL resolution (static recall ceiling) [L]  ·  correctness  — 🚫 WON'T FIX (accepted 2026-09-01)
-> 🚫 **WON'T FIX (accepted 2026-09-01):** Unattributed param-URLs are REQ-C2-honest (never guessed) and the interprocedural lever only ever pays on readable / source-map-recovered source, so this deliberate static-recall ceiling is acceptable today — revisit only if measuring the shipped static path across more real bundles shows single-unshadowed-call-site foldable URLs are a material population.
-The static extractor resolves a sink URL held in / built from a single-unshadowed local binding
-(Phase 2 for fetch/axios; extended by S1 to `XMLHttpRequest.open`, jQuery, and `new WebSocket` so
-the same `const u = "…"; sink(u)` folds at every sink). What stays `unattributed` is a URL that
-arrives as a **function parameter** (`fetch(o)`, `c.open("GET", a)`) or from a **builder-method
-call** (`fetch(t.build("fetch", r))`) — the shapes that dominate the real unresolved sinks on
-minified webpack (18/18 on the Asana corpus). This is REQ-C2-honest (unattributed, never guessed),
-not a bug — it is the deliberate ceiling of the static path.
-Resolving a parameter would need **cross-function (interprocedural) data-flow** — the taint
-analysis the thorough-endpoint-recovery §4 design review explicitly ruled out (F5: it is boolean
-source→sink *reachability* that does not reconstruct the URL string, and a per-sink pass over a
-function's call sites reintroduces the O(n²)/FP class DEBT D21 just closed). On minified-no-map
-bundles the names are mangled → poisoned → recall there is ~0 regardless of any analysis; the lever
-only ever pays on readable / source-map-recovered source.
-**Measure-first gate (do this BEFORE any build):** run the already-shipped static path across more
-real bundles and quantify what fraction of genuinely-unresolved sinks are (a) a *single unshadowed
-call site* whose argument is statically foldable (safely resolvable, 0-FP) versus (b) genuinely
-interprocedural / builder-method (not). Build only if (a) is a material population. If ever built:
-a bounded intraprocedural + single-call-site fold ONLY (never a full taint port), 0-FP re-proved on
-the real corpus, index-once / no per-sink re-traversal (D21 discipline). Related: the deferred exec
-engine (D29) and `apps/platform/docs/superpowers/thorough-endpoint-recovery-design.md`.
-
-#### D38 · Native-ESM chunk discovery — static + dynamic import() [S] — ✅ RESOLVED 2026-09-01 (static #121; dynamic 2026-09-01)  ·  correctness
-Modern Vite/Rollup/Rolldown apps split code via NATIVE ESM static imports (`import "./app-Cp.js"`),
-resolved by the browser's own module loader — no `<script>` tag and no `__webpack_require__.u`
-builder, so BOTH the katana crawl and the webpack-only `chunkenum` missed those sibling chunks (the
-app's real code + endpoints). VERIFIED on a real Rolldown target: a 210-byte entry whose whole body
-was three static imports (`runtime`/`vendor`/`app`) — the tool found the entry and missed all three.
-**SHIPPED (static, recursive):** `findings/esmimports.py` statically extracts `import` / `export …
-from` literal specifiers via the shared tree-sitter (a top-level scan — static ESM declarations are
-top-level-only per the ES spec, so O(top-level statements), not a full-tree walk); `fetch.
-_enumerate_and_seed_esm_chunks` does a bounded recursive BFS that fetches each sibling chunk THROUGH
-THE EGRESS GUARD and seeds it (mirrors the webpack `_enumerate_and_seed_chunks`: content-derived URLs
-are never a scope-widening lever — REQ-P2; cycle-safe via one visited set; total rows AND fetch
-attempts bounded by `crawl_max_assets`; REQ-A4 + soft-miss). Gated to non-webpack assets so exactly
-one enumerator parses any bundle.
-✅ **DYNAMIC `import()` RESOLVED 2026-09-01.** The measure-first gate ran against a live hackerone
-crawl: the recovered app chunk dynamic-imports **133** lazy route/feature chunks via
-`` import(`./page-hash.js`) `` (template literals) and katana caught **0** — a large real gap, not
-marginal. Shipped: the enumerator (renamed `esmimports.enumerate_esm_chunk_urls`) now does ONE bounded
-full-tree walk (`_jsast._walk`, capped at `_MAX_AST_NODES`) catching static `import`/`export … from`
-AND dynamic `import()` whose specifier is a static string OR a no-substitution template literal
-(`_dynamic_import_source`; a `${…}` template, a variable, or `import.meta` yields nothing — honest,
-never guessed). The fetch BFS follows them through the same egress guard + `crawl_max_assets` cap +
-cycle set as the static ones. Lease-safe by measurement (~8 s parse+walk on the real 8.5 MiB monolith;
-~12 s worst case at the 10 MiB fetch cap, under the 30 s lease with the pre-walk beat). §4: adversarial
-design self-review (full-walk DoS, interpolated-template rejection, volume) + higher-model code review =
-SHIP (invariants empirically verified; the `enumerate_chunk_urls`→`enumerate_esm_chunk_urls`
-disambiguation nit folded). **E2E on hackerone:** the run fanned out **10 → 500 assets** (493
-feature-page chunks, capped at `crawl_max_assets`) and **290 → 567 findings**, surfacing endpoints
-invisible before (`POST /graphql`, `GET /sample_report_templates.json`, `GET /invitations/${token}.json`).
-Tests: 21 extractor + 9 fetch-BFS (incl. the real Rolldown dynamic shape). **Accepted residuals (NOT
-owed):** recall is bounded by the 500-asset cap (tunable) and much of the deep route-chunk API surface
-lands in the unresolved/generic lanes — the D30 param-URL ceiling (accepted WON'T FIX); the fan-out
-makes a run heavier (~19 min). Related: D29, D30.
-
-#### D9 · Test-pyramid inversion [L, ongoing]  ·  maintainability  — 🚫 WON'T FIX (accepted 2026-09-01)
-> 🚫 **WON'T FIX (accepted 2026-09-01):** The fast hermetic layer is now ~half the suite and the heavy integration lane still catches most real bugs, so continuing to grow the small-test layer is acceptable to drop today — revisit if the integration-heavy suite's cost or flakiness starts slowing contributors.
-58 of 123 backend test files carry an integration marker (need live PG/Redis/MinIO); the fast
-hermetic layer is now ~half (≈65 files) — grown by the D9 slices below, no longer the clear
-minority — but the heavy lane still catches most real bugs. Grow the small-test layer.
-
-**Slice 1 (2026-08-09):** added hermetic tests for the decision kernels that were
-previously only exercised under live infra — `worker/main.py::process_message` (the
-full run-lifecycle routing matrix: gone/skipped/paused/cancel/pause/duplicate/
-mid-loop-checkpoint/ControlInterrupt/happy-path) + `_handle_failure` DLQ branch (30%→79%),
-`probe/reveal.py::_derive` + `_reveal_candidates` (the fail-closed `integrity` drift
-check + deterministic ordering; 41%→59%, faking only `storage.get_blob`), and
-`storage.py::object_key` (tenant-isolation key shape + content-addressing, no test
-existed). Fast-lane total 59%→61%; D5 floor ratcheted 58→60. **Slice 2 (2026-08-09):**
-extracted a pure `_etag()` from `runs/queries.get_status` (byte-identical refactor) +
-hermetic tests pinning the REQ-R4 invariant (a pause/cancel *request* changes the ETag
-without moving `state`, so `If-None-Match` polling can't miss it), and
-`probe/sources._as_content` (the byte-slice-before-decode bounded-response invariant).
-Fast lane 61.09%→61.32% (floor stays 60 — too little headroom to ratchet). Out of scope
-(intrinsically integration —
-uncovered lines are DB/queue semantics where a hermetic test buys mock-fiction):
-`spec/service.py`, `spec/base_url_service.py`, `findings/wrapper_service.py`,
-`findings/reextract.py`, `runs/service.py`, `runs/coordinator.py`, `probe/triage.py`.
-
-#### D11 · Files over the ~300-line cap [M] — ⏳ PARTIAL 2026-08-07 (extract.py split)  ·  maintainability  — 🚫 WON'T FIX (accepted 2026-09-01)
-> 🚫 **WON'T FIX (accepted 2026-09-01):** The shipped `extract.py` split stays shipped; the remaining over-cap files are deliberately deferred with evidence (ORM-registration fragility in `db/models.py`, monkeypatch-breaking risk in `capture_router.py`, invariant-dense `analyze.py`) for near-zero behavior gain, so leaving them over the line cap is acceptable today — revisit if a file's size starts causing real merge/maintenance pain or a test-aware re-split is undertaken.
-`findings/extract.py` (639, 2.1x) was split into a 3-module import DAG — `_jsast.py`
-(leaf: tree-sitter parser/AST helpers + value dataclasses + param builders) ← `_base_env.py`
-(REQ-C2 base-URL resolution) ← `extract.py` (network-sink handlers + `extract()`).
-Pure move (per-symbol AST diff proved byte-identical; §4 code gate SHIP-WITH-NITS), with an
-`__all__` re-export shim so `analyze.py`/`classify.py`/tests keep importing `RawEndpoint`,
-`HTTP_METHODS`, `collect_base_env`, `_PARSER` from `recon.findings.extract` unchanged (matters
-under D3's now-strict `no_implicit_reexport`). All three modules are mypy-strict-clean.
-Since the split, cross-chunk resolution + dataflow work has regrown all three back over the cap
-(2026-08-23: `_jsast.py` 679, `_base_env.py` 394, `extract.py` 610) — a re-split is a future slice.
-
-**Deferred (evidence-backed, both §4 design engineers):**
-- `db/models.py` (645) — DON'T split: a cohesive declarative schema (17 classes + 35
-  FK/`back_populates` cross-refs + the RLS `*_TABLES` tuples read by Alembic `env.py`). With
-  `from __future__ import annotations`, `relationship()` targets resolve only via the class
-  registry, so a package split makes `__init__` load-bearing for ORM registration (a bypassing
-  `from recon.db.models.run import Run` silently breaks `configure_mappers()`). High fragility,
-  zero behavior gain.
-- `api/capture_router.py` (793) — DEFER: the D1/D8a tests *rendezvous-monkeypatch*
-  `capture_router.<helper>` (e.g. `monkeypatch.setattr(capture_router, "_run_has_job", …)`);
-  moving a handler/helper to a sibling module silently breaks the patch (a test would pass while
-  testing nothing). Also can't reach the cap (~420 residual). Needs a careful test-aware slice.
-- `findings/analyze.py` (1126, the largest) — DEFER: a clean record-trio seam exists but it
-  touches the outbox/RLS/REQ-A3–A4 invariants and `reextract.py` imports `_extract_endpoints`;
-  higher-risk, own slice. `findings/queries.py` (623) + `fetch/fetch.py` (879, ~2.9x — grown by
-  D20/D22/source-map work): low priority (fetch is SSRF-fail-closed-critical — don't fragment).
-(Line counts re-measured 2026-08-23.)
-
-#### D5 · Coverage ratchet [ongoing]  ·  enforcement/tooling  — 🚫 WON'T FIX (accepted 2026-09-01)
-> 🚫 **WON'T FIX (accepted 2026-09-01):** The `--cov-fail-under=60` CI gate REMAINS enforced and is not removed or lowered; only the ongoing effort to ratchet the floor upward as coverage grows is being dropped — revisit if fast-lane coverage materially outgrows the 60% floor and locking in the gain is wanted.
-Floor is `--cov-fail-under=60` (fast-lane coverage is ~61%, grown by the D9 slice-1
-hermetic tests). **Ratcheted 55→58, then 58→60 on 2026-08-09** to lock in the gains.
-Ratchet the floor up as coverage grows; never lower it. (`.github/workflows/ci.yml` is
-the single source of the number; the CLAUDE.md mention trails it.)
-
-## Resolved (record)
-
-Kept for the decision trail - what was deferred, why, and how it was closed. In ID order.
-
-### D1 · Capture get-or-create race — silent duplicate sessions/runs [M] — ✅ RESOLVED 2026-08-07  ·  correctness
-Fixed via approach A.
-Added dedicated idempotency-key columns `session.external_id` + `run.capture_external_id`
-(migration 0011), each with a `UNIQUE(tenant_id, …)` index (NULLS DISTINCT — only
-capture rows bind); `capture_router` keys get-or-create on them and self-heals on
-`IntegrityError`. The open capture "round" is the run whose `capture_external_id` is
-set; `analyze/start` seals it by nulling the marker in the SAME transaction that
-inserts the Job (so a run can never be sealed-but-jobless, which would re-orphan JS).
-The singleton capture tenant uses a `pg_advisory_xact_lock` (its `name` is
-deliberately non-unique). Covered by a live-PG two-writer concurrency test
-(`capture_router_test.py`, verified red-without-index → green-with-index). Both §4
-gates passed (design: BUILD WITH CHANGES; code: SHIP).
-
-### D2 · Ruff format sweep + broaden the ruleset [M] — ✅ RESOLVED 2026-08-07  ·  enforcement/tooling
-Two isolated commits: (1) `style:` `ruff format` across the backend — 111/167 files
-reflowed, pure formatting (fast lane stayed green; SHA in `.git-blame-ignore-revs` so
-blame skips it); (2) broadened `select` to `F,I,UP,B,C4,SIM,PIE,RET` +
-`extend-immutable-calls` for the FastAPI DI markers (the 9 `B008` sites are the
-framework idiom, not bugs). Applied 22 safe + 8 verified-equivalent unsafe autofixes
-+ 4 hand-fixes (2 `SIM117` combined-`with`, 1 `SIM115` `# noqa` for a deliberate
-long-lived Popen handle, 1 `B017` → specific `FrozenInstanceError`). CI's host-tests
-lane now also runs `ruff format --check src` so the format can't drift.
-**Deferred** (tracked follow-up): `TC`/`TCH` (39 stylistic typing-only-import
-relocations that fight `from __future__ import annotations`). Both §4 gates passed.
-
-### D3 · mypy — no Python type checking [M–L] — ✅ RESOLVED 2026-08-07  ·  enforcement/tooling
-Introduced mypy 2.3.0 (dev extra + `uv.lock`) with a per-module `strict = true`
-override on `recon.findings.*` + `recon.spec.*` in `[tool.mypy]`; the base config
-follows all other imports *silently* so out-of-scope errors (e.g. `db/models.py`'s
-194) never enter this gate, and colocated `*_test.py` are excluded. Fixed all 37
-resulting errors: 25 pure annotations (`no-untyped-def` + `dict[str, Any]` generics),
-5 SQLAlchemy DML `Result` typings (`cast(CursorResult[Any], …).rowcount`), and 7
-targeted fixes. The 3 real None-safety sites were resolved by *invariant*, not blind
-guard: an `assert asset.input_ref is not None` in `analyze._analyze_assets` (an
-OK-fetched asset always has `input_ref` — `runs/assets.set_fetch_ok` writes it +
-`fetch_status=OK` atomically, and the loop only reaches OK assets); `(node.text or
-b"")` in `extract._text` (tree-sitter stub Optional, matching the fn's empty-on-
-absence contract); and `row.reason or ""` in `queries._run_spec_summary` (value-
-neutral — a null reason can never equal `"suffix-verify"`, the only value `summarize`
-reads). No stub packages (untyped 3rd-party → `Any`); the one `SafeLoader` subclass in
-`ingest.py` carries `# type: ignore[misc]` (adding `types-PyYAML` would *introduce* a
-new `no-untyped-call`). CI's host-tests lane now runs `mypy src/recon/findings
-src/recon/spec` (hermetic) and fails loudly if the override ever stops matching (no
-silent non-strict downgrade). Fast lane stays 421-green; ruff clean. Both §4 gates
-passed (design: Meta SHIP / Google BUILD-WITH-CHANGES — both deltas simplifications;
-code: SHIP WITH ONE NIT, nit addressed). **Widen next**, module-by-module; `db/models.py`
-(194) is the natural follow-up.
-
-### D4 · TypeScript strict off [S] — ✅ RESOLVED 2026-08-07  ·  enforcement/tooling
-Enabled `"strict": true` in both `apps/platform/web/tsconfig.app.json` and
-`tsconfig.node.json`. The "~5 feature pages to burn down" estimate was pessimistic —
-the code was already written null-safe, so a forced clean typecheck
-(`tsc -b --noEmit --force`) is **0 errors**; lint + build + 133 vitest tests stay
-green, and CI's `frontend` lane (`tsc -b --noEmit`) now enforces it. Both §4 gates
-passed (design: SHIP AS-IS; code: APPROVE). Deferred (a separate future slice, NOT
-this one): the beyond-umbrella flags `noUncheckedIndexedAccess` /
-`exactOptionalPropertyTypes` / `noImplicitReturns` add ~20 errors on current code, so
-enabling them means a real burn-down.
-
-### D6 · No dependency/secret scanning [S–M] — ✅ RESOLVED 2026-08-07  ·  supply-chain/security
-Added `.github/dependabot.yml` (weekly version-update PRs for the `uv` Python project
-+ both npm projects + github-actions + Docker base images), `.gitleaks.toml`, and
-`.github/workflows/security.yml` (push/PR + weekly schedule) with three advisory
-gates: `gitleaks dir` (secret scan of the working TREE — history is intentionally NOT
-scanned: a secret-detection tool's history is saturated with fixture tokens, measured
-at 437 fixture-only findings across 380 commits vs 0 in the tree; a one-time history
-triage confirmed all 437 sit in fixture/test/deleted-v1 paths, no real leak),
-`pip-audit` (clean today), and `npm audit --audit-level=high` for web + extension.
-Fixed a pre-existing dev-only `undici` HIGH in web via a non-breaking `npm audit fix`
-so the web gate is green. CodeQL DEFERRED (needs GitHub Advanced Security, unavailable
-on private Free-tier — the same limit that blocks branch protection). Both §4 gates
-passed (design: BUILD WITH CHANGES, then ENDORSED the working-tree-scan pivot).
-
-**Update 2026-08-07 — Dependabot version-updates PAUSED (config removed):** at the
-maintainer's request ("too early to be dealing with it"), `.github/dependabot.yml` was
-removed after its first run opened 15 update PRs (#6–#20, all closed). This pauses only
-the *auto-update-PR bot*; the *scanning* half of D6 — `gitleaks` + `pip-audit` +
-`npm audit` in `security.yml` — is untouched and still gates, so D6's core resolution
-stands. Repo-level Dependabot alerts + security auto-updates were already off
-(`automated-security-fixes` → `enabled:false`, `vulnerability-alerts` → 404), so no
-version PRs can regenerate. To re-enable later, restore `.github/dependabot.yml` from
-PR #5 (`git checkout 922335c -- .github/dependabot.yml`).
-
-### D7 · Image build isn't lock-pinned [M] — ✅ RESOLVED 2026-08-07  ·  supply-chain/security
-`apps/platform/Dockerfile` now installs Python deps from the committed lock instead
-of `pyproject` `>=` floors: a `deps-export` stage runs `uv export --frozen --no-dev`
-to a hash-pinned `requirements.txt`, and the runtime stage `pip install -r`s that,
-then `pip install --no-deps .` for the project (kept NON-editable — a real wheel
-build — so its packaged `findings/rules/*.yml` data stays validated in the image, the
-gap the integration-lane AKIA test catches). The image now matches CI's
-`uv sync --frozen`; verified by a full image build. Web was already `npm ci`-pinned.
-Both §4 gates passed.
-
-### D8 · Unversioned contracts [M] — D8a ✅ RESOLVED 2026-08-07; D8b ✅ RESOLVED 2026-08-09  ·  maintainability
-Two wire contracts carried no version field and no consumer-contract test.
-
-**D8a (capture ingest — DONE):** `capture_router.py` now stamps a server-authored
-`CAPTURE_CONTRACT_VERSION` on the `GET /api/health` handshake (response-side only —
-additive, so deployed extensions that ignore the health body aren't broken), and a
-hermetic fast-lane `capture_contract_test.py` pins the wire shapes the extension
-depends on (health / save-files / analyze-start / progress envelopes + the
-`GET /api/projects` bare-array invariant), so drift fails in the fast lane instead of
-silently in prod. Both §4 gates passed (design: BUILD WITH CHANGES; code: APPROVE
-WITH NITS).
-
-**D8b (OpenAPI export — ✅ RESOLVED 2026-08-09):** `probe/openapi.py` `build_openapi` now
-stamps a root `x-recon-export: {contract-version, generator}` on every emitted document —
-an explicit version for the export FORMAT (the machine-readable shape of the `x-recon-*`
-extensions), distinct from `info.version` (`"0.0.0"` = the reconstructed target's unknown
-version). Kept IN the document (not an HTTP header) so the version travels with a saved
-`.json`/`.yaml` artifact, so `export_router.py` needs no change. A hermetic drift test
-(`openapi_test.py`) pins the version literal, the in-document stamp shape, and the full set
-of `x-recon-*` extension names + the `x-recon-confidence` key/value vocabulary, so a silent
-shape change fails the fast lane instead of breaking a consumer (Burp / the threat-model
-feed). Both §4 gates passed (design: BUILD AS-IS; code: SHIP-WITH-NITS — the 3 nits [kebab
-`contract-version` key, tightened comment scope, this ledger flip] all folded). A third
-response contract — the spec classify/diff envelope (`api/spec_router.py` `asdict(summary)`)
-— is also unversioned but is out of D8's stated two-contract scope; noted here as a future
-follow-up if it grows an external consumer. Still precedes any D13 (enrichment) resume,
-which extends this output.
-
-### D10 · No ADR trail [M] — ✅ RESOLVED 2026-08-08  ·  maintainability
-Added a MADR ADR trail at repo-root `docs/adr/` (beside `ARCHITECTURE.md` — the "what";
-the ADRs are the "why"): a trimmed template (`0000-adr-template.md`), a `README.md` index,
-and **8 backfilled records** — Redis Streams broker (at-least-once folded in), Postgres
-RLS, cooperative orchestrator-level pause (not OS signal-stop), content-addressed blobs,
-fail-closed SSRF egress guard, static/no-active-traffic stance, single-analysis-core v1
-convergence, and the hardened out-of-process engine harness. Each carries a MADR
-**Confirmation** section pointing at the enforcing code/tests (anti-drift anchor) and links
-its slice spec rather than copying it; status is per-decision-reality (all 8 shipped →
-`accepted`). **GraphQL export-only is a corollary of ADR-0006, not a standalone accepted ADR** —
-it now ships (enrichment C, D13) as the export-side `x-recon-graphql-operations` annotation,
-consistent with ADR-0006 (outputs are static exports; a reconstructed GraphQL operation is an
-*export* annotation, never a served API nor an HTTP path/finding). Three decisions whose rejected-alternative rationale is
-off-repo (the SIGSTOP rejection, Redis-vs-alternatives, the exact scope of "no active
-traffic") say so explicitly and cite the source. A hermetic structure test
-(`apps/platform/src/recon/adr_structure_test.py` — must live under `src/` to be collected
-by the gated lane) enforces filename shape, unique numbering, valid frontmatter, and
-bidirectional README↔file index integrity, resolving repo-root `docs/adr/` via a `.git`
-walk (no fixed depth, no `**` glob). Both §4 gates passed (design: both engineers
-BUILD-WITH-CHANGES, all must-fixes folded; code review:
-CHANGES-REQUIRED → 1 must-fix [ADR-0007 overstated `apps/capture/` contents] + 5 citation
-nits, all fixed → SHIP).
-
-### D12 · Stale branches [S] — ✅ RESOLVED 2026-08-09  ·  maintainability
-Pruned 9 stale remote-tracking refs (`git fetch --prune`) + deleted 9 fully-merged
-local branches (via `git branch -d`, which refuses anything not actually merged) +
-deleted the merged `origin/spike/platform-ingest` (confirmed an ancestor of `main`).
-Preserved on purpose: `feat/enrichment` (D13, parked) and the two LIVE worktree
-branches `claude/vigilant-hertz-*` + `claude/wonderful-leavitt-*` (other active
-sessions under `apps/platform/.claude/worktrees/`). **One remnant:** removing the
-`claude/busy-boyd-e00cc4` worktree+branch (clean, detached, AKIA fix superseded on
-main) needs `git worktree remove` + `branch -D`, which the auto-mode command
-classifier blocked as destructive — remove it manually or add a Bash permission
-rule; nothing depends on it.
-
-### D13 · Enrichment slice [M] — ✅ RESOLVED 2026-08-13  ·  parked -> shipped
-Param risk-tags (A) + auth headers → OpenAPI `securitySchemes` (B) merged in PR #49; GraphQL
-export-only (C) reviewed and landing on `feat/enrichment-graphql`. Both §4 gates passed (design:
-BUILD WITH CHANGES; code: SHIP-WITH-NITS — the MEDIUM `RecursionError` soft-miss + the M4
-multi-event union test folded). The OpenAPI export now carries `x-recon-risk`,
-`components.securitySchemes`, and `x-recon-graphql-operations`. Spec:
-`apps/platform/docs/superpowers/specs/2026-08-07-enrichment-design.md`.
-
-### D14 · Concurrent `analyze/start` can double-enqueue a walk [S] — ✅ RESOLVED 2026-08-07  ·  correctness
-Closed via a guarded-seal CAS in `capture_router.py` `analyze_start`: the seal that
-nulls the `capture_external_id` marker is now `UPDATE run SET capture_external_id=NULL
-WHERE id=:run AND capture_external_id IS NOT NULL`, and only the caller whose
-`rowcount == 1` proceeds to insert the DISCOVERING Job — the loser returns the
-idempotent "already started" (mirrors `runs/service._apply_transition`'s guarded-UPDATE
-idiom; relies on D1's "a capture run has a Job ⟺ its marker is NULL" invariant). Two
-concurrent `analyze/start` calls now enqueue exactly ONE walk. Covered by a live-PG
-two-writer test (`capture_router_test.py::test_concurrent_analyze_start_enqueues_one_walk`,
-verified **red — 2 jobs — without the guard, green with it**). No migration (reuses
-D1's atomic seal); approach A (a partial unique index) was rejected as unnecessary
-heft since `analyze_start` is the sole capture enqueue path. Both §4 gates passed.
-
-### D15 · Tenant-UUID entry friction [S] — ✅ RESOLVED 2026-08-07  ·  maintainability
-The SPA's `TenantGate` forced a first-time operator to paste a tenant UUID they don't
-know. Persisted last-tenant was already handled (localStorage). Added an opt-in
-build-time `VITE_DEFAULT_TENANT_ID` (`web/.env.example`): when nothing is persisted,
-`TenantContext` falls back to it as a cold-start default — silent pass-through, never
-persisted (so it tracks the build), an explicit last-used tenant always wins, and the
-gate still validates it via `isValidTenant` (an invalid default fails safe to the form).
-A tenant *picker* stays DEFERRED on purpose — a `GET /tenants` enumeration would leak
-other tenants' identities under the RLS model; a per-caller `GET /me`-style identity
-endpoint is the strategic replacement (out of scope here). Caveat documented in
-`.env.example`: Vite inlines the var into the bundle, so it's for single-tenant/dev
-builds only, not a shared multi-tenant prod bundle. Both §4 gates passed (design: BUILD
-WITH CHANGES — the scope caveat + this ledger entry, both addressed; code review: SHIP
-WITH NITS — the precedence test was strengthened to assert the *effective* tenant, not
-just unclobbered storage). Frontend lane green (oxlint + tsc-strict + vitest 136 + build). NOTE: the `TenantGate`
-UI this entry describes was later removed — superseded by central login (PR #57);
-`TenantContext` + `VITE_DEFAULT_TENANT_ID` remain.
-
-### D21 · Extractor DoS: harvest O(n²) + one-shot work budget [S] — ✅ RESOLVED 2026-08-21  ·  correctness
-PR #71 was thought to have closed the crafted-input DoS class (per-decode span caps + iterative
-recursions kill the deep-single-expression O(n²)/crash). Landing the "still-owed" work budget
-surfaced a SECOND, live O(n²) the deep-chain guard could not catch: `findings/extract.py`'s
-off-sink harvest pass tested each builder node for containment in the recorded-sink `claimed`
-list with an `any(...)` scan — O(claimed) per node, so O(n²) once a bundle has many sinks (~5 s
-at 8k flat sinks, ~34 s at 20k — a <1 MB crafted input, well under the 10 MB ingest cap). The
-existing harvest guard only exercised a deep SINGLE chain, where the result (and thus `claimed`)
-stays empty, so it never saw this dimension. **Fixed algorithmically:** `_merge_spans` collapses
-the claimed spans once, and `_harvest_routes` probes them with a single forward pointer over the
-preorder walk (whose node start-bytes are non-decreasing), plus a scalar `last_harvest_end` for
-nested-sub-expression dedup — O(n log n), full recall preserved (byte-identical findings on real
-inputs; the 417-test findings lane stays green). **Plus the requested one-shot budget:**
-`_MAX_AST_NODES` (2 M nodes ≈ 6–8 MB of source — above any real single file) checked once via
-`Node.descendant_count` (O(1)); over it, `extract()` caps its two EXPENSIVE passes (the sink walk
-+ harvest) to a prefix via `_walk(limit=…)` — on a measured 10 MB nested-concat input this cut
-end-to-end from ~40 s to ~25 s. The budget does NOT bound `collect_base_env`'s poison/const
-pre-pass (the dominant residual, ~17 s of full-tree walks on that input): it must see the WHOLE
-tree or a name shadowed past the prefix could resolve wrongly (a false positive), so soundness
-beats the time. Net: worst-case wall-clock is ~linear and can APPROACH — not sit well under — the
-30 s heartbeat on a crafted oversize input, acceptable under the 10 MB ingest cap; the curtailment
-only ever drops tail recall, never invents a URL. (§4 code-review gate = SHIP-WITH-NITS; this
-softened wording + the `_walk(limit<=0)` guard are the folded nits.) Guards (both in
-`findings/extract_test.py`): `test_harvest_stays_linear_on_many_flat_sinks_no_dos` (the
-orthogonal many-claimed dimension) + `test_node_budget_curtails_pathological_tree_dos_guard`.
-
-**Guard placement (2026-08-23):** the three *wall-clock* scaling guards
-(`test_harvest_stays_linear_on_many_flat_sinks_no_dos`,
-`test_extract_stays_linear_on_deep_split_chain_no_dos`, `test_harvest_routes_pass_stays_linear_no_dos`)
-are marked `@pytest.mark.dos_timing` and run **host-lane-only** — do NOT re-add them to the Docker
-integration lane. They need no infra and their ratios are stable on the native `host-tests` runner,
-but the memory-pressured integration lane inflated them into false reds (~14-19x on linear code, and
-a marginal 12.5x on the deep-split ratio, 2026-08-22) — where they added zero coverage, since a
-super-linear regression is a complexity class that shows on any runner. The integration lane
-excludes them via `pytest -m 'not dos_timing'` (`.github/workflows/ci.yml`); `--strict-markers`
-(`apps/platform/pyproject.toml`) makes a mistagged guard a hard collection error so the exclusion
-can't silently swallow a test. The harvest guard was also switched from a phased min-of-3 to an
-interleaved per-round median (`_interleaved_harvest_ratio`) — the same de-flake PR #86 gave the
-deep-split guard, which this one originally lacked. The *deterministic* count guards
-(`test_node_budget_curtails_pathological_tree_dos_guard`, `test_walk_limit_caps_node_count`) are
-unmarked and still run in both lanes. Rejected alternatives: bumping the ratio threshold (masks real
-regressions — PR #86) and calibrating against a same-run baseline op (the ratio is already same-run;
-the already-interleaved deep-split guard still flaked, proving the environment, not the measurement,
-was the variable).
-
-### D24 · Runtime-capture / unconfirmed-lane findings lose host attribution [M] — ✅ RESOLVED 2026-08-19  ·  correctness
-Host is now lifted from a finding's absolute-URL literal on the unconfirmed lanes
-(`egress.attributed_host` + `analyze`), and the `source_path` mislabel was fixed (52e5669),
-so the Findings host facet populates for the hosts capture recovered. Shipped in PR #81
-(with the D26-broadening per-host "Suspected" column, PR #82). Both §4 gates passed.
-
-### D25 · Sources view freezes the app on large sessions [L] — ✅ RESOLVED 2026-08-19  ·  performance
-Fixed via file-tree virtualization + a one-pass bottom-up finding-count precompute + an
-occurrence→file index + decoupling the tree from mid-stream SSE re-renders (plus a FE
-long-task/error boundary and BE timing logs). A 500-file tree now renders ~25–40 DOM nodes
-instead of thousands. Shipped in PR #78. Both §4 gates passed; live-verified.
-
-### D26 · No host/domain inventory [M] — ✅ RESOLVED 2026-08-19  ·  maintainability
-Added a discovered-hosts endpoint (`GET /runs/{id}/hosts`), an Overview metric card, and a
-filterable Hosts page (by scope + name) with per-host roll-up counts. Shipped in PR #80
-(with the per-host "Suspected" backend column, PR #82). Key fix: http(s)-scheme-only assets
-so a capture run's `vm://<hash>` pseudo-hosts don't flood the list. Both §4 gates passed.
-
-### D27 · Session card shows the raw target as host + no failure-reason affordance [S] — ✅ RESOLVED 2026-08-19  ·  maintainability
-Card host is now derived from the crawl target's host (`_target_host` → `egress.host_of` of
-the first whitespace token, read-time only — fixes existing rows and keeps `run.target` raw
-for the re-run prefill; a user rename still shows verbatim). The classified `failure_reason`
-is surfaced accessibly on a failed card: on the card-body `aria-label` (screen readers) plus
-an `aria-hidden` hover/focus tip that is a SIBLING of the `role="button"` body (not nested,
-which would strip its ARIA). Both §4 gates passed (design: BUILD WITH CHANGES — crash-guard
-+ tooltip-out-of-button; code: SHIP WITH NITS — folded). Shipped in this PR.
+> **History (2026-09-04):** the resolved and won't-fix records for the pre-2026-09-03 register
+> (D1-D39 - the D31-D37 dogfood fixes, the earlier D1-D30 items, and the D17/D18/D19/D23 residual-risk
+> acceptances) were removed from this file to keep the live register lean. They are preserved in git
+> history - `git log -p -- DEBT.md` recovers the full "why isn't X done" trail. This register now tracks
+> only the currently-open items.
+
+## Open debt
+
+### 2026-09-03 review swarm — OPEN (D40–D54)
+
+Uncovered by a 7-agent review focused on the chrome-extension capture journey (4 agents) plus the
+platform (3 agents). **Cross-cutting theme (extension):** the capture core (MV3 durability, tenant
+isolation, auth-context) is well-built, but the operator cannot *trust* it — its two worst outcomes,
+"I captured nothing" and "my captures never uploaded," are the two the UI hides or misrepresents. The
+Tier-1 items below are mostly small, verified-in-code fixes; several were flagged independently by
+multiple agents (noted `◆N`). Evidence is `file:line` at time of review.
+
+#### D40 · Silent no-op capture: fail-closed scope + `*.` wildcard mismatch + "CAPTURING" lie [S]  ·  correctness — Tier 1  ◆3
+A first-time / Solo operator can sign in, press the single most prominent button, browse, and capture
+**zero** with no error. Three compounding causes: (a) `normalizeRootDomains` never strips a leading
+`*.`, so `*.target.com` — the syntax the popup's own placeholder suggests — is stored literally and
+matches no host (`background.js:27`, `isInScope` exact/suffix-only at `background.js:711`; misleading
+placeholder `src/popup/components/HomeView.jsx:137`, `src/popup/components/SettingsView.jsx:139`
+"auto (active tab domain)"); (b) `isInScope` fails closed (captures nothing) when no scope is set, but
+the Pause/Resume toggle has no scope guard and flips the card to a green pulsing "CAPTURING"
+(`src/popup/app.jsx:136-149`); (c) the only counter-signal is a small amber "no scope · capturing
+nothing" string (`src/popup/app.jsx:330-335`). **Fix:** strip `*.` in `normalizeRootDomains` (one
+`.replace(/^\*\./,'')`); block the capture toggle when `scopeMode==='none'` with an inline "set a scope
+or enable capture-every-tab" prompt (offer a one-tap "capture this site" → `activeHost`); fix the
+placeholder. See also [[D41]] (delivery visibility), [[D44]] (scope safety).
+
+#### D41 · Auth-token expiry mid-capture permanently drops captured JS [M]  ·  reliability — Tier 1
+The login token TTL is 8h (`apps/platform/src/recon/config.py:226`). On a long/overnight engagement it
+expires; `save-files` then returns 401 (`apps/platform/src/recon/api/capture_router.py:186-196`), which
+the uploader classifies as non-retriable (`retriable=false` for any 4xx except 429,
+`modules/batch-uploader.js:297`) and **drops the batch from the durable outbox** via `forget()`
+(`modules/batch-uploader.js:154-169`). Capture keeps running, the popup's counts keep climbing, and
+`lastPaired` is untouched on a throw so Settings still shows "paired ✓" (`modules/batch-uploader.js:306`)
+— the operator ships a fraction of the surface and cannot recover the dropped files by re-login. **Fix:**
+treat 401/403 as retriable (re-queue, don't drop), pause capture into a "session expired — sign in
+again" state, resume the outbox after re-auth; keep 400/422 as the only permanent drops.
+
+#### D42 · Capture pipeline has no operator-facing delivery / skip / failure visibility [M]  ·  correctness — Tier 1  ◆5
+The worker already computes everything needed to answer "did it all land, and what was skipped?" —
+`processingStats` (failedFiles, lastFailureReason/Url/Message) and uploader health (`lastError`,
+`pendingQueueLength`, `droppedFiles`, `failedBatches`, `paired`) are returned by `getStatus`
+(`background.js:1210-1222`) and `getStats` (`modules/batch-uploader.js:385-397`) — but **none of it is
+rendered.** Home shows only js/maps/secrets counts (`src/popup/components/HomeView.jsx:300-305`); the
+header "connected to workspace" dot is fake-green, mutated only by a manual Test, never by upload
+outcomes (`src/popup/app.jsx:48,267-277`); per-file skips (`asset_too_large` `background.js:433-440`,
+`fetch_failed` `:347-357`, `decompress_failed` `:370`, denylist/exclude `:273-279`) are silent; and every
+error renders as a green success Toast that auto-dismisses in ~2.2s (`src/popup/components/ui.jsx:43-59`,
+error call-sites `src/popup/app.jsx:222,235,246,250,276,408`). **Fix (mostly wiring existing data):** a
+Home status strip "N uploaded · M pending · X failed/skipped (with reasons)"; drive the connection dot
+from real upload results; add an error/warning Toast variant. The highest-leverage single item in this
+batch.
+
+#### D43 · Capture-pipeline reliability edges (four small correctness bugs) [S]  ·  reliability — Tier 1
+Four independent, verified holes, each S-effort: (a) **no fetch timeout** — the uploader added an
+`AbortController` because "Chrome has no default," but `ContentFetcher.fetch` has none
+(`modules/content-fetcher.js:13-18`) and the queue is strictly serial (`background.js:315-317`), so one
+blackholed in-scope asset (or its map) hangs `fetch()` and stalls *all* capture; (b) **8 MB under-cap**
+— default `maxAssetMb` is 8 while the backend accepts 10, so 8–10 MB main bundles are silently skipped
+(`background.js:432,808`); (c) **analyze-before-drain** — `analyzeSession` flushes with an 8s cap that
+early-breaks on one transient failure (`modules/workspace-client.js:95-105`,
+`modules/batch-uploader.js:214-226`), so Analyze can run on a partial set yet report "complete ✓"; (d)
+**dedup-before-outbox race** — `processFile` awaits `dedupStore.put(hash)` (`background.js:506`) before
+`batchUploader.enqueue` persists the outbox record (`background.js:541`), so a teardown in that gap marks
+the file "seen" but never sends it. **Fix:** (a) 30s `AbortController` on the content fetch + bounded
+concurrency; (b) default to 10; (c) block Analyze on `pendingQueueLength>0` (already exposed); (d)
+persist the outbox entry before the dedup entry.
+
+#### D44 · Scope-safety gaps: dependency-child bypass, `captureEverything` footgun, no CDN-apex discovery [S]  ·  supply-chain/security — Tier 1
+Three scope-enforcement / rules-of-engagement gaps: (a) **dependency-child chunks bypass the scope
+gate** — resolved child URLs are captured/uploaded with `isInScope` deliberately skipped (only denylist
++ exclude-mode-only third-party filtering apply), and the default `outOfScopeMode` is `tag`, so an
+absolute cross-origin `import` fetches and uploads out-of-scope third-party JS
+(`background.js:519-527,805`, `modules/dependency-extractor.js:83-85`); (b) **`captureEverything` is a
+one-tap cross-tenant footgun** — it makes `isInScope` return true for every tab/window with no per-tab
+binding (`background.js:711-721`, toggle `src/popup/app.jsx:414`), so left on it uploads unrelated
+sites/tenants into the current engagement; (c) **CDN-apex bundles are dropped with no discovery aid** —
+app JS served from a separate apex (`d123.cloudfront.net`) doesn't match the target root and is silently
+dropped (`background.js:711-742`, dropped requests just `return` at `:292-296`) with no "out-of-scope
+script host seen — add?" hint. **Fix:** apply `isInScope` to children (or gate behind an explicit
+"follow cross-scope deps" opt-in); gate `captureEverything` behind confirm + auto-expire and/or a
+per-tab "armed" binding; surface out-of-scope hosts that served `type:script` with one-click add.
+
+#### D45 · Capture coverage gaps: inline/eval, XHR/JSON/GraphQL bodies, source-map header/`.map` probe [M]  ·  correctness — Tier 1
+Capture is script-response-only, missing high-value post-auth recon the platform is otherwise trying to
+reconstruct: (a) **inline & `eval`'d scripts are never captured** — `webRequest` filters
+`types:["script"]` (`background.js:194-201`) and the content-script enumerates only `script[src]` +
+resource-timing (`content-script.js:69-85,113-121`); inline `<script>` `.textContent` is never read —
+and `docs/OPERATING.md:57` *falsely claims* inline/eval coverage; (b) **XHR/fetch/JSON/GraphQL response
+bodies are ignored** (`manifest.json:22-29`, `isLikelyScriptResource` `background.js:689-709`) — passive
+observation of the app's real calls would convert *suspected* endpoints (D29/D30 static ceiling) into
+confirmed ones; (c) **source-map recovery is inline-comment-only** — `SourceMapDetector` reads only
+`//# sourceMappingURL=` (`modules/sourcemap-detector.js:10-23`) and never consults the captured
+`SourceMap:`/`X-SourceMap` header (`background.js:561-573` captured but not passed at `:382-383`) or
+probes the conventional `<file>.js.map`. **Fix:** collect inline `<script>` bodies as synthetic files;
+add an opt-in "capture JSON/config + XHR" mode; read the map header + attempt `url+'.map'`. At minimum,
+correct the OPERATING.md claim.
+
+#### D46 · Extension value-loop + activation affordances [M]  ·  maintainability — Tier 2  ◆2
+The extension is a one-way uploader: value never returns to where the operator works, and first-run
+activation is unguided. Bundle of feature gaps: (a) **no results in the popup** — after Analyze only
+progress counts return; endpoints/secrets/OpenAPI require leaving to the web workspace
+(`modules/workspace-client.js`/`src/popup/api.js:36-37` expose no findings call; label
+`src/popup/components/HomeView.jsx:213-219`); (b) **no toolbar badge** — `chrome.action.setBadgeText` is
+never called, so capture state/progress is invisible while the popup is closed; (c) **no capture
+history** — `newSession` clears all state (`background.js:1089-1097`) and `handleMessage`
+(`background.js:900-917`) has no list/re-open/re-analyze for past sessions; (d) **export omits code &
+"clear captures" is unreachable** — `getExportData` uses `includeContent:false` (`background.js:1256`,
+`modules/export-builder.js:1-30`) and the `clearFiles` handler (`background.js:905,1181`) is wired to no
+UI; (e) **no Burp/Caido/HAR interchange** and **no first-run onboarding** (`src/popup/components/LoginView.jsx`
+has no help). **Fix (incremental):** post-analyze summary card via a `sessions/{id}/findings/summary`
+fetch; a live badge; a persisted per-session summary list; an "include code" export toggle + reachable
+"clear"; HAR export; a 3-step first-run coach.
+
+#### D47 · "Delete" doesn't delete object-storage blobs — REQ-S4 purge unmet [M–L]  ·  supply-chain/security — Tier 2
+`docs/REQUIREMENTS.md:88` mandates retention/purge as a **MUST**. `DELETE /sessions/{id}` hard-deletes
+Postgres rows only; the S3/MinIO blobs (raw JS, source maps, recovered sources — the bytes secrets /
+config-GUIDs / internal IPs live in) are never touched — no `delete_blob` exists in `storage.py`, and
+`apps/platform/src/recon/sessions/service.py:223-226` states outright that blobs "are not swept here; a
+GC pass is future work." Deleting a session at engagement close (or on a compliance request) leaves the
+sensitive bytes orphaned in the bucket forever: unbounded storage growth + a breach/compliance liability
+for a tool whose premise is trustworthy secret handling. Not previously tracked. **Fix:** blob sweep on
+session/run delete (or a scheduled GC diffing live `finding`/`run_asset` refs against the bucket) + a
+documented default retention window.
+
+#### D48 · Sensitive-action audit trail isn't bound to verified identity [S]  ·  supply-chain/security — Tier 2
+The reveal audit mechanism is durable and denial-inclusive (`apps/platform/src/recon/probe/reveal.py:111-142`),
+but the `actor` it records is a client-supplied, optional free-text request field
+(`apps/platform/src/recon/api/probe_router.py:23,27,63,85`), never derived from the verified
+`get_principal()` identity auth already resolves (`apps/platform/src/recon/api/deps.py:68-80`);
+pause/cancel/resume record no actor at all (`apps/platform/src/recon/api/runs_router.py:364-391`). In a
+tenant shared by multiple operators (docs already note "no RBAC — everyone is effectively an operator")
+the reveal log is spoofable/blank and run-control actions are unattributed — quietly defeating the
+accountability guarantee. **Fix:** when auth is on, derive `actor` server-side from `get_principal()`
+(ignore the client field); add it to pause/cancel/resume/delete event payloads.
+
+#### D49 · Findings prioritization is absent end-to-end [M]  ·  correctness — Tier 1  ◆2
+Nothing tells an operator what to look at first on a 500+/2000-asset run. The `severity` column exists
+but no pipeline path ever populates it (`apps/platform/src/recon/db/models.py:324`,
+`apps/platform/src/recon/findings/store.py:119,139`; the Overview widget even hardcodes a heuristic and
+comments that "findings carry severity = null" `apps/platform/web/src/features/overview/OverviewPanel.tsx:12-26`).
+The one real signal that *is* computed — param `risk_tags` (auth/admin/idor/flag,
+`apps/platform/src/recon/findings/analyze.py:1253-1258`) — reaches the browser in `finding.attributes`
+but is never rendered anywhere in `apps/platform/web/src` (and path-segment params, the common IDOR
+shape, are excluded even from the OpenAPI `x-recon-risk` at `apps/platform/src/recon/probe/openapi.py:149-159`).
+The Findings page has facets + search but **no sort control**. **Fix:** a deterministic, explainable
+priority score (shadow status + risk tags + secret/internal-IP type + unattributed) surfaced as a real
+sort key + badge; render `attributes.risk_tags` as a badge + 5th facet (near-free, data is client-side).
+
+#### D50 · Findings triage & reporting don't scale [M]  ·  performance — Tier 1  ◆2
+Breaks at exactly the scale the tool just built for (crawl cap 500→2000; an E2E already hit 567
+findings): (a) **triage is one-at-a-time** — `TriageControls` takes a single hash
+(`apps/platform/web/src/features/findings/TriageControls.tsx:6`, `apps/platform/src/recon/api/probe_router.py:48-73`),
+no multi-select/bulk-dismiss; (b) **the only export is OpenAPI** — no findings CSV/JSON, no report
+(`apps/platform/web/src/features/export/ExportSpecButton.tsx`,
+`apps/platform/src/recon/api/export_router.py` json/yaml only); (c) **the findings list is unpaginated
+and unwindowed** — `GET /runs/{id}/findings` takes no limit/offset
+(`apps/platform/src/recon/api/findings_router.py:18-27`, `apps/platform/src/recon/findings/queries.py:178-183`)
+and the UI renders every row into the DOM (`apps/platform/web/src/features/findings/FindingsPage.tsx:165-166`)
+— the same main-thread-freeze class [[D35]] fixed for Sources, now unaddressed for a multi-thousand-row
+findings response; no sort control either. **Fix:** limit/offset (or cursor) on the API + D35's spacer
+virtualization; multi-select + bulk triage looping the existing endpoint; a client-side findings
+CSV/JSON download from already-fetched data.
+
+#### D51 · Probe artifacts aren't ready-to-fire: auth header omitted, WebSocket dead-ends [S]  ·  correctness — Tier 2
+The Probe panel's whole promise is a one-step runnable request, but: (a) **`to_curl`/`to_http` never emit
+the observed auth** — they print a static `# add auth/headers here` comment
+(`apps/platform/src/recon/probe/serialize.py:73-96,99-113`) even though `request.auth` (header + scheme)
+is known and already used to build OpenAPI `securitySchemes` (`apps/platform/src/recon/probe/openapi.py:179,343`),
+so every authenticated endpoint's copied curl 401s with no hint; (b) **WebSocket findings dead-end** —
+WS/WSS ops are `probeable=False` (`apps/platform/src/recon/probe/reconstruct.py:22,217`) and both
+serializers `return None` (`serialize.py:59-60,99-100`), giving "not probeable" instead of a one-line
+`websocat`/`wscat` scaffold. **Fix:** emit a real placeholder header per `request.auth`; generate a
+`websocat` command for WS/WSS analogous to `to_curl`.
+
+#### D52 · Recon coverage: no source full-text search; postMessage/storage sinks aren't a finding type [M]  ·  correctness — Tier 2
+Two coverage gaps that lose real attack surface: (a) **no full-text search across recovered sources** —
+`apps/platform/src/recon/probe/sources.py` has no grep endpoint, `SourcesPage` filters file *names*
+only, and `CodeViewer` windowing (`apps/platform/web/src/features/sources/CodeViewer.tsx:73-74,117-134`)
+means even the browser's native Ctrl-F silently misses matches outside the viewport — "grep the whole
+target for X" is impossible in-tool on a 500-file run; (b) **postMessage / Web-Storage / cookie sinks are
+not a `FindingType`** — the enum has 9 members and none for a `postMessage` listener or
+`localStorage`/`sessionStorage`/cookie access (`apps/platform/src/recon/domain.py:65-128`), though the
+tree-sitter pass is already positioned to catch the call sites (common high-signal client-side bug
+classes). **Fix:** a run-scoped source-search endpoint over stored blobs; a new detector + FindingType
+for postMessage/storage sinks mirroring the recent internal-IP pattern ([[D33]]).
+
+#### D53 · Platform observability & ops gaps [M]  ·  reliability — Tier 2
+The async spine is solid but under-instrumented for operation: (a) **no metrics/tracing** — `REQ-S3`
+(`docs/REQUIREMENTS.md:87`) requires per-stage metrics + traces; there is no metrics lib, `/metrics`
+route, or OTel span anywhere (`apps/platform/src/recon/observability.py` is logging-only); (b) **no
+queue/DLQ visibility** — `/healthz` checks only Redis ping + `SELECT 1` (`apps/platform/src/recon/api/app.py:83-87`),
+`pending_count()` exists but is called only from tests (`apps/platform/src/recon/queue/streams.py:159-163`),
+and there's no admin/ops route; (c) **the worker container has no healthcheck** — `docker-compose.yml`
+gives `api` one but not `worker`, so a *hang* (not a crash) is never detected/restarted and runs sit
+`stalled` forever; (d) **no backup/restore** procedure for Postgres or MinIO anywhere in the repo; (e)
+**no horizontal worker scaling** — the Redis consumer name is the hardcoded literal `"worker-1"`
+(`apps/platform/src/recon/worker/main.py:275,287`), so replicas are indistinguishable in Redis
+bookkeeping. **Fix:** `prometheus_client` counters/histograms at `/metrics`; extend `/healthz` with S3 +
+per-queue pending/DLQ; a worker liveness healthcheck; a documented `pg_dump` + `mc mirror` recipe;
+derive the consumer name from hostname/PID.
+
+#### D54 · Continuous-use & collaboration features [L]  ·  maintainability — Tier 2
+The product is built to re-run a target over time and be used by a team, but the payoff features are
+absent: (a) **no run-to-run diff** — `REQ-D5` specifies it; only a same-hash *sightings count* exists
+(`apps/platform/src/recon/findings/queries.py:84-268`), no diff route, so "what's new/gone since last
+scan" (the point of re-running) doesn't exist; (b) **no run-finished notification** — progress is
+SSE-only, nothing fires on terminal state if the tab is unfocused (`apps/platform/web/src/features/progress/RunProgress.tsx`;
+runs can be ~19 min per [[D38]]); (c) **no in-product user invite** — the only way to add an operator is
+the `seed-admin` CLI (`docs/ARCHITECTURE.md:173-177`), and `role` is never enforced outside tests, so a
+2-person team can't self-serve a second seat at all; (d) **global search is a decorative placeholder** —
+the TopBar box is an inert `<div title="Search — coming soon">` (`apps/platform/web/src/shell/TopBar.tsx:5-6,18-22`).
+**Fix (independent slices):** an MVP two-run diff (partial-aware per REQ-D5); a browser `Notification`
+on state→terminal; an admin-only invite endpoint reusing `seed-admin`; a client-side session search to
+start.
