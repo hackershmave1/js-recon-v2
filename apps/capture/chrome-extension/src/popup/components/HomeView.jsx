@@ -134,7 +134,7 @@ function EngagementPicker({ vm }) {
       {creating && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
           <input value={newName} placeholder="engagement name" onInput={(e) => setNewName(e.target.value)} style={input} />
-          <input value={newScope} placeholder="root domains (e.g. *.target.com)" onInput={(e) => setNewScope(e.target.value)} style={input} />
+          <input value={newScope} placeholder="root domains (e.g. target.com)" onInput={(e) => setNewScope(e.target.value)} style={input} />
           <div style={{ display: 'flex', gap: '8px' }}>
             <button onClick={async () => {
               const r = await vm.createProject(newName, newScope);
@@ -278,6 +278,35 @@ export function HomeView({ vm }) {
           </button>
         </div>
       </div>
+
+      {/* no-scope prompt — fail-closed capture guard (D40): with no scope AND capture-every-tab off,
+          capture collects nothing, so offer a one-tap "capture this site" instead of a fake-green
+          CAPTURING. Shown whenever the gate is empty, capturing or not. */}
+      {vm.scopeMode === 'none' && (
+        <div style={{ padding: '0 17px 14px' }}>
+          <div style={{
+            background: 'rgba(240,199,94,0.08)', border: `1px solid ${C.amber}`,
+            borderRadius: '11px', padding: '11px 13px'
+          }}>
+            <div style={{ fontSize: '11.5px', color: C.amber, fontWeight: 700, marginBottom: '4px' }}>
+              No scope — capturing nothing
+            </div>
+            <div style={{ fontSize: '10.5px', color: C.faint, marginBottom: vm.activeHost ? '9px' : 0, lineHeight: 1.5 }}>
+              Capture is fail-closed: set a target scope, or turn on “Capture every tab” below.
+            </div>
+            {vm.activeHost && (
+              <button onClick={() => vm.armScope(vm.activeHost)} style={{
+                width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
+                padding: '9px', borderRadius: '9px', border: 'none', background: C.lime, color: C.onLime,
+                cursor: 'pointer', fontSize: '12px', fontWeight: 700
+              }}>
+                <span style={{ width: '14px', height: '14px', display: 'inline-flex' }}><PlayIcon /></span>
+                Capture {vm.activeHost}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* scope */}
       <div style={{ padding: '0 17px 14px' }}>

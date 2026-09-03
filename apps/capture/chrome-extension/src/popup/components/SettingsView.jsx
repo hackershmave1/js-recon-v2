@@ -136,7 +136,7 @@ export function SettingsView({ vm }) {
         <SectionHeader icon={<GlobeIcon />}>CAPTURE RULES</SectionHeader>
         <Card>
           <Label>Standalone default scope <span style={{ color: C.faint }}>(used when no project is selected)</span></Label>
-          <input value={vm.defScope} onInput={(e) => vm.setDefScope(e.target.value)} placeholder="auto (active tab domain)"
+          <input value={vm.defScope} onInput={(e) => vm.setDefScope(e.target.value)} placeholder="root domains (e.g. target.com)"
                  style={{ ...inputStyle, color: C.lime, marginBottom: '13px' }} />
           <button onClick={vm.toggleSubdomains} style={{
             width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 0 13px',

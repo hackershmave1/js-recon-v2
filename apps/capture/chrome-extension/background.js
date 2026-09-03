@@ -12,6 +12,7 @@ import { buildExportData } from './modules/export-builder.js';
 import { classifyAsset, isThirdParty, matchesDenylist, countSecrets } from './modules/asset-classifier.js';
 import { listProjectsWithCache } from './modules/projects-cache.js';
 import { settingsFromConfig } from './modules/project-config.js';
+import { normalizeRootDomains } from './modules/normalize-scope.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -22,22 +23,6 @@ const DEFAULT_DENY_RULES = [
   { tag: 'LIB', pattern: '*/jquery*.min.js' }
 ];
 
-// Reduce user-supplied scope entries (full URL, host:port, user@host, www.host) to bare
-// hostnames so they gate capture (domainScopes) and match the backend's normalize_root_domains.
-function normalizeRootDomains(values) {
-  const list = Array.isArray(values) ? values : [];
-  const out = [];
-  for (const value of list) {
-    let host = String(value || '').trim().toLowerCase();
-    if (!host) continue;
-    host = host.replace(/^[a-z][a-z0-9+.-]*:\/\//, ''); // scheme
-    host = host.replace(/^[^@/]*@/, '');                // userinfo
-    host = host.split('/')[0].split('?')[0].split('#')[0].split(':')[0]; // path/query/frag/port
-    if (host.startsWith('www.')) host = host.slice(4);
-    if (host && !out.includes(host)) out.push(host);
-  }
-  return out;
-}
 
 // Messages the popup/content-script send without waiting for a response. The onMessage
 // listener must NOT hold the response channel open for these (see setupListeners).
@@ -1223,7 +1208,15 @@ class JSExtractor {
   }
 
   async updateSettings(request, sendResponse) {
-    this.settings = { ...this.settings, ...request.settings };
+    const incoming = { ...(request.settings || {}) };
+    // Scope entries drive the capture gate (isInScope reads this.settings.domainScopes directly),
+    // so normalize them at the WRITE here too — not just on the newSession path (applyConfig). Without
+    // this, a `*.target.com` / `https://target.com/` typed in the Settings box (or the one-tap arm)
+    // is stored literally and matches no host = silent no-op capture (D40).
+    if (Array.isArray(incoming.domainScopes)) {
+      incoming.domainScopes = normalizeRootDomains(incoming.domainScopes);
+    }
+    this.settings = { ...this.settings, ...incoming };
     if (typeof this.settings.captureAuthContext !== 'boolean') {
       this.settings.captureAuthContext = true;
     }

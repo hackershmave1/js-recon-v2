@@ -146,8 +146,34 @@ export function App() {
       setView('settings');
       return;
     }
+    // Fail-closed scope guard (D40): with no scope AND capture-every-tab off, isInScope captures
+    // ZERO — but the toggle used to flip the card to a green pulsing "CAPTURING" anyway, the silent
+    // no-op. Block the start and point the operator at the inline scope prompt instead.
+    const noScope = settings?.captureEverything !== true &&
+      !(settings?.useDomainScope && (settings?.domainScopes || []).length > 0);
+    if (next && noScope) {
+      showToast('Set a scope to capture', 'warn');
+      return;
+    }
     setStatus((s) => ({ ...s, isCapturing: next }));
     await (next ? api.startCapture() : api.stopCapture());
+    refresh();
+  }
+
+  // One-tap "capture this site" for the no-scope empty state (D40): arm the active tab's host as the
+  // scope and start capturing. updateSettings is awaited before startCapture so the gate is armed
+  // before the rescan fires; a stray `*.` is stripped so a pasted wildcard still works.
+  async function armScope(host) {
+    const h = String(host || activeHost || '').trim().replace(/^\*\./, '');
+    if (!h) { showToast('No active tab to scope to', 'warn'); return; }
+    const patch = { domainScopes: [h], useDomainScope: true, captureEverything: false };
+    setSettings((prev) => ({ ...(prev || {}), ...patch }));
+    await api.updateSettings(patch);
+    if (!status.isCapturing) {
+      setStatus((s) => ({ ...s, isCapturing: true }));
+      await api.startCapture();
+    }
+    showToast(`Capturing ${h}`);
     refresh();
   }
 
@@ -204,7 +230,7 @@ export function App() {
     if (!selected) {
       // Standalone: bake the ad-hoc scope into the resolved DEFAULTS (not as an override) so
       // override_keys stays [] (spec §4) while capture still runs under the typed scope.
-      const rootDomains = String(rawScope || '').split(/[\s,]+/).filter(Boolean);
+      const rootDomains = String(rawScope || '').split(/[\s,]+/).filter(Boolean).map((s) => s.replace(/^\*\./, ''));
       defaults = { ...defaults, scope: { ...(defaults.scope || {}), rootDomains, includeSubdomains: settings?.includeSubdomains !== false } };
       ovr = {};
     }
@@ -280,7 +306,7 @@ export function App() {
   }
 
   function setDefScope(value) {
-    const list = value.split(/[\s,]+/).filter(Boolean);
+    const list = value.split(/[\s,]+/).filter(Boolean).map((s) => s.replace(/^\*\./, ''));
     patchSettings({ domainScopes: list, useDomainScope: list.length > 0 });
   }
 
@@ -388,6 +414,8 @@ export function App() {
     session: (status.sessionId || '').slice(0, 8) || '—',
     scope: scopeText,
     scopeMode,
+    activeHost,
+    armScope,
     includeSubdomains: settings.includeSubdomains !== false,
     startNewSession,
     startScopeDefault: (settings.domainScopes || []).join(', ') || activeHost || '',
@@ -477,7 +505,7 @@ export function App() {
       borderRadius: '0', overflow: 'hidden', color: C.text, position: 'relative'
     }}>
       {view === 'home' ? <HomeView vm={homeVm} /> : <SettingsView vm={settingsVm} />}
-      <Toast message={toast} />
+      <Toast toast={toast} />
     </div>
   );
 }
