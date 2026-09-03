@@ -167,6 +167,12 @@ accountability guarantee. **Fix:** when auth is on, derive `actor` server-side f
 (ignore the client field); add it to pause/cancel/resume/delete event payloads.
 
 #### D49 · Findings prioritization is absent end-to-end [M]  ·  correctness — Tier 1  ◆2
+> ✅ **RESOLVED 2026-09-04** (commit 4fe469d). A pure `findings/priority.py` derives a deterministic,
+> explainable 0-100 priority at READ time (type + highest risk tag; no migration, applies to every
+> existing run); `queries._finding_view` fills the view's `severity` with the label + adds `priority`,
+> and the findings API exposes both. The Findings list renders a severity pill + risk-tag chips per row,
+> adds a Risk facet, and defaults to priority-first sort. (Shadow-status/unattributed inputs to the score
+> were intentionally left simple rather than baked into an opaque number.)
 Nothing tells an operator what to look at first on a 500+/2000-asset run. The `severity` column exists
 but no pipeline path ever populates it (`apps/platform/src/recon/db/models.py:324`,
 `apps/platform/src/recon/findings/store.py:119,139`; the Overview widget even hardcodes a heuristic and
@@ -180,6 +186,13 @@ priority score (shadow status + risk tags + secret/internal-IP type + unattribut
 sort key + badge; render `attributes.risk_tags` as a badge + 5th facet (near-free, data is client-side).
 
 #### D50 · Findings triage & reporting don't scale [M]  ·  performance — Tier 1  ◆2
+> 🟡 **PARTIAL 2026-09-04** (commit ed7a676). Shipped (a) multi-select + bulk triage (loops the existing
+> per-finding endpoint, local overlay reflects it without a refetch), (b) client-side CSV/JSON findings
+> export, and (c) a render cap ("show more") that bounds the DOM. **STILL OPEN:** server-side limit/offset
+> pagination — the rich client-side facets/search/sort depend on the full set in memory, so real
+> pagination needs those moved server-side too; the render cap is the pragmatic freeze fix for the
+> realistic range, and true windowing is complicated by variable finding-row heights (unlike [[D35]]'s
+> fixed-height code lines).
 Breaks at exactly the scale the tool just built for (crawl cap 500→2000; an E2E already hit 567
 findings): (a) **triage is one-at-a-time** — `TriageControls` takes a single hash
 (`apps/platform/web/src/features/findings/TriageControls.tsx:6`, `apps/platform/src/recon/api/probe_router.py:48-73`),
@@ -195,6 +208,11 @@ virtualization; multi-select + bulk triage looping the existing endpoint; a clie
 CSV/JSON download from already-fetched data.
 
 #### D51 · Probe artifacts aren't ready-to-fire: auth header omitted, WebSocket dead-ends [S]  ·  correctness — Tier 2
+> ✅ **RESOLVED 2026-09-04** (commit 4c15c62). `to_curl`/`to_http` now emit a real placeholder for each
+> OBSERVED auth header (Bearer/Basic/named slot; deduped + control-free, no header injection) instead of a
+> static stub comment; and a new `serialize.to_websocat` emits a runnable `websocat` scaffold for WS/WSS
+> ops (the probe endpoint returns `{ websocat }`, ProbePanel shows "Copy websocat") instead of the
+> "not probeable" dead-end.
 The Probe panel's whole promise is a one-step runnable request, but: (a) **`to_curl`/`to_http` never emit
 the observed auth** — they print a static `# add auth/headers here` comment
 (`apps/platform/src/recon/probe/serialize.py:73-96,99-113`) even though `request.auth` (header + scheme)
@@ -206,6 +224,12 @@ serializers `return None` (`serialize.py:59-60,99-100`), giving "not probeable" 
 `websocat` command for WS/WSS analogous to `to_curl`.
 
 #### D52 · Recon coverage: no source full-text search; postMessage/storage sinks aren't a finding type [M]  ·  correctness — Tier 2
+> 🟡 **PARTIAL 2026-09-04** (commit 706dea1). Shipped (a) a run-scoped full-text search — new
+> `GET /runs/{id}/sources/search?q=` greps the run's sources server-side (bounded: 120-file / 200-match /
+> 20-per-file caps), and a debounced Sources search box lists file+line+snippet hits that jump into the
+> viewer. **STILL OPEN:** (b) the postMessage/localStorage/cookie sink FindingType + detector — a new
+> detection capability that wants a proper precision design (tree-sitter vs regex, FP budget) and its own
+> migration (a new `ck_finding_type` value), not a session-end add.
 Two coverage gaps that lose real attack surface: (a) **no full-text search across recovered sources** —
 `apps/platform/src/recon/probe/sources.py` has no grep endpoint, `SourcesPage` filters file *names*
 only, and `CodeViewer` windowing (`apps/platform/web/src/features/sources/CodeViewer.tsx:73-74,117-134`)
@@ -233,6 +257,13 @@ per-queue pending/DLQ; a worker liveness healthcheck; a documented `pg_dump` + `
 derive the consumer name from hostname/PID.
 
 #### D54 · Continuous-use & collaboration features [L]  ·  maintainability — Tier 2
+> 🟡 **PARTIAL 2026-09-04** (commit a92dcc5). Shipped (b) a run-finished browser Notification (fires on the
+> transition into terminal, only when the tab is hidden + permission granted; pure `shouldNotifyRunFinished`
+> helper) and (d) a real global search (the inert "coming soon" TopBar pill is now a live client-side
+> session search jumping to a session's latest run). **STILL OPEN:** (a) run-to-run diff (a real REQ-D5
+> feature with correctness traps — a curtailed/skipped run's absent findings must diff as UNKNOWN, not
+> REMOVED; needs dedicated design) and (c) the in-product invite endpoint (creates users; security-sensitive,
+> wants its own review). A server-side findings/endpoints/files search index is the follow-up to (d).
 The product is built to re-run a target over time and be used by a team, but the payoff features are
 absent: (a) **no run-to-run diff** — `REQ-D5` specifies it; only a same-hash *sightings count* exists
 (`apps/platform/src/recon/findings/queries.py:84-268`), no diff route, so "what's new/gone since last
