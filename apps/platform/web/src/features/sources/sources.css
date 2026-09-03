@@ -105,3 +105,14 @@ button.sv-node.sel { background: var(--accent-soft); color: var(--accent); }
 
 .sv-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--faint); padding: 40px; text-align: center; }
 .sv-empty-title { font-family: var(--font-display); font-size: 15px; color: var(--muted); }
+
+/* D52: full-text source search box + results (shown in place of the file tree while active). */
+.sv-search { padding: 8px 12px; border-bottom: 1px solid var(--border); position: relative; }
+.sv-search input { width: 100%; box-sizing: border-box; padding: 7px 26px 7px 10px; border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--field); color: var(--text); font-size: 12.5px; font-family: var(--font-mono); outline: none; }
+.sv-search-clear { position: absolute; right: 18px; top: 50%; transform: translateY(-50%); border: none; background: none; color: var(--faint); cursor: pointer; font-size: 16px; line-height: 1; }
+.sv-search-note { padding: 14px; color: var(--faint); font-size: 12.5px; }
+.sv-search-results { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
+.sv-search-hit { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 7px 9px; border: none; border-radius: var(--r-sm); background: transparent; color: var(--text-2); cursor: pointer; text-align: left; }
+.sv-search-hit:hover { background: var(--surface); }
+.sv-search-hit-loc { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+.sv-search-hit-snip { font-family: var(--font-mono); font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

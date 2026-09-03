@@ -55,6 +55,40 @@ async def get_run_sources(run_id: str, tenant_id: str = Depends(get_tenant_id)) 
     }
 
 
+@router.get("/runs/{run_id}/sources/search")
+async def search_run_sources(
+    run_id: str,
+    q: str,
+    tenant_id: str = Depends(get_tenant_id),
+) -> dict:
+    """D52: run-scoped full-text grep across the run's sources (bounded in recon.probe.sources)."""
+    started = time.perf_counter()
+    matches = await run_in_threadpool(sources.search_sources, tenant_id, run_id, q)
+    if matches is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    _log.info(
+        "sources.search",
+        run_id=run_id,
+        query_len=len(q or ""),
+        matches=len(matches),
+        elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
+    )
+    return {
+        "run_id": run_id,
+        "count": len(matches),
+        "matches": [
+            {
+                "path": m.path,
+                "kind": m.kind,
+                "asset_url": m.asset_url,
+                "line": m.line,
+                "snippet": m.snippet,
+            }
+            for m in matches
+        ],
+    }
+
+
 @router.get("/runs/{run_id}/sources/content")
 async def get_run_source_content(
     run_id: str,

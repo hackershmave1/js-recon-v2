@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
+  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -180,6 +180,11 @@ export function getStatus(tenantId: string, runId: string): Promise<RunStatus> {
 
 export function getSources(tenantId: string, runId: string): Promise<SourcesResponse> {
   return request(`/runs/${encodeURIComponent(runId)}/sources`, {}, tenantId);
+}
+
+// D52: run-scoped full-text grep across the run's sources (bounded server-side).
+export function searchSources(tenantId: string, runId: string, query: string): Promise<SourceSearchResponse> {
+  return request(`/runs/${encodeURIComponent(runId)}/sources/search?q=${encodeURIComponent(query)}`, {}, tenantId);
 }
 
 // `assetUrl` disambiguates a source-map-recovered file (kind:"source") that shares
