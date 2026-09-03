@@ -23,6 +23,11 @@ Tier-1 items below are mostly small, verified-in-code fixes; several were flagge
 multiple agents (noted `◆N`). Evidence is `file:line` at time of review.
 
 #### D40 · Silent no-op capture: fail-closed scope + `*.` wildcard mismatch + "CAPTURING" lie [S]  ·  correctness — Tier 1  ◆3
+> ✅ **RESOLVED 2026-09-04** (commit 9969425). `normalizeRootDomains` strips a leading `*.` (extracted to
+> `modules/normalize-scope.js` + colocated test), and `updateSettings` normalizes scope so the gate is robust
+> to `*.`/scheme/www/port in every write path (not just newSession). `toggleCapture` blocks a no-scope start
+> (warn toast) and Home shows a "No scope — capturing nothing" prompt with a one-tap "Capture <activeHost>";
+> the misleading placeholders were corrected. Also repaired the main-view `<Toast>` prop missed in D42.
 A first-time / Solo operator can sign in, press the single most prominent button, browse, and capture
 **zero** with no error. Three compounding causes: (a) `normalizeRootDomains` never strips a leading
 `*.`, so `*.target.com` — the syntax the popup's own placeholder suggests — is stored literally and
@@ -48,6 +53,10 @@ treat 401/403 as retriable (re-queue, don't drop), pause capture into a "session
 again" state, resume the outbox after re-auth; keep 400/422 as the only permanent drops.
 
 #### D42 · Capture pipeline has no operator-facing delivery / skip / failure visibility [M]  ·  correctness — Tier 1  ◆5
+> ✅ **RESOLVED 2026-09-04** (commit 96a7e3e). Home now renders a DELIVERY strip (N sent · M pending · X
+> failed + the last reason), the header connection dot/label are driven by real upload health (not a manual
+> test), and the Toast gained ok/warn/error tones — all wiring the worker's existing `getStatus`
+> (`processingStats` + uploader health). New pure `modules/delivery-health.js` + colocated 9-case test.
 The worker already computes everything needed to answer "did it all land, and what was skipped?" —
 `processingStats` (failedFiles, lastFailureReason/Url/Message) and uploader health (`lastError`,
 `pendingQueueLength`, `droppedFiles`, `failedBatches`, `paired`) are returned by `getStatus`
@@ -78,6 +87,13 @@ concurrency; (b) default to 10; (c) block Analyze on `pendingQueueLength>0` (alr
 persist the outbox entry before the dedup entry.
 
 #### D44 · Scope-safety gaps: dependency-child bypass, `captureEverything` footgun, no CDN-apex discovery [S]  ·  supply-chain/security — Tier 1
+> 🟡 **PARTIAL 2026-09-04** (commit b134572). Shipped (c) out-of-scope script-host discovery — the worker
+> records out-of-scope `type:script` hosts (bounded, session-scoped, workspace/denylist-filtered), and Home
+> shows them with a one-click "+ add"; and (b) an in-app confirm before enabling `captureEverything`.
+> **STILL OPEN:** (a) dependency-child chunks bypass the scope gate — deferred deliberately because gating
+> children by `isInScope` risks dropping legitimately-discovered in-scope app chunks served cross-origin (the
+> ESM/webpack chunk-discovery differentiator), so it needs its own adversarial design review; and (b)
+> `captureEverything` auto-expire / per-tab arming (the confirm lands the headline safety win).
 Three scope-enforcement / rules-of-engagement gaps: (a) **dependency-child chunks bypass the scope
 gate** — resolved child URLs are captured/uploaded with `isInScope` deliberately skipped (only denylist
 + exclude-mode-only third-party filtering apply), and the default `outOfScopeMode` is `tag`, so an
@@ -108,6 +124,11 @@ add an opt-in "capture JSON/config + XHR" mode; read the map header + attempt `u
 correct the OPERATING.md claim.
 
 #### D46 · Extension value-loop + activation affordances [M]  ·  maintainability — Tier 2  ◆2
+> 🟡 **PARTIAL 2026-09-04** (commit 6e84cf1). Shipped (b) a live toolbar badge, (d) reachable "clear
+> captures" (Settings) + an export-with-code toggle, and (e) a first-run coach on the sign-in screen.
+> **STILL OPEN:** (a) the post-analyze findings-summary card in the popup — needs a platform
+> `sessions/{id}/findings/summary` endpoint (pairs with a platform slice); (c) a persisted capture history;
+> and the Burp/Caido/HAR interchange export.
 The extension is a one-way uploader: value never returns to where the operator works, and first-run
 activation is unguided. Bundle of feature gaps: (a) **no results in the popup** — after Analyze only
 progress counts return; endpoints/secrets/OpenAPI require leaving to the web workspace
