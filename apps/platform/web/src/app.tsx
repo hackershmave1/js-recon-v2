@@ -1,9 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { listSessions } from "./api/apiClient";
 import { NewRunPanel } from "./features/newRun/NewRunPanel";
 import { RunProgress } from "./features/progress/RunProgress";
 import { RunDataProvider, useRunData } from "./features/progress/runData";
+import { shouldNotifyRunFinished } from "./features/progress/runNotify";
 import { FindingsPage } from "./features/findings/FindingsPage";
 import { SourcesPage } from "./features/sources/SourcesPage";
 import { ApiSpecPage } from "./features/apispec/ApiSpecPage";
@@ -22,12 +23,44 @@ import { TERMINAL_STATES, type SourceJump } from "./api/types";
 // (keyed by run id so a run switch remounts it fresh — the monotonic-guard refs must
 // not bleed across runs) and every page renders into the <Outlet> below it, so moving
 // between a run's pages never tears the live stream down or refetches findings.
+// D54: fire a browser Notification when a run reaches a terminal state while the tab is
+// hidden — runs can be ~19 min, so an operator who tabbed away otherwise never learns it
+// finished (progress was SSE-only). Permission is requested once on mount (while they're
+// here); the notification only fires on the transition INTO terminal, and only if hidden.
+function useRunFinishedNotification(state: string, runId?: string): void {
+  const prev = useRef(state);
+  useEffect(() => {
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, []);
+  useEffect(() => {
+    const was = prev.current;
+    prev.current = state;
+    if (typeof Notification === "undefined") return;
+    const hidden = typeof document !== "undefined" ? document.hidden : false;
+    if (!shouldNotifyRunFinished(was, state, { permission: Notification.permission, hidden })) return;
+    try {
+      new Notification("RECON — run finished", {
+        body: `Run ${state}${runId ? ` · ${runId.slice(0, 8)}` : ""}`,
+      });
+    } catch { /* Notification construction can throw on some platforms; best-effort */ }
+  }, [state, runId]);
+}
+
+function RunNotifier({ runId }: { runId: string }) {
+  const { state } = useRunData();
+  useRunFinishedNotification(state, runId);
+  return null;
+}
+
 export function RunWorkspace() {
   const { id } = useParams();
   const location = useLocation();
   if (!id) return null;
   return (
     <RunDataProvider key={id} runId={id}>
+      <RunNotifier runId={id} />
       <Shell runId={id}>
         {/* Contain a page crash (and log it) instead of blanking the workspace;
             keyed by route so it resets when you navigate to another page. */}
