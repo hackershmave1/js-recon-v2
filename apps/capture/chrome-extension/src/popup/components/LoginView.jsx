@@ -108,6 +108,28 @@ export function LoginView({ vm }) {
           </div>
         </div>
 
+        {/* first-run coach (D46): a signed-out operator had no guidance on the capture funnel. */}
+        <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: '12px', padding: '14px', marginTop: '16px' }}>
+          <div style={{ fontSize: '10px', color: C.faint, fontWeight: 700, letterSpacing: '0.9px', marginBottom: '11px' }}>HOW IT WORKS</div>
+          {[
+            ['1', 'Sign in', 'Connect to your workspace so captures route to your tenant.'],
+            ['2', 'Set a scope', 'Pick an engagement, or type the target’s root domain.'],
+            ['3', 'Browse the target', 'In-scope JavaScript is captured automatically as you go.']
+          ].map(([n, title, body]) => (
+            <div key={n} style={{ display: 'flex', gap: '10px', marginBottom: n === '3' ? 0 : '11px' }}>
+              <span style={{
+                flex: '0 0 20px', width: '20px', height: '20px', borderRadius: '50%',
+                background: 'rgba(205,235,69,0.13)', color: C.lime, fontSize: '11px', fontWeight: 700,
+                display: 'flex', alignItems: 'center', justifyContent: 'center'
+              }}>{n}</span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ display: 'block', fontSize: '12px', color: C.textSoft, fontWeight: 600 }}>{title}</span>
+                <span style={{ display: 'block', fontSize: '10.5px', color: C.faint, lineHeight: 1.5 }}>{body}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+
         <div style={{ textAlign: 'center', marginTop: '14px' }}>
           <span style={{ fontFamily: F.mono, fontSize: '10.5px', color: C.faint }}>RECON Capture · v{vm.version}</span>
         </div>

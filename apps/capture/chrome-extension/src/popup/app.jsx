@@ -271,13 +271,22 @@ export function App() {
   }
 
   async function exportNow() {
-    const res = await api.getExportData();
+    const res = await api.getExportData({ includeContent: settings?.exportIncludeContent === true });
     if (res?.success) {
       api.downloadJson(res.exportData, res.filename || 'js-extraction.json');
-      showToast('Export downloaded');
+      showToast(settings?.exportIncludeContent ? 'Export downloaded · with code' : 'Export downloaded');
     } else {
       showToast(res?.error ? 'Export failed' : 'Nothing to export', res?.error ? 'error' : 'warn');
     }
+  }
+
+  // Reachable "clear captures" (D46): the worker's clearFiles handler existed but was wired to no
+  // UI. Drops the captured set for the current session and resets the analysis feed.
+  async function clearCaptures() {
+    await api.clearFiles();
+    setAnalysis({ status: 'idle', counts: null, files: [] });
+    showToast('Captures cleared');
+    refresh();
   }
 
   // Kick off the decoupled analysis job for the captured session, then let the polling
@@ -488,7 +497,8 @@ export function App() {
       { key: 'captureEverything', label: 'Capture every tab (ignore scope)', on: settings.captureEverything === true },
       { key: 'performAnalysisOnUpload', label: 'Analyze on upload', on: settings.performAnalysisOnUpload === true },
       { key: 'muteNoise', label: 'Mute plugins & trackers', on: muteNoise },
-      { key: 'captureAuthContext', label: 'Capture auth context', on: settings.captureAuthContext !== false }
+      { key: 'captureAuthContext', label: 'Capture auth context', on: settings.captureAuthContext !== false },
+      { key: 'exportIncludeContent', label: 'Include code in export', on: settings.exportIncludeContent === true }
     ],
     openSettings: () => setView('settings'),
     toggleCapture,
@@ -524,6 +534,7 @@ export function App() {
     toggleDefaultProfile: () => patchSettings({ denyDefaultProfile: !(settings.denyDefaultProfile !== false) }),
     denyRules: settings.denyRules || [],
     removeRule, newRule, setNewRule, addRule,
+    clearCaptures, capturedCount: status.fileCount || 0,
     version: api.extensionVersion()
   };
 

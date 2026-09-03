@@ -113,6 +113,7 @@ class JSExtractor {
     this.processingStats.lastFailureReason = reason;
     this.processingStats.lastFailureUrl = url || null;
     this.processingStats.lastFailureMessage = message || null;
+    this.updateBadge();
   }
 
   async initialize() {
@@ -497,6 +498,7 @@ class JSExtractor {
 
     // Track both URL and content hash for version-aware deduplication
     this.capturedFiles.set(url, fileObject);
+    this.updateBadge();
     this.capturedHashes.set(contentHash, {url: url, capturedAt: fileObject.capturedAt});
     // Persist the dedup entry so a respawn won't re-fetch/re-hash/re-upload this file.
     try { await this.dedupStore.put(contentHash, { contentHash, url, capturedAt: fileObject.capturedAt }); }
@@ -915,7 +917,7 @@ class JSExtractor {
       clearFiles: () => this.clearFiles(sendResponse),
       getStatus: () => this.getStatus(sendResponse),
       updateSettings: (req) => this.updateSettings(req, sendResponse),
-      getExportData: () => this.getExportData(sendResponse),
+      getExportData: (req) => this.getExportData(req, sendResponse),
       testConnection: () => this.workspaceClient.testConnection().then(sendResponse),
       analyzeSession: () => this.workspaceClient.analyzeSession().then(sendResponse),
       getAnalysisProgress: () => this.workspaceClient.getAnalysisProgress().then(sendResponse),
@@ -976,8 +978,24 @@ class JSExtractor {
   startCapture(sendResponse) {
     this.isCapturing = true;
     this.persistCaptureState(true);
+    this.updateBadge();
     this.rescanActiveTab();
     sendResponse({ success: true, sessionId: this.sessionId });
+  }
+
+  // Toolbar badge (D46): show live capture state while the popup is closed. Empty when paused; the
+  // captured-file count while capturing, orange when delivery/processing is unhealthy (else lime).
+  updateBadge() {
+    try {
+      if (!chrome.action || !chrome.action.setBadgeText) return;
+      if (!this.isCapturing) { chrome.action.setBadgeText({ text: '' }); return; }
+      const n = this.capturedFiles.size;
+      const up = this.batchUploader.getStats();
+      const bad = !!up.lastError || (up.droppedFiles || 0) > 0 || up.paired === false ||
+        (this.processingStats.failedFiles || 0) > 0;
+      chrome.action.setBadgeText({ text: n > 999 ? '999+' : String(n) });
+      chrome.action.setBadgeBackgroundColor({ color: bad ? '#ff8a47' : '#4ea86b' });
+    } catch (e) { /* action API unavailable in this context */ }
   }
 
   // Central login: authenticate to the workspace and persist the session token + identity so
@@ -1159,6 +1177,7 @@ class JSExtractor {
   async stopCapture(sendResponse) {
     this.isCapturing = false;
     this.persistCaptureState(false);
+    this.updateBadge();
     await this.batchUploader.flushAll();
     sendResponse({
       success: true,
@@ -1192,6 +1211,7 @@ class JSExtractor {
 
   clearFiles(sendResponse) {
     this.capturedFiles.clear();
+    this.updateBadge();
     this.clearCapturedFilesMeta();
     this.capturedHashes.clear();
     this.dedupStore.clear().catch(() => {});
@@ -1268,20 +1288,23 @@ class JSExtractor {
     sendResponse({ success: true, projects, source });
   }
 
-  getExportData(sendResponse) {
+  getExportData(request, sendResponse) {
     const files = Array.from(this.capturedFiles.values());
+    // D46: let the operator export WITH the captured code, not just metadata. Best-effort — files
+    // rehydrated after a worker respawn are lean (no content) and simply export without it.
+    const includeContent = !!(request && request.includeContent);
 
     try {
       const exportData = buildExportData({
         sessionId: this.sessionId,
         files,
-        includeContent: false,
+        includeContent,
         version: '3.0.0'
       });
 
       sendResponse({
         success: true,
-        filename: `js-extraction-${this.sessionId}.json`,
+        filename: `js-extraction-${this.sessionId}${includeContent ? '-with-code' : ''}.json`,
         exportData
       });
     } catch (error) {
