@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { getSources, getSourceContent, ApiError } from "../../api/apiClient";
-import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump } from "../../api/types";
+import { getSources, getSourceContent, searchSources, ApiError } from "../../api/apiClient";
+import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump, SourceMatch } from "../../api/types";
 import { CodeViewer } from "./CodeViewer";
 import { beautify } from "./beautifyClient";
 import { useResizableRail } from "../../shell/useResizableRail";
@@ -301,6 +301,28 @@ const SourceTree = memo(function SourceTree({ rows, selectedPath, onSelect, onTo
   return <WindowedTree rows={rows} renderRow={renderRow} />;
 });
 
+// D52: full-text search results — a flat list; clicking a hit opens the file and jumps to the
+// line (reusing the finding-jump path). Shown in place of the file tree while a query is active.
+function SourceSearchResults({ results, searching, onJump }: {
+  results: SourceMatch[]; searching: boolean; onJump: (m: SourceMatch) => void;
+}) {
+  if (searching && results.length === 0) return <div className="sv-search-note">Searching…</div>;
+  if (results.length === 0) return <div className="sv-search-note">No matches.</div>;
+  return (
+    <ul className="sv-search-results">
+      {results.map((m, i) => (
+        <li key={`${m.path}:${m.line}:${i}`}>
+          <button type="button" className="sv-search-hit" onClick={() => onJump(m)}
+            title={`${m.path}:${m.line}`}>
+            <span className="sv-search-hit-loc">{m.path.split("/").filter(Boolean).slice(-1)[0] || m.path}:{m.line}</span>
+            <span className="sv-search-hit-snip">{m.snippet}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, jump }: {
   data: FindingsResponse | null; tenantId: string; runId: string; jump: SourceJump | null;
 }) {
@@ -320,6 +342,12 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   }, []);
   // Manually picking a file cancels a jump's line highlight.
   const selectFile = useCallback((path: string) => { setSelPath(path); setFocusLine(null); }, []);
+  // D52 full-text search across the run's sources (server grep). Debounced; while a query is
+  // active the results replace the file tree, and clicking a hit opens the file at that line.
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SourceMatch[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const jumpToMatch = useCallback((m: SourceMatch) => { setSelPath(m.path); setFocusLine(m.line); }, []);
   // Draggable + collapsible file rail (task: expand the code view).
   const { width: railWidth, collapsed: railCollapsed, toggleCollapsed: toggleRail, resizerProps } = useResizableRail();
 
@@ -347,12 +375,30 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     setListError(null);
     setCollapsed(new Set());
     setFocusLine(null);
+    setSearchQuery("");
+    setSearchResults(null);
     let live = true;
     getSources(tenantId, runId)
       .then((r) => { if (live) setFiles(r.sources); })
       .catch((e) => { if (live) setListError(e instanceof ApiError ? e.message : "Failed to load sources"); });
     return () => { live = false; };
   }, [tenantId, runId]);
+
+  // Debounced full-text search: < 2 chars clears results (back to the tree); otherwise grep the
+  // run's sources server-side. A stale response can't clobber a newer query (the `live` guard).
+  useEffect(() => {
+    const term = searchQuery.trim();
+    if (term.length < 2) { setSearchResults(null); setSearching(false); return; }
+    let live = true;
+    setSearching(true);
+    const timer = setTimeout(() => {
+      searchSources(tenantId, runId, term)
+        .then((r) => { if (live) setSearchResults(r.matches); })
+        .catch(() => { if (live) setSearchResults([]); })
+        .finally(() => { if (live) setSearching(false); });
+    }, 300);
+    return () => { live = false; clearTimeout(timer); };
+  }, [searchQuery, tenantId, runId]);
 
   // Resolve the shown file: the clicked one, else the first viewable, else the first.
   const selected = files
@@ -454,7 +500,19 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
               title="Collapse sources" aria-label="Collapse sources panel"><PanelIcon /></button>
           </div>
         </div>
-        <SourceTree rows={rows} selectedPath={selected?.path ?? null} onSelect={selectFile} onToggle={toggleDir} />
+        <div className="sv-search">
+          <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search across sources…" aria-label="Search across sources" />
+          {searchQuery.trim() !== "" && (
+            <button type="button" className="sv-search-clear" onClick={() => setSearchQuery("")}
+              aria-label="Clear search">×</button>
+          )}
+        </div>
+        {searchResults !== null ? (
+          <SourceSearchResults results={searchResults} searching={searching} onJump={jumpToMatch} />
+        ) : (
+          <SourceTree rows={rows} selectedPath={selected?.path ?? null} onSelect={selectFile} onToggle={toggleDir} />
+        )}
       </aside>
 
       {!railCollapsed && (

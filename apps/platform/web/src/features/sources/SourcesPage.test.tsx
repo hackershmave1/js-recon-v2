@@ -283,4 +283,31 @@ describe("SourcesPage", () => {
     const libDir = await screen.findByRole("button", { name: /^lib/i });
     expect(libDir).toHaveTextContent("2");                     // 2 findings aggregated under lib/
   });
+
+  // ---- D52: full-text search across sources ----
+
+  it("searches across sources and jumps to a hit", async () => {
+    mount([UPLOAD]);
+    await screen.findByText("fetch('/x')"); // page ready
+    const search = vi.spyOn(api, "searchSources").mockResolvedValue({
+      run_id: "r", count: 1,
+      matches: [{ path: "input.js", kind: "upload", asset_url: null, line: 2, snippet: "fetch('/x')" }],
+    });
+    await userEvent.type(screen.getByLabelText(/search across sources/i), "fetch");
+    await waitFor(() => expect(search).toHaveBeenCalledWith("t", "r", "fetch"));
+    // a result hit (loc "input.js:2") replaces the tree; clicking it opens the file at the line
+    const hit = await screen.findByText(/input\.js:2/);
+    await userEvent.click(hit);
+    expect((await screen.findAllByText("fetch('/x')")).length).toBeGreaterThan(0);
+  });
+
+  it("does not search for a too-short query (keeps the file tree)", async () => {
+    mount([UPLOAD]);
+    await screen.findByText("fetch('/x')");
+    const search = vi.spyOn(api, "searchSources");
+    await userEvent.type(screen.getByLabelText(/search across sources/i), "f");
+    // wait past the debounce; a 1-char query must not hit the server
+    await new Promise((r) => setTimeout(r, 400));
+    expect(search).not.toHaveBeenCalled();
+  });
 });

@@ -48,7 +48,9 @@ export interface SpecStatus {
 export interface Sightings { capture: number; platform: number; }
 export interface Finding {
   finding_hash: string; type: string; value: string | null; path: string | null;
-  severity: string | null; attributes: Record<string, unknown>; first_stage: string | null;
+  // D49: read-time priority 0-100 (type + risk tags); `severity` is its label. Optional so
+  // pre-D49 fixtures/responses stay valid.
+  severity: string | null; priority?: number; attributes: Record<string, unknown>; first_stage: string | null;
   revealable: boolean; triage: Triage | null; spec_status: SpecStatus | null;
   sightings?: Sightings | null; occurrences: Occurrence[];
 }
@@ -110,13 +112,14 @@ export interface WrapperRule {
 }
 export interface WrapperRuleResult { rule: WrapperRule; recovered: number; }
 // One reconstructed request from GET /runs/{id}/requests (probe_router::_request_dict).
-// `artifacts` is null when `probeable` is false.
+// `artifacts` is null when there's nothing to run. A probeable HTTP request carries
+// { curl, http }; a WS/WSS op carries { websocat } (D51) instead of dead-ending.
 export interface ReconstructedRequest {
   operation: string; method: string; path: string; hosts: string[];
   query_params: { name: string; example: string | null }[];
   body_params: string[]; content_type: string | null; example_url: string | null;
   probeable: boolean; endpoint_hashes: string[];
-  artifacts: { curl: string; http: string } | null;
+  artifacts: { curl?: string; http?: string; websocat?: string } | null;
 }
 export interface RequestsResponse { run_id: string; count: number; requests: ReconstructedRequest[]; }
 // One stored source file for a run (GET /runs/{id}/sources). `path` is "input.js"
@@ -128,6 +131,9 @@ export interface RequestsResponse { run_id: string; count: number; requests: Rec
 // a legacy run-level map). See recon.probe.sources for the join keys.
 export interface SourceFile { path: string; kind: "asset" | "upload" | "source"; fetch_status: string; asset_url: string | null; }
 export interface SourcesResponse { run_id: string; count: number; sources: SourceFile[]; }
+// D52: a full-text search hit across a run's sources (file + line + snippet).
+export interface SourceMatch { path: string; kind: string; asset_url: string | null; line: number; snippet: string; }
+export interface SourceSearchResponse { run_id: string; count: number; matches: SourceMatch[]; }
 // A finding occurrence's "jump to its source" request (Findings drawer -> Sources).
 // Any field may be null: an occurrence without a source_path/asset_url can still
 // carry a line, and a legacy occurrence resolves to the "input.js" bundle.

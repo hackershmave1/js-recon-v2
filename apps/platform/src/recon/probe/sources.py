@@ -83,6 +83,69 @@ class SourceContent:
     formatted: bool
 
 
+@dataclass(frozen=True)
+class SourceMatch:
+    path: str
+    kind: str
+    asset_url: str | None
+    line: int
+    snippet: str
+
+
+# D52 full-text search bounds. The current UI could only filter file NAMES, and CodeViewer's
+# windowing meant even the browser's Ctrl-F missed matches outside the viewport — so "grep the
+# whole target for X" was impossible in-tool. This is a run-scoped server grep, but reading (and,
+# for recovered originals, RE-DERIVING) every source per query is expensive, so it's firmly
+# bounded: a total file cap (raw assets sort first in list_sources, so the cheap blob reads are
+# scanned before the subprocess-recovered originals), a per-file cap, and a total-match cap.
+_SEARCH_MAX_FILES = 120
+_SEARCH_MAX_MATCHES = 200
+_SEARCH_MAX_PER_FILE = 20
+_SEARCH_SNIPPET = 240
+_SEARCH_MIN_QUERY = 2
+
+
+def search_sources(
+    tenant_id: str, run_id: str, query: str, *, max_matches: int = _SEARCH_MAX_MATCHES
+) -> list[SourceMatch] | None:
+    """Case-insensitive substring grep across a run's source files (D52).
+
+    Returns ``None`` if the run is absent/invisible (404), ``[]`` for a too-short query or no
+    hits. Bounded per the caps above; line numbers index the served (possibly beautified) text,
+    so a jump-to-line lands on the same content the viewer shows.
+    """
+    needle = (query or "").strip().lower()
+    if len(needle) < _SEARCH_MIN_QUERY:
+        files = list_sources(tenant_id, run_id)
+        return None if files is None else []
+    files = list_sources(tenant_id, run_id)
+    if files is None:
+        return None
+    out: list[SourceMatch] = []
+    for source in files[:_SEARCH_MAX_FILES]:
+        content = get_source_content(tenant_id, run_id, source.path, source.asset_url)
+        if content is None:
+            continue
+        per_file = 0
+        for line_no, line in enumerate(content.content.splitlines(), start=1):
+            if needle in line.lower():
+                out.append(
+                    SourceMatch(
+                        path=source.path,
+                        kind=source.kind,
+                        asset_url=source.asset_url,
+                        line=line_no,
+                        snippet=line.strip()[:_SEARCH_SNIPPET],
+                    )
+                )
+                per_file += 1
+                if per_file >= _SEARCH_MAX_PER_FILE or len(out) >= max_matches:
+                    break
+        if len(out) >= max_matches:
+            break
+    return out
+
+
 def list_sources(tenant_id: str, run_id: str) -> list[SourceFile] | None:
     """Every source file for a run, or ``None`` if the run is absent/invisible.
 

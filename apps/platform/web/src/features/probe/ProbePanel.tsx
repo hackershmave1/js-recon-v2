@@ -23,21 +23,26 @@ function hostOf(raw: string | null | undefined): string | null {
   }
 }
 
+type ArtifactKind = "curl" | "http" | "websocat";
+
 function ProbeRequestCard({ req }: { req: ReconstructedRequest }) {
-  const [copied, setCopied] = useState<"curl" | "http" | null>(null);
-  async function copy(kind: "curl" | "http", text: string) {
+  const [copied, setCopied] = useState<ArtifactKind | null>(null);
+  async function copy(kind: ArtifactKind, text: string) {
     await navigator.clipboard.writeText(text);
     setCopied(kind); setTimeout(() => setCopied(null), 1200);
   }
+  const a = req.artifacts;
   return (
     <div className="card">
       <span className="chip">{req.method}</span> <code>{req.path}</code>
       {req.query_params.length > 0 && <p className="muted">query: {req.query_params.map((q) => q.name).join(", ")}</p>}
       {req.body_params.length > 0 && <p className="muted">body: {req.body_params.join(", ")}</p>}
-      {req.artifacts ? (
+      {a ? (
         <div>
-          <button type="button" onClick={() => copy("curl", req.artifacts!.curl)}>{copied === "curl" ? "Copied ✓" : "Copy curl"}</button>
-          <button type="button" onClick={() => copy("http", req.artifacts!.http)}>{copied === "http" ? "Copied ✓" : "Copy raw-HTTP"}</button>
+          {a.curl && <button type="button" onClick={() => copy("curl", a.curl!)}>{copied === "curl" ? "Copied ✓" : "Copy curl"}</button>}
+          {a.http && <button type="button" onClick={() => copy("http", a.http!)}>{copied === "http" ? "Copied ✓" : "Copy raw-HTTP"}</button>}
+          {/* D51: a WS/WSS op carries a websocat scaffold instead of a "not probeable" dead-end. */}
+          {a.websocat && <button type="button" onClick={() => copy("websocat", a.websocat!)}>{copied === "websocat" ? "Copied ✓" : "Copy websocat"}</button>}
         </div>
       ) : <p className="muted">not probeable</p>}
     </div>

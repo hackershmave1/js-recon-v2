@@ -75,6 +75,38 @@
 .chip-sightings { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); font-family: var(--font-mono); }
 .fp-sightings-hint { margin: 2px 2px 12px; padding: 8px 11px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--muted); font-size: 12px; line-height: 1.5; }
 
+/* D49: Priority sort control + a derived-severity pill (leftmost on each row) + risk-tag chips.
+   Severity colour ramps the derived label; risk chips warm for access-control smells. */
+.fp-sort { flex: 0 0 auto; font-size: 12px; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--surface); color: var(--text-2); cursor: pointer; }
+.fp-sev { font-size: 9.5px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; border: 1px solid currentColor; border-radius: var(--r-sm); padding: 2px 6px; flex: 0 0 auto; }
+.fp-sev-critical { color: var(--pink); }
+.fp-sev-high { color: var(--orange); }
+.fp-sev-medium { color: var(--warn, var(--muted)); }
+.fp-sev-low { color: var(--faint); }
+.fp-risk { font-size: 9px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; border-radius: var(--r-sm); padding: 2px 6px; flex: 0 0 auto; background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+.fp-risk-admin, .fp-risk-idor { color: var(--orange); border-color: var(--orange); }
+.fp-risk-auth { color: var(--info); border-color: var(--border-strong); }
+
+/* D50: bulk-triage + export toolbar, row select checkboxes, and a render-cap "show more". */
+.fp-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 0 2px 10px; font-size: 12px; }
+.fp-actions-hint { color: var(--faint); }
+.fp-bulk { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.fp-bulk-count { font-family: var(--font-mono); color: var(--accent); font-weight: 500; }
+.fp-bulk-label { color: var(--muted); }
+.fp-bulk-btn { padding: 4px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface); color: var(--text-2); cursor: pointer; font-size: 12px; }
+.fp-bulk-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.fp-bulk-clear { padding: 4px 8px; border: none; background: transparent; color: var(--faint); cursor: pointer; font-size: 12px; }
+.fp-export { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.fp-export-label { color: var(--faint); }
+.fp-export button { padding: 4px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface); color: var(--text-2); cursor: pointer; font-size: 12px; }
+.fp-export button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.fp-export button:disabled, .fp-bulk-btn:disabled { opacity: .5; cursor: default; }
+.fp-li { display: flex; align-items: flex-start; gap: 8px; }
+.fp-li .fp-rowbtn { flex: 1; min-width: 0; }
+.fp-check { flex: 0 0 auto; margin: 15px 0 0 4px; accent-color: var(--accent); cursor: pointer; }
+.fp-more { width: 100%; margin: 8px 0 4px; padding: 9px; border: 1px dashed var(--border-strong); border-radius: var(--r); background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
+.fp-more:hover { color: var(--accent); border-color: var(--accent); }
+
 /* drawer */
 .fp-scrim { position: fixed; inset: 0; background: rgba(5,7,11,0.55); z-index: 40; }
 .fp-drawer { position: fixed; top: 0; right: 0; height: 100vh; width: 468px; max-width: 94vw; background: var(--panel); border-left: 1px solid var(--border); z-index: 41; overflow-y: auto; box-shadow: -24px 0 60px rgba(0,0,0,0.5); }

@@ -20,6 +20,9 @@ from recon.probe.reconstruct import ReconstructedRequest
 _MAX_URL = 8192
 _MAX_BODY = 65536
 _BASE_URL_PLACEHOLDER = "{{base_url}}"
+# WS/WSS operations (mirrors reconstruct._WEBSOCKET_METHODS) — curl/raw-HTTP don't apply, but
+# to_websocat emits a runnable socket command for them (D51).
+_WEBSOCKET_METHODS = frozenset({"WS", "WSS"})
 
 
 def _control_free(text: str) -> str:
@@ -56,6 +59,34 @@ def _json_body(request: ReconstructedRequest) -> str | None:
     return json.dumps(body, separators=(",", ":"))[:_MAX_BODY]
 
 
+def _auth_headers(request: ReconstructedRequest) -> list[tuple[str, str]]:
+    """(header-name, placeholder-value) for each observed auth header (D51).
+
+    request.auth carries the auth headers seen for this operation as (name, scheme);
+    the serializers used to print a static ``# add auth/headers here`` even when the
+    scheme was known, so every authenticated endpoint's copied artifact 401'd. We emit
+    a real placeholder per scheme (never a real secret — none is known): bearer/basic
+    get their canonical prefix, anything else a ``<name>`` slot. Names are control-free
+    + deduped; the value slots are literal placeholders (injection-free by construction).
+    """
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for name, scheme in request.auth:
+        clean = _control_free(str(name))[:_MAX_URL]
+        if not clean or clean.lower() in seen:
+            continue
+        seen.add(clean.lower())
+        normalized = (scheme or "").lower()
+        if normalized == "bearer":
+            value = "Bearer <token>"
+        elif normalized == "basic":
+            value = "Basic <base64(user:pass)>"
+        else:
+            value = f"<{clean}>"
+        out.append((clean, value))
+    return out
+
+
 def to_curl(request: ReconstructedRequest) -> str | None:
     if not request.probeable:
         return None
@@ -70,12 +101,14 @@ def to_curl(request: ReconstructedRequest) -> str | None:
         if request.hosts
         else "  (host unknown)"
     )
-    lines = [
-        f"# {_control_free(request.operation)[:_MAX_URL]}{host_note}",
-        "# add auth/headers here",
-    ]
+    auth = _auth_headers(request)
+    lines = [f"# {_control_free(request.operation)[:_MAX_URL]}{host_note}"]
+    if not auth:
+        lines.append("# add auth/headers here")
     curl = f"curl -X {shlex.quote(method)} {quoted_url}"
     extra: list[str] = []
+    for name, value in auth:
+        extra.append(f"-H {shlex.quote(name + ': ' + value)}")
     if request.content_type:
         extra.append(f"-H {shlex.quote('Content-Type: ' + _control_free(request.content_type))}")
     body = _json_body(request)
@@ -104,10 +137,47 @@ def to_http(request: ReconstructedRequest) -> str | None:
     lines = [
         f"{method} {origin} HTTP/1.1",
         f"Host: {host}",
-        "# add auth/headers here",
     ]
+    auth = _auth_headers(request)
+    if auth:
+        lines.extend(f"{name}: {value}" for name, value in auth)
+    else:
+        lines.append("# add auth/headers here")
     if request.content_type:
         lines.append(f"Content-Type: {_control_free(request.content_type)}")
     lines.append("")
     lines.append(_json_body(request) or "")
     return "\n".join(lines)
+
+
+def to_websocat(request: ReconstructedRequest) -> str | None:
+    """A ``websocat`` scaffold for a WS/WSS operation (D51).
+
+    WebSocket ops are not HTTP requests, so to_curl/to_http return None and the UI used
+    to dead-end at "not probeable". A reviewer still wants a one-line command to open the
+    socket, so emit one — with the observed auth headers as ``-H`` flags. Returns None for
+    non-WebSocket requests (the caller falls back to curl/http).
+    """
+    if request.method not in _WEBSOCKET_METHODS:
+        return None
+    base, origin, _host = _request_parts(request)
+    url = (base + origin)[:_MAX_URL]
+    # _request_parts yields the observed scheme (often already ws/wss) or an https/base_url
+    # fallback; force the websocket scheme so the command is runnable as-is.
+    if url.startswith("https://"):
+        url = "wss://" + url[len("https://") :]
+    elif url.startswith("http://"):
+        url = "ws://" + url[len("http://") :]
+    quoted_url = "'" + url.replace("'", "'\\''") + "'"
+    host_note = (
+        f"  (host: {_control_free(request.hosts[0])[:_MAX_URL]})"
+        if request.hosts
+        else "  (host unknown)"
+    )
+    parts = ["websocat"]
+    for name, value in _auth_headers(request):
+        parts.append(f"-H {shlex.quote(name + ': ' + value)}")
+    parts.append(quoted_url)
+    return "\n".join(
+        [f"# {_control_free(request.operation)[:_MAX_URL]}{host_note}", " ".join(parts)]
+    )

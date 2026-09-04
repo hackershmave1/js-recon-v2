@@ -1,9 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TenantProvider } from "../../tenant/TenantContext";
 import { FindingsPage } from "./FindingsPage";
 import type { FindingsResponse, Finding, Occurrence } from "../../api/types";
+
+// D50: mock only the per-finding triage call (bulk loops it); keep the rest of apiClient real.
+vi.mock("../../api/apiClient", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/apiClient")>();
+  return {
+    ...actual,
+    triageFinding: vi.fn().mockResolvedValue({ status: "dismissed", note: null, actor: "you", updated_at: "t" }),
+  };
+});
 
 const occ = (over: Partial<Occurrence> = {}): Occurrence => ({
   host: null, raw_url: null, source_path: "app.js", line: 1, col: 1,
@@ -32,6 +41,9 @@ const view = () => render(<TenantProvider><FindingsPage data={data} runId="r" on
 const rail = () => document.querySelector(".fp-rail") as HTMLElement;
 
 describe("FindingsPage", () => {
+  // A tenant is needed for the bulk-triage endpoint call; harmless for the other cases.
+  beforeEach(() => { localStorage.setItem("recon.tenantId", "123e4567-e89b-12d3-a456-426614174000"); });
+
   it("shows the title and the shown/total count", () => {
     view();
     expect(screen.getByRole("heading", { name: "Findings" })).toBeInTheDocument();
@@ -141,5 +153,62 @@ describe("FindingsPage", () => {
   it("hides the ungrouped hint once the run is grouped (sightings present)", () => {
     withFindings([f({ finding_hash: "x", value: "GET /a", sightings: { capture: 0, platform: 0 } })]);
     expect(screen.queryByText(/group its session under an engagement/i)).toBeNull();
+  });
+
+  // D49: prioritization — severity pills, risk-tag chips + facet, and priority-first default sort.
+  it("shows severity pills + risk-tag chips and a Risk facet", () => {
+    withFindings([
+      f({ finding_hash: "crit", type: "secret", value: "aws:sha256:z", severity: "critical", priority: 100 }),
+      f({ finding_hash: "risk", type: "endpoint", value: "GET /api/admins", severity: "high", priority: 70, attributes: { risk_tags: ["admin"] } }),
+    ]);
+    expect(screen.getByText("critical")).toBeInTheDocument();
+    expect(screen.getByText("high")).toBeInTheDocument();
+    // "admin" renders both as a row chip and as a Risk facet option
+    expect(screen.getAllByText("admin").length).toBeGreaterThan(0);
+    expect(within(rail()).getByText("Risk")).toBeInTheDocument();
+  });
+
+  it("defaults to priority sort (highest first) and can switch to source order", async () => {
+    withFindings([
+      f({ finding_hash: "low", type: "page_route", value: "/home", severity: "low", priority: 15 }),
+      f({ finding_hash: "crit", type: "secret", value: "SECRETVAL", severity: "critical", priority: 100 }),
+    ]);
+    const order = () => [...document.querySelectorAll(".fp-rowbtn")].map((r) => r.textContent || "");
+    // default sort=priority: the critical secret precedes the low page route even though it's 2nd in the data
+    let rows = order();
+    expect(rows.findIndex((t) => t.includes("SECRETVAL"))).toBeLessThan(rows.findIndex((t) => t.includes("/home")));
+    // switching to Default restores source order (low first)
+    await userEvent.selectOptions(screen.getByLabelText(/sort findings/i), "default");
+    rows = order();
+    expect(rows.findIndex((t) => t.includes("/home"))).toBeLessThan(rows.findIndex((t) => t.includes("SECRETVAL")));
+  });
+
+  // D50: bulk triage + client-side export.
+  it("bulk-triages the selected findings (loops the endpoint) and reflects the new status", async () => {
+    const { triageFinding } = await import("../../api/apiClient");
+    (triageFinding as ReturnType<typeof vi.fn>).mockClear();
+    withFindings([f({ finding_hash: "a", value: "GET /a" }), f({ finding_hash: "b", value: "GET /b" })]);
+    const selectBoxes = screen.getAllByRole("checkbox")
+      .filter((c) => c.getAttribute("aria-label")?.startsWith("Select"));
+    expect(selectBoxes).toHaveLength(2);
+    await userEvent.click(selectBoxes[0]);
+    await userEvent.click(selectBoxes[1]);
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "dismissed" }));
+    expect(triageFinding).toHaveBeenCalledTimes(2);
+    // the local overlay reflects the new status on the rows without a refetch
+    expect((await screen.findAllByText("dismissed")).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("exports the visible findings as a CSV download", async () => {
+    const create = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:x");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    view();
+    await userEvent.click(screen.getByRole("button", { name: "CSV" }));
+    expect(create).toHaveBeenCalled();
+    expect(click).toHaveBeenCalled();
+    create.mockRestore();
+    click.mockRestore();
   });
 });
