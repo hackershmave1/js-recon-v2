@@ -268,7 +268,10 @@ export class BatchUploader {
 
     this.isFlushing = false;
 
-    if (this.pendingQueue.length > 0) {
+    // Don't arm a drain timer while auth-paused (DEBT D41; consistency with the finally re-arm
+    // guard): it would only fire once and no-op via processBatch's authPaused guard. resumeUploads()
+    // re-arms on re-login.
+    if (this.pendingQueue.length > 0 && !this.authPaused) {
       this.uploadTimer = setTimeout(() => {
         this.processBatch();
       }, this.batchInterval);
