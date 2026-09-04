@@ -42,6 +42,16 @@ or enable capture-every-tab" prompt (offer a one-tap "capture this site" → `ac
 placeholder. See also [[D41]] (delivery visibility), [[D44]] (scope safety).
 
 #### D41 · Auth-token expiry mid-capture permanently drops captured JS [M]  ·  reliability — Tier 1
+> ✅ **RESOLVED 2026-09-04** (PR #129). 401/403 from `save-files` are no longer permanent drops: the
+> uploader re-queues the batch and PAUSES the drain (`authPaused`) instead of `forget()`ing it, and
+> `onAuthFailure` → `handleAuthExpired` fires a one-shot "session expired" notification + unhealthy
+> badge. The popup shows a "session expired — sign in again" banner (single source of truth:
+> `uploader.authPaused`); capture KEEPS running (buffers to the durable outbox, nothing lost), and a
+> re-login calls `resumeUploads()` which lifts the pause UNCONDITIONALLY (`mint()` stamps `exp` at 1s
+> resolution over a fixed payload, so a token can repeat within a second — a token-change gate would
+> latch forever) and drains the backlog. `clearOutbox()` also lifts a latched pause (tenant switch /
+> new session). 400/422 stay permanent drops. Deliberately keeps capturing rather than the literal
+> "pause capture" — buffering loses nothing vs a capture gap (both review gates approved).
 The login token TTL is 8h (`apps/platform/src/recon/config.py:226`). On a long/overnight engagement it
 expires; `save-files` then returns 401 (`apps/platform/src/recon/api/capture_router.py:186-196`), which
 the uploader classifies as non-retriable (`retriable=false` for any 4xx except 429,
@@ -72,6 +82,15 @@ from real upload results; add an error/warning Toast variant. The highest-levera
 batch.
 
 #### D43 · Capture-pipeline reliability edges (four small correctness bugs) [S]  ·  reliability — Tier 1
+> ✅ **RESOLVED 2026-09-04** (PR #129). All four: (a) `ContentFetcher.fetch` now has a per-attempt 30s
+> `AbortController` timeout so one blackholed asset can't hang the strictly-serial capture queue; (b)
+> the per-asset `maxAssetMb` default is 8→10, matching the backend's 10 MiB `max_upload_bytes` (8-10 MB
+> main bundles no longer silently skipped); (c) `analyzeSession` blocks when `pendingQueueLength>0 ||
+> isUploading` and returns a typed reason, so analysis can't run on a partial set and report complete;
+> (d) `processFile` persists the outbox entry (enqueue) BEFORE the dedup entry, closing the "marked
+> seen but never queued" drop. NOTE: only the fetch timeout is added for (a) — bounded fetch
+> concurrency (a possible future refinement) is not, since the timeout alone unstalls the queue; and
+> the analyze-block (c) has no "analyze anyway" override in v1.
 Four independent, verified holes, each S-effort: (a) **no fetch timeout** — the uploader added an
 `AbortController` because "Chrome has no default," but `ContentFetcher.fetch` has none
 (`modules/content-fetcher.js:13-18`) and the queue is strictly serial (`background.js:315-317`), so one
