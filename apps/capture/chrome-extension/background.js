@@ -496,11 +496,22 @@ class JSExtractor {
       needsServerProcessing: sourceMapData !== null || dependencies.length > 0
     };
 
-    // Track both URL and content hash for version-aware deduplication
+    // Track both URL and content hash for version-aware deduplication (in-memory).
     this.capturedFiles.set(url, fileObject);
     this.updateBadge();
     this.capturedHashes.set(contentHash, {url: url, capturedAt: fileObject.capturedAt});
-    // Persist the dedup entry so a respawn won't re-fetch/re-hash/re-upload this file.
+
+    // Persist the OUTBOX entry BEFORE the durable dedup entry (DEBT D43d): a worker teardown in the
+    // gap must never leave a file marked "seen" (dedup) yet never queued for upload — that dropped
+    // it permanently. enqueue persists to the outbox first; the in-memory capturedHashes above
+    // still guards same-session re-capture regardless of this ordering.
+    await this.batchUploader.enqueue(fileObject);
+    // Durable pending work now exists — ensure the cold-respawn flush alarm is armed.
+    this.reconcileFlushAlarm(true);
+
+    // Persist the dedup entry so a respawn won't re-fetch/re-hash/re-upload this file. Safe after
+    // enqueue: the file is already durably queued, so a crash before this line just re-uploads it
+    // once on respawn (the server dedupes on session_id, content_hash).
     try { await this.dedupStore.put(contentHash, { contentHash, url, capturedAt: fileObject.capturedAt }); }
     catch (e) { /* dedup is an optimization; a miss just re-uploads (server dedupes) */ }
     // Keep the persisted counter projection in step so a worker teardown can't reset it to 0.
@@ -535,10 +546,6 @@ class JSExtractor {
         });
       }
     }
-
-    await this.batchUploader.enqueue(fileObject);
-    // There is now durable pending work — ensure the cold-respawn flush alarm exists.
-    this.reconcileFlushAlarm(true);
 
     this.notifyUI({
       action: 'fileProcessed',
