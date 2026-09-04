@@ -22,7 +22,8 @@ export const stopCapture = () => send('stopCapture');
 // Start a fresh session. Payload is the popup-resolved snapshot the background applies:
 // { projectId, scope: { rootDomains, includeSubdomains }, captureConfig, overrideKeys }.
 export const newSession = (payload) => send('newSession', payload);
-export const getExportData = () => send('getExportData');
+export const getExportData = (opts = {}) => send('getExportData', opts);
+export const clearFiles = () => send('clearFiles');
 export const testConnection = () => send('testConnection');
 export const updateSettings = (settings) => send('updateSettings', { settings });
 // Central login: authenticate to the workspace so captures route to the operator's tenant.

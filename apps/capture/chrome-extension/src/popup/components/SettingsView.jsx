@@ -136,7 +136,7 @@ export function SettingsView({ vm }) {
         <SectionHeader icon={<GlobeIcon />}>CAPTURE RULES</SectionHeader>
         <Card>
           <Label>Standalone default scope <span style={{ color: C.faint }}>(used when no project is selected)</span></Label>
-          <input value={vm.defScope} onInput={(e) => vm.setDefScope(e.target.value)} placeholder="auto (active tab domain)"
+          <input value={vm.defScope} onInput={(e) => vm.setDefScope(e.target.value)} placeholder="root domains (e.g. target.com)"
                  style={{ ...inputStyle, color: C.lime, marginBottom: '13px' }} />
           <button onClick={vm.toggleSubdomains} style={{
             width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 0 13px',
@@ -212,6 +212,24 @@ export function SettingsView({ vm }) {
             }}>Add</button>
           </div>
         </Card>
+
+        {/* CAPTURED DATA — reachable "clear captures" (D46): the worker handler existed but had no UI */}
+        <SectionHeader>CAPTURED DATA</SectionHeader>
+        <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: '12px', padding: '14px', marginBottom: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '11px' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: '12.5px', color: C.textSoft }}>Clear captured files</div>
+              <div style={{ fontSize: '10.5px', color: C.faint, marginTop: '2px' }}>
+                {vm.capturedCount} file{vm.capturedCount === 1 ? '' : 's'} in this session
+              </div>
+            </div>
+            <button onClick={vm.clearCaptures} disabled={vm.capturedCount === 0} style={{
+              flex: '0 0 auto', padding: '8px 14px', borderRadius: '8px', border: `1px solid ${C.lineHover}`,
+              background: C.control, color: vm.capturedCount === 0 ? C.dim : C.orange,
+              cursor: vm.capturedCount === 0 ? 'default' : 'pointer', fontSize: '12px', fontWeight: 700
+            }}>Clear</button>
+          </div>
+        </div>
 
         {/* ABOUT */}
         <SectionHeader>ABOUT</SectionHeader>

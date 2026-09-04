@@ -9,6 +9,7 @@ import { LoginView } from './components/LoginView.jsx';
 import * as api from './api.js';
 import { resolveEffectiveConfig, splitEffective, configFromSettings } from '../../modules/project-config.js';
 import { reconcileActiveProject, activeProjectName } from '../../modules/active-engagement.js';
+import { deriveDelivery } from '../../modules/delivery-health.js';
 
 const NOISE = new Set(['lib', 'cms', 'tracker']);
 
@@ -121,10 +122,12 @@ export function App() {
     return () => { alive = false; clearInterval(id); };
   }, [analysis.status]);
 
-  function showToast(msg) {
-    setToast(msg);
+  // toast holds { msg, tone }; tone ∈ ok|warn|error drives colour/icon (ui.jsx). Failures linger
+  // longer than the 2.2s success flash so an error can actually be read (D42).
+  function showToast(msg, tone = 'ok') {
+    setToast({ msg, tone });
     clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 2200);
+    toastTimer.current = setTimeout(() => setToast(null), tone === 'ok' ? 2200 : 4200);
   }
 
   function patchSettings(patch) {
@@ -139,12 +142,53 @@ export function App() {
     // fail-closed backend (or leaks into the shared tenant), so send the operator to
     // sign in first instead of piling doomed captures into the outbox.
     if (next && !settings?.authToken) {
-      showToast('Sign in to capture');
+      showToast('Sign in to capture', 'warn');
       setView('settings');
+      return;
+    }
+    // Fail-closed scope guard (D40): with no scope AND capture-every-tab off, isInScope captures
+    // ZERO — but the toggle used to flip the card to a green pulsing "CAPTURING" anyway, the silent
+    // no-op. Block the start and point the operator at the inline scope prompt instead.
+    const noScope = settings?.captureEverything !== true &&
+      !(settings?.useDomainScope && (settings?.domainScopes || []).length > 0);
+    if (next && noScope) {
+      showToast('Set a scope to capture', 'warn');
       return;
     }
     setStatus((s) => ({ ...s, isCapturing: next }));
     await (next ? api.startCapture() : api.stopCapture());
+    refresh();
+  }
+
+  // One-tap "capture this site" for the no-scope empty state (D40): arm the active tab's host as the
+  // scope and start capturing. updateSettings is awaited before startCapture so the gate is armed
+  // before the rescan fires; a stray `*.` is stripped so a pasted wildcard still works.
+  async function armScope(host) {
+    const h = String(host || activeHost || '').trim().replace(/^\*\./, '');
+    if (!h) { showToast('No active tab to scope to', 'warn'); return; }
+    const patch = { domainScopes: [h], useDomainScope: true, captureEverything: false };
+    setSettings((prev) => ({ ...(prev || {}), ...patch }));
+    await api.updateSettings(patch);
+    if (!status.isCapturing) {
+      setStatus((s) => ({ ...s, isCapturing: true }));
+      await api.startCapture();
+    }
+    showToast(`Capturing ${h}`);
+    refresh();
+  }
+
+  // Add a host observed serving out-of-scope scripts to the scope (D44) — the one-click fix for a
+  // CDN-apex / separate host that the operator wants to pull in. Appends (doesn't replace) so the
+  // existing scope is preserved.
+  async function addScopeHost(host) {
+    const h = String(host || '').trim().replace(/^\*\./, '');
+    if (!h) return;
+    const current = settings?.domainScopes || [];
+    if (current.includes(h)) { showToast(`${h} already in scope`); return; }
+    const patch = { domainScopes: [...current, h], useDomainScope: true };
+    setSettings((prev) => ({ ...(prev || {}), ...patch }));
+    await api.updateSettings(patch);
+    showToast(`Added ${h} to scope`);
     refresh();
   }
 
@@ -201,7 +245,7 @@ export function App() {
     if (!selected) {
       // Standalone: bake the ad-hoc scope into the resolved DEFAULTS (not as an override) so
       // override_keys stays [] (spec §4) while capture still runs under the typed scope.
-      const rootDomains = String(rawScope || '').split(/[\s,]+/).filter(Boolean);
+      const rootDomains = String(rawScope || '').split(/[\s,]+/).filter(Boolean).map((s) => s.replace(/^\*\./, ''));
       defaults = { ...defaults, scope: { ...(defaults.scope || {}), rootDomains, includeSubdomains: settings?.includeSubdomains !== false } };
       ovr = {};
     }
@@ -221,19 +265,28 @@ export function App() {
       setOverrides({});
       showToast(selected ? `New session · ${selected.name}` : 'New standalone session');
     } else {
-      showToast('Could not start session');
+      showToast('Could not start session', 'error');
     }
     refresh();
   }
 
   async function exportNow() {
-    const res = await api.getExportData();
+    const res = await api.getExportData({ includeContent: settings?.exportIncludeContent === true });
     if (res?.success) {
       api.downloadJson(res.exportData, res.filename || 'js-extraction.json');
-      showToast('Export downloaded');
+      showToast(settings?.exportIncludeContent ? 'Export downloaded · with code' : 'Export downloaded');
     } else {
-      showToast(res?.error ? 'Export failed' : 'Nothing to export');
+      showToast(res?.error ? 'Export failed' : 'Nothing to export', res?.error ? 'error' : 'warn');
     }
+  }
+
+  // Reachable "clear captures" (D46): the worker's clearFiles handler existed but was wired to no
+  // UI. Drops the captured set for the current session and resets the analysis feed.
+  async function clearCaptures() {
+    await api.clearFiles();
+    setAnalysis({ status: 'idle', counts: null, files: [] });
+    showToast('Captures cleared');
+    refresh();
   }
 
   // Kick off the decoupled analysis job for the captured session, then let the polling
@@ -247,7 +300,7 @@ export function App() {
       setAnalysis((a) => ({ ...a, status: 'running' }));
     } else {
       setAnalysis((a) => ({ ...a, status: 'idle' }));
-      showToast(res?.error === 'timeout' ? 'Analyze timed out' : 'Analyze failed');
+      showToast(res?.error === 'timeout' ? 'Analyze timed out' : 'Analyze failed', 'error');
     }
   }
 
@@ -272,12 +325,12 @@ export function App() {
       showToast(`Connection OK · ${res.latencyMs} ms`);
     } else {
       setConnState('fail'); setLatency('timeout');
-      showToast('Connection failed');
+      showToast('Connection failed', 'error');
     }
   }
 
   function setDefScope(value) {
-    const list = value.split(/[\s,]+/).filter(Boolean);
+    const list = value.split(/[\s,]+/).filter(Boolean).map((s) => s.replace(/^\*\./, ''));
     patchSettings({ domainScopes: list, useDomainScope: list.length > 0 });
   }
 
@@ -316,7 +369,7 @@ export function App() {
         borderRadius: '0', overflow: 'hidden', color: C.text, position: 'relative'
       }}>
         <LoginView vm={loginVm} />
-        <Toast message={toast} />
+        <Toast toast={toast} />
       </div>
     );
   }
@@ -363,13 +416,43 @@ export function App() {
   // against the fetched list so a deleted / different-tenant id renders as Solo, not a phantom.
   const activeProjectId = reconcileActiveProject(status.projectId, projects);
 
+  // Real delivery health from the worker's uploader + processing stats — the D42 fix for a popup
+  // that hid "captured nothing" / "never uploaded". A manual connection test still overrides
+  // (testing/fail); otherwise the health comes from actual upload/skip/failure outcomes.
+  const delivery = deriveDelivery(status);
+  const deliveryVm = { ...delivery, lastFile: delivery.lastUrl ? basename(delivery.lastUrl) : '' };
+  // Out-of-scope script hosts to suggest (D44), minus any already covered by the current scope so a
+  // host disappears from the list once added (mirrors the isInScope exact/suffix gate).
+  const scopedSet = new Set((settings.domainScopes || []).map((s) => s.toLowerCase()));
+  const withSubs = settings.includeSubdomains !== false;
+  const outOfScopeHosts = (status.outOfScopeHosts || []).filter(({ host }) => {
+    const h = String(host || '').toLowerCase();
+    if (!h || scopedSet.has(h)) return false;
+    if (withSubs) { for (const s of scopedSet) if (h.endsWith('.' + s)) return false; }
+    return true;
+  });
+
+  const health = connState === 'testing' ? 'testing' : connState === 'fail' ? 'fail' : delivery.health;
+  const connectionLabel =
+    health === 'testing' ? 'testing…'
+      : health === 'fail'
+        ? (delivery.paired === false && !delivery.lastReason ? 'not paired · check sign-in' : 'delivery failing')
+        : health === 'warn' ? `${delivery.skipped} skipped`
+          : delivery.paired === true ? 'connected · delivering' : 'connected to workspace';
+
   const homeVm = {
     capturing: status.isCapturing,
-    connectionLabel: connState === 'fail' ? 'workspace unreachable' : 'connected to workspace',
+    connectionLabel,
+    deliveryHealth: health,
+    delivery: deliveryVm,
     host: status.host || activeHost || '—',
     session: (status.sessionId || '').slice(0, 8) || '—',
     scope: scopeText,
     scopeMode,
+    activeHost,
+    armScope,
+    outOfScopeHosts,
+    addScopeHost,
     includeSubdomains: settings.includeSubdomains !== false,
     startNewSession,
     startScopeDefault: (settings.domainScopes || []).join(', ') || activeHost || '',
@@ -392,7 +475,7 @@ export function App() {
       }),
     createProject: async (name, rootDomains) => {
       const cleanName = String(name || '').trim();
-      if (!cleanName) { showToast('Project name required'); return { success: false }; }
+      if (!cleanName) { showToast('Project name required', 'warn'); return { success: false }; }
       const res = await api.createProject({
         name: cleanName,
         defaults: { scope: { rootDomains: String(rootDomains || '').split(/[\s,]+/).filter(Boolean) } }
@@ -403,7 +486,7 @@ export function App() {
         setOverrides({});
         showToast(`Project created · ${res.project.name}`);
       } else {
-        showToast(res?.error ? `Create failed: ${res.error}` : 'Could not create project');
+        showToast(res?.error ? `Create failed: ${res.error}` : 'Could not create project', 'error');
       }
       return res;
     },
@@ -414,7 +497,8 @@ export function App() {
       { key: 'captureEverything', label: 'Capture every tab (ignore scope)', on: settings.captureEverything === true },
       { key: 'performAnalysisOnUpload', label: 'Analyze on upload', on: settings.performAnalysisOnUpload === true },
       { key: 'muteNoise', label: 'Mute plugins & trackers', on: muteNoise },
-      { key: 'captureAuthContext', label: 'Capture auth context', on: settings.captureAuthContext !== false }
+      { key: 'captureAuthContext', label: 'Capture auth context', on: settings.captureAuthContext !== false },
+      { key: 'exportIncludeContent', label: 'Include code in export', on: settings.exportIncludeContent === true }
     ],
     openSettings: () => setView('settings'),
     toggleCapture,
@@ -450,6 +534,7 @@ export function App() {
     toggleDefaultProfile: () => patchSettings({ denyDefaultProfile: !(settings.denyDefaultProfile !== false) }),
     denyRules: settings.denyRules || [],
     removeRule, newRule, setNewRule, addRule,
+    clearCaptures, capturedCount: status.fileCount || 0,
     version: api.extensionVersion()
   };
 
@@ -459,7 +544,7 @@ export function App() {
       borderRadius: '0', overflow: 'hidden', color: C.text, position: 'relative'
     }}>
       {view === 'home' ? <HomeView vm={homeVm} /> : <SettingsView vm={settingsVm} />}
-      <Toast message={toast} />
+      <Toast toast={toast} />
     </div>
   );
 }

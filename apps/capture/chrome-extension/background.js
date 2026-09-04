@@ -12,6 +12,7 @@ import { buildExportData } from './modules/export-builder.js';
 import { classifyAsset, isThirdParty, matchesDenylist, countSecrets } from './modules/asset-classifier.js';
 import { listProjectsWithCache } from './modules/projects-cache.js';
 import { settingsFromConfig } from './modules/project-config.js';
+import { normalizeRootDomains } from './modules/normalize-scope.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -22,22 +23,6 @@ const DEFAULT_DENY_RULES = [
   { tag: 'LIB', pattern: '*/jquery*.min.js' }
 ];
 
-// Reduce user-supplied scope entries (full URL, host:port, user@host, www.host) to bare
-// hostnames so they gate capture (domainScopes) and match the backend's normalize_root_domains.
-function normalizeRootDomains(values) {
-  const list = Array.isArray(values) ? values : [];
-  const out = [];
-  for (const value of list) {
-    let host = String(value || '').trim().toLowerCase();
-    if (!host) continue;
-    host = host.replace(/^[a-z][a-z0-9+.-]*:\/\//, ''); // scheme
-    host = host.replace(/^[^@/]*@/, '');                // userinfo
-    host = host.split('/')[0].split('?')[0].split('#')[0].split(':')[0]; // path/query/frag/port
-    if (host.startsWith('www.')) host = host.slice(4);
-    if (host && !out.includes(host)) out.push(host);
-  }
-  return out;
-}
 
 // Messages the popup/content-script send without waiting for a response. The onMessage
 // listener must NOT hold the response channel open for these (see setupListeners).
@@ -60,6 +45,10 @@ class JSExtractor {
     // one; overwritten in initialize() before any capture/message listener attaches.
     this.sessionId = this.sessionStore.generate();
     this.totalCapturedBytes = 0;
+    // Out-of-scope script hosts observed this session (host -> hit count). A discovery aid (D44):
+    // app JS served from a separate apex (e.g. a CDN) falls outside the target root and is dropped;
+    // surfacing the host lets the operator one-click add it instead of silently missing that bundle.
+    this.outOfScopeHosts = new Map();
     this.processingStats = {
       processedFiles: 0,
       failedFiles: 0,
@@ -67,6 +56,7 @@ class JSExtractor {
       lastFailureUrl: null,
       lastFailureMessage: null
     };
+    this.outOfScopeHosts.clear();
 
     this.limits = {
       // NOTE: must not exceed the backend's per-file cap (SecurityValidator.
@@ -123,6 +113,7 @@ class JSExtractor {
     this.processingStats.lastFailureReason = reason;
     this.processingStats.lastFailureUrl = url || null;
     this.processingStats.lastFailureMessage = message || null;
+    this.updateBadge();
   }
 
   async initialize() {
@@ -291,8 +282,14 @@ class JSExtractor {
 
   async handleRequest(details) {
     if (!this.isCapturing) return;
-    if (!this.isInScope(details.url)) return;
     if (this.isExtensionRequest(details)) return;
+    if (!this.isInScope(details.url)) {
+      // Out-of-scope SCRIPT (the webRequest listener filters types:["script"], so every drop here
+      // is a script the page loaded). Record the host as a discovery hint (D44) before dropping, so
+      // the popup can surface a CDN-apex/separate host that served app JS and offer a one-click add.
+      this.noteOutOfScopeScript(details.url);
+      return;
+    }
     if (this.shouldSkipUrl(details.url, details.documentUrl)) return;
 
     const authContext = this.authTracker.consume(details.requestId, details.url);
@@ -501,6 +498,7 @@ class JSExtractor {
 
     // Track both URL and content hash for version-aware deduplication
     this.capturedFiles.set(url, fileObject);
+    this.updateBadge();
     this.capturedHashes.set(contentHash, {url: url, capturedAt: fileObject.capturedAt});
     // Persist the dedup entry so a respawn won't re-fetch/re-hash/re-upload this file.
     try { await this.dedupStore.put(contentHash, { contentHash, url, capturedAt: fileObject.capturedAt }); }
@@ -742,8 +740,22 @@ class JSExtractor {
   }
 
   isExtensionRequest(details) {
-    return details.initiator && 
+    return details.initiator &&
            details.initiator.startsWith('chrome-extension://');
+  }
+
+  // Record an out-of-scope script host as a discovery hint (D44). Skips the workspace's own origin
+  // and denylisted hosts (trackers/CMS noise) so the popup only suggests plausible target hosts.
+  // Bounded at 50 distinct hosts so a busy tab can't grow this unboundedly.
+  noteOutOfScopeScript(url) {
+    try {
+      if (this.isWorkspaceUrl(url)) return;
+      if (matchesDenylist(url, this.settings.denyRules || [], this.settings.denyDefaultProfile !== false)) return;
+      const host = new URL(url).hostname.toLowerCase();
+      if (!host) return;
+      if (!this.outOfScopeHosts.has(host) && this.outOfScopeHosts.size >= 50) return;
+      this.outOfScopeHosts.set(host, (this.outOfScopeHosts.get(host) || 0) + 1);
+    } catch (e) { /* ignore malformed URL */ }
   }
 
   scheduleQueueProcessing() {
@@ -905,7 +917,7 @@ class JSExtractor {
       clearFiles: () => this.clearFiles(sendResponse),
       getStatus: () => this.getStatus(sendResponse),
       updateSettings: (req) => this.updateSettings(req, sendResponse),
-      getExportData: () => this.getExportData(sendResponse),
+      getExportData: (req) => this.getExportData(req, sendResponse),
       testConnection: () => this.workspaceClient.testConnection().then(sendResponse),
       analyzeSession: () => this.workspaceClient.analyzeSession().then(sendResponse),
       getAnalysisProgress: () => this.workspaceClient.getAnalysisProgress().then(sendResponse),
@@ -966,8 +978,24 @@ class JSExtractor {
   startCapture(sendResponse) {
     this.isCapturing = true;
     this.persistCaptureState(true);
+    this.updateBadge();
     this.rescanActiveTab();
     sendResponse({ success: true, sessionId: this.sessionId });
+  }
+
+  // Toolbar badge (D46): show live capture state while the popup is closed. Empty when paused; the
+  // captured-file count while capturing, orange when delivery/processing is unhealthy (else lime).
+  updateBadge() {
+    try {
+      if (!chrome.action || !chrome.action.setBadgeText) return;
+      if (!this.isCapturing) { chrome.action.setBadgeText({ text: '' }); return; }
+      const n = this.capturedFiles.size;
+      const up = this.batchUploader.getStats();
+      const bad = !!up.lastError || (up.droppedFiles || 0) > 0 || up.paired === false ||
+        (this.processingStats.failedFiles || 0) > 0;
+      chrome.action.setBadgeText({ text: n > 999 ? '999+' : String(n) });
+      chrome.action.setBadgeBackgroundColor({ color: bad ? '#ff8a47' : '#4ea86b' });
+    } catch (e) { /* action API unavailable in this context */ }
   }
 
   // Central login: authenticate to the workspace and persist the session token + identity so
@@ -1060,6 +1088,7 @@ class JSExtractor {
       lastFailureUrl: null,
       lastFailureMessage: null
     };
+    this.outOfScopeHosts.clear();
     // Drop the engagement binding: clear the live uploader config AND the persisted snapshot so a
     // respawn can't re-bind the fresh session to the old engagement.
     this.batchUploader.setConfig(null);
@@ -1102,6 +1131,7 @@ class JSExtractor {
       lastFailureUrl: null,
       lastFailureMessage: null
     };
+    this.outOfScopeHosts.clear();
 
     // Apply the client-resolved effective config. The popup resolved (project.defaults +
     // per-session overrides) and sent the snapshot; here we map it onto the flat capture-gate
@@ -1147,6 +1177,7 @@ class JSExtractor {
   async stopCapture(sendResponse) {
     this.isCapturing = false;
     this.persistCaptureState(false);
+    this.updateBadge();
     await this.batchUploader.flushAll();
     sendResponse({
       success: true,
@@ -1180,6 +1211,7 @@ class JSExtractor {
 
   clearFiles(sendResponse) {
     this.capturedFiles.clear();
+    this.updateBadge();
     this.clearCapturedFilesMeta();
     this.capturedHashes.clear();
     this.dedupStore.clear().catch(() => {});
@@ -1193,6 +1225,7 @@ class JSExtractor {
       lastFailureUrl: null,
       lastFailureMessage: null
     };
+    this.outOfScopeHosts.clear();
     sendResponse({ success: true });
   }
 
@@ -1215,6 +1248,7 @@ class JSExtractor {
       secretCount,
       queueLength: this.processingQueue.length,
       processingStats: this.processingStats,
+      outOfScopeHosts: [...this.outOfScopeHosts.entries()].map(([host, count]) => ({ host, count })),
       uploader: uploaderStats,
       projectId: uploaderStats.projectId || null,
       standalone: !uploaderStats.projectId,
@@ -1223,7 +1257,15 @@ class JSExtractor {
   }
 
   async updateSettings(request, sendResponse) {
-    this.settings = { ...this.settings, ...request.settings };
+    const incoming = { ...(request.settings || {}) };
+    // Scope entries drive the capture gate (isInScope reads this.settings.domainScopes directly),
+    // so normalize them at the WRITE here too — not just on the newSession path (applyConfig). Without
+    // this, a `*.target.com` / `https://target.com/` typed in the Settings box (or the one-tap arm)
+    // is stored literally and matches no host = silent no-op capture (D40).
+    if (Array.isArray(incoming.domainScopes)) {
+      incoming.domainScopes = normalizeRootDomains(incoming.domainScopes);
+    }
+    this.settings = { ...this.settings, ...incoming };
     if (typeof this.settings.captureAuthContext !== 'boolean') {
       this.settings.captureAuthContext = true;
     }
@@ -1246,20 +1288,23 @@ class JSExtractor {
     sendResponse({ success: true, projects, source });
   }
 
-  getExportData(sendResponse) {
+  getExportData(request, sendResponse) {
     const files = Array.from(this.capturedFiles.values());
+    // D46: let the operator export WITH the captured code, not just metadata. Best-effort — files
+    // rehydrated after a worker respawn are lean (no content) and simply export without it.
+    const includeContent = !!(request && request.includeContent);
 
     try {
       const exportData = buildExportData({
         sessionId: this.sessionId,
         files,
-        includeContent: false,
+        includeContent,
         version: '3.0.0'
       });
 
       sendResponse({
         success: true,
-        filename: `js-extraction-${this.sessionId}.json`,
+        filename: `js-extraction-${this.sessionId}${includeContent ? '-with-code' : ''}.json`,
         exportData
       });
     } catch (error) {

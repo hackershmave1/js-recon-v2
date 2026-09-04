@@ -134,7 +134,7 @@ function EngagementPicker({ vm }) {
       {creating && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
           <input value={newName} placeholder="engagement name" onInput={(e) => setNewName(e.target.value)} style={input} />
-          <input value={newScope} placeholder="root domains (e.g. *.target.com)" onInput={(e) => setNewScope(e.target.value)} style={input} />
+          <input value={newScope} placeholder="root domains (e.g. target.com)" onInput={(e) => setNewScope(e.target.value)} style={input} />
           <div style={{ display: 'flex', gap: '8px' }}>
             <button onClick={async () => {
               const r = await vm.createProject(newName, newScope);
@@ -202,6 +202,12 @@ export function HomeView({ vm }) {
   // Scope-badge colour tracks the real capture-gate state: red = wide open (all tabs),
   // amber = no scope (capturing nothing), lime = scoped.
   const scopeColor = vm.scopeMode === 'open' ? C.orange : vm.scopeMode === 'none' ? C.amber : C.lime;
+  // Connection dot/label colour = real delivery health (D42), no longer a fake constant green.
+  const healthColor = { ok: C.lime, warn: C.amber, fail: C.orange, testing: C.blue }[vm.deliveryHealth] || C.lime;
+  const d = vm.delivery || { uploaded: 0, pending: 0, failedTotal: 0, paired: null, lastReason: '', lastFile: '' };
+  // Confirm-before-enable for "Capture every tab" (D44): a cross-tenant footgun, so it takes an
+  // explicit in-app confirm (window.confirm is suppressed in the popup) rather than a silent toggle.
+  const [confirmEvery, setConfirmEvery] = useState(false);
   const statBox = (value, label, color) => (
     <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: '11px', padding: '12px' }}>
       <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: '22px', lineHeight: 1, color: color || C.text }}>{value}</div>
@@ -229,8 +235,8 @@ export function HomeView({ vm }) {
         }}><SearchIcon /></div>
         <div style={{ flex: 1, lineHeight: 1.05 }}>
           <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: '14px', letterSpacing: '-0.2px' }}>RECON Capture</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10.5px', color: C.lime, fontFamily: F.mono, marginTop: '1px' }}>
-            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: C.lime, boxShadow: `0 0 6px ${C.lime}` }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10.5px', color: healthColor, fontFamily: F.mono, marginTop: '1px' }}>
+            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: healthColor, boxShadow: `0 0 6px ${healthColor}` }} />
             {vm.connectionLabel}
           </div>
         </div>
@@ -276,6 +282,35 @@ export function HomeView({ vm }) {
         </div>
       </div>
 
+      {/* no-scope prompt — fail-closed capture guard (D40): with no scope AND capture-every-tab off,
+          capture collects nothing, so offer a one-tap "capture this site" instead of a fake-green
+          CAPTURING. Shown whenever the gate is empty, capturing or not. */}
+      {vm.scopeMode === 'none' && (
+        <div style={{ padding: '0 17px 14px' }}>
+          <div style={{
+            background: 'rgba(240,199,94,0.08)', border: `1px solid ${C.amber}`,
+            borderRadius: '11px', padding: '11px 13px'
+          }}>
+            <div style={{ fontSize: '11.5px', color: C.amber, fontWeight: 700, marginBottom: '4px' }}>
+              No scope — capturing nothing
+            </div>
+            <div style={{ fontSize: '10.5px', color: C.faint, marginBottom: vm.activeHost ? '9px' : 0, lineHeight: 1.5 }}>
+              Capture is fail-closed: set a target scope, or turn on “Capture every tab” below.
+            </div>
+            {vm.activeHost && (
+              <button onClick={() => vm.armScope(vm.activeHost)} style={{
+                width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
+                padding: '9px', borderRadius: '9px', border: 'none', background: C.lime, color: C.onLime,
+                cursor: 'pointer', fontSize: '12px', fontWeight: 700
+              }}>
+                <span style={{ width: '14px', height: '14px', display: 'inline-flex' }}><PlayIcon /></span>
+                Capture {vm.activeHost}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* scope */}
       <div style={{ padding: '0 17px 14px' }}>
         <div style={{
@@ -297,11 +332,62 @@ export function HomeView({ vm }) {
         <EngagementPicker vm={vm} />
       </div>
 
+      {/* out-of-scope script hosts — discovery aid (D44): app JS served from a separate apex the
+          scope missed, with a one-click add so the operator stops silently missing that bundle. */}
+      {vm.outOfScopeHosts && vm.outOfScopeHosts.length > 0 && (
+        <div style={{ padding: '0 17px 14px' }}>
+          <div style={{ background: C.inset, border: `1px solid ${C.lineStrong}`, borderRadius: '10px', padding: '10px 12px' }}>
+            <div style={{ fontSize: '10px', color: C.faint, fontWeight: 700, letterSpacing: '0.6px', marginBottom: '7px' }}>
+              OUT-OF-SCOPE SCRIPT HOSTS
+            </div>
+            {vm.outOfScopeHosts.slice(0, 5).map((h) => (
+              <div key={h.host} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0' }}>
+                <span style={{
+                  flex: 1, minWidth: 0, fontFamily: F.mono, fontSize: '11px', color: C.textSoft,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                }}>{h.host} <span style={{ color: C.faint }}>· {h.count}</span></span>
+                <button onClick={() => vm.addScopeHost(h.host)} style={{
+                  flex: '0 0 auto', padding: '3px 11px', borderRadius: '7px', border: `1px solid ${C.lineHover}`,
+                  background: C.control, color: C.lime, cursor: 'pointer', fontSize: '10.5px', fontWeight: 700
+                }}>+ add</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '9px', padding: '0 17px 15px' }}>
         {statBox(vm.stats.js, 'scripts')}
         {statBox(vm.stats.maps, 'maps', C.teal)}
         {statBox(vm.stats.secrets, 'secrets', C.pink)}
+      </div>
+
+      {/* delivery — real upload/skip/failure health, not just captured counts (D42) */}
+      <div style={{ padding: '0 17px 15px' }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '10px', background: C.inset,
+          border: `1px solid ${C.lineStrong}`, borderRadius: '10px', padding: '9px 12px'
+        }}>
+          <span style={{ fontSize: '10px', color: C.faint, fontWeight: 700, letterSpacing: '0.6px' }}>DELIVERY</span>
+          <span style={{
+            flex: 1, minWidth: 0, display: 'flex', gap: '13px', fontFamily: F.mono, fontSize: '11px',
+            whiteSpace: 'nowrap', overflow: 'hidden'
+          }}>
+            <span style={{ color: C.teal }}>{d.uploaded} sent</span>
+            <span style={{ color: d.pending > 0 ? C.textSoft : C.dim }}>{d.pending} pending</span>
+            <span style={{ color: d.failedTotal > 0 ? C.orange : C.dim }}>{d.failedTotal} failed</span>
+            {d.paired === false && <span style={{ color: C.orange }}>not paired</span>}
+          </span>
+        </div>
+        {d.failedTotal > 0 && d.lastReason && (
+          <div style={{
+            fontSize: '10px', color: C.faint, marginTop: '6px',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+          }}>
+            last: {d.lastReason}{d.lastFile ? ` · ${d.lastFile}` : ''}
+          </div>
+        )}
       </div>
 
       {/* analyze on demand (decoupled from capture) */}
@@ -345,8 +431,33 @@ export function HomeView({ vm }) {
 
       {/* quick toggles */}
       <div style={{ padding: '13px 17px', borderTop: `1px solid ${C.line}`, marginTop: '13px' }}>
+        {confirmEvery && (
+          <div style={{
+            background: 'rgba(255,138,71,0.08)', border: `1px solid ${C.orange}`,
+            borderRadius: '10px', padding: '11px 12px', marginBottom: '11px'
+          }}>
+            <div style={{ fontSize: '11.5px', color: C.orange, fontWeight: 700, marginBottom: '4px' }}>Capture every tab?</div>
+            <div style={{ fontSize: '10.5px', color: C.faint, marginBottom: '9px', lineHeight: 1.5 }}>
+              Ignores scope and uploads JS from every tab — including unrelated sites and other tenants — into this engagement.
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={() => { vm.toggleSetting('captureEverything'); setConfirmEvery(false); }} style={{
+                flex: 1, padding: '8px', borderRadius: '8px', border: 'none', background: C.orange,
+                color: C.onLime, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700
+              }}>Enable anyway</button>
+              <button onClick={() => setConfirmEvery(false)} style={{
+                flex: 1, padding: '8px', borderRadius: '8px', border: `1px solid ${C.lineHover}`,
+                background: C.control, color: C.muted, cursor: 'pointer', fontSize: '11.5px', fontWeight: 600
+              }}>Cancel</button>
+            </div>
+          </div>
+        )}
         {vm.toggles.map((t) => (
-          <button key={t.key} onClick={() => vm.toggleSetting(t.key)} style={{
+          <button key={t.key} onClick={() => {
+            // "Capture every tab" enable takes an explicit confirm (D44); everything else toggles directly.
+            if (t.key === 'captureEverything' && !t.on) { setConfirmEvery(true); return; }
+            vm.toggleSetting(t.key);
+          }} style={{
             width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0',
             border: 'none', background: 'none', cursor: 'pointer'
           }}>
