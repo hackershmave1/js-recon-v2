@@ -16,6 +16,9 @@ const __dirname = path.dirname(__filename);
 const bg = fs.readFileSync(path.resolve(__dirname, '../background.js'), 'utf8');
 assert.match(bg, /maxFileBytes:\s*10\s*\*\s*1024\s*\*\s*1024/, 'client maxFileBytes must be 10 MB (matches backend MAX_JS_CONTENT_SIZE)');
 assert.ok(!/maxFileBytes:\s*50\s*\*/.test(bg), 'stale 50 MB client cap must be gone');
+// D43b: the per-asset slider defaults to 10 MB (the backend ceiling), not 8 — an 8 MB default
+// silently skipped 8-10 MB main bundles.
+assert.match(bg, /maxAssetMb:\s*Math\.min\(10,.*:\s*10\)/, 'maxAssetMb must default to 10 MB (DEBT D43b)');
 const mani = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../manifest.json'), 'utf8'));
 assert.ok(mani.permissions.includes('alarms'), 'alarms permission required for the durable flush timer');
 assert.ok(mani.permissions.includes('unlimitedStorage'), 'unlimitedStorage required for the durable outbox');

@@ -43,6 +43,14 @@ export class BatchUploader {
     // null until the first upload under the current token; surfaced via getStats so the
     // popup can show a paired ✓/✗ instead of failing silently on a bad/expired token.
     this.lastPaired = null;
+    // Auth-expiry pause (DEBT D41). A 401/403 from save-files means the login token expired or was
+    // rejected mid-capture. Those batches must NOT be dropped (the original bug) — they are valid
+    // once re-authenticated — so processBatch re-queues them and sets this flag to PAUSE the drain
+    // (otherwise it would loop 401s). onAuthFailure lets the owner surface a "session expired —
+    // sign in again" state + notification. Cleared by resumeUploads() (on re-login) and by
+    // clearOutbox() (a tenant switch empties the queue anyway).
+    this.authPaused = false;
+    this.onAuthFailure = null;
   }
 
   // Outbox key includes the session id so the SAME content captured under two
@@ -93,11 +101,31 @@ export class BatchUploader {
     // and dropped instead of re-queued when it fails — closing the in-flight-retry leak path.
     this.epoch += 1;
     this.pendingQueue = [];
+    // A full drop (tenant switch / new session) must not leave an auth-pause latched: there is
+    // nothing left to re-send, and the next tenant's token drains fresh work (DEBT D41 / review R1).
+    this.authPaused = false;
     if (this.store && typeof this.store.clear === 'function') {
       try { await this.store.clear(); } catch (e) { /* best-effort; the in-memory queue is already dropped */ }
     }
   }
   setOnDrained(fn) { this.onDrained = typeof fn === 'function' ? fn : null; }
+  setOnAuthFailure(fn) { this.onAuthFailure = typeof fn === 'function' ? fn : null; }
+
+  // Resume a drain paused by a 401/403 (DEBT D41). Called on a successful (re-)login. Clears the
+  // pause UNCONDITIONALLY — deliberately NOT gated on a token change: auth.token.mint() stamps exp
+  // at 1-second resolution over a fixed payload, so two logins within the same wall-clock second
+  // produce a byte-identical token, and a transient 403 can pause with a still-valid token — either
+  // would otherwise latch the pause forever (a silent upload outage). The owner is the sole caller
+  // and only calls this after installing a fresh token, so an unconditional clear is safe.
+  resumeUploads() {
+    this.authPaused = false;
+    if (this.pendingQueue.length > 0 && !this.isUploading) {
+      // Clear any stale (paused, no-op) timer and drain promptly rather than waiting out a
+      // leftover batchInterval timer that flushAll may have armed while paused.
+      clearTimeout(this.uploadTimer);
+      this.uploadTimer = setTimeout(() => this.processBatch(), 0);
+    }
+  }
 
   // Reload any persisted-but-unsent files after a service-worker respawn and resume
   // draining. Returns the resulting pending count so the owner can arm its alarm.
@@ -127,7 +155,9 @@ export class BatchUploader {
   }
 
   async processBatch() {
-    if (this.isUploading || this.pendingQueue.length === 0) {
+    // Skip while an auth-pause is in effect (DEBT D41): the token is expired/rejected, so uploading
+    // would just 401 again and re-pause. resumeUploads() (on re-login) lifts this.
+    if (this.isUploading || this.pendingQueue.length === 0 || this.authPaused) {
       return;
     }
 
@@ -174,6 +204,17 @@ export class BatchUploader {
         console.warn('Dropping stale-epoch batch after outbox clear (tenant switch)');
         this.stats.droppedFiles += batch.length;
         await this.forget(batch);
+      } else if (error.authExpired) {
+        // Auth expired/rejected mid-flight (DEBT D41): DON'T drop — these bytes upload fine once
+        // re-authenticated. Re-queue and PAUSE the drain (processBatch's guard skips while paused)
+        // so we don't loop 401s; fire onAuthFailure so the owner can show a "session expired" state.
+        // resumeUploads() (on re-login) lifts the pause and drains the backlog.
+        console.warn('Upload rejected (auth expired) — pausing uploads, batch kept:', error.status);
+        this.pendingQueue.unshift(...batch);
+        this.authPaused = true;
+        if (this.onAuthFailure) {
+          try { this.onAuthFailure(error.status); } catch (e) { /* owner hook is best-effort */ }
+        }
       } else {
         // Transient failure (network / 5xx / 429): put the batch back and retry.
         console.error('Batch upload failed (will retry):', error);
@@ -188,7 +229,7 @@ export class BatchUploader {
     } finally {
       this.isUploading = false;
 
-      if (this.pendingQueue.length > 0 && !this.isFlushing) {
+      if (this.pendingQueue.length > 0 && !this.isFlushing && !this.authPaused) {
         this.uploadTimer = setTimeout(() => {
           this.processBatch();
         }, this.batchInterval);
@@ -227,7 +268,10 @@ export class BatchUploader {
 
     this.isFlushing = false;
 
-    if (this.pendingQueue.length > 0) {
+    // Don't arm a drain timer while auth-paused (DEBT D41; consistency with the finally re-arm
+    // guard): it would only fire once and no-op via processBatch's authPaused guard. resumeUploads()
+    // re-arms on re-login.
+    if (this.pendingQueue.length > 0 && !this.authPaused) {
       this.uploadTimer = setTimeout(() => {
         this.processBatch();
       }, this.batchInterval);
@@ -291,10 +335,13 @@ export class BatchUploader {
       const errorText = await response.text();
       const error = new Error(`HTTP ${response.status}: ${errorText}`);
       error.status = response.status;
-      // 4xx (except 429 Too Many Requests) are permanent — the payload is invalid
-      // and will never be accepted, so it must not be re-queued. Everything else
-      // (network failure, 5xx, 429) is transient and safe to retry.
-      error.retriable = !(response.status >= 400 && response.status < 500 && response.status !== 429);
+      // 401/403 mean the login token expired or was rejected mid-capture (DEBT D41): those bytes are
+      // valid once re-authenticated, so they are RETRIABLE (re-queued, never dropped) and flagged
+      // authExpired so processBatch PAUSES the drain instead of looping. Other 4xx (not 429/401/403)
+      // stay permanent — an invalid payload will never be accepted, so re-queueing loops forever.
+      // Everything else (network failure, 5xx, 429) is transient and safe to retry.
+      error.authExpired = response.status === 401 || response.status === 403;
+      error.retriable = !(response.status >= 400 && response.status < 500 && ![429, 401, 403].includes(response.status));
       throw error;
     }
 
@@ -388,6 +435,9 @@ export class BatchUploader {
       pendingQueueLength: this.pendingQueue.length,
       endpoint: this.apiEndpoint,
       isUploading: this.isUploading,
+      // Auth-expiry pause (DEBT D41): the single source of truth for the popup's "session expired"
+      // banner. True => a 401/403 paused the drain; re-login (resumeUploads) clears it.
+      authPaused: this.authPaused,
       paired: this.lastPaired,
       // The engagement the current session is bound to (null => Standalone). Surfaced so the
       // popup's Active-engagement display reflects the REAL binding the uploader stamps, not a

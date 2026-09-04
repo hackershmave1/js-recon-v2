@@ -48,6 +48,10 @@ export function App() {
   const [toast, setToast] = useState(null);
   const [connState, setConnState] = useState('ok');
   const [latency, setLatency] = useState('');
+  // Force the sign-in view while a (now-expired) token is still held — the re-auth path for a
+  // 401/403 upload pause (DEBT D41). Cleared on a successful sign-in. A same-tenant re-login
+  // refreshes the token WITHOUT rotating the capture session, so the buffered outbox resumes.
+  const [forceLogin, setForceLogin] = useState(false);
   const [newRule, setNewRule] = useState('');
   // Decoupled analysis: status of the on-demand backend job + its per-file progress,
   // which drives the captures feed's ingested→analyzing→analyzed lifecycle.
@@ -209,6 +213,7 @@ export function App() {
       setProjectId(null);
       api.listProjects().then((r) => { if (r && Array.isArray(r.projects)) setProjects(r.projects); });
       setView('home');
+      setForceLogin(false);   // leave the re-auth view once signed back in (D41)
       showToast(`Signed in${res.tenant?.name ? ` · ${res.tenant.name}` : ''}`);
     }
     return res || { success: false };
@@ -298,8 +303,16 @@ export function App() {
     if (res?.success) {
       showToast(res.started ? 'Analysis started' : (res.message || 'Analysis already running'));
       setAnalysis((a) => ({ ...a, status: 'running' }));
+      return;
+    }
+    setAnalysis((a) => ({ ...a, status: 'idle' }));
+    // Analyze is blocked until captures finish uploading, so it can't run on a partial set (D43c).
+    // An expired session will never drain without re-auth, so it reads differently from slow uploads.
+    if (res?.reason === 'session_expired') {
+      showToast('Session expired — sign in to finish uploading', 'error');
+    } else if (res?.reason === 'pending_uploads') {
+      showToast(`${res.pending || 'Some'} captures still uploading — try again shortly`, 'warn');
     } else {
-      setAnalysis((a) => ({ ...a, status: 'idle' }));
       showToast(res?.error === 'timeout' ? 'Analyze timed out' : 'Analyze failed', 'error');
     }
   }
@@ -362,7 +375,7 @@ export function App() {
     signIn,
     version: api.extensionVersion()
   };
-  if (!settings.authToken) {
+  if (!settings.authToken || forceLogin) {
     return (
       <div class="pp" style={{
         width: '384px', background: C.card, border: `1px solid ${C.lineStrong}`,
@@ -442,6 +455,11 @@ export function App() {
 
   const homeVm = {
     capturing: status.isCapturing,
+    // Auth-expiry banner (DEBT D41): single source of truth is the uploader's authPaused, surfaced
+    // via getStatus. reauth() shows the sign-in form without logging out, so a same-tenant re-login
+    // refreshes the token and resumes the paused outbox without rotating the capture session.
+    sessionExpired: status?.uploader?.authPaused === true,
+    reauth: () => setForceLogin(true),
     connectionLabel,
     deliveryHealth: health,
     delivery: deliveryVm,
@@ -528,7 +546,7 @@ export function App() {
     toggleSubdomains: () => patchSettings({ includeSubdomains: !(settings.includeSubdomains !== false) }),
     outOfScopeMode: settings.outOfScopeMode || 'tag',
     setOutOfScopeMode: (m) => patchSettings({ outOfScopeMode: m }),
-    maxAssetMb: settings.maxAssetMb || 8,
+    maxAssetMb: settings.maxAssetMb || 10,
     setMaxAssetMb: (n) => patchSettings({ maxAssetMb: n }),
     denyDefaultProfile: settings.denyDefaultProfile !== false,
     toggleDefaultProfile: () => patchSettings({ denyDefaultProfile: !(settings.denyDefaultProfile !== false) }),

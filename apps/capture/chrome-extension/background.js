@@ -39,6 +39,9 @@ class JSExtractor {
     this.capturedHashes = new Map(); // hash -> {url, capturedAt} (for deduplication)
     this.processingQueue = [];
     this.isCapturing = false;
+    // One-shot guard so a run of 401s during an auth-expiry episode fires a single "session
+    // expired" notification, not one per failed batch (DEBT D41). Reset on a successful (re-)login.
+    this.authNotified = false;
     this.settings = null;
     this.sessionStore = new SessionStore();
     // Placeholder id for the brief window before initialize() restores the persisted
@@ -146,6 +149,9 @@ class JSExtractor {
     // let it clear the flush alarm once fully drained.
     this.batchUploader.setStore(this.outboxStore);
     this.batchUploader.setOnDrained(() => this.reconcileFlushAlarm(false));
+    // Auth-expiry (DEBT D41): when a 401/403 pauses the uploader, surface a "session expired"
+    // notification + badge. The uploader keeps the batch (re-queued); re-login resumes the drain.
+    this.batchUploader.setOnAuthFailure((status) => this.handleAuthExpired(status));
 
     // NOTE: listeners are registered SYNCHRONOUSLY at module load (see bootstrap at the
     // bottom), not here — MV3 tears the worker down and routes the waking event only to
@@ -426,7 +432,7 @@ class JSExtractor {
 
     // Per-asset size cap (popup "Max asset size" slider). Skips the single file
     // without stopping capture — unlike the hard limits in enforceLimits().
-    const maxAssetBytes = (this.settings.maxAssetMb || 8) * 1024 * 1024;
+    const maxAssetBytes = (this.settings.maxAssetMb || 10) * 1024 * 1024;
     if (contentByteLength > maxAssetBytes) {
       this.recordProcessingFailure(
         'asset_too_large',
@@ -496,11 +502,22 @@ class JSExtractor {
       needsServerProcessing: sourceMapData !== null || dependencies.length > 0
     };
 
-    // Track both URL and content hash for version-aware deduplication
+    // Track both URL and content hash for version-aware deduplication (in-memory).
     this.capturedFiles.set(url, fileObject);
     this.updateBadge();
     this.capturedHashes.set(contentHash, {url: url, capturedAt: fileObject.capturedAt});
-    // Persist the dedup entry so a respawn won't re-fetch/re-hash/re-upload this file.
+
+    // Persist the OUTBOX entry BEFORE the durable dedup entry (DEBT D43d): a worker teardown in the
+    // gap must never leave a file marked "seen" (dedup) yet never queued for upload — that dropped
+    // it permanently. enqueue persists to the outbox first; the in-memory capturedHashes above
+    // still guards same-session re-capture regardless of this ordering.
+    await this.batchUploader.enqueue(fileObject);
+    // Durable pending work now exists — ensure the cold-respawn flush alarm is armed.
+    this.reconcileFlushAlarm(true);
+
+    // Persist the dedup entry so a respawn won't re-fetch/re-hash/re-upload this file. Safe after
+    // enqueue: the file is already durably queued, so a crash before this line just re-uploads it
+    // once on respawn (the server dedupes on session_id, content_hash).
     try { await this.dedupStore.put(contentHash, { contentHash, url, capturedAt: fileObject.capturedAt }); }
     catch (e) { /* dedup is an optimization; a miss just re-uploads (server dedupes) */ }
     // Keep the persisted counter projection in step so a worker teardown can't reset it to 0.
@@ -535,10 +552,6 @@ class JSExtractor {
         });
       }
     }
-
-    await this.batchUploader.enqueue(fileObject);
-    // There is now durable pending work — ensure the cold-respawn flush alarm exists.
-    this.reconcileFlushAlarm(true);
 
     this.notifyUI({
       action: 'fileProcessed',
@@ -815,9 +828,11 @@ class JSExtractor {
       authTenantId: result.authTenantId || '',
       muteNoise: result.muteNoise !== false,
       outOfScopeMode: result.outOfScopeMode || 'tag',
-      // Clamp to the 10 MB backend ceiling so a legacy stored value (from the old
+      // Default 10 MB to match the backend ceiling (settings.max_upload_bytes) and the
+      // server-advertised capture config (maxAssetMb: 10); an 8 MB default silently skipped
+      // 8-10 MB main bundles (DEBT D43b). Clamp to 10 so a legacy stored value (from the old
       // 25 MB slider) can't wave through files the server will 422.
-      maxAssetMb: Math.min(10, typeof result.maxAssetMb === 'number' ? result.maxAssetMb : 8),
+      maxAssetMb: Math.min(10, typeof result.maxAssetMb === 'number' ? result.maxAssetMb : 10),
       denyDefaultProfile: result.denyDefaultProfile !== false,
       denyRules: Array.isArray(result.denyRules) ? result.denyRules : DEFAULT_DENY_RULES
     };
@@ -992,10 +1007,29 @@ class JSExtractor {
       const n = this.capturedFiles.size;
       const up = this.batchUploader.getStats();
       const bad = !!up.lastError || (up.droppedFiles || 0) > 0 || up.paired === false ||
-        (this.processingStats.failedFiles || 0) > 0;
+        up.authPaused === true || (this.processingStats.failedFiles || 0) > 0;
       chrome.action.setBadgeText({ text: n > 999 ? '999+' : String(n) });
       chrome.action.setBadgeBackgroundColor({ color: bad ? '#ff8a47' : '#4ea86b' });
     } catch (e) { /* action API unavailable in this context */ }
+  }
+
+  // Auth token expired/rejected mid-capture (DEBT D41). The uploader has already re-queued the
+  // batch and paused the drain (authPaused, surfaced via getStatus so the popup shows a "session
+  // expired — sign in again" banner). We KEEP capturing so nothing is lost: new files buffer to the
+  // durable outbox and flush on re-auth. Fire ONE notification per episode (authNotified guard) so
+  // repeated 401s don't spam; refresh the badge to the unhealthy colour.
+  handleAuthExpired(status) {
+    this.updateBadge();
+    if (this.authNotified) return;
+    this.authNotified = true;
+    try {
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icons/icon48.png',
+        title: 'Session expired',
+        message: `Sign in again to keep uploading captures (auth ${status || 'expired'}). Capture continues; nothing is lost.`
+      });
+    } catch (e) { /* notifications API unavailable in this context */ }
   }
 
   // Central login: authenticate to the workspace and persist the session token + identity so
@@ -1029,6 +1063,11 @@ class JSExtractor {
         });
         await chrome.storage.local.set(this.settings);
         this.batchUploader.setAuthToken(this.settings.authToken);
+        // Re-auth: lift any auth-expiry pause and drain the buffered outbox under the fresh token
+        // (DEBT D41). Unconditional by design — tokens can repeat within a second, so the resume
+        // must NOT be gated on a token change. Re-arm the notification for a future expiry.
+        this.batchUploader.resumeUploads();
+        this.authNotified = false;
         sendResponse({ success: true, user: this.settings.authUser, tenant: result.tenant || null, role: result.role || '' });
         return;
       }

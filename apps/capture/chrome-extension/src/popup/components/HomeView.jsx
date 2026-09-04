@@ -247,6 +247,33 @@ export function HomeView({ vm }) {
         }}><GearIcon /></button>
       </div>
 
+      {/* session-expired banner — the login token expired/was rejected mid-capture (DEBT D41).
+          Capture keeps running and buffers to the durable outbox; only uploads are paused until
+          re-auth. Always escapable via "Sign in again", which refreshes the token without dropping
+          the capture session. Single source of truth: uploader.authPaused (via getStatus). */}
+      {vm.sessionExpired && (
+        <div style={{ padding: '13px 17px 0' }}>
+          <div style={{
+            background: 'rgba(255,138,71,0.1)', border: `1px solid ${C.orange}`,
+            borderRadius: '11px', padding: '11px 13px'
+          }}>
+            <div style={{ fontSize: '11.5px', color: C.orange, fontWeight: 700, marginBottom: '4px' }}>
+              Session expired — uploads paused
+            </div>
+            <div style={{ fontSize: '10.5px', color: C.faint, marginBottom: '9px', lineHeight: 1.5 }}>
+              Capture is still running and buffered locally — sign in again to resume uploading. Nothing is lost.
+            </div>
+            <button onClick={vm.reauth} style={{
+              width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
+              padding: '9px', borderRadius: '9px', border: 'none', background: C.orange, color: C.onLime,
+              cursor: 'pointer', fontSize: '12px', fontWeight: 700
+            }}>
+              Sign in again
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* capture target card */}
       <div style={{ padding: '15px 17px' }}>
         <div style={{
