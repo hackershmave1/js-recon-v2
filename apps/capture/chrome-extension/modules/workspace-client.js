@@ -102,6 +102,20 @@ export class WorkspaceClient {
         // A flush failure shouldn't block analyzing what did upload.
         console.warn('Flush before analyze failed:', e);
       }
+      // Don't analyze on a PARTIAL set (DEBT D43c): if captures are still queued, OR a batch is
+      // mid-flight (pendingQueueLength drops to 0 the instant a batch is spliced out for upload,
+      // before it lands — so isUploading must be checked too), analyzing now would run on fewer
+      // files than were captured yet report "complete ✓". Block and tell the caller why, so a
+      // genuinely-expired session (which will never drain without re-auth) reads differently from
+      // uploads that are merely slow.
+      const st = this.batchUploader.getStats();
+      if ((st.pendingQueueLength || 0) > 0 || st.isUploading) {
+        return {
+          success: false,
+          reason: st.authPaused ? 'session_expired' : 'pending_uploads',
+          pending: st.pendingQueueLength || 0
+        };
+      }
     }
     const target = `${this.resolveApiBase()}/api/sessions/${encodeURIComponent(this.getSessionId())}/analyze/start`;
     const controller = new AbortController();

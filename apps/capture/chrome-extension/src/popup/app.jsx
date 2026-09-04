@@ -298,8 +298,16 @@ export function App() {
     if (res?.success) {
       showToast(res.started ? 'Analysis started' : (res.message || 'Analysis already running'));
       setAnalysis((a) => ({ ...a, status: 'running' }));
+      return;
+    }
+    setAnalysis((a) => ({ ...a, status: 'idle' }));
+    // Analyze is blocked until captures finish uploading, so it can't run on a partial set (D43c).
+    // An expired session will never drain without re-auth, so it reads differently from slow uploads.
+    if (res?.reason === 'session_expired') {
+      showToast('Session expired — sign in to finish uploading', 'error');
+    } else if (res?.reason === 'pending_uploads') {
+      showToast(`${res.pending || 'Some'} captures still uploading — try again shortly`, 'warn');
     } else {
-      setAnalysis((a) => ({ ...a, status: 'idle' }));
       showToast(res?.error === 'timeout' ? 'Analyze timed out' : 'Analyze failed', 'error');
     }
   }
