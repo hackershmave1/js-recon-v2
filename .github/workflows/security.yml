@@ -56,9 +56,29 @@ jobs:
         working-directory: apps/platform/web
         run: |
           npm ci
-          npm audit --audit-level=high
+          # npm is retiring the legacy /audits/quick endpoint and it intermittently returns HTTP
+          # 400 ("audit endpoint returned an error"), which was failing this advisory job (DEBT D6)
+          # for reasons unrelated to the dependency tree. Tolerate a transient endpoint/registry
+          # error, but STILL fail on a real high/critical advisory so the check can't go blind.
+          if npm audit --audit-level=high 2> audit.err; then
+            echo "npm audit clean"
+          elif grep -qiE 'audit endpoint returned an error|Bad Request|ENETUNREACH|ECONNRESET|EAI_AGAIN|ETIMEDOUT|socket hang up|network' audit.err; then
+            echo "::warning::npm audit endpoint/registry error tolerated (npm retiring /audits/quick)"; cat audit.err >&2
+          else
+            cat audit.err >&2; exit 1
+          fi
       - name: chrome-extension
         working-directory: apps/capture/chrome-extension
         run: |
           npm ci
-          npm audit --audit-level=high
+          # npm is retiring the legacy /audits/quick endpoint and it intermittently returns HTTP
+          # 400 ("audit endpoint returned an error"), which was failing this advisory job (DEBT D6)
+          # for reasons unrelated to the dependency tree. Tolerate a transient endpoint/registry
+          # error, but STILL fail on a real high/critical advisory so the check can't go blind.
+          if npm audit --audit-level=high 2> audit.err; then
+            echo "npm audit clean"
+          elif grep -qiE 'audit endpoint returned an error|Bad Request|ENETUNREACH|ECONNRESET|EAI_AGAIN|ETIMEDOUT|socket hang up|network' audit.err; then
+            echo "::warning::npm audit endpoint/registry error tolerated (npm retiring /audits/quick)"; cat audit.err >&2
+          else
+            cat audit.err >&2; exit 1
+          fi
