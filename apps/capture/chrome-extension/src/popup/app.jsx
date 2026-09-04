@@ -528,7 +528,7 @@ export function App() {
     toggleSubdomains: () => patchSettings({ includeSubdomains: !(settings.includeSubdomains !== false) }),
     outOfScopeMode: settings.outOfScopeMode || 'tag',
     setOutOfScopeMode: (m) => patchSettings({ outOfScopeMode: m }),
-    maxAssetMb: settings.maxAssetMb || 8,
+    maxAssetMb: settings.maxAssetMb || 10,
     setMaxAssetMb: (n) => patchSettings({ maxAssetMb: n }),
     denyDefaultProfile: settings.denyDefaultProfile !== false,
     toggleDefaultProfile: () => patchSettings({ denyDefaultProfile: !(settings.denyDefaultProfile !== false) }),

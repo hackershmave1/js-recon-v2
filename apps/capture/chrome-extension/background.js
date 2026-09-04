@@ -426,7 +426,7 @@ class JSExtractor {
 
     // Per-asset size cap (popup "Max asset size" slider). Skips the single file
     // without stopping capture — unlike the hard limits in enforceLimits().
-    const maxAssetBytes = (this.settings.maxAssetMb || 8) * 1024 * 1024;
+    const maxAssetBytes = (this.settings.maxAssetMb || 10) * 1024 * 1024;
     if (contentByteLength > maxAssetBytes) {
       this.recordProcessingFailure(
         'asset_too_large',
@@ -815,9 +815,11 @@ class JSExtractor {
       authTenantId: result.authTenantId || '',
       muteNoise: result.muteNoise !== false,
       outOfScopeMode: result.outOfScopeMode || 'tag',
-      // Clamp to the 10 MB backend ceiling so a legacy stored value (from the old
+      // Default 10 MB to match the backend ceiling (settings.max_upload_bytes) and the
+      // server-advertised capture config (maxAssetMb: 10); an 8 MB default silently skipped
+      // 8-10 MB main bundles (DEBT D43b). Clamp to 10 so a legacy stored value (from the old
       // 25 MB slider) can't wave through files the server will 422.
-      maxAssetMb: Math.min(10, typeof result.maxAssetMb === 'number' ? result.maxAssetMb : 8),
+      maxAssetMb: Math.min(10, typeof result.maxAssetMb === 'number' ? result.maxAssetMb : 10),
       denyDefaultProfile: result.denyDefaultProfile !== false,
       denyRules: Array.isArray(result.denyRules) ? result.denyRules : DEFAULT_DENY_RULES
     };
