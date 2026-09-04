@@ -32,8 +32,10 @@ assert.ok(/contentHash/.test(projBody) && /secretCount/.test(projBody), 'project
 assert.ok(/rehydrateDedup\(\);[\s\S]{0,200}rehydrateCapturedFilesMeta\(\)/.test(bg),
   'initialize() rehydrates the counter after the dedup set');
 
-// A capture schedules a persist; a session reset clears the persisted projection.
-assert.ok(/capturedFiles\.set\(url, fileObject\);[\s\S]{0,700}schedulePersistCapturedMeta\(\)/.test(bg),
+// A capture schedules a persist; a session reset clears the persisted projection. (Window widened
+// for the D43d reorder, which added the outbox-before-dedup enqueue + explanatory comments between
+// recording the file and scheduling the persist; still bounded so the two stay in the same region.)
+assert.ok(/capturedFiles\.set\(url, fileObject\);[\s\S]{0,1400}schedulePersistCapturedMeta\(\)/.test(bg),
   'processFile schedules a persist after recording a file');
 assert.ok((bg.match(/this\.clearCapturedFilesMeta\(\)/g) || []).length >= 2,
   'clearFiles and newSession both clear the persisted projection');
