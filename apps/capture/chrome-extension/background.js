@@ -39,6 +39,9 @@ class JSExtractor {
     this.capturedHashes = new Map(); // hash -> {url, capturedAt} (for deduplication)
     this.processingQueue = [];
     this.isCapturing = false;
+    // One-shot guard so a run of 401s during an auth-expiry episode fires a single "session
+    // expired" notification, not one per failed batch (DEBT D41). Reset on a successful (re-)login.
+    this.authNotified = false;
     this.settings = null;
     this.sessionStore = new SessionStore();
     // Placeholder id for the brief window before initialize() restores the persisted
@@ -146,6 +149,9 @@ class JSExtractor {
     // let it clear the flush alarm once fully drained.
     this.batchUploader.setStore(this.outboxStore);
     this.batchUploader.setOnDrained(() => this.reconcileFlushAlarm(false));
+    // Auth-expiry (DEBT D41): when a 401/403 pauses the uploader, surface a "session expired"
+    // notification + badge. The uploader keeps the batch (re-queued); re-login resumes the drain.
+    this.batchUploader.setOnAuthFailure((status) => this.handleAuthExpired(status));
 
     // NOTE: listeners are registered SYNCHRONOUSLY at module load (see bootstrap at the
     // bottom), not here — MV3 tears the worker down and routes the waking event only to
@@ -1001,10 +1007,29 @@ class JSExtractor {
       const n = this.capturedFiles.size;
       const up = this.batchUploader.getStats();
       const bad = !!up.lastError || (up.droppedFiles || 0) > 0 || up.paired === false ||
-        (this.processingStats.failedFiles || 0) > 0;
+        up.authPaused === true || (this.processingStats.failedFiles || 0) > 0;
       chrome.action.setBadgeText({ text: n > 999 ? '999+' : String(n) });
       chrome.action.setBadgeBackgroundColor({ color: bad ? '#ff8a47' : '#4ea86b' });
     } catch (e) { /* action API unavailable in this context */ }
+  }
+
+  // Auth token expired/rejected mid-capture (DEBT D41). The uploader has already re-queued the
+  // batch and paused the drain (authPaused, surfaced via getStatus so the popup shows a "session
+  // expired — sign in again" banner). We KEEP capturing so nothing is lost: new files buffer to the
+  // durable outbox and flush on re-auth. Fire ONE notification per episode (authNotified guard) so
+  // repeated 401s don't spam; refresh the badge to the unhealthy colour.
+  handleAuthExpired(status) {
+    this.updateBadge();
+    if (this.authNotified) return;
+    this.authNotified = true;
+    try {
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icons/icon48.png',
+        title: 'Session expired',
+        message: `Sign in again to keep uploading captures (auth ${status || 'expired'}). Capture continues; nothing is lost.`
+      });
+    } catch (e) { /* notifications API unavailable in this context */ }
   }
 
   // Central login: authenticate to the workspace and persist the session token + identity so
@@ -1038,6 +1063,11 @@ class JSExtractor {
         });
         await chrome.storage.local.set(this.settings);
         this.batchUploader.setAuthToken(this.settings.authToken);
+        // Re-auth: lift any auth-expiry pause and drain the buffered outbox under the fresh token
+        // (DEBT D41). Unconditional by design — tokens can repeat within a second, so the resume
+        // must NOT be gated on a token change. Re-arm the notification for a future expiry.
+        this.batchUploader.resumeUploads();
+        this.authNotified = false;
         sendResponse({ success: true, user: this.settings.authUser, tenant: result.tenant || null, role: result.role || '' });
         return;
       }
