@@ -54,7 +54,8 @@ docker compose run --rm api python -m recon.bootstrap seed-admin \
 ### First run — runtime capture (post-auth JS)
 
 A static crawl only sees JS served over the wire. To capture the JS an app loads **after login**
-(lazy/dynamic chunks, inline/`eval`'d code), use the extension:
+(lazy/dynamic chunks and inline `<script>` blocks; runtime-`eval`-generated code is out of scope),
+use the extension:
 
 1. `chrome://extensions` → Developer mode → **Load unpacked** → `apps/capture/chrome-extension`.
 2. In the popup, **sign in** to the workspace (same operator) and pick the engagement. Captures ride

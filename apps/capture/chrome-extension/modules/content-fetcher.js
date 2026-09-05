@@ -10,6 +10,34 @@ export class ContentFetcher {
     this.fetchTimeoutMs = 30000;
   }
 
+  // Single-shot GET, NO retry — for SPECULATIVE probes (the conventional `<file>.js.map`,
+  // DEBT D45c) where a miss is the common case. ContentFetcher.fetch retries 3x with
+  // 1s+2s backoff; on the strictly-serial capture queue that would add ~3 requests + ~3s
+  // of latency for EVERY map-less in-scope file (review Finding A). One attempt, one abort
+  // timeout, never throws. Not cached (a probe result shouldn't shadow a real later fetch).
+  async fetchOnce(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.fetchTimeoutMs);
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        credentials: 'include',
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        return { success: false, error: `HTTP ${response.status}` };
+      }
+      return { success: true, content: await response.text() };
+    } catch (error) {
+      const msg = error && error.name === 'AbortError'
+        ? `timeout after ${this.fetchTimeoutMs}ms`
+        : (error && error.message ? error.message : 'fetch failed');
+      return { success: false, error: msg };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async fetch(url, options = {}) {
     if (this.cache.has(url)) {
       return { success: true, content: this.cache.get(url), cached: true };
