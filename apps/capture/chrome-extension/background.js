@@ -13,6 +13,9 @@ import { classifyAsset, isThirdParty, matchesDenylist, countSecrets } from './mo
 import { listProjectsWithCache } from './modules/projects-cache.js';
 import { settingsFromConfig } from './modules/project-config.js';
 import { normalizeRootDomains } from './modules/normalize-scope.js';
+import { isRelevantInlineScript } from './modules/inline-relevance.js';
+import { normalizeObservedUrl, isApiIshObservation, isTelemetryPath } from './modules/observation-filter.js';
+import { prepareRequestBody, redactBody, capBody } from './modules/body-capture.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -26,7 +29,23 @@ const DEFAULT_DENY_RULES = [
 
 // Messages the popup/content-script send without waiting for a response. The onMessage
 // listener must NOT hold the response channel open for these (see setupListeners).
-const FIRE_AND_FORGET_ACTIONS = new Set(['dynamicScriptDetected']);
+const FIRE_AND_FORGET_ACTIONS = new Set(['dynamicScriptDetected', 'inlineScriptDetected', 'responseBodyObserved']);
+
+// Per-page cap on captured inline <script> bodies (DEBT D45a). A churny SPA can inject a fresh
+// inline script per route; the content-hash dedup + relevance filter thin most, this bounds the
+// tail so one busy origin can't flood the outbox.
+const INLINE_PER_PAGE_CAP = 100;
+
+// Cap on distinct runtime request observations kept per session (DEBT D45b1). Observations are
+// tiny ({method, url}) and deduped; this bounds a chatty SPA's long-poll / notification churn.
+const OBSERVATION_CAP = 1000;
+
+// Body-capture caps (DEBT D45b2): per-body char caps + a per-session total so captured bodies
+// can't bloat the analyze payload. Beyond the total, observations still carry method+url (endpoint
+// confirmation keeps working), just no body.
+const REQ_BODY_CAP = 64 * 1024;
+const RESP_BODY_CAP = 128 * 1024;
+const BODY_TOTAL_CAP = 2 * 1024 * 1024;
 
 class JSExtractor {
   constructor() {
@@ -52,6 +71,21 @@ class JSExtractor {
     // app JS served from a separate apex (e.g. a CDN) falls outside the target root and is dropped;
     // surfacing the host lets the operator one-click add it instead of silently missing that bundle.
     this.outOfScopeHosts = new Map();
+    // Per-origin count of captured inline <script> bodies this session (DEBT D45a), for the
+    // INLINE_PER_PAGE_CAP flood guard. Reset on session rotation (newSession).
+    this.inlinePerPage = new Map();
+    // Runtime API-call observations this session (DEBT D45b1): { method, url } the app actually
+    // issued. Sent with analyze/start so the platform's correlate stage promotes a statically-
+    // SUSPECTED endpoint to CONFIRMED. observationKeys dedups on "METHOD url". Persisted
+    // (debounced) so they survive an MV3 teardown before the operator hits Analyze.
+    this.observations = [];
+    this.observationKeys = new Set();
+    this.observationsKey = 'capturedObservations';
+    this._obsPersistTimer = null;
+    // Request bodies captured via onBeforeRequest, keyed by requestId until onCompleted attaches
+    // them to the observation (DEBT D45b2). bodyBytesUsed bounds total captured body bytes/session.
+    this.pendingRequestBodies = new Map();
+    this.bodyBytesUsed = 0;
     this.processingStats = {
       processedFiles: 0,
       failedFiles: 0,
@@ -60,6 +94,11 @@ class JSExtractor {
       lastFailureMessage: null
     };
     this.outOfScopeHosts.clear();
+    this.inlinePerPage.clear();
+    this.observations = [];
+    this.observationKeys.clear();
+    this.pendingRequestBodies.clear();
+    this.bodyBytesUsed = 0;
 
     this.limits = {
       // NOTE: must not exceed the backend's per-file cap (SecurityValidator.
@@ -89,7 +128,9 @@ class JSExtractor {
     this.workspaceClient = new WorkspaceClient({
       getSettings: () => this.settings,
       getSessionId: () => this.sessionId,
-      batchUploader: this.batchUploader
+      batchUploader: this.batchUploader,
+      // Runtime request observations to ship with analyze/start (DEBT D45b1).
+      getObservations: () => this.observations
     });
     // Durable stores (IndexedDB) that outlive the service worker: the upload outbox
     // (unsent files) and the dedup set (hash -> {url, capturedAt}). Separate DBs to
@@ -121,6 +162,8 @@ class JSExtractor {
 
   async initialize() {
     this.settings = await this.loadSettings();
+    // Register the opt-in main-world response-body hook if it's enabled (DEBT D45b2).
+    this.syncResponseBodyHook();
     // Restore the persisted session id (or mint one on first run) so a service-worker
     // respawn resumes the SAME backend session instead of fragmenting into a new one.
     this.sessionId = await this.sessionStore.loadOrCreate();
@@ -162,6 +205,8 @@ class JSExtractor {
     await this.rehydrateDedup();
     // Restore the popup's file/map/secret counters so a cold start doesn't read 0.
     await this.rehydrateCapturedFilesMeta();
+    // Restore runtime request observations so a teardown before Analyze doesn't lose them (D45b1).
+    await this.rehydrateObservations();
     // rehydrate() returns pending count, or -1 if the outbox READ failed. Treat both
     // "has files" and "unknown" as reasons to keep the flush alarm armed (fail safe).
     const pendingUploads = await this.batchUploader.rehydrate();
@@ -195,6 +240,39 @@ class JSExtractor {
         types: ["script"]
       },
       ["responseHeaders"]
+    );
+
+    // Runtime API-call observations (DEBT D45b1): XHR/fetch completions. We record ONLY
+    // { method, url } for CONFIRMING endpoints — never the response body (that is the opt-in
+    // main-world path). Same client-side scope/denylist gate as script capture.
+    chrome.webRequest.onCompleted.addListener(
+      (details) => { this.ready.then(() => this.recordObservation(details)); },
+      {
+        urls: ["<all_urls>"],
+        types: ["xmlhttprequest"]
+      },
+      ["responseHeaders"]
+    );
+
+    // Request BODIES (DEBT D45b2, on by default): onBeforeRequest is the only webRequest hook that
+    // exposes the request payload (GraphQL query / JSON) — no main world needed. Captured keyed by
+    // requestId and attached to the observation at onCompleted; redacted + capped in captureRequestBody.
+    chrome.webRequest.onBeforeRequest.addListener(
+      (details) => { this.ready.then(() => this.captureRequestBody(details)); },
+      {
+        urls: ["<all_urls>"],
+        types: ["xmlhttprequest"]
+      },
+      ["requestBody"]
+    );
+
+    // Drop a captured request body if the request errors (never completes) so the map can't leak.
+    chrome.webRequest.onErrorOccurred.addListener(
+      (details) => { this.ready.then(() => this.pendingRequestBodies.delete(details.requestId)); },
+      {
+        urls: ["<all_urls>"],
+        types: ["xmlhttprequest"]
+      }
     );
 
     chrome.webRequest.onErrorOccurred.addListener(
@@ -339,24 +417,31 @@ class JSExtractor {
 
     console.log('Processing:', url);
 
-    let contentResult = await this.contentFetcher.fetch(url, {});
+    let contentResult;
+    if (typeof metadata.inlineContent === 'string') {
+      // Inline <script> body already read from the DOM (DEBT D45a) — the synthetic URL isn't
+      // fetchable, so use the content in hand and skip the network fetch entirely.
+      contentResult = { success: true, content: metadata.inlineContent };
+    } else {
+      contentResult = await this.contentFetcher.fetch(url, {});
 
-    if (!contentResult.success) {
-      if (tabId >= 0) {
-        const fallback = await this.fetchViaContentScript(tabId, frameId, url);
-        if (fallback.success) {
-          contentResult = fallback;
+      if (!contentResult.success) {
+        if (tabId >= 0) {
+          const fallback = await this.fetchViaContentScript(tabId, frameId, url);
+          if (fallback.success) {
+            contentResult = fallback;
+          } else {
+            throw this.buildProcessingError(
+              'fetch_failed',
+              `Failed to fetch: ${contentResult.error}`
+            );
+          }
         } else {
           throw this.buildProcessingError(
             'fetch_failed',
             `Failed to fetch: ${contentResult.error}`
           );
         }
-      } else {
-        throw this.buildProcessingError(
-          'fetch_failed',
-          `Failed to fetch: ${contentResult.error}`
-        );
       }
     }
 
@@ -380,10 +465,23 @@ class JSExtractor {
     let sourceMapData = null;
     let sourceMapUrl = null;
     let detectedSourceMapUrl = null;
+    // How the map ref was found: 'comment' | 'header' | 'probe' (DEBT D45c). Null when none.
+    let sourceMapDetection = null;
     let sourceMapFetchStatus = this.settings.captureSourceMaps ? 'not_detected' : 'disabled';
     let sourceMapFetchError = null;
-    if (this.settings.captureSourceMaps) {
+    if (this.settings.captureSourceMaps && typeof metadata.inlineContent !== 'string') {
+      // 1) inline `//# sourceMappingURL=` comment (authoritative, existing path). Skipped for
+      // inline <script> bodies (DEBT D45a) — they carry no separate map ref, and probing the
+      // page URL + '.map' would be a wasted request per inline block.
       detectedSourceMapUrl = this.sourceMapDetector.detect(content, url);
+      if (detectedSourceMapUrl) {
+        sourceMapDetection = 'comment';
+      } else {
+        // 2) the `SourceMap:`/`X-SourceMap` response header the browser already gave us but
+        // detection never consulted (DEBT D45c). metadata.headers keys are lowercased.
+        detectedSourceMapUrl = this.sourceMapDetector.detectFromHeaders(metadata.headers, url);
+        if (detectedSourceMapUrl) sourceMapDetection = 'header';
+      }
 
       if (!detectedSourceMapUrl) {
         sourceMapFetchStatus = 'not_detected';
@@ -420,6 +518,30 @@ class JSExtractor {
         } else {
           sourceMapFetchStatus = this.classifySourceMapError(sourceMapResult.error);
           sourceMapFetchError = sourceMapResult.error || 'Fetch failed';
+        }
+      }
+
+      // 3) last resort — probe the conventional `<file>.js.map` sibling (DEBT D45c). Only
+      // when neither a comment nor a header pointed at a map. ONE request, NO retry (review
+      // Finding A) since a miss is the common case on the strictly-serial queue. Accept only
+      // a body that parses as a real map so a SPA 200-HTML fallback can't masquerade as one.
+      if (!sourceMapData && sourceMapFetchStatus === 'not_detected') {
+        const probeUrl = this.sourceMapDetector.conventionalMapUrl(url);
+        if (probeUrl) {
+          const probed = await this.contentFetcher.fetchOnce(probeUrl);
+          if (probed.success) {
+            try {
+              const parsed = JSON.parse(probed.content);
+              if (parsed && (parsed.version || parsed.sources || parsed.mappings)) {
+                sourceMapData = parsed;
+                sourceMapUrl = probeUrl;
+                sourceMapDetection = 'probe';
+                sourceMapFetchStatus = 'fetched';
+              }
+            } catch (e) {
+              // not JSON → no conventional map here; stay 'not_detected' (silent, expected).
+            }
+          }
         }
       }
     }
@@ -494,6 +616,7 @@ class JSExtractor {
       hasSourceMap: sourceMapData !== null,
       sourceMapUrl: sourceMapUrl,
       sourceMapContent: sourceMapData,
+      sourceMapDetection: sourceMapDetection,
       sourceMapFetchStatus: sourceMapFetchStatus,
       sourceMapFetchError: sourceMapFetchError,
       dependencies: dependencies,
@@ -788,6 +911,7 @@ class JSExtractor {
       'captureEverything',
       'performAnalysisOnUpload',
       'captureSourceMaps',
+      'captureResponseBodies',
       'resolveDependencies',
       'isCapturing',
       'captureAuthContext',
@@ -811,6 +935,8 @@ class JSExtractor {
       captureEverything: result.captureEverything === true,
       performAnalysisOnUpload: result.performAnalysisOnUpload === true,
       captureSourceMaps: result.captureSourceMaps !== false,
+      // Response-body capture is OPT-IN (posture: it collects response DATA) — default OFF (D45b2).
+      captureResponseBodies: result.captureResponseBodies === true,
       resolveDependencies: result.resolveDependencies !== false,
       isCapturing: result.isCapturing || false,
       captureAuthContext: result.captureAuthContext !== false,
@@ -940,7 +1066,9 @@ class JSExtractor {
       createProject: (req) => this.workspaceClient.createProject(req.project).then(sendResponse),
       login: (req) => this.login(req, sendResponse),
       logout: () => this.logout(sendResponse),
-      dynamicScriptDetected: (req) => this.handleDynamicScript(req, sender)
+      dynamicScriptDetected: (req) => this.handleDynamicScript(req, sender),
+      inlineScriptDetected: (req) => this.handleInlineScript(req, sender),
+      responseBodyObserved: (req) => this.handleResponseBody(req)
     };
 
     const handler = handlers[request.action];
@@ -972,6 +1100,231 @@ class JSExtractor {
     });
 
     this.scheduleQueueProcessing();
+  }
+
+  // An inline <script> body the content script read from the DOM (DEBT D45a). webRequest never
+  // sees inline scripts (they make no request) and the URL-keyed noise gate can't classify one
+  // (its synthetic URL is the in-scope page), so scope is applied on the PAGE url and a
+  // CONTENT-based relevance filter drops analytics/hydration noise (review Claim 3).
+  handleInlineScript(request, sender) {
+    if (!this.isCapturing) return;
+    if (!request || typeof request.content !== 'string') return;
+    const pageUrl = request.pageUrl || sender?.tab?.url;
+    if (!pageUrl) return;
+    if (!this.isInScope(pageUrl)) { this.noteOutOfScopeScript(pageUrl); return; }
+    if (this.shouldSkipUrl(pageUrl, pageUrl)) return;
+    if (!isRelevantInlineScript(request.content)) return;
+
+    // Per-page cap so a churny SPA can't flood the outbox (review Claim 4).
+    const origin = this.originOf(pageUrl);
+    const seen = this.inlinePerPage.get(origin) || 0;
+    if (seen >= INLINE_PER_PAGE_CAP) return;
+    this.inlinePerPage.set(origin, seen + 1);
+
+    // Synthetic URL keyed on the reported ordinal, not content hash. A full re-scan (reload/bfcache)
+    // reuses document-order ordinals, so a changed inline block at the same slot SUPERSEDES via
+    // processFile's changed-content branch. A mutation-added block (SPA soft-nav) gets a monotonic
+    // ordinal and instead accumulates — bounded by INLINE_PER_PAGE_CAP + content-hash dedup + the
+    // relevance filter (which drops the dominant __next_f/hydration flood), not by supersede.
+    const ordinal = Number.isInteger(request.ordinal) ? request.ordinal : seen;
+    const syntheticUrl = `${pageUrl}#inline-${ordinal}`;
+
+    const senderTabId = sender?.tab?.id;
+    const senderFrameId = sender?.frameId;
+    const tabId = Number.isInteger(senderTabId) ? senderTabId : -1;
+    const frameId = Number.isInteger(senderFrameId) ? senderFrameId : 0;
+
+    this.processingQueue.push({
+      metadata: {
+        url: syntheticUrl,
+        timestamp: request.timestamp || new Date().toISOString(),
+        initiator: pageUrl,
+        documentUrl: pageUrl,
+        method: 'GET',
+        contentType: 'application/javascript',
+        // Signals processFile to use this content directly (no network fetch — the synthetic
+        // URL isn't fetchable) and to skip the source-map paths (inline carries no map ref).
+        inlineContent: request.content
+      },
+      tabId: tabId,
+      frameId: frameId
+    });
+
+    this.scheduleQueueProcessing();
+  }
+
+  originOf(url) {
+    try { return new URL(url).origin; } catch (e) { return url || ''; }
+  }
+
+  // Record one runtime API call as a { method, url } observation (DEBT D45b1) for endpoint
+  // confirmation. NO body is captured here (that's the opt-in main-world path). Scope is enforced
+  // HERE because the platform's ingest scope is inert for pre-fetched captures, so this gate is
+  // the no-noise boundary for observations.
+  recordObservation(details) {
+    // Reclaim + delete the pending request body FIRST — before any early-return — so a body never
+    // orphans when we bail below (capture toggled off mid-flight, extension request, out of scope).
+    // A completed request always hits onCompleted, so this is the reliable cleanup point (review
+    // Finding 3).
+    const reqBody = this.pendingRequestBodies.get(details.requestId);
+    if (reqBody !== undefined) this.pendingRequestBodies.delete(details.requestId);
+    if (!this.isCapturing) return;
+    if (this.isExtensionRequest(details)) return;
+
+    const rawUrl = details.url;
+    if (!this.isInScope(rawUrl)) return;
+    if (this.shouldSkipUrl(rawUrl, details.documentUrl)) return;
+    if (isTelemetryPath(rawUrl)) return;
+    if (!isApiIshObservation(this.responseContentType(details.responseHeaders))) return;
+
+    const url = normalizeObservedUrl(rawUrl);
+    if (!url) return;
+    const method = (details.method || 'GET').toUpperCase();
+    const key = method + ' ' + url;
+    if (this.observationKeys.has(key)) return;
+    if (this.observationKeys.size >= OBSERVATION_CAP) return;
+    this.observationKeys.add(key);
+
+    const obs = { method, url };
+    // Attach the redacted request body if we captured one and we're under the total-body budget.
+    if (reqBody && this.bodyBytesUsed < BODY_TOTAL_CAP) {
+      obs.reqBody = reqBody;
+      this.bodyBytesUsed += reqBody.length;
+    }
+    this.observations.push(obs);
+    this.schedulePersistObservations();
+  }
+
+  // Capture an in-scope XHR/fetch REQUEST body (DEBT D45b2, on by default), keyed by requestId for
+  // recordObservation to attach. Redacted + capped before storage; gated by the same scope/denylist
+  // as observations, plus the per-session total-body budget.
+  captureRequestBody(details) {
+    if (!this.isCapturing) return;
+    if (this.isExtensionRequest(details)) return;
+    if (!details.requestBody) return;
+    const url = details.url;
+    if (!this.isInScope(url)) return;
+    if (this.shouldSkipUrl(url, details.documentUrl)) return;
+    if (this.bodyBytesUsed >= BODY_TOTAL_CAP) return;
+    if (this.pendingRequestBodies.size >= 512) return; // bound un-completed requests
+    const prepared = prepareRequestBody(details.requestBody, REQ_BODY_CAP);
+    if (!prepared || !prepared.text) return;
+    this.pendingRequestBodies.set(details.requestId, prepared.text);
+  }
+
+  // A RESPONSE body from the opt-in main-world hook (DEBT D45b2). Lower-trust (page-forgeable) —
+  // re-apply scope + denylist + telemetry + budget here (the hook can't see scope), redact, cap,
+  // and attach to the matching observation (dedup keeps one respBody per method+url).
+  handleResponseBody(request) {
+    if (!this.isCapturing) return;
+    if (!this.settings || this.settings.captureResponseBodies !== true) return;
+    if (!request || typeof request.url !== 'string' || typeof request.body !== 'string') return;
+    const rawUrl = request.url;
+    if (!this.isInScope(rawUrl)) return;
+    if (this.shouldSkipUrl(rawUrl, request.pageUrl)) return;
+    if (isTelemetryPath(rawUrl)) return;
+    // Apply the same API-ish content-type gate as recordObservation — the forgeable hook's own
+    // filter is not trusted in the worker (review nit).
+    if (!isApiIshObservation(request.contentType)) return;
+    if (this.bodyBytesUsed >= BODY_TOTAL_CAP) return;
+
+    const url = normalizeObservedUrl(rawUrl);
+    if (!url) return;
+    const method = (request.method || 'GET').toUpperCase();
+    const key = method + ' ' + url;
+    const respBody = capBody(redactBody(request.body), RESP_BODY_CAP);
+    if (!respBody) return;
+
+    let obs = null;
+    if (this.observationKeys.has(key)) {
+      for (let i = this.observations.length - 1; i >= 0; i--) {
+        const o = this.observations[i];
+        if (o.method + ' ' + o.url === key) { obs = o; break; }
+      }
+    }
+    if (!obs) {
+      if (this.observationKeys.size >= OBSERVATION_CAP) return;
+      this.observationKeys.add(key);
+      obs = { method, url };
+      this.observations.push(obs);
+    }
+    if (obs.respBody) return; // keep the first response body for this endpoint
+    obs.respBody = respBody;
+    this.bodyBytesUsed += respBody.length;
+    this.schedulePersistObservations();
+  }
+
+  // Register/unregister the opt-in main-world response-body hook (DEBT D45b2). A statically-declared
+  // content script can't be toggled, so it's registered dynamically ONLY while captureResponseBodies
+  // is on — the default build ships zero main-world code.
+  async syncResponseBodyHook() {
+    const want = !!(this.settings && this.settings.captureResponseBodies === true);
+    try {
+      if (!chrome.scripting || !chrome.scripting.getRegisteredContentScripts) return;
+      const existing = await chrome.scripting.getRegisteredContentScripts({ ids: ['recon-xhr-hook'] });
+      const has = Array.isArray(existing) && existing.length > 0;
+      if (want && !has) {
+        await chrome.scripting.registerContentScripts([{
+          id: 'recon-xhr-hook',
+          matches: ['<all_urls>'],
+          js: ['inject/xhr-hook.js'],
+          runAt: 'document_start',
+          world: 'MAIN',
+          allFrames: true
+        }]);
+      } else if (!want && has) {
+        await chrome.scripting.unregisterContentScripts({ ids: ['recon-xhr-hook'] });
+      }
+    } catch (e) {
+      // scripting API unavailable / register race — non-fatal (the feature just stays off).
+    }
+  }
+
+  responseContentType(responseHeaders) {
+    if (!Array.isArray(responseHeaders)) return '';
+    for (const h of responseHeaders) {
+      if (h && typeof h.name === 'string' && h.name.toLowerCase() === 'content-type') {
+        return h.value || '';
+      }
+    }
+    return '';
+  }
+
+  // Debounced persist of the observation list so it survives an MV3 teardown before the operator
+  // clicks Analyze (mirrors schedulePersistCapturedMeta). Best-effort — a miss just loses some
+  // endpoint-confirmations, never a capture.
+  schedulePersistObservations() {
+    if (this._obsPersistTimer) return;
+    this._obsPersistTimer = setTimeout(() => {
+      this._obsPersistTimer = null;
+      // Persist only { method, url } — never the captured bodies (review Finding 2). Bodies are
+      // best-effort enrichment; keeping them out of chrome.storage avoids writing (redacted) PII to
+      // disk for no benefit, since rehydrateObservations restores method+url only.
+      const lean = this.observations.map((o) => ({ method: o.method, url: o.url }));
+      chrome.storage.local.set({ [this.observationsKey]: lean }).catch(() => {});
+    }, 750);
+  }
+
+  async rehydrateObservations() {
+    try {
+      const stored = (await chrome.storage.local.get(this.observationsKey))[this.observationsKey];
+      if (!Array.isArray(stored)) return;
+      for (const o of stored) {
+        if (!o || typeof o.method !== 'string' || typeof o.url !== 'string') continue;
+        const key = o.method + ' ' + o.url;
+        if (this.observationKeys.has(key)) continue;
+        if (this.observationKeys.size >= OBSERVATION_CAP) break;
+        this.observationKeys.add(key);
+        this.observations.push({ method: o.method, url: o.url });
+      }
+    } catch (e) {
+      // no persisted observations / storage unavailable — start empty
+    }
+  }
+
+  clearObservationsStore() {
+    if (this._obsPersistTimer) { clearTimeout(this._obsPersistTimer); this._obsPersistTimer = null; }
+    try { chrome.storage.local.remove(this.observationsKey).catch(() => {}); } catch (e) { /* best effort */ }
   }
 
   // Capture just turned on: pull in the JS the ACTIVE tab already loaded. webRequest only sees
@@ -1114,6 +1467,7 @@ class JSExtractor {
     this.sessionId = await this.sessionStore.rotate();
     this.capturedFiles.clear();
     this.clearCapturedFilesMeta();
+    this.clearObservationsStore();
     this.capturedHashes.clear();
     this.dedupStore.clear().catch(() => {});
     this.authTracker.clear();
@@ -1128,6 +1482,11 @@ class JSExtractor {
       lastFailureMessage: null
     };
     this.outOfScopeHosts.clear();
+    this.inlinePerPage.clear();
+    this.observations = [];
+    this.observationKeys.clear();
+    this.pendingRequestBodies.clear();
+    this.bodyBytesUsed = 0;
     // Drop the engagement binding: clear the live uploader config AND the persisted snapshot so a
     // respawn can't re-bind the fresh session to the old engagement.
     this.batchUploader.setConfig(null);
@@ -1157,6 +1516,7 @@ class JSExtractor {
     this.sessionId = await this.sessionStore.rotate();
     this.capturedFiles.clear();
     this.clearCapturedFilesMeta();
+    this.clearObservationsStore();
     this.capturedHashes.clear();
     // Reset the persistent dedup set for the new session. The outbox is intentionally
     // NOT cleared — any still-unsent files carry their own (old) per-file session id.
@@ -1171,6 +1531,11 @@ class JSExtractor {
       lastFailureMessage: null
     };
     this.outOfScopeHosts.clear();
+    this.inlinePerPage.clear();
+    this.observations = [];
+    this.observationKeys.clear();
+    this.pendingRequestBodies.clear();
+    this.bodyBytesUsed = 0;
 
     // Apply the client-resolved effective config. The popup resolved (project.defaults +
     // per-session overrides) and sent the snapshot; here we map it onto the flat capture-gate
@@ -1215,6 +1580,9 @@ class JSExtractor {
 
   async stopCapture(sendResponse) {
     this.isCapturing = false;
+    // Drop request bodies captured for still-in-flight requests so a stop/start can't strand them
+    // in the pending map (review Finding 3); the completed-request path also self-cleans up-front.
+    this.pendingRequestBodies.clear();
     this.persistCaptureState(false);
     this.updateBadge();
     await this.batchUploader.flushAll();
@@ -1252,6 +1620,7 @@ class JSExtractor {
     this.capturedFiles.clear();
     this.updateBadge();
     this.clearCapturedFilesMeta();
+    this.clearObservationsStore();
     this.capturedHashes.clear();
     this.dedupStore.clear().catch(() => {});
     this.processingQueue = [];
@@ -1265,6 +1634,11 @@ class JSExtractor {
       lastFailureMessage: null
     };
     this.outOfScopeHosts.clear();
+    this.inlinePerPage.clear();
+    this.observations = [];
+    this.observationKeys.clear();
+    this.pendingRequestBodies.clear();
+    this.bodyBytesUsed = 0;
     sendResponse({ success: true });
   }
 
@@ -1309,6 +1683,8 @@ class JSExtractor {
       this.settings.captureAuthContext = true;
     }
     await chrome.storage.local.set(this.settings);
+    // Toggle the opt-in main-world response-body hook to match the new setting (DEBT D45b2).
+    this.syncResponseBodyHook();
     this.batchUploader.setEndpoint(this.workspaceClient.resolveApiBase());
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
     // Push a changed login token to the uploader (workspace-client reads it live via

@@ -548,6 +548,9 @@ export function App() {
     setOutOfScopeMode: (m) => patchSettings({ outOfScopeMode: m }),
     maxAssetMb: settings.maxAssetMb || 10,
     setMaxAssetMb: (n) => patchSettings({ maxAssetMb: n }),
+    // Opt-in API response-body capture (DEBT D45b2) — off by default (collects response DATA).
+    captureResponseBodies: settings.captureResponseBodies === true,
+    toggleResponseBodies: () => patchSettings({ captureResponseBodies: !(settings.captureResponseBodies === true) }),
     denyDefaultProfile: settings.denyDefaultProfile !== false,
     toggleDefaultProfile: () => patchSettings({ denyDefaultProfile: !(settings.denyDefaultProfile !== false) }),
     denyRules: settings.denyRules || [],

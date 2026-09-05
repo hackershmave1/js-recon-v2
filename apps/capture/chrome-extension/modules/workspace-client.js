@@ -8,10 +8,12 @@ export class WorkspaceClient {
   //   getSettings()  -> the live settings object (for workspaceUrl)
   //   getSessionId() -> the current session id (for the analyze endpoints)
   //   batchUploader  -> used only for the bounded pre-analyze flush
-  constructor({ getSettings, getSessionId, batchUploader } = {}) {
+  constructor({ getSettings, getSessionId, batchUploader, getObservations } = {}) {
     this.getSettings = typeof getSettings === 'function' ? getSettings : () => ({});
     this.getSessionId = typeof getSessionId === 'function' ? getSessionId : () => '';
     this.batchUploader = batchUploader || null;
+    // Runtime request observations to ship with analyze/start (DEBT D45b1); default none.
+    this.getObservations = typeof getObservations === 'function' ? getObservations : () => [];
   }
 
   // Workspace API origin (no trailing slash) for non-ingestion calls (health, analyze).
@@ -124,7 +126,8 @@ export class WorkspaceClient {
       const resp = await fetch(target, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
-        body: JSON.stringify({ options: {} }),
+        // observations: runtime { method, url } calls that confirm endpoints (DEBT D45b1).
+        body: JSON.stringify({ options: {}, observations: this.getObservations() || [] }),
         signal: controller.signal
       });
       clearTimeout(timer);
