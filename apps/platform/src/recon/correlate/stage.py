@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from redis import Redis
 
 from recon import storage
-from recon.correlate import match
+from recon.correlate import bodies, match
 from recon.db.base import tenant_session
 from recon.discover import queries as discover_queries
 from recon.domain import TOTAL_ENDPOINT_TYPE_VALUES
@@ -107,6 +107,24 @@ def correlate_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> 
         resolved=len(resolved),
         written=written,
     )
+
+    # D45b2: secret-scan the captured request/response BODIES + extract light param hints, AFTER
+    # the endpoint occurrences above have committed. BEST-EFFORT enrichment — it owns its own
+    # transaction and must NEVER fail the correlate stage: a Kingfisher hiccup or a malformed body
+    # can't undo the confirmed-endpoint occurrences (and a DLQ'd correlate would strand the run's
+    # analyze findings). A missing binary / genuine engine failure is logged, not raised. The pass
+    # itself never checks control flags, so nothing here is a cooperative cancel to re-raise.
+    try:
+        bodies.analyze_bodies(
+            redis,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            observed=observed,
+            resolved=resolved,
+            by_hash=by_hash,
+        )
+    except Exception as exc:  # noqa: BLE001 - best-effort enrichment; log, never fail the stage
+        log.warning("correlate.bodies_failed", run_id=run_id, error=str(exc))
 
 
 def _resolvable_endpoints(findings: list[findings_queries.FindingView]) -> list[match.Endpoint]:

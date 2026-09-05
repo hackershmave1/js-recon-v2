@@ -185,6 +185,19 @@ class Settings(BaseSettings):
     capture_idle_settle_seconds: float = 2.0  # quiet window (no new scripts) => capture done
     capture_max_scripts: int = 2000  # cap stored scripts per run (bounds worker + blob load)
     capture_max_requests: int = 1000  # REQ-C3: cap recorded XHR/fetch request URLs per run
+    # D45b2: optional per-observation body text the extension may attach to each runtime
+    # observation (``reqBody`` on-by-default, ``respBody`` opt-in). Both are already redacted +
+    # size-capped client-side, but re-capped SERVER-SIDE here (never trust the client) before the
+    # ``capture-requests`` blob is stored, then secret-scanned + light-param-hinted in the
+    # CORRELATING stage. Sized small — a body is recon EVIDENCE (a JSON/GraphQL payload or a bearer
+    # token), not an asset; a genuinely oversized/forged body is truncated, not rejected. Bytes are
+    # UTF-8; a truncation drops a split trailing codepoint (decode-ignore), never raises.
+    capture_max_request_body_bytes: int = 64 * 1024  # 64 KiB
+    capture_max_response_body_bytes: int = 128 * 1024  # 128 KiB
+    # Cap total request+response bodies one run's CORRELATING body-scan forks Kingfisher over —
+    # a SECONDARY fail-closed bound on top of the per-body byte caps + the capture_max_requests
+    # observation cap, so a run can never make the body secret-scan unbounded work.
+    capture_max_bodies: int = 500
     # Interaction driver (slice 3): after the initial load settles, drive the page —
     # autoscroll to idle, click every interactive element, and walk same-origin routes —
     # so lazily-loaded / route-split / click-gated chunks execute and get captured. All
