@@ -128,6 +128,30 @@ script host seen — add?" hint. **Fix:** apply `isInScope` to children (or gate
 per-tab "armed" binding; surface out-of-scope hosts that served `type:script` with one-click add.
 
 #### D45 · Capture coverage gaps: inline/eval, XHR/JSON/GraphQL bodies, source-map header/`.map` probe [M]  ·  correctness — Tier 1
+> ✅ **RESOLVED 2026-09-05** (D45 capture-coverage slice). Shipped in 4 slices; both §4 gates passed
+> (design GO-WITH-CHANGES + code review SHIP-WITH-NITS, all findings folded). Design spec:
+> `apps/platform/docs/superpowers/specs/2026-09-05-d45-capture-coverage-design.md`.
+> - **(c) source maps** — detection now reads the `SourceMap:`/`X-SourceMap` response header (already
+>   captured, previously unused) + a SINGLE no-retry `<file>.js.map` probe (`sourcemap-detector.js`);
+>   `docs/OPERATING.md` claim corrected.
+> - **(a) inline** — inline `<script>` bodies captured as synthetic files (content-script DOM read →
+>   `handleInlineScript`), keyed on page+ordinal, per-page capped, filtered by a CONTENT-based
+>   `modules/inline-relevance.js` (drops an in-scope-page GTM/hydration snippet the URL gate can't).
+>   **`eval` DEFERRED (operator-approved):** the review showed an `eval`/`Function` main-world hook is
+>   race-prone (a page can stash native `eval` first), misses `new Function`/`setTimeout`/`import()`/Wasm,
+>   is CSP-gated, and inherently noisy — so inline ships + the false OPERATING.md eval claim is corrected,
+>   and the hook is not built speculatively (YAGNI).
+> - **(b) bodies** — runtime XHR/fetch `{method,url}` observations CONFIRM endpoints (extension webRequest
+>   observer → sent with `analyze/start` → `capture-requests` blob → `requests_ref` → the existing
+>   correlate stage promotes suspected→confirmed). Request bodies incl. GraphQL captured via webRequest
+>   `onBeforeRequest` (ON, no main world); RESPONSE bodies via an OPT-IN main-world hook
+>   (`inject/xhr-hook.js` + conditional `chrome.scripting`, off by default, Settings toggle) — both
+>   redacted + capped + bounded by a per-session budget. Platform (pragmatic v1): bodies ride the
+>   capture-requests blob (no new kind/migration) + Kingfisher secret-scan + light top-level param hints
+>   (`correlate/bodies.py`, best-effort, offset-less secrets so reveal fail-closes, `engine="capture"`
+>   lower-trust provenance). **Deferred (operator-approved pragmatic-v1):** deep GraphQL-operation /
+>   JSON-schema extraction. Verification: 37 extension Node suites + platform full fast lane green + ruff
+>   + mypy-strict + capture-contract unchanged.
 Capture is script-response-only, missing high-value post-auth recon the platform is otherwise trying to
 reconstruct: (a) **inline & `eval`'d scripts are never captured** — `webRequest` filters
 `types:["script"]` (`background.js:194-201`) and the content-script enumerates only `script[src]` +
