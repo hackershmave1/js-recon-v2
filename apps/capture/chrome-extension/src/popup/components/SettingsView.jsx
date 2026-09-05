@@ -169,6 +169,19 @@ export function SettingsView({ vm }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9.5px', color: C.faint, fontFamily: F.mono, marginTop: '2px' }}>
             <span>1 MB</span><span>skip larger files</span><span>10 MB</span>
           </div>
+          {/* D45b2 — opt-in API response-body capture. Off by default: it collects response DATA
+              (may contain PII/secrets) from in-scope API calls, via a main-world hook. */}
+          <div style={{ borderTop: `1px solid ${C.line}`, margin: '14px 0 12px' }} />
+          <button onClick={vm.toggleResponseBodies} style={{
+            width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '0',
+            border: 'none', background: 'none', cursor: 'pointer'
+          }}>
+            <span style={{ flex: 1, textAlign: 'left' }}>
+              <span style={{ display: 'block', fontSize: '12.5px', color: C.text, fontWeight: 600 }}>Capture API response bodies</span>
+              <span style={{ display: 'block', fontSize: '10.5px', color: C.faint }}>Opt-in · collects response DATA (may include PII); retained until you clear/delete the session</span>
+            </span>
+            <Switch on={vm.captureResponseBodies} />
+          </button>
         </Card>
 
         {/* NOISE DENYLIST */}

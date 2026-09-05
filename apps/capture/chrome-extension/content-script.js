@@ -63,6 +63,54 @@
     }
   }
 
+  // Fire-and-forget report of one INLINE <script> body (DEBT D45a). Same channel/contract as
+  // emitScript; the background applies scope + a content-based relevance filter and dedups by
+  // content hash. Swallows the "worker respawning" rejection.
+  function emitInline(pageUrl, content, ordinal) {
+    try {
+      const sent = chrome.runtime.sendMessage({
+        action: 'inlineScriptDetected',
+        pageUrl,
+        content,
+        ordinal,
+        timestamp: new Date().toISOString()
+      });
+      if (sent && typeof sent.catch === 'function') sent.catch(() => {});
+    } catch (e) {
+      // Extension context torn down mid-navigation — the next load/rescan retries.
+    }
+  }
+
+  // Running ordinal so the background can key an inline script's synthetic URL on POSITION
+  // rather than content hash — a re-rendered slot then supersedes its prior version instead of
+  // accumulating (DEBT D45a). Initial-scan scripts take stable document-order ordinals; nodes
+  // added later continue past the last scan's count.
+  let inlineSeq = 0;
+
+  // An inline <script> worth reading: no src, and a classic/module JS type — never a JSON /
+  // importmap / ld+json data island (no code to analyze).
+  function isCapturableInlineScript(node) {
+    if (!node || node.tagName !== 'SCRIPT' || node.src) return false;
+    const type = (node.getAttribute('type') || '').trim().toLowerCase();
+    return type === '' || type === 'text/javascript' || type === 'application/javascript' || type === 'module';
+  }
+
+  // Read every inline <script> body in document order and report each with a stable ordinal.
+  function scanInlineScripts() {
+    try {
+      const pageUrl = location.href;
+      let i = 0;
+      document.querySelectorAll('script:not([src])').forEach((node) => {
+        if (!isCapturableInlineScript(node)) return;
+        const content = node.textContent || '';
+        if (!content.trim()) return;
+        emitInline(pageUrl, content, i);
+        i += 1;
+      });
+      if (i > inlineSeq) inlineSeq = i;
+    } catch (e) { /* DOM unavailable — skip */ }
+  }
+
   // Every JS URL the page has ALREADY loaded: `<script src>` still in the DOM plus the
   // resource-timing timeline, which also surfaces the module / import() / fetch-loaded chunks
   // that BOTH the webRequest `types:["script"]` filter and the MutationObserver miss.
@@ -90,6 +138,7 @@
     for (const url of collectLoadedScriptUrls()) {
       emitScript(url, 'initial-scan');
     }
+    scanInlineScripts();
   }
 
   // On a full load (and bfcache restore), scan — but only when capture is active, so an idle
@@ -113,8 +162,13 @@
   const scriptObserver = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
       mutation.addedNodes.forEach((node) => {
-        if (node.tagName === 'SCRIPT' && node.src) {
+        if (!node || node.tagName !== 'SCRIPT') return;
+        if (node.src) {
           emitScript(node.src, 'dynamic-script');
+        } else if (isCapturableInlineScript(node)) {
+          // Inline <script> injected after load (SPA hydration/route render) — DEBT D45a.
+          const content = node.textContent || '';
+          if (content.trim()) emitInline(location.href, content, inlineSeq++);
         }
       });
     });
@@ -123,5 +177,29 @@
   scriptObserver.observe(document.documentElement, {
     childList: true,
     subtree: true
+  });
+
+  // Relay RESPONSE bodies from the opt-in main-world hook (DEBT D45b2). The hook (inject/xhr-hook.js)
+  // runs in the page world and posts via window.postMessage; validate the source tag + that it came
+  // from THIS window, then forward to the background (which re-applies scope + caps + redaction +
+  // dedup). Page-forgeable by design (shared world) — the platform tags these findings lower-trust.
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    const d = event.data;
+    if (!d || d.source !== 'recon-xhr-hook' || typeof d.url !== 'string' || typeof d.body !== 'string') return;
+    try {
+      const sent = chrome.runtime.sendMessage({
+        action: 'responseBodyObserved',
+        method: d.method,
+        url: d.url,
+        status: d.status,
+        contentType: d.contentType,
+        body: d.body,
+        pageUrl: location.href
+      });
+      if (sent && typeof sent.catch === 'function') sent.catch(() => {});
+    } catch (e) {
+      // Extension context torn down — drop; the next response will retry.
+    }
   });
 })();

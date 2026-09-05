@@ -76,6 +76,17 @@ class SaveFilesIn(BaseModel):
     files: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class AnalyzeStartIn(BaseModel):
+    """Optional analyze/start body. ``observations`` are runtime ``{method, url}`` calls the
+    extension observed at capture time (DEBT D45b1); the platform writes them as the run's
+    ``capture-requests`` blob so the CORRELATING stage can promote a statically-suspected
+    endpoint to confirmed. Additive + backward-compatible: a deployed client that omits the
+    body (or sends only ``options``) still starts analysis with no observations."""
+
+    options: dict[str, Any] = Field(default_factory=dict)
+    observations: list[dict[str, Any]] = Field(default_factory=list)
+
+
 @router.get("/health")
 def capture_health() -> dict:
     """The extension's workspace-client health probe (``testConnection``). Carries the
@@ -610,9 +621,69 @@ def _manifest_domain(rows: list, fallback: str) -> str:
     return fallback
 
 
+def _capped_body(value: Any, max_bytes: int) -> str | None:
+    """A request/response body re-capped to ``max_bytes`` UTF-8 bytes (D45b2), or ``None`` for a
+    missing / non-str / empty value. NEVER trust the client's own cap — a forged oversized body is
+    TRUNCATED here (``decode("utf-8", "ignore")`` drops a split trailing codepoint), so it can
+    neither blow up the ``capture-requests`` blob nor the downstream Kingfisher body-scan. A hard,
+    fail-closed byte bound; a body under the cap round-trips unchanged."""
+    if not isinstance(value, str) or not value:
+        return None
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", "ignore")
+
+
+def _normalize_observations(raw: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Validate + normalize client-supplied runtime observations (DEBT D45b1/b2) to the shape the
+    correlate matcher expects: ``[{"method","url"}]`` with ``url`` = ``scheme://host/path``
+    (query/fragment dropped), deduped and capped. Never trust the client — re-validate the
+    scheme + host here and drop anything malformed (fail-closed: a bad item is skipped, never
+    the whole batch).
+
+    D45b2 (additive): an observation MAY also carry ``reqBody``/``respBody`` text; when present +
+    a ``str``, each is preserved on the entry re-capped SERVER-SIDE (``_capped_body``) so the
+    CORRELATING stage can secret-scan the payload + extract light param hints. The ``{method,url}``
+    correlate matcher (``recon.correlate.match.correlate``) reads only method + url, so these extra
+    keys ride along untouched. Bodies do NOT participate in the dedup key — the first sighting of a
+    ``(method, url)`` wins, carrying its own bodies."""
+    settings = get_settings()
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    cap = settings.capture_max_requests
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        method = str(item.get("method") or "").upper().strip()
+        url = str(item.get("url") or "").strip()
+        if not method or not url:
+            continue
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            continue
+        norm = f"{parts.scheme}://{parts.netloc}{parts.path}"
+        key = f"{method} {norm}"
+        if key in seen:
+            continue
+        seen.add(key)
+        entry: dict[str, str] = {"method": method, "url": norm}
+        req_body = _capped_body(item.get("reqBody"), settings.capture_max_request_body_bytes)
+        if req_body:
+            entry["reqBody"] = req_body
+        resp_body = _capped_body(item.get("respBody"), settings.capture_max_response_body_bytes)
+        if resp_body:
+            entry["respBody"] = resp_body
+        out.append(entry)
+        if len(out) >= cap:
+            break
+    return out
+
+
 @router.post("/sessions/{ext_session_id}/analyze/start")
 def analyze_start(
     ext_session_id: str,
+    body: AnalyzeStartIn | None = None,
     origin: str | None = Header(default=None, alias="Origin"),
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> dict:
@@ -648,6 +719,18 @@ def analyze_start(
         "assets": [{"url": r.url, "source": "extension"} for r in rows],
     }
     assets_ref = storage.put_blob(tenant_id, run_id, "assets", json.dumps(manifest).encode("utf-8"))
+    # Runtime request observations (DEBT D45b1): persist the { method, url } calls the extension
+    # observed as the run's capture-requests blob, referenced on the event below so CORRELATING
+    # promotes matching suspected endpoints to confirmed. Same content-addressed put as the
+    # manifest, OUTSIDE the seal transaction (no S3 round-trip under the run-row lock). None when
+    # the client sent no observations (an older/non-extension client) — correlate then no-ops.
+    requests_ref = None
+    if body is not None and body.observations:
+        observed = _normalize_observations(body.observations)
+        if observed:
+            requests_ref = storage.put_blob(
+                tenant_id, run_id, "capture-requests", json.dumps(observed).encode("utf-8")
+            )
     # ONE transaction: seal the run, record discover.assets, and insert the Job — all
     # atomic. The seal is a GUARDED update (DEBT D14): null the capture accumulator
     # marker only while it is still set, and let the rowcount elect a single winner.
@@ -670,12 +753,15 @@ def analyze_start(
         )
         if sealed.rowcount != 1:
             return {"started": True, "message": "analysis already started", "runId": run_id}
+        payload = {"count": len(rows), "assets_ref": assets_ref, "status": "ok"}
+        if requests_ref:
+            payload["requests_ref"] = requests_ref
         event = record_event(
             session,
             tenant_id=tenant_id,
             run_id=run_id,
             event_type="discover.assets",
-            payload={"count": len(rows), "assets_ref": assets_ref, "status": "ok"},
+            payload=payload,
         )
         job_id, job_message = coordinator.create_stage_job(
             session, tenant_id=tenant_id, run_id=run_id, stage=RunStage.DISCOVERING
