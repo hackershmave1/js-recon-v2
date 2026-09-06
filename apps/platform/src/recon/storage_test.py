@@ -11,8 +11,10 @@ import hashlib
 import os
 
 import pytest
+from botocore.exceptions import ClientError
 
-from recon.storage import BLOB_KINDS, object_key, object_key_for_file
+from recon import storage
+from recon.storage import BLOB_KINDS, BlobPurgeError, object_key, object_key_for_file
 
 
 def test_object_key_shape_is_tenant_run_kind_sha256():
@@ -75,3 +77,125 @@ def test_object_key_for_file_rejects_unknown_kind(tmp_path):
     path.write_bytes(b"x")
     with pytest.raises(ValueError, match="unknown blob kind"):
         object_key_for_file("t", "r", "not_a_kind", str(path))
+
+
+# --------------------------------------------------------------------------- #
+# delete_run_blobs — the REQ-S4 purge sweep (D47). Hermetic: a fake S3 client
+# stands in for _s3_client so the paginator + batched-delete + Errors handling
+# are pinned in the fast lane; the real-MinIO round-trip lives in the integration
+# suite. Keeps this file's "no live S3" discipline.
+# --------------------------------------------------------------------------- #
+
+
+class _FakeS3:
+    """Minimal boto3-S3 stand-in for the list+delete sweep. Paginates its key set at
+    ``page_size`` (default 1000, as real S3 does) and records every delete batch + the
+    prefix it was listed with, so a test can assert the sweep's prefix, pagination, and
+    1000-key batching. ``fail_keys`` simulates ``delete_objects``' HTTP-200-with-``Errors``
+    partial-failure shape."""
+
+    def __init__(self, keys, *, page_size=1000, fail_keys=frozenset(), delete_raises=None):
+        self._keys = list(keys)
+        self._page_size = page_size
+        self._fail_keys = frozenset(fail_keys)
+        self._delete_raises = delete_raises  # an exception the whole delete_objects call raises
+        self.listed_prefixes: list[str] = []
+        self.delete_batches: list[list[str]] = []
+
+    def get_paginator(self, operation):
+        assert operation == "list_objects_v2"
+        outer = self
+
+        class _Paginator:
+            def paginate(self, *, Bucket, Prefix):  # noqa: N803 (boto3 kwarg name)
+                outer.listed_prefixes.append(Prefix)
+                matched = [k for k in outer._keys if k.startswith(Prefix)]
+                if not matched:
+                    yield {}  # a page with no "Contents" (empty prefix), as S3 returns
+                    return
+                for i in range(0, len(matched), outer._page_size):
+                    yield {"Contents": [{"Key": k} for k in matched[i : i + outer._page_size]]}
+
+        return _Paginator()
+
+    def delete_objects(self, *, Bucket, Delete):  # noqa: N803 (boto3 kwarg names)
+        if self._delete_raises is not None:
+            raise self._delete_raises
+        keys = [obj["Key"] for obj in Delete["Objects"]]
+        self.delete_batches.append(keys)
+        errors = [{"Key": k, "Code": "AccessDenied"} for k in keys if k in self._fail_keys]
+        return {"Errors": errors} if errors else {}
+
+
+def test_delete_run_blobs_sweeps_only_the_run_prefix_across_pages_and_batches(monkeypatch):
+    # >1000 objects spread over several LIST pages must delete in ≤1000-key batches, and the
+    # sweep must touch ONLY keys under the exact "{tenant}/{run}/" prefix — decoys under a
+    # sibling run, a prefix-lookalike run, and another tenant are left untouched (REQ-S4 safety).
+    target = [object_key("t1", "r1", "input", f"asset-{i}".encode()) for i in range(2500)]
+    decoys = [
+        object_key("t1", "r2", "input", b"other-run"),
+        object_key("t1", "r1x", "input", b"prefix-lookalike"),  # "t1/r1x/" not under "t1/r1/"
+        object_key("t2", "r1", "input", b"other-tenant"),
+    ]
+    fake = _FakeS3(target + decoys, page_size=400)  # page_size<1000 proves batching ≠ paging
+    monkeypatch.setattr(storage, "_s3_client", lambda: fake)
+
+    deleted = storage.delete_run_blobs("t1", "r1")
+
+    assert deleted == 2500
+    assert fake.listed_prefixes == ["t1/r1/"]  # exact prefix, trailing slash
+    assert [len(b) for b in fake.delete_batches] == [1000, 1000, 500]  # 3 batches at the limit
+    swept = {k for batch in fake.delete_batches for k in batch}
+    assert swept == set(target)  # no decoy (sibling run / lookalike / other tenant) was deleted
+
+
+def test_delete_run_blobs_raises_on_partial_delete_errors(monkeypatch):
+    # delete_objects returns HTTP 200 with a per-key Errors[] on partial failure — a bare
+    # try/except never sees it. The sweep must surface it as BlobPurgeError so the purge is
+    # never silently incomplete (H1 / REQ-S4 MUST).
+    keys = [object_key("t", "r", "input", f"k{i}".encode()) for i in range(3)]
+    fake = _FakeS3(keys, fail_keys={keys[1]})
+    monkeypatch.setattr(storage, "_s3_client", lambda: fake)
+
+    with pytest.raises(BlobPurgeError) as excinfo:
+        storage.delete_run_blobs("t", "r")
+    # Structured counts ride on the exception so delete_session can log them (M1): 2 of 3 gone.
+    assert excinfo.value.prefix == "t/r/"
+    assert excinfo.value.failed == 1
+    assert excinfo.value.deleted == 2
+    # ...and WHICH key survived + WHY, not just the count, so the operator can remediate (H1).
+    assert excinfo.value.sample == [{"key": keys[1], "code": "AccessDenied"}]
+    assert fake.delete_batches  # a best-effort delete WAS attempted before raising
+
+
+def test_delete_run_blobs_empty_prefix_deletes_nothing(monkeypatch):
+    # A run whose blobs are already gone (or never existed): list yields no Contents, so no
+    # delete_objects call is made and the count is 0 (no spurious empty-batch delete).
+    fake = _FakeS3([object_key("t", "other", "input", b"x")])
+    monkeypatch.setattr(storage, "_s3_client", lambda: fake)
+
+    assert storage.delete_run_blobs("t", "r") == 0
+    assert fake.delete_batches == []
+
+
+def test_delete_run_blobs_no_spurious_delete_at_exact_batch_multiple(monkeypatch):
+    # Exactly _DELETE_BATCH_MAX keys: the in-loop flush empties `batch`, so the trailing _purge
+    # sees [] and issues NO second (empty) delete_objects call. Pins the batch-boundary edge.
+    n = storage._DELETE_BATCH_MAX
+    keys = [object_key("t", "r", "input", f"k{i}".encode()) for i in range(n)]
+    fake = _FakeS3(keys)  # page_size defaults to 1000 == _DELETE_BATCH_MAX
+    monkeypatch.setattr(storage, "_s3_client", lambda: fake)
+
+    assert storage.delete_run_blobs("t", "r") == n
+    assert len(fake.delete_batches) == 1  # one full batch, no spurious empty follow-up call
+
+
+def test_delete_run_blobs_propagates_when_delete_objects_raises(monkeypatch):
+    # A whole-call failure (e.g. missing s3:DeleteObject) raises rather than returning Errors[];
+    # the sweep lets it propagate, so delete_session's broad except logs it + still 204s the delete.
+    boom = ClientError({"Error": {"Code": "AccessDenied"}}, "DeleteObjects")
+    fake = _FakeS3([object_key("t", "r", "input", b"x")], delete_raises=boom)
+    monkeypatch.setattr(storage, "_s3_client", lambda: fake)
+
+    with pytest.raises(ClientError):
+        storage.delete_run_blobs("t", "r")
