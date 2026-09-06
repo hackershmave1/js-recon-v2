@@ -269,6 +269,93 @@ def _process_and_record(redis: Redis, queue: QueueName, msg_id: str, message: di
         job_duration_seconds.labels(queue=queue.value).observe(time.monotonic() - start)
 
 
+def _find_orphaned_jobs() -> list[tuple[str, str, str, str | None]]:
+    """Cross-tenant scan for jobs with expired leases (admin session bypasses RLS).
+    Returns (job_id, tenant_id, run_id, stage) tuples, bounded to 20 per call."""
+    from sqlalchemy import and_, func, select
+
+    from recon.db.base import admin_session
+    from recon.db.models import Job
+
+    with admin_session() as session:
+        rows = session.execute(
+            select(Job.id, Job.tenant_id, Job.run_id, Job.stage)
+            .where(and_(Job.state == JobState.RUNNING.value, Job.lease_expires_at < func.now()))
+            .limit(20)
+        ).all()
+    return [(str(r.id), str(r.tenant_id), str(r.run_id), r.stage) for r in rows]
+
+
+def _mark_job_dead(tenant_id: str, job_id: str) -> bool:
+    """Atomically claim an orphaned job by marking it DEAD.
+
+    Guarded on (state=running AND lease_expires_at < now()): if a concurrent XAUTOCLAIM
+    renewed the lease, the WHERE misses and this returns False, leaving the reclaiming
+    worker in control. Returns True only when this caller wins ownership.
+    """
+    from sqlalchemy import func, update
+
+    from recon.db.base import tenant_session
+    from recon.db.models import Job
+
+    with tenant_session(tenant_id) as session:
+        result = session.execute(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.state == JobState.RUNNING.value,
+                Job.lease_expires_at < func.now(),
+            )
+            .values(state=JobState.DEAD.value, heartbeat_at=func.now())
+        )
+        return result.rowcount == 1
+
+
+def reap_orphaned_jobs(redis: Redis) -> int:
+    """Resolve runs whose worker died after acking the stream message (no PEL entry
+    left for XAUTOCLAIM to reclaim). Settles cancel/pause/failure in ≤one run_once cycle
+    instead of waiting forever. Returns the number of jobs reaped."""
+    reaped = 0
+    for job_id, tenant_id, run_id, stage in _find_orphaned_jobs():
+        if not _mark_job_dead(tenant_id, job_id):
+            continue  # XAUTOCLAIM or a peer reaper won the race — nothing to do
+
+        flags = queries.get_run_flags(tenant_id, run_id)
+        if flags is None or sm.is_terminal(RunState(flags.state)):
+            log.info("job.reaped.already_resolved", job_id=job_id, run_id=run_id)
+            reaped += 1
+            continue
+
+        if flags.cancel_requested:
+            to_state = RunState.CANCELLED
+            extra: dict | None = None
+            reason = "cancel_requested"
+        elif flags.pause_requested:
+            to_state = RunState.PAUSED
+            extra = {"resumed_from_stage": stage}
+            reason = "pause_requested"
+        else:
+            to_state = RunState.FAILED
+            extra = {
+                "error": {"stage": stage, "message": "worker lease expired without completion"}
+            }
+            reason = "lease_expired"
+
+        try:
+            service.transition(
+                redis, tenant_id=tenant_id, run_id=run_id, to_state=to_state, extra_values=extra
+            )
+            log.warning(
+                "job.reaped", job_id=job_id, run_id=run_id, to=to_state.value, reason=reason
+            )
+        except (service.TransitionConflict, sm.InvalidTransition) as exc:
+            # Another path (a concurrent worker, a prior reaper cycle) already moved the run.
+            log.info("job.reap_transition_skipped", job_id=job_id, run_id=run_id, error=str(exc))
+        reaped += 1
+
+    return reaped
+
+
 def run_once(redis: Redis, consumer: str, *, batch: int = 10, block_ms: int = 1000) -> int:
     """One maintenance + drain pass across the served queues. Returns messages
     processed. Called in a loop by :func:`serve_forever`; tests call it directly."""
@@ -316,6 +403,7 @@ def serve_forever(consumer: str | None = None) -> None:  # pragma: no cover
                 from pathlib import Path
 
                 Path(liveness_path).touch()
+            reap_orphaned_jobs(redis)
             run_once(redis, consumer)
         except Exception:  # noqa: BLE001 - keep the loop alive
             log.exception("worker.loop_error")
