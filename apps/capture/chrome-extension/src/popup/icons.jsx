@@ -1,6 +1,16 @@
 // icons.jsx — inline SVG icons matching the prototype's stroke set.
 // Each accepts { size, color, ...rest }; defaults stroke=currentColor.
 
+// LogoMark — stylized eye for reconnaissance / observation. Use on lime bg (dark ink).
+export const LogoMark = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M2 12C5 6 19 6 22 12C19 18 5 18 2 12Z"
+          stroke="#0B0D13" stroke-width="1.7" stroke-linejoin="round" fill="rgba(11,13,19,0.12)" />
+    <circle cx="12" cy="12" r="3.6" stroke="#0B0D13" stroke-width="1.7" />
+    <circle cx="12" cy="12" r="1.5" fill="#0B0D13" />
+  </svg>
+);
+
 const stroke = (size, children, extra = {}) => (
   <svg
     width={size}

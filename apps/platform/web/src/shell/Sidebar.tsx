@@ -50,7 +50,14 @@ export function Sidebar({ mode, runId }: { mode: "run" | "sessions"; runId?: str
   return (
     <aside className="shell-side">
       <div className="shell-brand">
-        <span className="shell-brand-mark"><Icon name="search" size={17} /></span>
+        <span className="shell-brand-mark">
+          <svg width={18} height={18} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M2 12C5 6 19 6 22 12C19 18 5 18 2 12Z"
+                  stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" fill="currentColor" fillOpacity="0.12" />
+            <circle cx="12" cy="12" r="3.6" stroke="currentColor" strokeWidth="1.8" />
+            <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+          </svg>
+        </span>
         <div>
           <div className="shell-brand-name">RECON</div>
           <div className="shell-brand-sub">WORKSPACE</div>

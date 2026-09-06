@@ -5,7 +5,7 @@ import { useState } from 'preact/hooks';
 import { C, F, CLASS_COLOR, CLASS_LABEL } from '../theme.js';
 import { Switch, Dot } from './ui.jsx';
 import {
-  SearchIcon, GearIcon, PauseIcon, PlayIcon, DownloadIcon, ArrowRightIcon
+  LogoMark, GearIcon, PauseIcon, PlayIcon, DownloadIcon, ArrowRightIcon
 } from '../icons.jsx';
 import { EngagementPicker } from './EngagementPicker.jsx';
 
@@ -90,7 +90,7 @@ export function HomeView({ vm }) {
         <div style={{
           width: '28px', height: '28px', borderRadius: '8px', background: C.lime, display: 'flex',
           alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 16px rgba(205,235,69,0.4)'
-        }}><SearchIcon /></div>
+        }}><LogoMark size={17} /></div>
         <div style={{ flex: 1, lineHeight: 1.05 }}>
           <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: '14px', letterSpacing: '-0.2px' }}>RECON Capture</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10.5px', color: healthColor, fontFamily: F.mono, marginTop: '1px' }}>
