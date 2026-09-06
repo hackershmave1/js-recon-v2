@@ -64,9 +64,7 @@ from recon.fetch import egress
 from recon.findings import noise_hosts
 
 
-def _expand_scope_for_display(
-    scope_hosts: list[str], *, allow_local: bool = False
-) -> list[str]:
+def _expand_scope_for_display(scope_hosts: list[str], *, allow_local: bool = False) -> list[str]:
     """Expand scope entries to their apex domain (last two labels) for the Hosts tab.
 
     If ``assets.canditech.io`` is declared, ``canditech.io`` is added so that
