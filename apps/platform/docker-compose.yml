@@ -15,6 +15,10 @@ x-app-env: &app-env
   # REQUIRED and the tenant comes from the signed session token; empty would disable auth
   # and brick the served SPA (login 503s), so it ships enabled.
   RECON_AUTH_SECRET: dev-only-auth-secret-change-in-prod
+  # D53-a: prometheus-client multiprocess mode. Both api and worker write metric files
+  # here; the /metrics endpoint aggregates them via MultiProcessCollector.
+  # The prometheusdata volume is shared between the two containers.
+  PROMETHEUS_MULTIPROC_DIR: /tmp/prom
 
 x-app-base: &app-base
   build:
@@ -111,6 +115,8 @@ services:
       interval: 5s
       timeout: 4s
       retries: 12
+    volumes:
+      - prometheusdata:/tmp/prom
     depends_on:
       postgres:
         condition: service_healthy
@@ -131,6 +137,19 @@ services:
     mem_limit: 8g
     command: ["python", "-m", "recon.worker.main"]
     restart: unless-stopped
+    # D53-c: liveness probe — detect a hung serve_forever loop (a crash is caught by restart:
+    # unless-stopped; a hang is not). The file is touched each loop iteration by the worker;
+    # threshold 600s is generous enough to cover a long analyze job (~5 min) blocking the loop.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import os,time; s=os.stat('/tmp/recon-worker-liveness'); exit(0 if time.time()-s.st_mtime < 600 else 1)\" 2>/dev/null || exit 1"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    volumes:
+      - prometheusdata:/tmp/prom
     depends_on:
       postgres:
         condition: service_healthy
@@ -145,3 +164,11 @@ volumes:
   pgdata:
   redisdata:
   miniodata:
+  # D53-a: shared prometheus-client multiprocess dir — api + worker each write their metric
+  # files here; the API's /metrics endpoint aggregates them via MultiProcessCollector.
+  # tmpfs: in-memory, wiped on compose down → no stale PID files from prior runs accumulate
+  # (prometheus-client multiprocess mode requires the dir to be clean at startup).
+  prometheusdata:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
