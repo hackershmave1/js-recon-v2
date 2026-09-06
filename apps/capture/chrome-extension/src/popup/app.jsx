@@ -453,6 +453,8 @@ export function App() {
         : health === 'warn' ? `${delivery.skipped} skipped`
           : delivery.paired === true ? 'connected · delivering' : 'connected to workspace';
 
+  // TODO D62: extract to viewmodels/homeVm.js — blocked by deep closure coupling (20+ useState
+  // values + local action functions). Needs a dedicated refactor pass to group related state.
   const homeVm = {
     capturing: status.isCapturing,
     // Auth-expiry banner (DEBT D41): single source of truth is the uploader's authPaused, surfaced
@@ -527,6 +529,7 @@ export function App() {
     openWorkspace
   };
 
+  // TODO D62: extract to viewmodels/settingsVm.js — same closure coupling as homeVm.
   const settingsVm = {
     closeSettings: () => setView('home'),
     connState, latency,

@@ -56,14 +56,33 @@ export class SourceMapDetector {
     if (mapUrl.startsWith('data:')) {
       return mapUrl;
     }
+
+    let resolvedMapUrl;
     if (mapUrl.startsWith('http://') || mapUrl.startsWith('https://')) {
-      return mapUrl;
+      resolvedMapUrl = mapUrl;
+    } else {
+      try {
+        const baseUrl = jsFileUrl.substring(0, jsFileUrl.lastIndexOf('/') + 1);
+        resolvedMapUrl = new URL(mapUrl, baseUrl).href;
+      } catch (e) {
+        return null;
+      }
     }
+
+    // Cross-origin source map guard: a hostile page could set
+    // `//# sourceMappingURL=https://internal.corp/secret` to cause the extension
+    // to read an arbitrary host. Reject any map URL whose origin differs from the
+    // parent JS file — same-origin maps are always valid; cross-origin ones are not.
     try {
-      const baseUrl = jsFileUrl.substring(0, jsFileUrl.lastIndexOf('/') + 1);
-      return new URL(mapUrl, baseUrl).href;
+      const jsOrigin = new URL(jsFileUrl).origin;
+      const mapOrigin = new URL(resolvedMapUrl).origin;
+      if (jsOrigin !== mapOrigin) {
+        return null;
+      }
     } catch (e) {
-      return mapUrl;
+      return null;
     }
+
+    return resolvedMapUrl;
   }
 }

@@ -24,7 +24,19 @@ export class WorkspaceClient {
     // A scheme-less workspace URL (e.g. "localhost:3000") would resolve relative to the
     // extension origin and fail — prepend http:// so it's an absolute URL.
     if (base && !/^[a-z][a-z0-9+.-]*:\/\//i.test(base)) base = 'http://' + base;
-    return base.replace(/\/+$/, '');
+    base = base.replace(/\/+$/, '');
+    // Reject non-http/https schemes to prevent URL-injection exfiltration (e.g. file://,
+    // javascript://, chrome:// injected via a malicious workspaceUrl value).
+    try {
+      const u = new URL(base);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+        console.warn('[recon] workspace URL must use http or https; using localhost fallback');
+        return 'http://localhost:8000';
+      }
+    } catch (e) {
+      return 'http://localhost:8000';
+    }
+    return base;
   }
 
   // Authorization header for the login session token, if one is configured. Read live

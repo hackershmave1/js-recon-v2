@@ -3,10 +3,13 @@
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'fetchUrl') {
-      fetchFromPage(request.url)
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ success: false, error: error.message }));
-
+      (async () => {
+        try {
+          sendResponse(await fetchFromPage(request.url));
+        } catch (error) {
+          sendResponse({ success: false, error: error.message });
+        }
+      })();
       return true;
     }
     // Capture turned on (or a new session opened) on an ALREADY-loaded tab: the background
@@ -24,7 +27,7 @@
     try {
       const response = await fetch(url, {
         method: 'GET',
-        credentials: 'include'
+        credentials: 'omit'
       });
 
       if (!response.ok) {
@@ -160,18 +163,23 @@
   window.addEventListener('pageshow', (event) => { if (event.persisted) scanIfCapturing(); });
 
   const scriptObserver = new MutationObserver((mutations) => {
-    mutations.forEach((mutation) => {
-      mutation.addedNodes.forEach((node) => {
-        if (!node || node.tagName !== 'SCRIPT') return;
-        if (node.src) {
-          emitScript(node.src, 'dynamic-script');
-        } else if (isCapturableInlineScript(node)) {
-          // Inline <script> injected after load (SPA hydration/route render) — DEBT D45a.
-          const content = node.textContent || '';
-          if (content.trim()) emitInline(location.href, content, inlineSeq++);
-        }
-      });
-    });
+    try {
+      chrome.storage.local.get('isCapturing').then(({ isCapturing }) => {
+        if (!isCapturing) return;
+        mutations.forEach((mutation) => {
+          mutation.addedNodes.forEach((node) => {
+            if (!node || node.tagName !== 'SCRIPT') return;
+            if (node.src) {
+              emitScript(node.src, 'dynamic-script');
+            } else if (isCapturableInlineScript(node)) {
+              // Inline <script> injected after load (SPA hydration/route render) — DEBT D45a.
+              const content = node.textContent || '';
+              if (content.trim()) emitInline(location.href, content, inlineSeq++);
+            }
+          });
+        });
+      }).catch(() => {});
+    } catch (e) { /* extension context torn down */ }
   });
 
   scriptObserver.observe(document.documentElement, {

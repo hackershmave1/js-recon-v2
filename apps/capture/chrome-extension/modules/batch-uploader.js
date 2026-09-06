@@ -1,5 +1,6 @@
 export class BatchUploader {
-  constructor() {
+  constructor({ onStatsChange } = {}) {
+    this.onStatsChange = typeof onStatsChange === 'function' ? onStatsChange : () => {};
     this.pendingQueue = [];
     this.batchSize = 5;
     this.batchInterval = 5000;
@@ -92,6 +93,7 @@ export class BatchUploader {
   }
 
   setStore(store) { this.store = store || null; }
+  setOnStatsChange(fn) { this.onStatsChange = typeof fn === 'function' ? fn : () => {}; }
 
   // Drop ALL pending work — the in-memory queue AND the durable store — so one tenant's unsent
   // captures can never flush under another tenant's token after a tenant switch. The outbox drains
@@ -176,10 +178,12 @@ export class BatchUploader {
       this.stats.uploadedFiles += batch.length;
       this.stats.lastError = null;
       this.stats.lastUploadAt = new Date().toISOString();
+      this.onStatsChange(this.stats);
       await this.forget(batch);
     } catch (error) {
       this.stats.failedBatches += 1;
       this.stats.lastError = error.message;
+      this.onStatsChange(this.stats);
 
       if (error.retriable === false) {
         // Permanent failure (4xx other than 429): the same bytes will never be
@@ -190,6 +194,7 @@ export class BatchUploader {
         // single offender via per-file re-upload is a possible future refinement.
         console.error('Batch upload rejected (dropped, non-retriable):', error);
         this.stats.droppedFiles += batch.length;
+        this.onStatsChange(this.stats);
         await this.forget(batch);
         chrome.notifications.create({
           type: 'basic',
@@ -203,6 +208,7 @@ export class BatchUploader {
         // new tenant's token — the exact cross-tenant leak we guard against. Drop, don't retry.
         console.warn('Dropping stale-epoch batch after outbox clear (tenant switch)');
         this.stats.droppedFiles += batch.length;
+        this.onStatsChange(this.stats);
         await this.forget(batch);
       } else if (error.authExpired) {
         // Auth expired/rejected mid-flight (DEBT D41): DON'T drop — these bytes upload fine once
@@ -245,6 +251,7 @@ export class BatchUploader {
     // Clear any sticky error from an earlier batch so a stale display value can't
     // linger while we drain.
     this.stats.lastError = null;
+    this.onStatsChange(this.stats);
     clearTimeout(this.uploadTimer);
     this.uploadTimer = null;
 
@@ -444,5 +451,17 @@ export class BatchUploader {
       // separate copy that could drift. Mirrors configMetadata()'s projectId source.
       projectId: (this.config && this.config.projectId) || null
     };
+  }
+
+  // Merge persisted stats back into the in-memory counters after a service-worker respawn
+  // so the delivery health panel reflects the full session lifetime, not just since the
+  // last respawn.
+  restoreStats(saved) {
+    if (!saved || typeof saved !== 'object') return;
+    this.stats.uploadedFiles = saved.uploadedFiles || 0;
+    this.stats.droppedFiles = saved.droppedFiles || 0;
+    this.stats.failedBatches = saved.failedBatches || 0;
+    if (saved.lastError) this.stats.lastError = saved.lastError;
+    if (saved.lastUploadAt) this.stats.lastUploadAt = saved.lastUploadAt;
   }
 }

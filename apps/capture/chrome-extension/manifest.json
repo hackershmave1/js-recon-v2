@@ -10,7 +10,6 @@
     "unlimitedStorage",
     "alarms",
     "notifications",
-    "downloads",
     "scripting"
   ],
   "host_permissions": [

@@ -8,6 +8,7 @@ venv/
 htmlcov/
 .env
 dist/
+!apps/capture/chrome-extension/dist/fonts/
 build/
 .ruff_cache/
 

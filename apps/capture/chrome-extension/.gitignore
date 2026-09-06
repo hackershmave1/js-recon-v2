@@ -1,1 +1,6 @@
 node_modules/
+
+# Build artifacts — rebuilt by npm run build
+dist/popup.js
+dist/popup.css
+# Keep dist/fonts/ and dist/fonts.css — vendored static assets, not rebuilt
