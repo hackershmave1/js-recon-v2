@@ -1663,9 +1663,11 @@ class JSExtractor {
     // projectId is the uploader's live in-memory binding (restored on cold start via
     // pendingSessionConfig, initialize()), so this stays synchronous — no storage await.
     const uploaderStats = this.batchUploader.getStats();
-    // Strip the raw authToken before sending — the popup reads the identity fields
-    // (authUser, authTenantName) but has no need for the raw Bearer credential.
-    const { authToken: _omit, ...safeSettings } = this.settings || {};
+    // Replace the raw Bearer token with a truthy-only marker: the popup gates on
+    // settings.authToken being truthy (line 378 app.jsx) but never uses the value.
+    // 'session' matches the marker the popup sets locally on login (app.jsx:207).
+    const { authToken, ...restSettings } = this.settings || {};
+    const safeSettings = { ...restSettings, authToken: authToken ? 'session' : '' };
     sendResponse({
       isCapturing: this.isCapturing,
       sessionId: this.sessionId,
