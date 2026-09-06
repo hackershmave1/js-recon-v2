@@ -192,3 +192,55 @@ Deliberately deferred — safe for internal single-operator use, revisit before 
   (post-auth JS) is the lever for what static analysis can't reach.
 - **The AI threat model + consolidated recon report are planned, not built.** Only the OpenAPI export
   ships today; the "Threat Model" workspace tab is marked SOON.
+
+---
+
+## 4. Backup & restore
+
+### Postgres — dump & restore
+
+```bash
+# Dump (run from outside the container; targets the compose postgres service):
+docker exec platform-postgres-1 pg_dump -U recon recon | gzip > recon-db-$(date +%F).sql.gz
+
+# Restore into a fresh database (drops and recreates the public schema):
+gunzip -c recon-db-YYYY-MM-DD.sql.gz | docker exec -i platform-postgres-1 psql -U recon recon
+```
+
+Run the restore against a freshly migrated target (i.e. run `alembic upgrade head` first so
+the schema is current, then restore data). Never restore a dump from a **newer** migration version
+into an **older** schema.
+
+### MinIO / object storage — mirror & restore
+
+```bash
+# Prerequisites: mc (MinIO client) configured with an alias pointing at your MinIO instance.
+# Example alias setup:
+mc alias set local http://localhost:9000 recon recon-secret
+
+# Full mirror to a local directory (preserves key hierarchy):
+mc mirror local/recon-artifacts ./backup-$(date +%F)/
+
+# Restore from the local backup into a running MinIO bucket:
+mc mirror ./backup-YYYY-MM-DD/ local/recon-artifacts
+```
+
+`mc mirror` is incremental — re-running against an existing backup directory skips unchanged objects.
+For the prod IAM role the bucket needs `s3:ListBucket`, `s3:GetObject`, `s3:PutObject`, and
+`s3:DeleteObject` (delete is only required for the purge path, not for backup itself).
+
+### Observability — Prometheus /metrics
+
+The API exposes a Prometheus text endpoint at **`GET /metrics`** (no auth required; safe to scrape
+from within the internal network). It aggregates metrics from both the api and worker processes:
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `recon_jobs_total` | Counter | `queue`, `outcome` | Jobs processed per queue and result |
+| `recon_job_duration_seconds` | Histogram | `queue` | End-to-end job wall time |
+| `recon_http_requests_total` | Counter | `method`, `path`, `status` | HTTP requests into the API |
+
+Queue pending + DLQ counts are exposed in `/healthz` under the `queues` key. The worker
+container now has a Docker liveness healthcheck (interval 30 s, threshold 600 s) — a hung
+serve_forever loop triggers `docker compose ps` to show the worker as `unhealthy`, at which
+point `docker compose restart worker` is the recovery action.

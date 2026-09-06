@@ -191,3 +191,55 @@ def test_out_of_scope_lookalike_is_not_in_scope():
     view = _agg(asset_urls=["https://evil-acme.io/x.js"], scope_hosts=["acme.io"])
     assert view.count == 1 and view.in_scope == 0
     assert not _row(view, "evil-acme.io").in_scope
+
+
+# ---------------------------------------------------------------------------
+# Apex-domain expansion (_expand_scope_for_display)
+# ---------------------------------------------------------------------------
+
+
+def test_sibling_subdomain_is_in_scope_when_declared_host_shares_apex():
+    # assets.canditech.io in scope → api.canditech.io is a sibling, same apex
+    # (canditech.io) → should be in-scope in the Hosts tab.
+    view = _agg(
+        asset_urls=[
+            "https://assets.canditech.io/app.js",
+            "https://api.canditech.io/v1",
+            "https://canditech.io/",
+        ],
+        scope_hosts=["assets.canditech.io"],
+    )
+    assert _row(view, "assets.canditech.io").in_scope  # declared entry itself
+    assert _row(view, "api.canditech.io").in_scope  # sibling subdomain
+    assert _row(view, "canditech.io").in_scope  # apex domain
+
+
+def test_apex_expansion_does_not_cross_to_unrelated_domain():
+    # canditech.io expansion must not mark evil.com as in-scope.
+    view = _agg(
+        asset_urls=["https://evil.com/x.js"],
+        scope_hosts=["assets.canditech.io"],
+    )
+    assert not _row(view, "evil.com").in_scope
+
+
+def test_apex_expansion_blocked_for_public_suffix():
+    # assets.github.io in scope must NOT expand to github.io (shared-hosting suffix).
+    view = _agg(
+        asset_urls=[
+            "https://assets.github.io/x.js",
+            "https://other.github.io/y.js",
+        ],
+        scope_hosts=["assets.github.io"],
+    )
+    assert _row(view, "assets.github.io").in_scope  # exact match still works
+    assert not _row(view, "other.github.io").in_scope  # sibling blocked
+
+
+def test_apex_already_declared_no_duplicate():
+    # scope_hosts already contains the apex — expansion adds nothing new, no errors.
+    view = _agg(
+        asset_urls=["https://api.canditech.io/v1"],
+        scope_hosts=["canditech.io"],
+    )
+    assert _row(view, "api.canditech.io").in_scope

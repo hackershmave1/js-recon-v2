@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     # the whole blob). A run MAY raise this via run.max_fetch_bytes (edit-&-re-run), but
     # only UP TO max_fetch_bytes_ceiling; clamp_fetch_bytes() enforces min(override-or-
     # default, ceiling) and fails closed on a non-positive override.
-    max_fetch_bytes: int = 10 * 1024 * 1024  # 10 MiB — matches the upload cap
+    max_fetch_bytes: int = 20 * 1024 * 1024  # 20 MiB — covers large app bundles
     # Hard ceiling on a per-run max_fetch_bytes override — the REAL analyze-memory bound.
     # Defaulted to the engine output cap (engine_max_output_bytes, 32 MiB): fetching more
     # than an engine can process buys nothing, and it is the size the analyze path is sized
@@ -267,6 +267,13 @@ class Settings(BaseSettings):
     # < heartbeat_stall_threshold_seconds (enforced by _check_fetch_lease_safety below).
     heartbeat_interval_seconds: float = 5.0
     heartbeat_stall_threshold_seconds: float = 30.0
+
+    # Worker liveness probe (D53-c). The worker touches this file every serve_forever loop
+    # iteration so the Docker healthcheck can detect a fully hung process. Empty string disables
+    # the touch (tests, local runs without Docker). Threshold in the healthcheck must exceed
+    # the longest expected run_once() call (analyze can block up to ~5 min for large maps).
+    # env: RECON_WORKER_LIVENESS_FILE
+    worker_liveness_file: str = "/tmp/recon-worker-liveness"  # noqa: S108
     event_stream_maxlen: int = 10_000
 
     # Queue retry policy (REQ-Q2).

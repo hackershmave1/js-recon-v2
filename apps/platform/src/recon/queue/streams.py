@@ -157,7 +157,14 @@ def reclaim_stalled(
 
 
 def pending_count(redis: Redis, queue: QueueName) -> int:
-    summary = redis.xpending(queue_key(queue), GROUP)
+    try:
+        summary = redis.xpending(queue_key(queue), GROUP)
+    except ResponseError as exc:
+        # NOGROUP: the queue stream / consumer group hasn't been created yet (no
+        # messages enqueued on this queue since last boot). Treat as 0 pending.
+        if "NOGROUP" in str(exc):
+            return 0
+        raise
     if isinstance(summary, dict):
         return int(summary.get("pending", 0))
     return int(summary[0]) if summary else 0

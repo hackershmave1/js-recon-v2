@@ -64,6 +64,32 @@ from recon.fetch import egress
 from recon.findings import noise_hosts
 
 
+def _expand_scope_for_display(scope_hosts: list[str], *, allow_local: bool = False) -> list[str]:
+    """Expand scope entries to their apex domain (last two labels) for the Hosts tab.
+
+    If ``assets.canditech.io`` is declared, ``canditech.io`` is added so that
+    all sibling subdomains (``api.canditech.io``, ``system.canditech.io``, …)
+    are classified as in-scope in the display. Public suffixes (``github.io``,
+    ``amazonaws.com``, …) are excluded via the existing denylist, so scope never
+    expands to cover a shared-hosting neighbour.
+
+    This only widens the *display* classification — the egress guard that controls
+    what the fetcher actually reaches is unchanged.
+    """
+    expanded = list(scope_hosts)
+    for entry in scope_hosts:
+        normalized = egress._normalize_host(entry)
+        if not egress.is_valid_scope_entry(normalized, allow_local=allow_local):
+            continue
+        labels = normalized.split(".")
+        if len(labels) < 3:
+            continue  # already at apex (two labels) — nothing to add
+        apex = ".".join(labels[-2:])
+        if egress.is_valid_scope_entry(apex, allow_local=allow_local) and apex not in expanded:
+            expanded.append(apex)
+    return expanded
+
+
 @dataclass(frozen=True)
 class HostRow:
     host: str
@@ -202,10 +228,11 @@ def _aggregate_hosts(
         # from the inventory by DEFAULT — reversible via the toggle. A declared/in-scope host is
         # never on the denylist, so this removes only vendor noise, never the target's own surface.
         universe = {h for h in universe if not noise_hosts.is_noise_host(h)}
+    display_scope = _expand_scope_for_display(scope_hosts, allow_local=allow_local)
     rows = [
         HostRow(
             host=h,
-            in_scope=egress.host_in_scope(h, scope_hosts, allow_local=allow_local),
+            in_scope=egress.host_in_scope(h, display_scope, allow_local=allow_local),
             declared=h in declared,
             assets=assets_by_host.get(h, 0),
             endpoints=endpoints_by_host.get(h, 0),

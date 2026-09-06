@@ -302,6 +302,16 @@ classes). **Fix:** a run-scoped source-search endpoint over stored blobs; a new 
 for postMessage/storage sinks mirroring the recent internal-IP pattern ([[D33]]).
 
 #### D53 · Platform observability & ops gaps [M]  ·  reliability — Tier 2
+> ✅ **RESOLVED 2026-09-06** (PR #132). All 5 facets shipped:
+> (a) `prometheus-client` added; `recon/metrics.py` defines `recon_jobs_total{queue,outcome}`,
+> `recon_job_duration_seconds{queue}`, `recon_http_requests_total{method,path,status}`; `/metrics`
+> endpoint (multiprocess mode via `PROMETHEUS_MULTIPROC_DIR` + shared `prometheusdata` Docker volume)
+> aggregates api + worker processes. (b) `/healthz` extended: S3 `head_bucket` check + per-queue
+> `pending`/`dlq` counts for all `QueueName` values. (c) Worker Docker healthcheck added (liveness
+> file `/tmp/recon-worker-liveness` touched each serve_forever loop iteration, threshold 600 s).
+> (d) `pg_dump` + `mc mirror` recipes added to `docs/OPERATING.md` §4. (e) Worker consumer name
+> derived from `socket.gethostname()` + `os.getpid()` — unique per container per process, stale PEL
+> entries autoclaimed within one lease window (REQ-R3).
 The async spine is solid but under-instrumented for operation: (a) **no metrics/tracing** — `REQ-S3`
 (`docs/REQUIREMENTS.md:87`) requires per-stage metrics + traces; there is no metrics lib, `/metrics`
 route, or OTel span anywhere (`apps/platform/src/recon/observability.py` is logging-only); (b) **no

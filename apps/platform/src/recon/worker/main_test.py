@@ -281,6 +281,80 @@ def test_handle_failure_dead_letters_when_retries_exhausted(monkeypatch):
     assert seen["to_state"] == RunState.FAILED
 
 
+# ---------------------------------------------------------------------------
+# reap_orphaned_jobs (hermetic)
+# ---------------------------------------------------------------------------
+
+
+def _reap_wire(monkeypatch, *, orphans, mark_wins=True, flags, transition_raises=None):
+    seen: dict = {"transitions": []}
+    monkeypatch.setattr(worker, "_find_orphaned_jobs", lambda: orphans)
+    monkeypatch.setattr(worker, "_mark_job_dead", lambda tid, jid: mark_wins)
+    monkeypatch.setattr(queries, "get_run_flags", lambda tid, rid: flags)
+
+    def _transition(*a, **k):
+        if transition_raises:
+            raise transition_raises
+        seen["transitions"].append(k)
+
+    monkeypatch.setattr(worker.service, "transition", _transition)
+    return seen
+
+
+def test_reap_cancel_requested_transitions_run_to_cancelled(monkeypatch):
+    orphans = [("j1", "t1", "r1", "fetching")]
+    seen = _reap_wire(monkeypatch, orphans=orphans, flags=_flags("fetching", cancel=True))
+    count = worker.reap_orphaned_jobs(None)
+    assert count == 1
+    assert seen["transitions"][0]["to_state"] == RunState.CANCELLED
+
+
+def test_reap_pause_requested_transitions_to_paused_with_stage(monkeypatch):
+    orphans = [("j1", "t1", "r1", "fetching")]
+    seen = _reap_wire(monkeypatch, orphans=orphans, flags=_flags("fetching", pause=True))
+    worker.reap_orphaned_jobs(None)
+    t = seen["transitions"][0]
+    assert t["to_state"] == RunState.PAUSED
+    assert t["extra_values"]["resumed_from_stage"] == "fetching"
+
+
+def test_reap_no_flags_transitions_run_to_failed(monkeypatch):
+    orphans = [("j1", "t1", "r1", "fetching")]
+    seen = _reap_wire(monkeypatch, orphans=orphans, flags=_flags("fetching"))
+    worker.reap_orphaned_jobs(None)
+    assert seen["transitions"][0]["to_state"] == RunState.FAILED
+
+
+def test_reap_skips_when_mark_dead_lost_race(monkeypatch):
+    orphans = [("j1", "t1", "r1", "fetching")]
+    seen = _reap_wire(
+        monkeypatch, orphans=orphans, mark_wins=False, flags=_flags("fetching", cancel=True)
+    )
+    count = worker.reap_orphaned_jobs(None)
+    assert count == 0
+    assert seen["transitions"] == []
+
+
+def test_reap_skips_transition_for_already_terminal_run(monkeypatch):
+    orphans = [("j1", "t1", "r1", "fetching")]
+    seen = _reap_wire(monkeypatch, orphans=orphans, flags=_flags("cancelled"))
+    count = worker.reap_orphaned_jobs(None)
+    assert count == 1
+    assert seen["transitions"] == []
+
+
+def test_reap_swallows_transition_conflict(monkeypatch):
+    orphans = [("j1", "t1", "r1", "fetching")]
+    _reap_wire(
+        monkeypatch,
+        orphans=orphans,
+        flags=_flags("fetching", cancel=True),
+        transition_raises=worker.service.TransitionConflict("already moved"),
+    )
+    count = worker.reap_orphaned_jobs(None)
+    assert count == 1  # still counted; the conflict is not an error
+
+
 def test_handle_failure_persists_classified_reason(monkeypatch):
     # The dead path classifies the exception and records the safe subset to
     # run.error + the SSE event; the raw message stays only in error["message"].

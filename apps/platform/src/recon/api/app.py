@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
@@ -32,7 +32,9 @@ from recon.api import (
 from recon.api.deps import get_redis
 from recon.config import get_settings
 from recon.db.base import engine
+from recon.domain import QueueName
 from recon.observability import configure_logging, get_logger
+from recon.queue import streams
 
 log = get_logger("recon.api")
 
@@ -80,11 +82,64 @@ def create_app() -> FastAPI:
         app.include_router(capture_router.router)
         log.info("api.capture_ingest_enabled")
 
+    # D53-a: count every HTTP request. Added first so it wraps ALL routes (Starlette
+    # middleware executes outermost-first). /metrics itself is excluded to avoid
+    # self-referential noise. The path label uses the matched route *template*
+    # (e.g. "/runs/{run_id}/findings") not the resolved path, to avoid unbounded
+    # label cardinality from UUIDs and arbitrary 404 paths.
+    @app.middleware("http")
+    async def _count_requests(request: Request, call_next):
+        status = "500"
+        try:
+            response = await call_next(request)
+            status = str(response.status_code)
+            return response
+        except Exception:
+            raise
+        finally:
+            if request.url.path != "/metrics":
+                from recon.metrics import http_requests_total
+
+                route = request.scope.get("route")
+                path = route.path if route is not None else "<unmatched>"
+                http_requests_total.labels(
+                    method=request.method,
+                    path=path,
+                    status=status,
+                ).inc()
+
+    @app.get("/metrics", tags=["ops"], include_in_schema=False)
+    def metrics_endpoint() -> Response:
+        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+        from recon.metrics import make_scrape_registry
+
+        return Response(generate_latest(make_scrape_registry()), media_type=CONTENT_TYPE_LATEST)
+
     @app.get("/healthz", tags=["ops"])
     def healthz() -> dict:
-        checks = {"redis": _check_redis(), "postgres": _check_postgres()}
+        redis = get_redis()
+        checks = {
+            "redis": _check_redis(redis),
+            "postgres": _check_postgres(),
+            "s3": _check_s3(),
+        }
+        queue_stats: dict[str, dict[str, int]] = {}
+        if checks["redis"]:
+            for queue in QueueName:
+                try:
+                    queue_stats[queue.value] = {
+                        "pending": streams.pending_count(redis, queue),
+                        "dlq": redis.xlen(streams.dlq_key(queue)),
+                    }
+                except Exception:  # pragma: no cover - best-effort
+                    queue_stats[queue.value] = {"pending": -1, "dlq": -1}
         healthy = all(checks.values())
-        return {"status": "ok" if healthy else "degraded", "checks": checks}
+        return {
+            "status": "ok" if healthy else "degraded",
+            "checks": checks,
+            "queues": queue_stats,
+        }
 
     log.info("api.started", env=settings.env)
     _mount_spa(app, settings)
@@ -149,9 +204,10 @@ def _mount_spa(app: FastAPI, settings) -> None:
         raise HTTPException(status_code=404, detail="not found")
 
 
-def _check_redis() -> bool:
+def _check_redis(redis=None) -> bool:
     try:
-        return bool(get_redis().ping())
+        r = redis if redis is not None else get_redis()
+        return bool(r.ping())
     except Exception:  # pragma: no cover - health check is best-effort
         return False
 
@@ -162,6 +218,16 @@ def _check_postgres() -> bool:
             conn.execute(text("SELECT 1"))
         return True
     except Exception:  # pragma: no cover
+        return False
+
+
+def _check_s3() -> bool:
+    try:
+        from recon.storage import _s3_client
+
+        _s3_client().head_bucket(Bucket=get_settings().s3_bucket)
+        return True
+    except Exception:  # pragma: no cover - health check is best-effort
         return False
 
 
