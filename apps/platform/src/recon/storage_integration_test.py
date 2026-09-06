@@ -12,8 +12,10 @@ env (see ``apps/platform/README``):
 from __future__ import annotations
 
 import os
+import uuid
 
 import pytest
+from botocore.exceptions import ClientError
 
 from recon import storage
 
@@ -47,3 +49,22 @@ def test_streamed_put_dedups_with_bytes_put(tmp_path):
     buffered = storage.put_blob("t", "r", "input", content)
     assert streamed == buffered
     assert storage.get_blob(streamed) == content
+
+
+def test_delete_run_blobs_purges_only_the_target_run():
+    # REQ-S4 / D47: the prefix sweep removes every kind under {tenant}/{run}/ and NOTHING under
+    # a sibling run — the safety property the whole design rests on, proven against real MinIO.
+    tenant = f"t-{uuid.uuid4().hex[:8]}"
+    key_a_input = storage.put_blob(tenant, "run-a", "input", b"a-input")
+    key_a_map = storage.put_blob(tenant, "run-a", "source_map", b"a-map")
+    key_b_input = storage.put_blob(tenant, "run-b", "input", b"b-input")
+
+    assert storage.delete_run_blobs(tenant, "run-a") == 2  # both of run-a's kinds, not run-b's
+
+    for gone in (key_a_input, key_a_map):
+        with pytest.raises(ClientError):
+            storage.get_blob(gone)
+    assert storage.get_blob(key_b_input) == b"b-input"  # run-b untouched (run-scoped prefix)
+
+    # Idempotent: re-sweeping the now-empty prefix deletes nothing and does not raise.
+    assert storage.delete_run_blobs(tenant, "run-a") == 0

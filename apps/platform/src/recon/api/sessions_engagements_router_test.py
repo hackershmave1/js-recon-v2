@@ -11,8 +11,10 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 
+from recon import storage
 from recon.api.app import create_app
 from recon.sessions import service as sessions_service
 
@@ -122,6 +124,68 @@ def test_delete_session_with_runs_cascades(tenant, redis):
     # Session gone, and its run cascaded away (the runs listing 404s with the session).
     assert client.get("/sessions?archived=true", headers=_hdr(tenant)).json()["count"] == 0
     assert client.get(f"/sessions/{session_id}/runs", headers=_hdr(tenant)).status_code == 404
+
+
+def test_delete_session_sweeps_each_run_and_skips_when_none(tenant, redis, monkeypatch):
+    # D47 wiring: delete_session must call the blob sweep once per NON-EMPTY run id, and not
+    # at all for a run-less session. This is the collect-before-delete guard (L1) — it can only
+    # be proven against a real DB: a mocked session returns the same canned rows whether the
+    # SELECT runs before or after session.delete, so it cannot catch a collect-after regression.
+    client = _client()
+    swept: list[str] = []
+    monkeypatch.setattr(
+        storage, "delete_run_blobs", lambda _tenant, run_id: swept.append(run_id) or 0
+    )
+
+    run_less = _new_session(client, tenant)
+    assert client.delete(f"/sessions/{run_less}", headers=_hdr(tenant)).status_code == 204
+    assert swept == []  # no runs -> nothing to sweep
+
+    session_id = _new_session(client, tenant)
+    run_id = _upload_run(client, tenant, session_id)
+    assert client.delete(f"/sessions/{session_id}", headers=_hdr(tenant)).status_code == 204
+    assert swept == [run_id]  # the run id was collected BEFORE the cascade, then swept once
+
+
+def test_delete_session_purges_run_blobs_from_object_store(tenant, redis):
+    # REQ-S4 end-to-end against real MinIO: deleting a session removes its object-storage bytes,
+    # not just its Postgres rows. A known blob under the run's prefix is gone after the delete.
+    client = _client()
+    session_id = _new_session(client, tenant)
+    run_id = _upload_run(client, tenant, session_id)
+    key = storage.put_blob(tenant, run_id, "reconstructed", b"sensitive-recovered-source")
+    assert storage.get_blob(key) == b"sensitive-recovered-source"
+
+    assert client.delete(f"/sessions/{session_id}", headers=_hdr(tenant)).status_code == 204
+
+    with pytest.raises(ClientError):  # NoSuchKey — the run's prefix was purged
+        storage.get_blob(key)
+
+
+@pytest.mark.parametrize(
+    "sweep_error",
+    [
+        storage.BlobPurgeError(
+            "t/r/", deleted=0, failed=1, sample=[{"key": "k", "code": "AccessDenied"}]
+        ),
+        RuntimeError("s3 list/delete threw"),  # e.g. missing s3:ListBucket -> the broad-except path
+    ],
+    ids=["partial-errors", "raw-exception"],
+)
+def test_delete_session_survives_a_blob_purge_failure(tenant, redis, monkeypatch, sweep_error):
+    # A best-effort sweep failure must NOT surface as a 500 — the DB delete already committed, so
+    # the session is gone regardless; the orphaned bytes are left for the deferred GC. Cover BOTH
+    # handled branches: the BlobPurgeError partial-failure path and the broad-except (call threw).
+    client = _client()
+    session_id = _new_session(client, tenant)
+    _upload_run(client, tenant, session_id)
+
+    def _boom(tenant_id, run_id):
+        raise sweep_error
+
+    monkeypatch.setattr(storage, "delete_run_blobs", _boom)
+    assert client.delete(f"/sessions/{session_id}", headers=_hdr(tenant)).status_code == 204
+    assert client.get("/sessions?archived=true", headers=_hdr(tenant)).json()["count"] == 0
 
 
 def test_rename_empty_is_400(tenant, redis):

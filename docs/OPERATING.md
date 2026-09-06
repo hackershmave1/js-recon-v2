@@ -146,6 +146,13 @@ What is safe to point this at, and what it will and won't do.
 - **Secrets are hashed, not stored (REQ-S2/S4).** A found secret is kept as a one-way hash + location;
   reveal is ephemeral, just-in-time, and audit-logged — the platform is not a store of live
   third-party credentials.
+- **Deleting a session purges its object-storage blobs (REQ-S4).** `DELETE /sessions/{id}` sweeps
+  every artifact under the run-scoped key prefix `{tenant}/{run}/…` (raw JS, source maps, recovered
+  sources, captured request/response bodies) — not just the Postgres rows — so a closed engagement
+  leaves no sensitive bytes in the bucket. The prod S3/MinIO role therefore needs **`s3:ListBucket` +
+  `s3:DeleteObject`** on the artifact bucket (MinIO dev is already full-access). A purge that can't
+  list/delete is logged loud (`blob_purge_failed`, with the run prefix + deleted/failed counts) but
+  the delete still succeeds — so alert on that log line if the bucket perms are locked down.
 - **Tenant isolation is enforced in the database (REQ-S1).** Every row and blob key is tenant-scoped
   by Postgres row-level security, enforced on a non-superuser app role — not just at the API.
 - **Auth (central login).** Password + bcrypt, stateless HMAC-signed session tokens, one generic 401
@@ -169,6 +176,13 @@ Deliberately deferred — safe for internal single-operator use, revisit before 
   reject them regardless.
 - **No role-based authorization yet.** Every signed-in user in a tenant is effectively an operator.
   Fine for a single trusted operator; add RBAC before multi-user tenants.
+- **Automated retention TTL isn't enforced yet (DEBT D47).** Purge is tenant-initiated — deleting a
+  session reclaims its blobs — but there's no scheduled expiry. Do **not** add a raw age-based S3
+  lifecycle rule: it expires objects by age decoupled from session liveness, so a live session's older
+  blobs would vanish and its reveal/source reads would 500. A default TTL must be *liveness-aware*
+  (bound to session deletion/archival), and a scheduled GC — diffing bucket prefixes against live run
+  ids, special-casing the session-scoped `spec` blob — is the backstop for anything a best-effort sweep
+  failure or a delete-while-running leaves orphaned.
 - **Migrations aren't frozen snapshots (DEBT D19).** Pre-prod only; freeze before running incremental
   upgrades against live tenant data.
 - **CI is advisory, not a hard merge gate.** Branch protection isn't available on the current
