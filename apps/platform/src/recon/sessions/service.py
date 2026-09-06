@@ -22,12 +22,16 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from recon import storage
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
 from recon.db.models import Engagement, EngagementSession, Finding, Run, RunAsset, Tenant
 from recon.domain import TOTAL_ENDPOINT_TYPES, FindingType
 from recon.fetch import egress
 from recon.findings.queries import _latest_coverage
+from recon.observability import get_logger
+
+_logger = get_logger(__name__)
 
 
 class AuthorizationRequired(Exception):
@@ -221,15 +225,63 @@ def set_session_archived(tenant_id: str, session_id: str, *, archived: bool) -> 
 
 
 def delete_session(tenant_id: str, session_id: str) -> bool:
-    """Hard-delete a session and (FK CASCADE) its runs/findings. Returns False if
-    the session is invisible to the tenant or already gone. Object-storage blobs
-    are content-addressed and not swept here; a GC pass is future work."""
+    """Hard-delete a session and (FK CASCADE) its runs/findings, then PURGE the object-storage
+    blobs those runs owned (REQ-S4, D47). Returns False if the session is invisible to the
+    tenant or already gone.
+
+    Ordering is load-bearing. The run ids are collected INSIDE the transaction — before the
+    cascade removes the run rows — the DB delete commits, and only THEN are the blobs swept.
+    A crash or S3 failure mid-sweep therefore leaves at worst ORPHANED blobs (storage waste,
+    reclaimable by the deferred GC), never a dangling DB->blob reference (which would 500 a
+    reveal/source read). Blob keys are run-scoped (``{tenant}/{run}/{kind}/{sha256}``), so
+    sweeping each run's prefix is complete (every kind, incl. captured request/response
+    bodies) and can reach neither another run nor another tenant.
+
+    The sweep is best-effort: the row is already gone, so an S3 error must NOT re-raise into a
+    500 — it is logged loud + structured (``blob_purge_failed`` with the prefix and the
+    deleted/failed counts) so it is alertable, and the orphaned bytes await the deferred GC."""
     with tenant_session(tenant_id) as session:
         row = session.get(EngagementSession, session_id)
         if row is None:
             return False
+        # Collect BEFORE delete — after session.delete the cascade removes the run rows, so a
+        # later SELECT would return nothing and silently strand every blob.
+        run_ids = [
+            str(rid)
+            for rid in session.scalars(
+                select(Run.id).where(Run.session_id == str(session_id))
+            ).all()
+        ]
         session.delete(row)
-        return True
+    # Transaction committed: the session + its runs/findings are gone. Reclaim their blobs.
+    for run_id in run_ids:
+        try:
+            deleted = storage.delete_run_blobs(tenant_id, run_id)
+        except storage.BlobPurgeError as exc:
+            # A partial failure: log WHICH sensitive blobs survived and WHY (bounded sample), not
+            # just the count, so the operator can remediate before the deferred GC exists (H1).
+            _logger.error(
+                "blob_purge_failed",
+                tenant_id=tenant_id,
+                run_id=run_id,
+                prefix=exc.prefix,
+                deleted=exc.deleted,
+                failed=exc.failed,
+                failed_sample=exc.sample,
+            )
+        except Exception:
+            # List/delete itself threw (e.g. missing s3:ListBucket/DeleteObject in prod) — the
+            # whole run's bytes remain. Loud, with the traceback, so a perms misconfig surfaces.
+            _logger.error(
+                "blob_purge_failed",
+                tenant_id=tenant_id,
+                run_id=run_id,
+                prefix=f"{tenant_id}/{run_id}/",
+                exc_info=True,
+            )
+        else:
+            _logger.info("blob_purge_ok", tenant_id=tenant_id, run_id=run_id, deleted=deleted)
+    return True
 
 
 # ----------------------------------------------------------------------------- #

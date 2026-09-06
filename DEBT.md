@@ -188,6 +188,23 @@ fetch; a live badge; a persisted per-session summary list; an "include code" exp
 "clear"; HAR export; a 3-step first-run coach.
 
 #### D47 · "Delete" doesn't delete object-storage blobs — REQ-S4 purge unmet [M–L]  ·  supply-chain/security — Tier 2
+> ✅ **RESOLVED 2026-09-06** (D47 blob-purge slice; both §4 gates passed — design GO-WITH-CHANGES + code
+> review SHIP-WITH-NITS, all folded). `DELETE /sessions/{id}` now PURGES the run's object-storage blobs,
+> not just its Postgres rows. New `storage.delete_run_blobs` sweeps every object under the run-scoped
+> prefix `{tenant}/{run}/` (`list_objects_v2` paginator + batched `delete_objects` ≤1000, inspecting the
+> per-key `Errors[]` an HTTP-200 can still carry → `BlobPurgeError` with a bounded sample of WHICH keys
+> survived + WHY); `delete_session` collects the run ids BEFORE the cascade, commits, then sweeps
+> best-effort — a failure is loud-structured-logged (`blob_purge_failed`), never a dangling ref, orphans
+> await the GC backstop. Complete + safe by construction: keys embed `run_id`, so one sweep hits every
+> blob kind (incl. the D45 capture bodies whose ref lives in a `run_event` payload, not a column) and can
+> reach neither another run nor another tenant. Verified: 5 hermetic + 5 integration cases (real PG +
+> MinIO). Design spec: `apps/platform/docs/superpowers/specs/2026-09-06-d47-blob-purge-design.md`.
+> **Deferred (documented, NOT claimed done):** REQ-S4's *default-TTL enforcement* — a raw age-based S3
+> lifecycle rule would reintroduce dangling refs (expiry decoupled from session liveness), so it needs a
+> liveness-aware retention job; a scheduled GC (diffing bucket prefixes vs live run ids, **special-casing
+> the session-scoped `spec` blob** — a per-run sweep would corrupt a live session's spec) as the
+> crash/failure + delete-while-running orphan backstop; and async/queued purge for very large runs.
+> OPERATING.md carries the `s3:ListBucket` + `s3:DeleteObject` IAM requirement + the no-raw-lifecycle warning.
 `docs/REQUIREMENTS.md:88` mandates retention/purge as a **MUST**. `DELETE /sessions/{id}` hard-deletes
 Postgres rows only; the S3/MinIO blobs (raw JS, source maps, recovered sources — the bytes secrets /
 config-GUIDs / internal IPs live in) are never touched — no `delete_blob` exists in `storage.py`, and
