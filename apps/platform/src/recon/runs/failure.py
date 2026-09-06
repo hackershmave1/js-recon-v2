@@ -169,7 +169,8 @@ def classify_failure(exc: BaseException, stage: RunStage | None = None) -> Failu
         return FailureInfo(FailureCategory.TIMEOUT, "The target timed out while responding.")
     if "exceeds" in msg and "bytes" in msg:
         return FailureInfo(
-            FailureCategory.TOO_LARGE, "The target response exceeded the fetch size limit."
+            FailureCategory.TOO_LARGE,
+            "An asset exceeded the per-run fetch size limit. Raise it via Edit & Re-run.",
         )
 
     # Fallback: a safe, generic reason — never the raw message (it may leak detail).

@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     # the whole blob). A run MAY raise this via run.max_fetch_bytes (edit-&-re-run), but
     # only UP TO max_fetch_bytes_ceiling; clamp_fetch_bytes() enforces min(override-or-
     # default, ceiling) and fails closed on a non-positive override.
-    max_fetch_bytes: int = 10 * 1024 * 1024  # 10 MiB — matches the upload cap
+    max_fetch_bytes: int = 20 * 1024 * 1024  # 20 MiB — covers large app bundles
     # Hard ceiling on a per-run max_fetch_bytes override — the REAL analyze-memory bound.
     # Defaulted to the engine output cap (engine_max_output_bytes, 32 MiB): fetching more
     # than an engine can process buys nothing, and it is the size the analyze path is sized

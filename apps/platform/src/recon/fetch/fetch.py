@@ -325,7 +325,10 @@ def _fetch_hops(
                             last_beat = now
                         written += len(chunk)
                         if written > max_bytes:
-                            raise retry.FatalError(f"response exceeds {max_bytes} bytes")
+                            raise retry.FatalError(
+                                f"asset too large: response exceeds {max_bytes} bytes"
+                                " — raise the limit via Edit & Re-run"
+                            )
                         # D37-L2 slice 4: stream to the sink (a temp file for a big .map) instead of
                         # buffering in RAM; the cap above is checked on the running total, not len(body).
                         if sink is not None:
