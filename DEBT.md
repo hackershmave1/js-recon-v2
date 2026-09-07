@@ -232,8 +232,10 @@ correct the OPERATING.md claim.
 #### D46 · Extension value-loop + activation affordances [M]  ·  maintainability — Tier 2  ◆2
 > 🟡 **PARTIAL 2026-09-04** (PR #126). Shipped (b) a live toolbar badge, (d) reachable "clear
 > captures" (Settings) + an export-with-code toggle, and (e) a first-run coach on the sign-in screen.
-> **STILL OPEN:** (a) the post-analyze findings-summary card in the popup — needs a platform
-> `sessions/{id}/findings/summary` endpoint (pairs with a platform slice); (c) a persisted capture history;
+> ✅ **(a) findings summary card RESOLVED 2026-09-07** — `GET /api/sessions/{id}/findings/summary`
+> added to the platform (queries.get_session_findings_summary, sessions_router); extension popup
+> fetches it once analysis completes and shows a compact "N findings: X endpoints · Y secrets · Z IPs"
+> card with a "View →" workspace link. **STILL OPEN:** (c) a persisted capture history;
 > and the Burp/Caido/HAR interchange export.
 The extension is a one-way uploader: value never returns to where the operator works, and first-run
 activation is unguided. Bundle of feature gaps: (a) **no results in the popup** — after Analyze only
@@ -357,12 +359,11 @@ serializers `return None` (`serialize.py:59-60,99-100`), giving "not probeable" 
 `websocat` command for WS/WSS analogous to `to_curl`.
 
 #### D52 · Recon coverage: no source full-text search; postMessage/storage sinks aren't a finding type [M]  ·  correctness — Tier 2
-> 🟡 **PARTIAL 2026-09-04** (PR #127). Shipped (a) a run-scoped full-text search — new
-> `GET /runs/{id}/sources/search?q=` greps the run's sources server-side (bounded: 120-file / 200-match /
-> 20-per-file caps), and a debounced Sources search box lists file+line+snippet hits that jump into the
-> viewer. **STILL OPEN:** (b) the postMessage/localStorage/cookie sink FindingType + detector — a new
-> detection capability that wants a proper precision design (tree-sitter vs regex, FP budget) and its own
-> migration (a new `ck_finding_type` value), not a session-end add.
+> ✅ **RESOLVED 2026-09-07** (both halves). (a) run-scoped full-text search — PR #127 (2026-09-04).
+> (b) postMessage/storage sink FindingType + detector — migration 0025 widens `ck_finding_type`;
+> `findings/data_sinks.py` regex detector (POSTMESSAGE_RE + STORAGE_RE, per-type cap 500); wired into
+> `_analyze_blob` after internal-IP pass; `priority.py` scores postmessage_sink=35, storage_sink=25;
+> frontend label + CSS pill added; type facet auto-enumerates new types.
 Two coverage gaps that lose real attack surface: (a) **no full-text search across recovered sources** —
 `apps/platform/src/recon/probe/sources.py` has no grep endpoint, `SourcesPage` filters file *names*
 only, and `CodeViewer` windowing (`apps/platform/web/src/features/sources/CodeViewer.tsx:73-74,117-134`)
