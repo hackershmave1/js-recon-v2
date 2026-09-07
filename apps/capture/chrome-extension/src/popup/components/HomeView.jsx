@@ -291,6 +291,49 @@ export function HomeView({ vm }) {
         </div>
       </div>
 
+      {/* D46: findings summary card — shown after analysis completes (status=done) when the
+          backend has a completed run for this session. Compact 2-line strip: count summary
+          on the first line, top finding type on the second, "View in workspace →" link.
+          Hidden until both the analysis job is done AND a summary with real findings exists. */}
+      {a.status === 'done' && vm.findingsSummary && vm.findingsSummary.status === 'complete' && (() => {
+        const s = vm.findingsSummary;
+        const c = s.counts || {};
+        // Compact summary line: "42 findings: 20 endpoints · 5 secrets · 3 IPs"
+        const parts = [];
+        if (c.endpoints > 0) parts.push(`${c.endpoints} endpoint${c.endpoints !== 1 ? 's' : ''}`);
+        if (c.secrets > 0) parts.push(`${c.secrets} secret${c.secrets !== 1 ? 's' : ''}`);
+        if (c.internal_ips > 0) parts.push(`${c.internal_ips} IP${c.internal_ips !== 1 ? 's' : ''}`);
+        if (c.graphql > 0) parts.push(`${c.graphql} GraphQL`);
+        if (c.other > 0) parts.push(`${c.other} other`);
+        const summaryLine = `${c.total || 0} finding${c.total !== 1 ? 's' : ''}${parts.length ? ': ' + parts.join(' · ') : ''}`;
+        return (
+          <div style={{ padding: '0 17px 15px' }}>
+            <div style={{
+              background: 'rgba(205,235,69,0.06)', border: `1px solid rgba(205,235,69,0.25)`,
+              borderRadius: '11px', padding: '11px 13px'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <span style={{ fontFamily: F.mono, fontSize: '11.5px', color: C.lime, fontWeight: 700, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {summaryLine}
+                </span>
+                <button onClick={vm.openWorkspace} style={{
+                  flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: '4px',
+                  padding: '3px 10px', borderRadius: '7px', border: `1px solid rgba(205,235,69,0.35)`,
+                  background: 'none', color: C.lime, cursor: 'pointer', fontSize: '10.5px', fontWeight: 700
+                }}>
+                  View <ArrowRightIcon />
+                </button>
+              </div>
+              {(s.top_findings || []).length > 0 && (
+                <div style={{ marginTop: '5px', fontSize: '10.5px', color: C.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  Top: {s.top_findings[0].type}{s.top_findings[0].value && s.top_findings[0].value !== '[redacted]' ? ` · ${s.top_findings[0].value}` : ''}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* recent captures */}
       <div style={{ padding: '0 17px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>

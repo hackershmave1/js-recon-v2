@@ -36,6 +36,8 @@ export const createProject = (project) => send('createProject', { project });
 // its per-file progress for the captures feed.
 export const analyzeSession = () => send('analyzeSession');
 export const getAnalysisProgress = () => send('getAnalysisProgress');
+// D46: fetch the findings summary for the session's latest completed run (popup card).
+export const getSessionFindingsSummary = (sessionId) => send('getSessionFindingsSummary', { sessionId });
 
 // Active tab hostname for the capture-target card. Falls back gracefully.
 export async function getActiveTabHost() {

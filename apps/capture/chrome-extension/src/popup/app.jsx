@@ -58,6 +58,8 @@ export function App() {
   // Decoupled analysis: status of the on-demand backend job + its per-file progress,
   // which drives the captures feed's ingested→analyzing→analyzed lifecycle.
   const [analysis, setAnalysis] = useState({ status: 'idle', counts: null, files: [] });
+  // D46: findings summary card — null until fetched after analysis completes.
+  const [findingsSummary, setFindingsSummary] = useState(null);
   // Project-scoped capture: cached engagement list, the chosen project (null => Standalone),
   // and the sparse per-session override doc the New-Session editor builds.
   const [projects, setProjects] = useState([]);
@@ -127,6 +129,20 @@ export function App() {
     const id = setInterval(poll, 1500);
     return () => { alive = false; clearInterval(id); };
   }, [analysis.status]);
+
+  // D46: fetch the findings summary once analysis settles to 'done' and a session id is known.
+  // Runs whenever analysis.status transitions to 'done'; clears on a new session (status changes
+  // back to 'idle'). A failed fetch is silent — the card simply stays hidden.
+  useEffect(() => {
+    if (analysis.status !== 'done') return;
+    const sid = status?.sessionId;
+    if (!sid) return;
+    api.getSessionFindingsSummary(sid).then((res) => {
+      if (res?.success && res.summary?.status === 'complete') {
+        setFindingsSummary(res.summary);
+      }
+    });
+  }, [analysis.status, status?.sessionId]);
 
   // toast holds { msg, tone }; tone ∈ ok|warn|error drives colour/icon (ui.jsx). Failures linger
   // longer than the 2.2s success flash so an error can actually be read (D42).
@@ -489,6 +505,7 @@ export function App() {
     scopeText, scopeMode, health, connectionLabel,
     captures, mutedCount,
     analysis, canAnalyze: (status.fileCount || 0) > 0,
+    findingsSummary,
     projects, projectId, activeProjectId,
     activeProjectName: activeProjectName(activeProjectId, projects),
     overrides, settings,

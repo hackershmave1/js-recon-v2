@@ -19,6 +19,7 @@ from redis import Redis
 from sqlalchemy.exc import IntegrityError
 
 from recon.api.deps import get_actor, get_redis, get_tenant_id
+from recon.findings import queries as findings_queries
 from recon.runs import coordinator
 from recon.sessions import service
 
@@ -77,6 +78,41 @@ def list_session_runs(session_id: str, tenant_id: str = Depends(get_tenant_id)) 
         "session_id": session_id,
         "count": len(runs),
         "runs": [_run_ref_dict(run) for run in runs],
+    }
+
+
+@router.get("/sessions/{session_id}/findings/summary")
+def get_session_findings_summary(
+    session_id: str, tenant_id: str = Depends(get_tenant_id)
+) -> dict:
+    """Lightweight findings summary for the latest completed run of a session.
+
+    Returns the per-bucket counts and the top-3 highest-priority findings so the
+    extension popup can render a compact card without fetching the full findings
+    list. ``{"status": "no_run"}`` when the session has no terminal run yet (or the
+    session is invisible to this tenant — RLS makes both cases indistinguishable,
+    which is correct: a tenant must not learn that a session belonging to another
+    tenant exists at all).
+    """
+    summary = findings_queries.get_session_findings_summary(tenant_id, session_id)
+    if summary is None:
+        return {"status": "no_run"}
+    return {
+        "status": "complete",
+        "session_id": summary.session_id,
+        "run_id": summary.run_id,
+        "counts": {
+            "total": summary.counts.total,
+            "endpoints": summary.counts.endpoints,
+            "secrets": summary.counts.secrets,
+            "internal_ips": summary.counts.internal_ips,
+            "graphql": summary.counts.graphql,
+            "other": summary.counts.other,
+        },
+        "top_findings": [
+            {"type": f.type, "value": f.value, "priority": f.priority}
+            for f in summary.top_findings
+        ],
     }
 
 

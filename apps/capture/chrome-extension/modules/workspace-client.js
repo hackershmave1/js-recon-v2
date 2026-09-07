@@ -190,6 +190,26 @@ export class WorkspaceClient {
     }
   }
 
+  // Fetch the findings summary for the session's latest completed run (D46).
+  // Called by the popup after analysis completes to render the compact findings card.
+  // Returns { success, summary } on 200, { success: false } otherwise. The caller
+  // treats a non-success result as "no summary yet" and hides the card gracefully.
+  async getSessionFindingsSummary(sessionId) {
+    const target = `${this.resolveApiBase()}/api/sessions/${encodeURIComponent(sessionId)}/findings/summary`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const resp = await fetch(target, { method: 'GET', headers: { ...this.authHeaders() }, signal: controller.signal });
+      clearTimeout(timer);
+      if (!resp.ok) return { success: false, status: resp.status };
+      const data = await resp.json();
+      return { success: true, summary: data };
+    } catch (error) {
+      clearTimeout(timer);
+      return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    }
+  }
+
   // Create a project (quick-create from the popup: name + scope; backend fills the rest).
   async createProject(project) {
     const target = this.resolveApiBase() + '/api/projects';

@@ -178,6 +178,147 @@ class _AssetRef:
     url: str
 
 
+@dataclass(frozen=True)
+class TopFinding:
+    """A single high-priority finding for the session summary card."""
+
+    type: str
+    value: str
+    priority: int
+
+
+@dataclass(frozen=True)
+class FindingCounts:
+    total: int
+    endpoints: int
+    secrets: int
+    internal_ips: int
+    graphql: int
+    other: int
+
+
+@dataclass(frozen=True)
+class SessionFindingsSummary:
+    """Lightweight summary of the latest completed run for a session.
+
+    Designed for the extension popup card: one small read (count+top-3) that
+    can be called after every analysis completion without holding a long query.
+    ``None`` is returned instead when the session has no completed run yet
+    (the HTTP layer maps that to ``{"status": "no_run"}``).
+    """
+
+    session_id: str
+    run_id: str
+    counts: FindingCounts
+    top_findings: list[TopFinding]
+
+
+# The finding types that roll up into the "endpoints" counter for the summary.
+# Includes the four endpoint lanes (confirmed, suspected, unresolved, generic)
+# so the number matches what an operator sees in the workspace.
+_ENDPOINT_TYPES: frozenset[str] = frozenset(
+    {
+        FindingType.ENDPOINT.value,
+        FindingType.ENDPOINT_SUSPECTED.value,
+        FindingType.ENDPOINT_UNRESOLVED.value,
+        FindingType.ENDPOINT_GENERIC.value,
+    }
+)
+_SECRET_TYPES: frozenset[str] = frozenset(
+    {FindingType.SECRET.value, FindingType.SECRET_SUSPECTED.value}
+)
+# Terminal states that constitute a "completed" run for the summary.
+# ``done`` = fully complete; ``partial`` = failed_partial (analyze finished even if some
+# assets failed). Both are terminal and represent a run the operator can read findings
+# from — the session summary should surface either rather than saying "no_run".
+_TERMINAL_RUN_STATES: frozenset[str] = frozenset({"done", "partial", "failed"})
+
+
+def get_session_findings_summary(
+    tenant_id: str, session_id: str
+) -> SessionFindingsSummary | None:
+    """Summary of the latest completed run for a session, or ``None`` if none exists.
+
+    Runs one query to find the most recent terminal run, then two aggregating
+    queries (type-bucket counts + top-3 by priority) to build the popup card.
+    RLS is enforced by ``tenant_session``: a session invisible to this tenant
+    returns ``None`` (the HTTP layer maps it to ``{"status": "no_run"}``).
+
+    ``priority`` is derived from type + risk_tags the same way ``_finding_view``
+    does it, using ``priority.priority_score`` directly so the popup card score
+    is consistent with the workspace's sort order.
+    """
+    with tenant_session(tenant_id) as session:
+        # Find the most recent run in a terminal state for this session.
+        run_row = session.execute(
+            select(Run.id)
+            .where(
+                Run.session_id == session_id,
+                Run.state.in_(_TERMINAL_RUN_STATES),
+            )
+            .order_by(Run.id.desc())
+            .limit(1)
+        ).first()
+        if run_row is None:
+            return None
+        run_id = str(run_row[0])
+
+        # Count findings by type bucket in a single grouped query.
+        type_counts: dict[str, int] = {}
+        rows = session.execute(
+            select(Finding.type, func.count().label("n"))
+            .where(Finding.run_id == run_id)
+            .group_by(Finding.type)
+        ).all()
+        for finding_type, count in rows:
+            type_counts[finding_type] = count
+
+        total = sum(type_counts.values())
+        endpoints = sum(type_counts.get(t, 0) for t in _ENDPOINT_TYPES)
+        secrets = sum(type_counts.get(t, 0) for t in _SECRET_TYPES)
+        internal_ips = type_counts.get(FindingType.INTERNAL_IP.value, 0)
+        graphql_count = type_counts.get(FindingType.GRAPHQL.value, 0)
+        other = total - endpoints - secrets - internal_ips - graphql_count
+
+        # Top-3 findings by derived priority (type-base + highest risk tag bump).
+        # Secrets are redacted: the value is replaced by a type-only label so the
+        # popup never surfaces raw secret material (REQ-S2).
+        finding_rows = session.execute(
+            select(Finding.type, Finding.value, Finding.attributes)
+            .where(Finding.run_id == run_id)
+            .order_by(Finding.type)  # stable secondary; priority computed in Python
+        ).all()
+
+        top: list[TopFinding] = []
+        for ftype, fvalue, fattributes in finding_rows:
+            score, _ = priority.derive_priority(ftype, fattributes or {})
+            is_secret = ftype in (FindingType.SECRET.value, FindingType.SECRET_SUSPECTED.value)
+            top.append(
+                TopFinding(
+                    type=ftype,
+                    # REQ-S2: never surface raw secret values in the popup card.
+                    value="[redacted]" if is_secret else fvalue,
+                    priority=score,
+                )
+            )
+        top.sort(key=lambda f: f.priority, reverse=True)
+        top = top[:3]
+
+        return SessionFindingsSummary(
+            session_id=session_id,
+            run_id=run_id,
+            counts=FindingCounts(
+                total=total,
+                endpoints=endpoints,
+                secrets=secrets,
+                internal_ips=internal_ips,
+                graphql=graphql_count,
+                other=other,
+            ),
+            top_findings=top,
+        )
+
+
 def list_findings(
     tenant_id: str, run_id: str, *, include_noise: bool = False
 ) -> FindingsView | None:

@@ -1101,6 +1101,7 @@ class JSExtractor {
       testConnection: async () => { try { sendResponse(await this.workspaceClient.testConnection()); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
       analyzeSession: async () => { try { sendResponse(await this.workspaceClient.analyzeSession()); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
       getAnalysisProgress: async () => { try { sendResponse(await this.workspaceClient.getAnalysisProgress()); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
+      getSessionFindingsSummary: async (req) => { try { sendResponse(await this.workspaceClient.getSessionFindingsSummary(req.sessionId)); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
       listProjects: () => this.listProjects(sendResponse),
       createProject: async (req) => { try { sendResponse(await this.workspaceClient.createProject(req.project)); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
       login: (req) => this.login(req, sendResponse),
