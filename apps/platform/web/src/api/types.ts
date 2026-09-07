@@ -79,7 +79,10 @@ export interface SpecSummary {
   base_url_incompleteness_ratio: number;
 }
 export interface FindingsResponse {
-  run_id: string; count: number; coverage: Coverage | null; spec: SpecSummary | null; findings: Finding[];
+  run_id: string; count: number;
+  // D50: total BEFORE pagination; offset/limit echo the request params.
+  total?: number; offset?: number; limit?: number;
+  coverage: Coverage | null; spec: SpecSummary | null; findings: Finding[];
 }
 // Per-asset fetch/analyze outcome (recon.domain.AssetStatus). "pending" until the
 // corresponding stage has touched the asset.
@@ -213,6 +216,19 @@ export interface HostRow {
 export interface HostsResponse {
   run_id: string; count: number; in_scope: number;
   endpoints_unattributed: number; suspected_unattributed: number; hosts: HostRow[];
+}
+
+// D54: run-to-run finding-set diff (REQ-D5).
+// `base_incomplete` is true when the base run was PARTIAL/FAILED/CANCELLED —
+// findings in `gone` may have been missed by the base run, not fixed. Surface
+// as a warning so an operator doesn't treat absent-in-base as "resolved".
+export interface DiffEntry {
+  finding_hash: string; type: string; value: string | null; path: string | null;
+  severity: string | null; priority: number;
+}
+export interface DiffResponse {
+  run_id: string; base_run_id: string; base_incomplete: boolean;
+  new: DiffEntry[]; persisted: DiffEntry[]; gone: DiffEntry[];
 }
 
 export const TERMINAL_STATES = new Set(["done", "partial", "failed", "cancelled"]);

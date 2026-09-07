@@ -7,7 +7,7 @@ deliberately distinct from a run with zero findings (200 + empty list).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from recon.api.deps import get_tenant_id
 from recon.findings import queries
@@ -23,13 +23,36 @@ def get_run_findings(
     # view's "show analytics" toggle passes ?include_noise=true to bring them back. A reversible
     # read overlay — the findings are stored either way, never deleted.
     include_noise: bool = False,
+    # D50: server-side filter + pagination params. All are optional; omitting them
+    # preserves the existing behaviour (full unfiltered result, limit=2000).
+    types: list[str] = Query(default=[]),
+    triage_statuses: list[str] = Query(default=[]),
+    q: str | None = None,
+    risk_tags: list[str] = Query(default=[]),
+    limit: int = Query(default=2000, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
 ) -> dict:
-    result = queries.list_findings(tenant_id, run_id, include_noise=include_noise)
+    result = queries.list_findings(
+        tenant_id,
+        run_id,
+        include_noise=include_noise,
+        types=types,
+        triage_statuses=triage_statuses,
+        q=q,
+        risk_tags=risk_tags,
+        limit=limit,
+        offset=offset,
+    )
     if result is None:
         raise HTTPException(status_code=404, detail="run not found")
     return {
         "run_id": result.run_id,
         "count": len(result.findings),
+        # D50: total before pagination so the FE can show "N of M" and decide whether
+        # a "load more" fetch would return more results.
+        "total": result.total,
+        "offset": offset,
+        "limit": limit,
         # REQ-C2: coverage is reported honestly alongside the findings it qualifies;
         # null until the analyze stage has run. Completeness is NOT guaranteed.
         "coverage": _coverage_dict(result.coverage),
@@ -117,6 +140,43 @@ def _coverage_dict(coverage: queries.CoverageView | None) -> dict | None:
             {"path": f.path, "attributed": f.attributed, "unattributed": f.unattributed}
             for f in coverage.files
         ],
+    }
+
+
+@router.get("/runs/{run_id}/diff")
+def get_run_diff(
+    run_id: str,
+    base: str,
+    tenant_id: str = Depends(get_tenant_id),
+) -> dict:
+    """REQ-D5: finding-set diff between two runs of the same session.
+
+    ``base`` is the base run id to compare against. Returns 404 when either
+    run is absent for this tenant. ``base_incomplete`` in the response signals
+    that the base run was PARTIAL/FAILED/CANCELLED — the ``gone`` bucket may
+    contain findings the base simply missed, not ones that disappeared from
+    the attack surface."""
+    result = queries.diff_runs(tenant_id, run_id, base)
+    if result is None:
+        raise HTTPException(status_code=404, detail="run or base run not found")
+    return {
+        "run_id": result.run_id,
+        "base_run_id": result.base_run_id,
+        "base_incomplete": result.base_incomplete,
+        "new": [_diff_entry_dict(e) for e in result.new],
+        "persisted": [_diff_entry_dict(e) for e in result.persisted],
+        "gone": [_diff_entry_dict(e) for e in result.gone],
+    }
+
+
+def _diff_entry_dict(e: queries.DiffEntry) -> dict:
+    return {
+        "finding_hash": e.finding_hash,
+        "type": e.type,
+        "value": e.value,
+        "path": e.path,
+        "severity": e.severity,
+        "priority": e.priority,
     }
 
 

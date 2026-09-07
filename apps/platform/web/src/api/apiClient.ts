@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
+  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, DiffResponse, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -200,14 +200,44 @@ export function getSourceContent(
   );
 }
 
+export interface FindingsParams {
+  includeNoise?: boolean;
+  // D50: server-side filter + pagination params. All optional; absent = server default.
+  types?: string[];
+  triageStatuses?: string[];
+  q?: string;
+  riskTags?: string[];
+  limit?: number;
+  offset?: number;
+}
+
 export function getFindings(
   tenantId: string,
   runId: string,
-  includeNoise = false,
+  params: FindingsParams = {},
 ): Promise<FindingsResponse> {
-  // #3: analytics/telemetry/vendor hosts are hidden by default; include_noise=true shows them.
-  const q = includeNoise ? "?include_noise=true" : "";
-  return request(`/runs/${encodeURIComponent(runId)}/findings${q}`, {}, tenantId);
+  const qs = new URLSearchParams();
+  if (params.includeNoise) qs.set("include_noise", "true");
+  for (const t of params.types ?? []) qs.append("types", t);
+  for (const s of params.triageStatuses ?? []) qs.append("triage_statuses", s);
+  if (params.q) qs.set("q", params.q);
+  for (const tag of params.riskTags ?? []) qs.append("risk_tags", tag);
+  if (params.limit != null) qs.set("limit", String(params.limit));
+  if (params.offset != null && params.offset > 0) qs.set("offset", String(params.offset));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request(`/runs/${encodeURIComponent(runId)}/findings${suffix}`, {}, tenantId);
+}
+
+export function getRunDiff(
+  tenantId: string,
+  runId: string,
+  baseRunId: string,
+): Promise<DiffResponse> {
+  return request(
+    `/runs/${encodeURIComponent(runId)}/diff?base=${encodeURIComponent(baseRunId)}`,
+    {},
+    tenantId,
+  );
 }
 
 export function getTechnologies(tenantId: string, runId: string): Promise<TechnologiesResponse> {

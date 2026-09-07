@@ -23,8 +23,10 @@ function priorityRank(f: Finding): number {
 }
 
 export function OverviewPanel(
-  { data, technologies, hosts }: {
+  { data, technologies, hosts, prevRunId, onCompare }: {
     data: FindingsResponse; technologies?: TechnologiesResponse | null; hosts?: HostsResponse | null;
+    // D54: if set, a "Compare to previous run" button navigates to the diff page.
+    prevRunId?: string | null; onCompare?: () => void;
   },
 ) {
   const navigate = useNavigate();
@@ -121,7 +123,15 @@ export function OverviewPanel(
       <div className="ov-panel">
         <div className="ov-panel-head">
           <span className="ov-panel-title">Top findings</span>
-          <button type="button" className="ov-link" onClick={() => go("findings")}>View all</button>
+          <div className="ov-panel-actions">
+            {onCompare && (
+              <button type="button" className="ov-link" onClick={onCompare}
+                title={`Compare to previous run ${prevRunId?.slice(0, 8) ?? ""}`}>
+                Compare to prev run
+              </button>
+            )}
+            <button type="button" className="ov-link" onClick={() => go("findings")}>View all</button>
+          </div>
         </div>
         {top.length === 0 ? (
           <p className="muted ov-empty">No findings yet.</p>

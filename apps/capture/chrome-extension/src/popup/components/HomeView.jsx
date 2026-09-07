@@ -334,6 +334,48 @@ export function HomeView({ vm }) {
         );
       })()}
 
+      {/* D46(c): past sessions history — shown when there are prior sessions */}
+      {vm.captureHistory && vm.captureHistory.length > 0 && (
+        <div style={{ padding: '0 17px 13px' }}>
+          <div style={{ marginBottom: '7px' }}><SectionLabel>PAST SESSIONS</SectionLabel></div>
+          {vm.captureHistory.slice(0, 5).map((entry, i) => {
+            const date = entry.timestamp ? new Date(entry.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+            const c = entry.findingsSummary?.counts || {};
+            const hasSummary = (c.total || 0) > 0;
+            const scopeLabel = (entry.scope?.rootDomains || []).join(', ') || '—';
+            const workspaceUrl = entry.workspaceUrl || 'http://localhost:8000';
+            const viewUrl = entry.sessionId
+              ? `${workspaceUrl}${workspaceUrl.includes('?') ? '&' : '?'}capture=${encodeURIComponent(entry.sessionId)}`
+              : workspaceUrl;
+            return (
+              <div key={entry.sessionId || i} style={{
+                display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px',
+                borderRadius: '9px', background: C.panel, marginBottom: '4px'
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '11px', color: C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {scopeLabel}
+                  </div>
+                  <div style={{ fontSize: '10px', color: C.faint, marginTop: '2px' }}>
+                    {date && <span style={{ marginRight: '6px' }}>{date}</span>}
+                    <span>{entry.fileCount || 0} JS</span>
+                    {entry.mapsCount > 0 && <span style={{ marginLeft: '5px' }}>{entry.mapsCount} map</span>}
+                    {hasSummary && <span style={{ marginLeft: '5px', color: C.lime }}>{c.total} finding{c.total !== 1 ? 's' : ''}</span>}
+                  </div>
+                </div>
+                <button onClick={() => { try { chrome.tabs.create({ url: viewUrl }); } catch (e) {} }} style={{
+                  flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: '3px',
+                  padding: '3px 8px', borderRadius: '6px', border: `1px solid ${C.lineHover}`,
+                  background: 'none', color: C.dim, cursor: 'pointer', fontSize: '10px'
+                }}>
+                  View <ArrowRightIcon />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* recent captures */}
       <div style={{ padding: '0 17px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>

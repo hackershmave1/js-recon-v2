@@ -10,6 +10,8 @@ export function buildHomeViewModel({
   analysis, canAnalyze,
   // D46: findings summary card — null until analysis is done and summary loaded
   findingsSummary,
+  // D46(c): persisted past session summaries
+  captureHistory,
   // engagement picker
   projects, projectId, activeProjectId, activeProjectName, overrides,
   // settings slices the vm needs
@@ -54,6 +56,7 @@ export function buildHomeViewModel({
     analyzeNow,
     canAnalyze,
     findingsSummary: findingsSummary || null,
+    captureHistory: captureHistory || [],
     toggles: [
       { key: 'captureEverything', label: 'Capture every tab (ignore scope)', on: settings.captureEverything === true },
       { key: 'performAnalysisOnUpload', label: 'Analyze on upload', on: settings.performAnalysisOnUpload === true },

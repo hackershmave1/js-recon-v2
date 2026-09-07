@@ -60,6 +60,8 @@ export function App() {
   const [analysis, setAnalysis] = useState({ status: 'idle', counts: null, files: [] });
   // D46: findings summary card — null until fetched after analysis completes.
   const [findingsSummary, setFindingsSummary] = useState(null);
+  // D46(c): persisted past session summaries (loaded once on mount, refreshed after rotation).
+  const [captureHistory, setCaptureHistory] = useState([]);
   // Project-scoped capture: cached engagement list, the chosen project (null => Standalone),
   // and the sparse per-session override doc the New-Session editor builds.
   const [projects, setProjects] = useState([]);
@@ -85,6 +87,8 @@ export function App() {
   useEffect(() => {
     api.getActiveTabHost().then(setActiveHost);
     refresh();
+    // D46(c): load persisted past sessions so the history section renders on first open.
+    api.getHistory().then((r) => { if (r?.history) setCaptureHistory(r.history); });
     // Seed analysis state on open so reopening the popup mid-run resumes the feed.
     api.getAnalysisProgress().then((res) => {
       if (!res?.success || !res.job?.counts) return;
@@ -286,7 +290,11 @@ export function App() {
         includeSubdomains: scope.includeSubdomains
       }));
       setOverrides({});
+      setFindingsSummary(null);
+      setAnalysis({ status: 'idle', counts: null, files: [] });
       showToast(selected ? `New session · ${selected.name}` : 'New standalone session');
+      // D46(c): reload history after rotation so the previous session appears immediately.
+      api.getHistory().then((r) => { if (r?.history) setCaptureHistory(r.history); });
     } else {
       showToast('Could not start session', 'error');
     }
@@ -505,7 +513,7 @@ export function App() {
     scopeText, scopeMode, health, connectionLabel,
     captures, mutedCount,
     analysis, canAnalyze: (status.fileCount || 0) > 0,
-    findingsSummary,
+    findingsSummary, captureHistory,
     projects, projectId, activeProjectId,
     activeProjectName: activeProjectName(activeProjectId, projects),
     overrides, settings,

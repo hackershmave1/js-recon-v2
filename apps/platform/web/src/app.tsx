@@ -1,11 +1,12 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
-import { listSessions } from "./api/apiClient";
+import { getSessionRuns, listSessions } from "./api/apiClient";
 import { NewRunPanel } from "./features/newRun/NewRunPanel";
 import { RunProgress } from "./features/progress/RunProgress";
 import { RunDataProvider, useRunData } from "./features/progress/runData";
 import { shouldNotifyRunFinished } from "./features/progress/runNotify";
 import { FindingsPage } from "./features/findings/FindingsPage";
+import { DiffPage } from "./features/findings/DiffPage";
 import { SourcesPage } from "./features/sources/SourcesPage";
 import { ApiSpecPage } from "./features/apispec/ApiSpecPage";
 import { ProbePanel } from "./features/probe/ProbePanel";
@@ -85,11 +86,36 @@ function NotReady({ title, body }: { title: string; body: string }) {
 }
 
 export function OverviewRoute() {
-  const { findings, technologies, hosts, state, failureCategory, failureReason, failureHost } = useRunData();
+  const { findings, technologies, hosts, state, sessionId, failureCategory, failureReason, failureHost } = useRunData();
   const { id } = useParams();
+  const navigate = useNavigate();
+  const { tenantId } = useTenant();
+  const [prevRunId, setPrevRunId] = useState<string | null>(null);
+
+  // D54: find the immediately preceding done/partial run of the same session so the
+  // "Compare" button can navigate to the diff page. Runs are ordered newest-first by
+  // the API; we want the first run whose id < current run's id (simpler than date sort).
+  useEffect(() => {
+    if (!tenantId || !sessionId || !id || !TERMINAL_STATES.has(state)) return;
+    getSessionRuns(tenantId, sessionId).then((r) => {
+      const terminal = new Set(["done", "partial"]);
+      const idx = r.runs.findIndex((run) => run.run_id === id);
+      const prev = r.runs.slice(idx + 1).find((run) => terminal.has(run.state));
+      setPrevRunId(prev?.run_id ?? null);
+    }).catch(() => {});
+  }, [tenantId, sessionId, id, state]);
+
   return (
     <>
-      {findings && <OverviewPanel data={findings} technologies={technologies} hosts={hosts} />}
+      {findings && (
+        <OverviewPanel
+          data={findings}
+          technologies={technologies}
+          hosts={hosts}
+          prevRunId={prevRunId}
+          onCompare={prevRunId ? () => navigate(`/runs/${id}/diff?base=${prevRunId}`) : undefined}
+        />
+      )}
       <RunProgress />
       <DiscoveryEmpty
         runId={id!}
@@ -127,6 +153,19 @@ export function FindingsRoute() {
       onJumpToSource={(j) => navigate(`/runs/${id}/sources`, { state: { jump: j } })}
     />
   );
+}
+
+// D54: run-to-run diff. `base` query param holds the base run id.
+// Reuses the run workspace layout (Shell + RunDataProvider) without any run-data
+// reads — the diff fetch is self-contained in DiffPage. A "no base" visit gets a
+// clear error via DiffPage's own error state (the backend returns 404).
+export function DiffRoute() {
+  const { id } = useParams();
+  const location = useLocation();
+  const base = new URLSearchParams(location.search).get("base") ?? "";
+  if (!id) return null;
+  if (!base) return <NotReady title="No base run" body="Navigate here via the 'Compare' button on a completed run." />;
+  return <DiffPage runId={id} baseRunId={base} />;
 }
 
 export function TechRoute() {

@@ -42,6 +42,7 @@
 .ov-panel-title { font-family: var(--font-display); font-weight: 600; font-size: 15px; color: var(--text); }
 .ov-link { background: none; border: none; color: var(--accent); font-weight: 600; font-size: 12.5px; cursor: pointer; padding: 0; }
 .ov-link:hover { text-decoration: underline; }
+.ov-panel-actions { display: flex; align-items: center; gap: 14px; }
 .ov-empty { padding: 18px; margin: 0; }
 
 .ov-list { list-style: none; margin: 0; padding: 0; }
