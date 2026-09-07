@@ -5,7 +5,9 @@ import { attachSpec, ApiError } from "../../api/apiClient";
 import type { SpecSummary } from "../../api/types";
 
 export function SpecUpload(
-  { runId, initialSummary = null }: { runId: string; initialSummary?: SpecSummary | null },
+  { runId, initialSummary = null, onApplied }: {
+    runId: string; initialSummary?: SpecSummary | null; onApplied?: () => void;
+  },
 ) {
   const { tenantId } = useTenant();
   const [mode, setMode] = useState<"file" | "paste">("file");
@@ -30,6 +32,7 @@ export function SpecUpload(
         ? await attachSpec(tenantId, runId, file)
         : await attachSpec(tenantId, runId, text);
       setSummary(res);
+      onApplied?.();
     } catch (err) {
       // The router's own messages are already readable ("invalid spec: ...",
       // "run not found") -- no extra status->message mapping needed here.

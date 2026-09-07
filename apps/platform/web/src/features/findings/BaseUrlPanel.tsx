@@ -4,7 +4,7 @@ import { useTenant } from "../../tenant/TenantContext";
 import { addBaseUrlRule, deleteBaseUrlRule, listBaseUrlRules, ApiError } from "../../api/apiClient";
 import type { BaseUrlRule, SpecSummary } from "../../api/types";
 
-export function BaseUrlPanel({ runId }: { runId: string }) {
+export function BaseUrlPanel({ runId, onApplied }: { runId: string; onApplied?: () => void }) {
   const { tenantId } = useTenant();
   const [rules, setRules] = useState<BaseUrlRule[]>([]);
   const [prefix, setPrefix] = useState("");
@@ -31,6 +31,7 @@ export function BaseUrlPanel({ runId }: { runId: string }) {
       setRules((prev) => [...prev.filter((r) => r.path_prefix !== res.rule.path_prefix), res.rule]);
       setSummary(res.summary);
       setPrefix(""); setBaseUrl("");
+      onApplied?.();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to add rule");
     } finally {
