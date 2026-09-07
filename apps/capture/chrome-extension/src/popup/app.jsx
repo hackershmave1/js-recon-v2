@@ -10,6 +10,8 @@ import * as api from './api.js';
 import { resolveEffectiveConfig, splitEffective, configFromSettings } from '../../modules/project-config.js';
 import { reconcileActiveProject, activeProjectName } from '../../modules/active-engagement.js';
 import { deriveDelivery } from '../../modules/delivery-health.js';
+import { buildHomeViewModel } from './viewmodels/homeVm.js';
+import { buildSettingsViewModel } from './viewmodels/settingsVm.js';
 
 const NOISE = new Set(['lib', 'cms', 'tracker']);
 
@@ -453,114 +455,63 @@ export function App() {
         : health === 'warn' ? `${delivery.skipped} skipped`
           : delivery.paired === true ? 'connected · delivering' : 'connected to workspace';
 
-  // TODO D62: extract to viewmodels/homeVm.js — blocked by deep closure coupling (20+ useState
-  // values + local action functions). Needs a dedicated refactor pass to group related state.
-  const homeVm = {
-    capturing: status.isCapturing,
-    // Auth-expiry banner (DEBT D41): single source of truth is the uploader's authPaused, surfaced
-    // via getStatus. reauth() shows the sign-in form without logging out, so a same-tenant re-login
-    // refreshes the token and resumes the paused outbox without rotating the capture session.
-    sessionExpired: status?.uploader?.authPaused === true,
-    reauth: () => setForceLogin(true),
-    connectionLabel,
-    deliveryHealth: health,
-    delivery: deliveryVm,
-    host: status.host || activeHost || '—',
-    session: (status.sessionId || '').slice(0, 8) || '—',
-    scope: scopeText,
-    scopeMode,
-    activeHost,
-    armScope,
-    outOfScopeHosts,
-    addScopeHost,
-    includeSubdomains: settings.includeSubdomains !== false,
-    startNewSession,
-    startScopeDefault: (settings.domainScopes || []).join(', ') || activeHost || '',
-    // Project-scoped capture: engagement picker + override editor state.
-    projects,
-    projectId,
-    // Active engagement = the current session's real binding (surfaced always, on Home).
-    activeProjectId,
-    activeProjectName: activeProjectName(activeProjectId, projects),
-    selectProject: (id) => { setProjectId(id || null); setOverrides({}); },
-    overrides,
-    setOverride: (section, key, value) =>
-      setOverrides((prev) => ({ ...prev, [section]: { ...(prev[section] || {}), [key]: value } })),
-    clearOverride: (section, key) =>
-      setOverrides((prev) => {
-        const next = { ...prev, [section]: { ...(prev[section] || {}) } };
-        delete next[section][key];
-        if (Object.keys(next[section]).length === 0) delete next[section];
-        return next;
-      }),
-    createProject: async (name, rootDomains) => {
-      const cleanName = String(name || '').trim();
-      if (!cleanName) { showToast('Project name required', 'warn'); return { success: false }; }
-      const res = await api.createProject({
-        name: cleanName,
-        defaults: { scope: { rootDomains: String(rootDomains || '').split(/[\s,]+/).filter(Boolean) } }
-      });
-      if (res?.success && res.project) {
-        setProjects((prev) => [res.project, ...prev]);
-        setProjectId(res.project.id);
-        setOverrides({});
-        showToast(`Project created · ${res.project.name}`);
-      } else {
-        showToast(res?.error ? `Create failed: ${res.error}` : 'Could not create project', 'error');
-      }
-      return res;
-    },
-    stats: { js: status.fileCount || 0, maps: status.mapsCount || 0, secrets: status.secretCount || 0 },
+  // Pre-bind actions that need closure access before passing to viewmodel factories.
+  const selectProject = (id) => { setProjectId(id || null); setOverrides({}); };
+  const setOverride = (section, key, value) =>
+    setOverrides((prev) => ({ ...prev, [section]: { ...(prev[section] || {}), [key]: value } }));
+  const clearOverride = (section, key) =>
+    setOverrides((prev) => {
+      const next = { ...prev, [section]: { ...(prev[section] || {}) } };
+      delete next[section][key];
+      if (Object.keys(next[section]).length === 0) delete next[section];
+      return next;
+    });
+  const createProject = async (name, rootDomains) => {
+    const cleanName = String(name || '').trim();
+    if (!cleanName) { showToast('Project name required', 'warn'); return { success: false }; }
+    const res = await api.createProject({
+      name: cleanName,
+      defaults: { scope: { rootDomains: String(rootDomains || '').split(/[\s,]+/).filter(Boolean) } }
+    });
+    if (res?.success && res.project) {
+      setProjects((prev) => [res.project, ...prev]);
+      setProjectId(res.project.id);
+      setOverrides({});
+      showToast(`Project created · ${res.project.name}`);
+    } else {
+      showToast(res?.error ? `Create failed: ${res.error}` : 'Could not create project', 'error');
+    }
+    return res;
+  };
+
+  const homeVm = buildHomeViewModel({
+    status, activeHost, delivery, deliveryVm, outOfScopeHosts,
+    scopeText, scopeMode, health, connectionLabel,
     captures, mutedCount,
-    analysis, analyzeNow, canAnalyze: (status.fileCount || 0) > 0,
-    toggles: [
-      { key: 'captureEverything', label: 'Capture every tab (ignore scope)', on: settings.captureEverything === true },
-      { key: 'performAnalysisOnUpload', label: 'Analyze on upload', on: settings.performAnalysisOnUpload === true },
-      { key: 'muteNoise', label: 'Mute plugins & trackers', on: muteNoise },
-      { key: 'captureAuthContext', label: 'Capture auth context', on: settings.captureAuthContext !== false },
-      { key: 'exportIncludeContent', label: 'Include code in export', on: settings.exportIncludeContent === true }
-    ],
+    analysis, canAnalyze: (status.fileCount || 0) > 0,
+    projects, projectId, activeProjectId,
+    activeProjectName: activeProjectName(activeProjectId, projects),
+    overrides, settings,
+    reauth: () => setForceLogin(true),
+    armScope, addScopeHost, startNewSession,
     openSettings: () => setView('settings'),
     toggleCapture,
     toggleSubdomains: () => patchSettings({ includeSubdomains: !(settings.includeSubdomains !== false) }),
     showAllCaptures: () => patchSettings({ muteNoise: false }),
-    toggleSetting,
-    exportNow,
-    openWorkspace
-  };
+    toggleSetting, exportNow, openWorkspace, analyzeNow,
+    selectProject, setOverride, clearOverride, createProject,
+  });
 
-  // TODO D62: extract to viewmodels/settingsVm.js — same closure coupling as homeVm.
-  const settingsVm = {
+  const settingsVm = buildSettingsViewModel({
     closeSettings: () => setView('home'),
-    connState, latency,
-    wsUrl: settings.workspaceUrl || '',
-    setWsUrl: (v) => patchSettings({ workspaceUrl: v }),
-    testConnection,
-    // Signed-in account summary (sign-in itself is the gate, LoginView). `paired` is the last
-    // save-files ack (via the uploader stats) so the Account block can confirm the login token
-    // actually routed instead of failing silently; undefined until the first upload.
-    authUser: settings.authUser || '',
-    authTenantName: settings.authTenantName || '',
-    signOut,
-    paired: status?.uploader?.paired,
-    defScope: (settings.domainScopes || []).join(', '),
-    setDefScope,
-    includeSubdomains: settings.includeSubdomains !== false,
+    connState, latency, testConnection,
+    settings, status,
+    signOut, patchSettings, setDefScope,
     toggleSubdomains: () => patchSettings({ includeSubdomains: !(settings.includeSubdomains !== false) }),
-    outOfScopeMode: settings.outOfScopeMode || 'tag',
-    setOutOfScopeMode: (m) => patchSettings({ outOfScopeMode: m }),
-    maxAssetMb: settings.maxAssetMb || 10,
-    setMaxAssetMb: (n) => patchSettings({ maxAssetMb: n }),
-    // Opt-in API response-body capture (DEBT D45b2) — off by default (collects response DATA).
-    captureResponseBodies: settings.captureResponseBodies === true,
-    toggleResponseBodies: () => patchSettings({ captureResponseBodies: !(settings.captureResponseBodies === true) }),
-    denyDefaultProfile: settings.denyDefaultProfile !== false,
-    toggleDefaultProfile: () => patchSettings({ denyDefaultProfile: !(settings.denyDefaultProfile !== false) }),
-    denyRules: settings.denyRules || [],
-    removeRule, newRule, setNewRule, addRule,
-    clearCaptures, capturedCount: status.fileCount || 0,
-    version: api.extensionVersion()
-  };
+    newRule, setNewRule, addRule, removeRule,
+    clearCaptures,
+    version: api.extensionVersion(),
+  });
 
   return (
     <div class="pp" style={{

@@ -11,9 +11,9 @@ const __dirname = path.dirname(__filename);
 const modPath = path.resolve(__dirname, '../modules/workspace-client.js');
 const source = fs.readFileSync(modPath, 'utf8').replace('export class WorkspaceClient', 'class WorkspaceClient');
 
-// resolveApiBase uses only string/regex ops; the fetch-based methods reference web APIs
-// lazily (only when called), so a minimal context is enough to load the class.
-const sandbox = { console };
+// resolveApiBase uses URL for scheme validation (D57 guard); the fetch-based methods
+// reference web APIs lazily (only when called), so this minimal context is enough.
+const sandbox = { console, URL };
 vm.createContext(sandbox);
 vm.runInContext(`${source}\nthis.WorkspaceClient = WorkspaceClient;`, sandbox, { filename: modPath });
 const WorkspaceClient = sandbox.WorkspaceClient;
