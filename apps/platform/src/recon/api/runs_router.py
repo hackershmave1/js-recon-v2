@@ -368,7 +368,9 @@ def pause_run(
     redis: Redis = Depends(get_redis),
     actor: str | None = Depends(get_actor),
 ) -> dict:
-    view = _guard(lambda: service.request_pause(redis, tenant_id=tenant_id, run_id=run_id, actor=actor))
+    view = _guard(
+        lambda: service.request_pause(redis, tenant_id=tenant_id, run_id=run_id, actor=actor)
+    )
     return {"run_id": view.id, "state": view.state, "pause_requested": view.pause_requested}
 
 
@@ -379,7 +381,9 @@ def cancel_run(
     redis: Redis = Depends(get_redis),
     actor: str | None = Depends(get_actor),
 ) -> dict:
-    view = _guard(lambda: service.request_cancel(redis, tenant_id=tenant_id, run_id=run_id, actor=actor))
+    view = _guard(
+        lambda: service.request_cancel(redis, tenant_id=tenant_id, run_id=run_id, actor=actor)
+    )
     return {"run_id": view.id, "state": view.state, "cancel_requested": view.cancel_requested}
 
 
@@ -390,7 +394,9 @@ def resume_run(
     redis: Redis = Depends(get_redis),
     actor: str | None = Depends(get_actor),
 ) -> dict:
-    view = _guard(lambda: coordinator.resume_run(redis, tenant_id=tenant_id, run_id=run_id, actor=actor))
+    view = _guard(
+        lambda: coordinator.resume_run(redis, tenant_id=tenant_id, run_id=run_id, actor=actor)
+    )
     return {"run_id": view.id, "state": view.state}
 
 

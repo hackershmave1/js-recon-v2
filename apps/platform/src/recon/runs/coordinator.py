@@ -391,9 +391,7 @@ def _finalize_state(tenant_id: str, run_id: str) -> tuple[RunState, dict]:
     return to_state, {"fetch_ok": fetch_ok, "analyze_ok": analyze_ok}
 
 
-def resume_run(
-    redis: Redis, *, tenant_id: str, run_id: str, actor: str | None = None
-) -> RunView:
+def resume_run(redis: Redis, *, tenant_id: str, run_id: str, actor: str | None = None) -> RunView:
     """Resume a paused run and re-enqueue the stage it left off at. ``actor`` is
     the verified identity from the JWT (auth on) or None (auth off / dev mode)."""
     view, stage = service.resume(redis, tenant_id=tenant_id, run_id=run_id, actor=actor)

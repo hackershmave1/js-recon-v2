@@ -77,8 +77,11 @@ def test_get_actor_returns_none_on_wrong_key(monkeypatch):
     try:
         # Minted with a different key — verification will fail
         token = auth_token.mint(
-            user_id=USER_ID, tenant_id=TENANT_ID, role="admin",
-            key="wrong-key", ttl_seconds=3600,
+            user_id=USER_ID,
+            tenant_id=TENANT_ID,
+            role="admin",
+            key="wrong-key",
+            ttl_seconds=3600,
         )
         result = deps.get_actor(authorization=f"Bearer {token}")
         assert result is None

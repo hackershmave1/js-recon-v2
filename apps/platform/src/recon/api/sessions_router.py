@@ -82,9 +82,7 @@ def list_session_runs(session_id: str, tenant_id: str = Depends(get_tenant_id)) 
 
 
 @router.get("/sessions/{session_id}/findings/summary")
-def get_session_findings_summary(
-    session_id: str, tenant_id: str = Depends(get_tenant_id)
-) -> dict:
+def get_session_findings_summary(session_id: str, tenant_id: str = Depends(get_tenant_id)) -> dict:
     """Lightweight findings summary for the latest completed run of a session.
 
     Returns the per-bucket counts and the top-3 highest-priority findings so the
@@ -117,8 +115,7 @@ def get_session_findings_summary(
             "other": summary.counts.other,
         },
         "top_findings": [
-            {"type": f.type, "value": f.value, "priority": f.priority}
-            for f in summary.top_findings
+            {"type": f.type, "value": f.value, "priority": f.priority} for f in summary.top_findings
         ],
     }
 

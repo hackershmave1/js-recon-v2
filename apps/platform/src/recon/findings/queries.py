@@ -234,9 +234,7 @@ _SECRET_TYPES: frozenset[str] = frozenset(
 _TERMINAL_RUN_STATES: frozenset[str] = frozenset({"done", "partial", "failed"})
 
 
-def get_session_findings_summary(
-    tenant_id: str, session_id: str
-) -> SessionFindingsSummary | None:
+def get_session_findings_summary(tenant_id: str, session_id: str) -> SessionFindingsSummary | None:
     """Summary of the latest completed run for a session, or ``None`` if none exists.
 
     Runs one query to find the most recent terminal run, then two aggregating

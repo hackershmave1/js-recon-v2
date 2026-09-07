@@ -68,9 +68,7 @@ def test_summary_returns_complete_when_run_exists(monkeypatch):
         findings_queries, "get_session_findings_summary", lambda *_: _make_summary()
     )
     client = _client()
-    resp = client.get(
-        f"/sessions/{SESSION_ID}/findings/summary", headers=_headers()
-    )
+    resp = client.get(f"/sessions/{SESSION_ID}/findings/summary", headers=_headers())
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "complete"
@@ -92,13 +90,9 @@ def test_summary_returns_complete_when_run_exists(monkeypatch):
 
 def test_summary_returns_no_run_when_none_found(monkeypatch):
     """No terminal run for the session: the endpoint returns status=no_run (not 404)."""
-    monkeypatch.setattr(
-        findings_queries, "get_session_findings_summary", lambda *_: None
-    )
+    monkeypatch.setattr(findings_queries, "get_session_findings_summary", lambda *_: None)
     client = _client()
-    resp = client.get(
-        f"/sessions/{SESSION_ID}/findings/summary", headers=_headers()
-    )
+    resp = client.get(f"/sessions/{SESSION_ID}/findings/summary", headers=_headers())
     assert resp.status_code == 200
     assert resp.json() == {"status": "no_run"}
 
@@ -147,9 +141,7 @@ def test_summary_top_findings_are_secrets_redacted(monkeypatch):
         lambda *_: _make_summary(top_findings=top),
     )
     client = _client()
-    resp = client.get(
-        f"/sessions/{SESSION_ID}/findings/summary", headers=_headers()
-    )
+    resp = client.get(f"/sessions/{SESSION_ID}/findings/summary", headers=_headers())
     body = resp.json()
     assert body["status"] == "complete"
     findings = body["top_findings"]

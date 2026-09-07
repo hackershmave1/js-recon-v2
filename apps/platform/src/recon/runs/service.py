@@ -190,7 +190,9 @@ def transition(
     return snapshot
 
 
-def request_pause(redis: Redis, *, tenant_id: str, run_id: str, actor: str | None = None) -> RunView:
+def request_pause(
+    redis: Redis, *, tenant_id: str, run_id: str, actor: str | None = None
+) -> RunView:
     """Signal a pause. Runs mid-stage flip when the worker next checkpoints; a
     still-queued run is paused immediately. ``actor`` is the verified identity
     from the JWT (auth on) or None (auth off / dev mode)."""
@@ -220,7 +222,9 @@ def request_pause(redis: Redis, *, tenant_id: str, run_id: str, actor: str | Non
     return snapshot
 
 
-def request_cancel(redis: Redis, *, tenant_id: str, run_id: str, actor: str | None = None) -> RunView:
+def request_cancel(
+    redis: Redis, *, tenant_id: str, run_id: str, actor: str | None = None
+) -> RunView:
     """Signal a cancel (REQ-A4). Active runs cancel at the worker's next
     checkpoint; queued/paused runs cancel immediately. ``actor`` is the verified
     identity from the JWT (auth on) or None (auth off / dev mode)."""

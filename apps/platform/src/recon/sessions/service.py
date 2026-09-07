@@ -188,9 +188,7 @@ def find_session_id_by_external_id(tenant_id: str, external_id: str) -> str | No
         )
 
 
-def seed_scope_hosts_if_empty(
-    tenant_id: str, session_id: str, raw_domains: list[str]
-) -> None:
+def seed_scope_hosts_if_empty(tenant_id: str, session_id: str, raw_domains: list[str]) -> None:
     """Set scope_hosts on a capture session that currently has none.
 
     Scope is intentionally empty on the ingest hot-path (captured assets never
