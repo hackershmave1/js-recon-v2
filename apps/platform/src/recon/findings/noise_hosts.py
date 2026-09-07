@@ -87,11 +87,42 @@ _VENDOR_CDN = {
     "apple.news",
     "mozilla.org",
     "wappalyzer.com",
+    # Public open-source CDNs — host-JS-libraries references, never the target's own API
+    "cdnjs.cloudflare.com",
+    "unpkg.com",
+    "jsdelivr.net",
+    "bootstrapcdn.com",
+    "fontawesome.com",
+    "use.typekit.net",
+    "use.fontawesome.com",
+    "ajax.googleapis.com",
+    "ajax.aspnetcdn.com",
+    "code.jquery.com",
+}
+# Web standards / specification bodies — URLs like https://www.w3.org/TR/WOFF/ appear in
+# JS source as namespace URIs, spec links, or typeof-check strings (e.g. SVG namespace).
+# These are never an API the target owns.
+_STANDARDS_REFERENCE = {
+    "w3.org",
+    "whatwg.org",
+    "ietf.org",
+    "rfc-editor.org",
+    "schema.org",
+    "json-ld.org",
+    "tc39.es",
+    "ecma-international.org",
+    "openapis.org",
+    "swagger.io",
+    "xml.org",
+    "xmlsoap.org",  # WSDL/SOAP namespace URIs
+    "xmlns.com",
+    "purl.org",  # persistent URL namespace URIs (Dublin Core etc.)
+    "dublincore.org",
 }
 
 # The flat runtime denylist (single source of truth).
 DEFAULT_NOISE_HOSTS: frozenset[str] = frozenset(
-    _ANALYTICS | _TELEMETRY | _ADS_MARKETING | _VENDOR_CDN
+    _ANALYTICS | _TELEMETRY | _ADS_MARKETING | _VENDOR_CDN | _STANDARDS_REFERENCE
 )
 
 

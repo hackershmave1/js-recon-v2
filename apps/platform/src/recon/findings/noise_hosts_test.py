@@ -23,6 +23,21 @@ def test_real_and_hostless_are_not_noise() -> None:
     assert not is_noise_host("")
 
 
+def test_standards_and_public_cdns_are_noise() -> None:
+    # Web-standards spec bodies
+    assert is_noise_host("w3.org")
+    assert is_noise_host("www.w3.org")
+    assert is_noise_host("www.whatwg.org")
+    assert is_noise_host("schema.org")
+    assert is_noise_host("tc39.es")
+    assert is_noise_host("ecma-international.org")
+    # Public CDNs
+    assert is_noise_host("cdnjs.cloudflare.com")
+    assert is_noise_host("unpkg.com")
+    assert is_noise_host("cdn.jsdelivr.net")
+    assert is_noise_host("code.jquery.com")
+
+
 def test_is_all_noise_drops_only_all_noise_findings() -> None:
     # A finding is hidden only when it HAS a host and EVERY host is noise.
     assert is_all_noise({"api.amplitude.com"})  # all noise -> hide
