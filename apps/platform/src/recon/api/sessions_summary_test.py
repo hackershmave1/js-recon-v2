@@ -91,6 +91,9 @@ def test_summary_returns_complete_when_run_exists(monkeypatch):
 def test_summary_returns_no_run_when_none_found(monkeypatch):
     """No terminal run for the session: the endpoint returns status=no_run (not 404)."""
     monkeypatch.setattr(findings_queries, "get_session_findings_summary", lambda *_: None)
+    # Patch the external-id fallback too — without this the router calls
+    # find_session_id_by_external_id which opens a real DB connection.
+    monkeypatch.setattr(sessions_service, "find_session_id_by_external_id", lambda *_: None)
     client = _client()
     resp = client.get(f"/sessions/{SESSION_ID}/findings/summary", headers=_headers())
     assert resp.status_code == 200
