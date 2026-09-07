@@ -13,6 +13,7 @@ const cs = R('../content-script.js');
 const hook = R('../inject/xhr-hook.js');
 const manifest = JSON.parse(R('../manifest.json'));
 const app = R('../src/popup/app.jsx');
+const settingsVm = R('../src/popup/viewmodels/settingsVm.js');
 const settingsView = R('../src/popup/components/SettingsView.jsx');
 
 // --- request bodies (ON by default): webRequest onBeforeRequest, NO main world ---
@@ -52,7 +53,7 @@ assert.match(hook, /recon-xhr-hook/, 'hook uses the shared source tag');
 assert.ok(manifest.permissions.includes('scripting'), 'manifest declares the scripting permission');
 
 // --- popup: opt-in toggle wired end to end ---
-assert.match(app, /toggleResponseBodies:.*patchSettings\(\{ captureResponseBodies:/, 'popup vm exposes the response-bodies toggle');
+assert.match(settingsVm, /toggleResponseBodies:.*patchSettings\(\{ captureResponseBodies:/, 'popup vm exposes the response-bodies toggle');
 assert.match(settingsView, /vm\.toggleResponseBodies/, 'settings screen renders the toggle');
 assert.match(settingsView, /vm\.captureResponseBodies/, 'settings screen reflects the toggle state');
 
