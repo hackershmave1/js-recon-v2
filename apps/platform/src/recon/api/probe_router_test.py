@@ -1,7 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from recon.api import deps
 from recon.api.app import create_app
 from recon.auth import token as auth_token
 from recon.config import get_settings
