@@ -5,11 +5,10 @@ import { typeLabel } from "../../api/findingLabels";
 import { getFindings, triageFinding } from "../../api/apiClient";
 import { useTenant } from "../../tenant/TenantContext";
 import { FindingDrawer } from "./FindingDrawer";
-import { SpecUpload } from "./SpecUpload";
-import { BaseUrlPanel } from "./BaseUrlPanel";
-import { WrapperPanel } from "./WrapperPanel";
 import { useResizableRail } from "../../shell/useResizableRail";
 import { Icon } from "../../shell/icons";
+import { TuningRail } from "../tuning/TuningRail";
+import { useTuningRail } from "../tuning/TuningRailContext";
 import "./findings.css";
 
 // Real-field facets only. Severity/Scope/Detection-engine/Confidence were omitted while findings
@@ -194,6 +193,8 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
   function exportCsv() { download(`findings-${runId}.csv`, findingsToCsv(sorted), "text/csv;charset=utf-8"); }
   function exportJson() { download(`findings-${runId}.json`, JSON.stringify(sorted, null, 2), "application/json"); }
 
+  const { openWith } = useTuningRail();
+
   return (
     <div>
       <div className="fp">
@@ -276,7 +277,14 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
             </div>
           )}
           {visible.length === 0 ? (
-            <div className="fp-empty">No findings match.</div>
+            <div className="fp-empty">
+              No findings match.
+              {view.coverage && view.coverage.unattributed > 0 && (
+                <button type="button" className="fp-tune-cta" onClick={() => openWith("base-url")}>
+                  {view.coverage.unattributed} calls are unattributed — tune extraction
+                </button>
+              )}
+            </div>
           ) : (
             <ul className="fp-list">
               {sorted.slice(0, limit).map((f) => {
@@ -335,18 +343,10 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
             </button>
           )}
         </div>
+        <TuningRail runId={runId} specSummary={data.spec} />
       </div>
 
       <FindingDrawer finding={selected} runId={runId} onClose={() => setSelected(null)} onJumpToSource={onJumpToSource} />
-
-      {/* Provisional home for the extraction-tuning knobs (spec attach, base-URL
-          rules, wrapper teaching) until the R6 per-session Tuning surface. */}
-      <details className="fp-tuning">
-        <summary>Extraction tuning (advanced)</summary>
-        <SpecUpload runId={runId} initialSummary={data.spec} />
-        <BaseUrlPanel runId={runId} />
-        <WrapperPanel runId={runId} />
-      </details>
     </div>
   );
 }

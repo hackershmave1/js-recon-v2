@@ -3,6 +3,8 @@ import { useTenant } from "../../tenant/TenantContext";
 import { useRunDataOptional } from "../progress/runData";
 import { getRequests, ApiError } from "../../api/apiClient";
 import type { ReconstructedRequest, RequestsResponse } from "../../api/types";
+import { TuningRail } from "../tuning/TuningRail";
+import "./probe.css";
 
 // Sentinel for the "Custom host…" <option>; a real host can never collide with it.
 const CUSTOM = "__custom__";
@@ -131,16 +133,19 @@ export function ProbePanel({ runId }: { runId: string }) {
   const hasRelative = data.requests.some((r) => r.probeable && !isAbsolute(r.example_url));
 
   return (
-    <div className="card">
-      <h3>Manual probe <span className="muted">({data.count})</span></h3>
-      {hasRelative && (
-        <HostSelector
-          hosts={inScopeHosts} target={target} useCustom={useCustom}
-          host={selected} customHost={customHost} onPick={onPick} onCustom={setCustomHost}
-          onCommit={() => setAppliedCustom(customHost.trim())}
-        />
-      )}
-      {data.requests.map((r) => <ProbeRequestCard key={r.operation} req={r} />)}
+    <div className="probe-outer">
+      <div className="card probe-content">
+        <h3>Manual probe <span className="muted">({data.count})</span></h3>
+        {hasRelative && (
+          <HostSelector
+            hosts={inScopeHosts} target={target} useCustom={useCustom}
+            host={selected} customHost={customHost} onPick={onPick} onCustom={setCustomHost}
+            onCommit={() => setAppliedCustom(customHost.trim())}
+          />
+        )}
+        {data.requests.map((r) => <ProbeRequestCard key={r.operation} req={r} />)}
+      </div>
+      <TuningRail runId={runId} specSummary={null} />
     </div>
   );
 }
