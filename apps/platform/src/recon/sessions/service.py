@@ -178,6 +178,43 @@ def get_session(tenant_id: str, session_id: str) -> SessionView | None:
         return _view(row) if row else None
 
 
+def find_session_id_by_external_id(tenant_id: str, external_id: str) -> str | None:
+    """Return the platform session UUID for a capture session keyed by its external_id
+    (the extension's own UUID), or None. Used as a fallback when an API caller sends
+    the extension UUID instead of the platform UUID."""
+    with tenant_session(tenant_id) as session:
+        return session.scalar(
+            select(EngagementSession.id).where(EngagementSession.external_id == external_id)
+        )
+
+
+def seed_scope_hosts_if_empty(
+    tenant_id: str, session_id: str, raw_domains: list[str]
+) -> None:
+    """Set scope_hosts on a capture session that currently has none.
+
+    Scope is intentionally empty on the ingest hot-path (captured assets never
+    egress, so the security guard is inert), but for display — the Hosts tab's
+    in/out-of-scope classification — the extension's declared domains matter.
+    This call is best-effort: invalid entries are dropped silently, and a session
+    that already has scope is never overwritten."""
+    if not raw_domains:
+        return
+    allow_local = get_settings().allow_local_egress
+    cleaned = [
+        n
+        for d in raw_domains
+        if (n := egress.normalize_scope_entry(d, allow_local=allow_local)) is not None
+    ]
+    if not cleaned:
+        return
+    with tenant_session(tenant_id) as session:
+        row = session.get(EngagementSession, session_id)
+        if row is None or row.scope_hosts:  # already has scope → don't overwrite
+            return
+        row.scope_hosts = cleaned
+
+
 def list_sessions(tenant_id: str, *, include_archived: bool = False) -> list[SessionSummary]:
     """Every session for the tenant, newest first, each with its latest run's
     stats. RLS confines the result to this tenant; archived sessions are hidden
@@ -457,10 +494,13 @@ def _run_stats(db: Session, run: Run) -> tuple[int, int, int, int | None]:
             .group_by(Finding.type)
         ).all()
     )
-    # "Total endpoints found" = the confirmed API lane + the promoted valid-path suspected lane.
-    # The API-vs-Endpoint breakdown lives in the findings list; coverage_pct below stays
-    # confirmed-only (it is attribution recall, never inflated by a suspected promotion).
-    endpoints = sum(int(type_counts.get(t.value, 0)) for t in TOTAL_ENDPOINT_TYPES)
+    # "Total reachable surface" = confirmed API lane + suspected lane + page routes.
+    # Mirrors the OverviewPanel's surface calculation so the session card count stays
+    # consistent with the run detail headline (TOTAL_ENDPOINT_TYPES is kept separate —
+    # OpenAPI / probe / probe-coverage never include page routes).
+    endpoints = sum(int(type_counts.get(t.value, 0)) for t in TOTAL_ENDPOINT_TYPES) + int(
+        type_counts.get(FindingType.PAGE_ROUTE.value, 0)
+    )
     secrets = int(type_counts.get(FindingType.SECRET.value, 0))
     # files (§4 fold M1): the run's discovered-asset count for a crawl; 1 for a
     # single-blob upload; else 0. NOT coverage.files (which is per-source-path and

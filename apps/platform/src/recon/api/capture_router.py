@@ -226,8 +226,16 @@ def _safe_uuid(value: Any) -> str | None:
         return None
 
 
-def _create_capture_session(tenant_id: str, ext_session_id: str, engagement_id: str | None) -> str:
-    # EMPTY scope (§4 defect B: scope is inert here — captured assets never egress).
+def _create_capture_session(
+    tenant_id: str,
+    ext_session_id: str,
+    engagement_id: str | None,
+    scope_hosts: list[str] | None = None,
+) -> str:
+    # scope_hosts seeds the Hosts-tab in/out-of-scope classification: captured assets
+    # never egress so the security guard is inert here (§4 defect B), but the operator's
+    # declared domains matter for display. Invalid entries are dropped by create_session's
+    # _resolve_scope_hosts → SessionInvalid; the engagement retry below handles that too.
     # Bind the engagement (projectId) if it resolves cleanly, but NEVER raise on the
     # ingest hot path (§4 defect A): a foreign/deleted engagement makes create_session
     # raise SessionInvalid *before* any row is added, so we retry unbound. A malformed
@@ -240,7 +248,7 @@ def _create_capture_session(tenant_id: str, ext_session_id: str, engagement_id: 
             tenant_id,
             name=None,
             external_id=ext_session_id,
-            scope_hosts=[],
+            scope_hosts=scope_hosts or [],
             authorized_by="chrome-extension-capture",
             engagement_id=engagement_id,
         )
@@ -254,7 +262,7 @@ def _create_capture_session(tenant_id: str, ext_session_id: str, engagement_id: 
             tenant_id,
             name=None,
             external_id=ext_session_id,
-            scope_hosts=[],
+            scope_hosts=scope_hosts or [],
             authorized_by="chrome-extension-capture",
             engagement_id=None,
         )
@@ -262,16 +270,23 @@ def _create_capture_session(tenant_id: str, ext_session_id: str, engagement_id: 
 
 
 def _get_or_create_session(
-    tenant_id: str, ext_session_id: str, engagement_id: str | None = None
+    tenant_id: str,
+    ext_session_id: str,
+    engagement_id: str | None = None,
+    root_domains: list[str] | None = None,
 ) -> str:
     # Map the extension's sessionId -> a platform session idempotently, keyed by
     # external_id (UNIQUE(tenant_id, external_id)), so a retried OR concurrent batch
     # reuses the session instead of piling up duplicates (DEBT D1).
     existing = _find_session_by_external_id(tenant_id, ext_session_id)
     if existing is not None:
+        # Best-effort: backfill scope on sessions created before scope seeding was added.
+        # Silently drops invalid entries; never overwrites an existing scope.
+        if root_domains:
+            sessions_service.seed_scope_hosts_if_empty(tenant_id, existing, root_domains)
         return existing
     try:
-        return _create_capture_session(tenant_id, ext_session_id, engagement_id)
+        return _create_capture_session(tenant_id, ext_session_id, engagement_id, root_domains)
     except IntegrityError:
         # Lost the create race to a concurrent batch for the same sessionId — the
         # unique key rejected the duplicate. Re-select the winner (committed by now at
@@ -454,7 +469,15 @@ def save_files(
     engagement_id = _safe_uuid(
         meta.get("projectId")
     )  # bind the project if it resolves; else unbound
-    session_id = _get_or_create_session(tenant_id, ext_session_id, engagement_id)
+    # rootDomains from scopeMetadata(): the extension's declared capture scope.
+    # Used for display-only Hosts in/out-of-scope classification; never for egress.
+    raw_domains = meta.get("rootDomains")
+    root_domains = (
+        [str(d) for d in raw_domains if isinstance(d, str) and d.strip()]
+        if isinstance(raw_domains, list)
+        else []
+    )
+    session_id = _get_or_create_session(tenant_id, ext_session_id, engagement_id, root_domains)
     run_id = _accumulating_run_id(tenant_id, session_id, ext_session_id, redis)
 
     file_results: list[dict] = []

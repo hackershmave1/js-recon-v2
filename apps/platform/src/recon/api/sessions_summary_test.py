@@ -17,6 +17,7 @@ from recon.findings.queries import (
     SessionFindingsSummary,
     TopFinding,
 )
+from recon.sessions import service as sessions_service
 
 TENANT = "22222222-2222-2222-2222-222222222222"
 SESSION_ID = str(uuid.uuid4())
@@ -108,6 +109,29 @@ def test_summary_requires_tenant_header():
     resp = client.get(f"/sessions/{SESSION_ID}/findings/summary")
     # In auth-off dev mode get_tenant_id requires the header; absent = 401.
     assert resp.status_code == 401
+
+
+def test_summary_resolves_ext_session_id_fallback(monkeypatch):
+    """Extension sends its own UUID (external_id); the endpoint falls back to an
+    external_id lookup so the popup card works without the platform UUID."""
+    ext_uuid = str(uuid.uuid4())
+    platform_uuid = str(uuid.uuid4())
+    # First query (by platform UUID) misses; fallback (by external_id) finds it.
+    call_count = {"n": 0}
+
+    def fake_summary(tenant_id, sid):
+        call_count["n"] += 1
+        return _make_summary() if sid == platform_uuid else None
+
+    monkeypatch.setattr(findings_queries, "get_session_findings_summary", fake_summary)
+    monkeypatch.setattr(
+        sessions_service, "find_session_id_by_external_id", lambda t, eid: platform_uuid
+    )
+    client = _client()
+    resp = client.get(f"/sessions/{ext_uuid}/findings/summary", headers=_headers())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "complete"
+    assert call_count["n"] == 2  # once for ext_uuid (miss), once for platform_uuid (hit)
 
 
 def test_summary_top_findings_are_secrets_redacted(monkeypatch):

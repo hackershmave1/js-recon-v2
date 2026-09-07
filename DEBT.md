@@ -235,7 +235,9 @@ correct the OPERATING.md claim.
 > ✅ **(a) findings summary card RESOLVED 2026-09-07** — `GET /api/sessions/{id}/findings/summary`
 > added to the platform (queries.get_session_findings_summary, sessions_router); extension popup
 > fetches it once analysis completes and shows a compact "N findings: X endpoints · Y secrets · Z IPs"
-> card with a "View →" workspace link. **STILL OPEN:** (c) a persisted capture history;
+> card with a "View →" workspace link. Bug-fixed 2026-09-07: endpoint now resolves the extension's
+> own UUID via `external_id` fallback so the card actually renders (previously the platform UUID
+> mismatch always returned `no_run`). **STILL OPEN:** (c) a persisted capture history;
 > and the Burp/Caido/HAR interchange export.
 The extension is a one-way uploader: value never returns to where the operator works, and first-run
 activation is unguided. Bundle of feature gaps: (a) **no results in the popup** — after Analyze only

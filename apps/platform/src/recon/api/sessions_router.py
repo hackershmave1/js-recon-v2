@@ -96,6 +96,13 @@ def get_session_findings_summary(
     """
     summary = findings_queries.get_session_findings_summary(tenant_id, session_id)
     if summary is None:
+        # The extension sends its own UUID (external_id), not the platform UUID.
+        # Fall back to an external_id lookup so the popup card works without the
+        # caller needing to know the platform's internal UUID.
+        platform_id = service.find_session_id_by_external_id(tenant_id, session_id)
+        if platform_id is not None:
+            summary = findings_queries.get_session_findings_summary(tenant_id, platform_id)
+    if summary is None:
         return {"status": "no_run"}
     return {
         "status": "complete",
