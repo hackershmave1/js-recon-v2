@@ -1,13 +1,18 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from recon.api import deps
 from recon.api.app import create_app
+from recon.auth import token as auth_token
+from recon.config import get_settings
 from recon.db import models
 from recon.db.base import tenant_session
 from recon.domain import FindingType
 from recon.findings import store
 
 pytestmark = pytest.mark.integration
+
+_AUTH_KEY = "probe-actor-test-secret"
 
 
 @pytest.fixture()
@@ -157,3 +162,63 @@ def test_post_triage_unknown_finding_is_404(client, authorized_session):
         headers=_headers(tenant),
     )
     assert resp.status_code == 404
+
+
+# D48: actor attribution — verified JWT wins over client body field
+# ----------------------------------------------------------------- #
+
+
+@pytest.fixture()
+def auth_client(monkeypatch):
+    """A TestClient + tenant_id with RECON_AUTH_SECRET configured.
+
+    ``get_actor`` returns the JWT's user_id; ``get_tenant_id`` also accepts the
+    same JWT so the same Bearer token satisfies both deps. Clears settings cache
+    before and after to avoid contaminating other tests.
+    """
+    monkeypatch.setenv("RECON_AUTH_SECRET", _AUTH_KEY)
+    get_settings.cache_clear()
+    yield TestClient(create_app())
+    get_settings.cache_clear()
+
+
+def _mint_for(tenant_id: str, user_id: str = "operator-jwt") -> str:
+    return auth_token.mint(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        role="admin",
+        key=_AUTH_KEY,
+        ttl_seconds=3600,
+    )
+
+
+def test_triage_actor_comes_from_jwt_not_body(auth_client, authorized_session):
+    """When auth is on, the triage audit actor is the JWT user_id — even when the
+    body supplies a different (spoofed) actor field (D48)."""
+    tenant, session_id = authorized_session
+    run_id, finding_hash = _seed(tenant, session_id)
+    token = _mint_for(tenant)
+
+    resp = auth_client.post(
+        f"/runs/{run_id}/findings/{finding_hash}/triage",
+        json={"status": "confirmed", "actor": "spoofed-actor"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    # The actor returned comes from the JWT identity, not the body's "spoofed-actor".
+    assert resp.json()["actor"] == "operator-jwt"
+
+
+def test_triage_actor_falls_back_to_body_when_auth_off(client, authorized_session):
+    """When auth is off (no secret), the body actor field is used as a fallback —
+    dev mode / header-based tests are not broken (D48 auth-off compatibility)."""
+    tenant, session_id = authorized_session
+    run_id, finding_hash = _seed(tenant, session_id)
+
+    resp = client.post(
+        f"/runs/{run_id}/findings/{finding_hash}/triage",
+        json={"status": "confirmed", "actor": "dev-tester"},
+        headers=_headers(tenant),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["actor"] == "dev-tester"

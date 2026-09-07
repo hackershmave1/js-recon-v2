@@ -22,7 +22,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from redis import Redis
 
-from recon.api.deps import get_redis, get_tenant_id
+from recon.api.deps import get_actor, get_redis, get_tenant_id
 from recon.config import get_settings
 from recon.discover import queries as discover_queries
 from recon.domain import TERMINAL_STATES
@@ -366,8 +366,9 @@ def pause_run(
     run_id: str,
     tenant_id: str = Depends(get_tenant_id),
     redis: Redis = Depends(get_redis),
+    actor: str | None = Depends(get_actor),
 ) -> dict:
-    view = _guard(lambda: service.request_pause(redis, tenant_id=tenant_id, run_id=run_id))
+    view = _guard(lambda: service.request_pause(redis, tenant_id=tenant_id, run_id=run_id, actor=actor))
     return {"run_id": view.id, "state": view.state, "pause_requested": view.pause_requested}
 
 
@@ -376,8 +377,9 @@ def cancel_run(
     run_id: str,
     tenant_id: str = Depends(get_tenant_id),
     redis: Redis = Depends(get_redis),
+    actor: str | None = Depends(get_actor),
 ) -> dict:
-    view = _guard(lambda: service.request_cancel(redis, tenant_id=tenant_id, run_id=run_id))
+    view = _guard(lambda: service.request_cancel(redis, tenant_id=tenant_id, run_id=run_id, actor=actor))
     return {"run_id": view.id, "state": view.state, "cancel_requested": view.cancel_requested}
 
 
@@ -386,8 +388,9 @@ def resume_run(
     run_id: str,
     tenant_id: str = Depends(get_tenant_id),
     redis: Redis = Depends(get_redis),
+    actor: str | None = Depends(get_actor),
 ) -> dict:
-    view = _guard(lambda: coordinator.resume_run(redis, tenant_id=tenant_id, run_id=run_id))
+    view = _guard(lambda: coordinator.resume_run(redis, tenant_id=tenant_id, run_id=run_id, actor=actor))
     return {"run_id": view.id, "state": view.state}
 
 

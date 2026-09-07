@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from recon.api.deps import get_tenant_id
+from recon.api.deps import get_actor, get_tenant_id
 from recon.probe import reconstruct, reveal, serialize, triage
 from recon.probe.reconstruct import ReconstructedRequest
 
@@ -51,16 +51,20 @@ def set_finding_triage(
     finding_hash: str,
     body: TriageRequest,
     tenant_id: str = Depends(get_tenant_id),
+    actor: str | None = Depends(get_actor),
 ) -> dict:
     if body.status not in triage.VALID_STATUSES:
         raise HTTPException(status_code=400, detail="invalid triage status")
+    # When auth is on, actor comes from the verified JWT; fall back to the body
+    # field for auth-off dev mode so header-based tests are unchanged.
+    effective_actor = actor or body.actor
     state = triage.set_triage_for_run(
         tenant_id,
         run_id,
         finding_hash,
         status=body.status,
         note=body.note,
-        actor=body.actor,
+        actor=effective_actor,
     )
     if state is None:
         raise HTTPException(status_code=404, detail="run or finding not found")
@@ -79,10 +83,14 @@ def reveal_secret_value(
     finding_hash: str,
     body: RevealRequest | None = None,
     tenant_id: str = Depends(get_tenant_id),
+    actor: str | None = Depends(get_actor),
 ) -> dict:
     body = body or RevealRequest()
+    # When auth is on, actor comes from the verified JWT; fall back to the body
+    # field for auth-off dev mode so header-based tests are unchanged.
+    effective_actor = actor or body.actor
     outcome = reveal.reveal_secret(
-        tenant_id, run_id, finding_hash, actor=body.actor, reason=body.reason
+        tenant_id, run_id, finding_hash, actor=effective_actor, reason=body.reason
     )
     if outcome is None:
         raise HTTPException(status_code=404, detail="run or secret not found")

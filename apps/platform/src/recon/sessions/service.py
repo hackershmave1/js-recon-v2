@@ -224,7 +224,7 @@ def set_session_archived(tenant_id: str, session_id: str, *, archived: bool) -> 
         return _view(row)
 
 
-def delete_session(tenant_id: str, session_id: str) -> bool:
+def delete_session(tenant_id: str, session_id: str, *, actor: str | None = None) -> bool:
     """Hard-delete a session and (FK CASCADE) its runs/findings, then PURGE the object-storage
     blobs those runs owned (REQ-S4, D47). Returns False if the session is invisible to the
     tenant or already gone.
@@ -244,6 +244,15 @@ def delete_session(tenant_id: str, session_id: str) -> bool:
         row = session.get(EngagementSession, session_id)
         if row is None:
             return False
+        # Durable audit record: the row is gone after the commit, so log before.
+        # Session delete cascades DB rows — no run_event survives — so structured
+        # logging here IS the audit trail for this action (D48).
+        _logger.info(
+            "session.delete_requested",
+            actor=actor,
+            session_id=session_id,
+            tenant_id=tenant_id,
+        )
         # Collect BEFORE delete — after session.delete the cascade removes the run rows, so a
         # later SELECT would return nothing and silently strand every blob.
         run_ids = [
@@ -254,6 +263,13 @@ def delete_session(tenant_id: str, session_id: str) -> bool:
         ]
         session.delete(row)
     # Transaction committed: the session + its runs/findings are gone. Reclaim their blobs.
+    _logger.info(
+        "session.deleted",
+        actor=actor,
+        session_id=session_id,
+        tenant_id=tenant_id,
+        run_count=len(run_ids),
+    )
     for run_id in run_ids:
         try:
             deleted = storage.delete_run_blobs(tenant_id, run_id)

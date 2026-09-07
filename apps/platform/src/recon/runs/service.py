@@ -190,9 +190,10 @@ def transition(
     return snapshot
 
 
-def request_pause(redis: Redis, *, tenant_id: str, run_id: str) -> RunView:
+def request_pause(redis: Redis, *, tenant_id: str, run_id: str, actor: str | None = None) -> RunView:
     """Signal a pause. Runs mid-stage flip when the worker next checkpoints; a
-    still-queued run is paused immediately."""
+    still-queued run is paused immediately. ``actor`` is the verified identity
+    from the JWT (auth on) or None (auth off / dev mode)."""
     events: list[RecordedEvent] = []
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
@@ -208,7 +209,7 @@ def request_pause(redis: Redis, *, tenant_id: str, run_id: str) -> RunView:
                 tenant_id=tenant_id,
                 run_id=str(run.id),
                 event_type="run.pause_requested",
-                payload={},
+                payload={"actor": actor},
             )
         )
         if RunState(run.state) == RunState.QUEUED:
@@ -219,9 +220,10 @@ def request_pause(redis: Redis, *, tenant_id: str, run_id: str) -> RunView:
     return snapshot
 
 
-def request_cancel(redis: Redis, *, tenant_id: str, run_id: str) -> RunView:
+def request_cancel(redis: Redis, *, tenant_id: str, run_id: str, actor: str | None = None) -> RunView:
     """Signal a cancel (REQ-A4). Active runs cancel at the worker's next
-    checkpoint; queued/paused runs cancel immediately."""
+    checkpoint; queued/paused runs cancel immediately. ``actor`` is the verified
+    identity from the JWT (auth on) or None (auth off / dev mode)."""
     events: list[RecordedEvent] = []
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
@@ -237,7 +239,7 @@ def request_cancel(redis: Redis, *, tenant_id: str, run_id: str) -> RunView:
                 tenant_id=tenant_id,
                 run_id=str(run.id),
                 event_type="run.cancel_requested",
-                payload={},
+                payload={"actor": actor},
             )
         )
         if RunState(run.state) in (RunState.QUEUED, RunState.PAUSED):
@@ -248,9 +250,12 @@ def request_cancel(redis: Redis, *, tenant_id: str, run_id: str) -> RunView:
     return snapshot
 
 
-def resume(redis: Redis, *, tenant_id: str, run_id: str) -> tuple[RunView, RunStage]:
+def resume(
+    redis: Redis, *, tenant_id: str, run_id: str, actor: str | None = None
+) -> tuple[RunView, RunStage]:
     """Resume a paused run to the stage it left (or the first stage). Returns the
-    new view and the stage the caller should re-enqueue work for."""
+    new view and the stage the caller should re-enqueue work for. ``actor`` is the
+    verified identity from the JWT (auth on) or None (auth off / dev mode)."""
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
         if run is None:
@@ -267,6 +272,7 @@ def resume(redis: Redis, *, tenant_id: str, run_id: str) -> tuple[RunView, RunSt
             tenant_id=tenant_id,
             stage=target_stage,
             extra_values={"pause_requested": False},
+            event_payload_extra={"actor": actor},
         )
         snapshot = _snapshot(run)
     publish(redis, event)

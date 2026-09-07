@@ -65,6 +65,18 @@ def _bearer_claims(authorization: str | None, settings: Settings) -> auth_token.
     return auth_token.verify(raw.strip(), key=settings.auth_secret)
 
 
+def get_actor(authorization: str | None = Header(default=None)) -> str | None:
+    """Verified actor for audit logging: the authenticated user_id, or None.
+
+    Returns ``None`` when auth is disabled or the token is absent/invalid
+    rather than 401ing — so routes that call this still work in auth-off dev
+    mode (actor is then absent from the audit trail, which is acceptable).
+    """
+    settings = get_settings()
+    claims = _bearer_claims(authorization, settings)
+    return claims.user_id if claims is not None else None
+
+
 def get_principal(authorization: str | None = Header(default=None)) -> Principal:
     """The authenticated identity, or 401. Use on routes that need the user/role.
 

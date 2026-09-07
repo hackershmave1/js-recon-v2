@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from redis import Redis
 from sqlalchemy.exc import IntegrityError
 
-from recon.api.deps import get_redis, get_tenant_id
+from recon.api.deps import get_actor, get_redis, get_tenant_id
 from recon.runs import coordinator
 from recon.sessions import service
 
@@ -102,8 +102,12 @@ def patch_session(
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
-def delete_session(session_id: str, tenant_id: str = Depends(get_tenant_id)) -> Response:
-    if not service.delete_session(tenant_id, session_id):
+def delete_session(
+    session_id: str,
+    tenant_id: str = Depends(get_tenant_id),
+    actor: str | None = Depends(get_actor),
+) -> Response:
+    if not service.delete_session(tenant_id, session_id, actor=actor):
         raise HTTPException(status_code=404, detail="session not found")
     return Response(status_code=204)
 

@@ -49,6 +49,18 @@ Two independent teardown-loss windows: (a) **500 ms `processingQueue` debounce**
 Two independent reliability gaps: (a) **MutationObserver unconditional** — the `scriptObserver` in `content-script.js:162–180` calls `emitScript`/`emitInline` immediately on every DOM mutation on every page, waking the service worker even when `isCapturing` is false. `scanIfCapturing()` already has the correct storage-read guard for the initial scan; the observer does not. (b) **Message dispatch swallows rejections** — `background.js:~1062–1066` dispatches `testConnection`, `analyzeSession`, `getAnalysisProgress`, and `createProject` as `.then(sendResponse)` chains without a `.catch`; any unhandled rejection leaves the popup's message port open until it times out, silently failing with no operator feedback. **Fix:** add a `chrome.storage.local.get('isCapturing')` guard in the MutationObserver callback (matching `scanIfCapturing`'s pattern); wrap each `.then(sendResponse)` dispatch in an `async` handler with `try/catch { sendResponse({ success: false, error }) }`.
 
 #### D62 · `background.js` god-file (1,740 lines, 5.8× cap) + popup components over limit + dist in git [L]  ·  maintainability — Tier 2
+> ✅ **RESOLVED 2026-09-07** (incremental fixes complete). All four tracked items shipped:
+> (a) `_resetSessionState()` private method extracted — eliminates 4× copy-paste of the session-reset block;
+> (b) `EngagementPicker` extracted to its own component file (PR #126, 2026-09-04);
+> (c) `buildHomeViewModel` + `buildSettingsViewModel` extracted to `src/popup/viewmodels/homeVm.js` +
+> `settingsVm.js` — pure factory functions, no hooks, closing over pre-bound actions passed as params;
+> (d) `dist/popup.js` + `dist/popup.css` removed from git tracking (`git rm --cached`) — `.gitignore` entries
+> already in place, `npm run build` CI gate already enforcing compile on every PR (added D55-D63 pass).
+> Also fixed a pre-existing test regression in `test_workspace_client.mjs` where D57's `new URL()` scheme
+> guard was running in a vm sandbox without `URL`, silently failing since D55-D63. 41/41 tests now pass.
+> **Deferred (as designed):** full `background.js` module split into `SessionManager` / `FileProcessor` /
+> `AuthManager` / `SettingsManager` — the DEBT entry always labelled this "a separate L-effort slice";
+> it is not required for this resolution and is now its own open item if needed in future.
 
 Three co-located maintainability debts: (a) **`background.js` god-file** — the `JSExtractor` class owns 7 distinct responsibilities (listener wiring `225–307`, file processing pipeline `391–688`, session management `1346–1643`, auth/login `1388–1503`, settings `907–965`, message dispatch `1052–1078`, and orchestration throughout), making it 1,740 lines at 5.8× the 300-line cap. The same 12-line session-state reset block is copy-pasted at 4 sites (constructor line ~96, `newSession`, `resetCaptureSession`, `clearFiles`). Natural extraction seams: `SessionManager`, `FileProcessor`, `AuthManager`, `SettingsManager`. (b) **Popup components over limit** — `src/popup/app.jsx` (571 lines) builds two large view-model objects inline; `src/popup/components/HomeView.jsx` (516 lines) embeds a self-contained `EngagementPicker` sub-component (lines 64–198) with its own local state. (c) **`dist/popup.js` committed but CI doesn't rebuild** — the extension CI lane runs `tests/test_*.mjs` without `npm run build`, so a PR touching `src/popup/**` without rebuilding ships stale compiled JS silently. **Fix (incremental):** extract `_resetSessionState()` private method (eliminates 4×duplication); extract `EngagementPicker` to its own file; extract `buildHomeViewModel`/`buildSettingsViewModel` to `src/popup/viewmodels/`; add `dist/popup.js` + `dist/popup.css` to `.gitignore` and add a build+check step to the extension CI lane. Full `background.js` module split is a separate L-effort slice.
 
@@ -259,6 +271,16 @@ session/run delete (or a scheduled GC diffing live `finding`/`run_asset` refs ag
 documented default retention window.
 
 #### D48 · Sensitive-action audit trail isn't bound to verified identity [S]  ·  supply-chain/security — Tier 2
+> ✅ **RESOLVED 2026-09-07**. Added `get_actor` dependency to `deps.py` — when auth is on it derives the
+> actor server-side from the verified JWT user_id; when auth is off it returns None and the body field is
+> used as fallback so dev/header-based tests are unchanged. `probe_router`: triage + reveal now use
+> `effective_actor = actor or body.actor`. `runs_router`: pause, cancel, and resume all inject `get_actor`
+> and pass it to service functions, which include `{"actor": actor}` in their `run.pause_requested`,
+> `run.cancel_requested`, and `run.transition` event payloads. `sessions_router`: delete injects
+> `get_actor` and passes it to `sessions.service.delete_session`, which emits structured
+> `session.delete_requested` + `session.deleted` log entries with the actor (session delete cascades DB
+> rows so no run_event survives — structured logging is the audit trail). 5 fast-lane unit tests +
+> 2 integration tests added.
 The reveal audit mechanism is durable and denial-inclusive (`apps/platform/src/recon/probe/reveal.py:111-142`),
 but the `actor` it records is a client-supplied, optional free-text request field
 (`apps/platform/src/recon/api/probe_router.py:23,27,63,85`), never derived from the verified
