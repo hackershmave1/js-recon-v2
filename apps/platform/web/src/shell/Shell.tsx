@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
+import { RunHeader } from "./RunHeader";
 import "./shell.css";
 
 // Frames a view with a fixed sidebar + top bar around one scrolling column. Intra-run
@@ -18,6 +19,7 @@ export function Shell({ runId, mode = "run", children }: {
       <Sidebar mode={mode} runId={runId} />
       <div className="shell-main">
         <TopBar mode={mode} runId={runId} />
+        {mode === "run" && <RunHeader />}
         <div className="shell-view">
           <div className="shell-view-inner">{children}</div>
         </div>

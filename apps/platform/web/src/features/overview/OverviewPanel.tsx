@@ -1,13 +1,10 @@
 import { useNavigate, useParams } from "react-router";
 import type { FindingsResponse, Finding, HostsResponse, TechnologiesResponse } from "../../api/types";
 import { typeLabel } from "../../api/findingLabels";
+import { countType, computeAttributionPct, computeEndpoints, computeSecrets, computePartialNotes } from "./metrics";
 import "./overview.css";
 
 const DASH = "—"; // shown when the underlying metric isn't available yet
-
-function countType(findings: Finding[], type: string): number {
-  return findings.filter((f) => f.type === type).length;
-}
 
 // Production findings carry severity = null, so there is no severity to rank by.
 // Priority instead follows recon value: an undocumented (shadow) endpoint first,
@@ -35,28 +32,23 @@ export function OverviewPanel(
   // Each metric card / "View all" is a shortcut to the matching run subpage route.
   const go = (section: string) => navigate(`/runs/${id}/${section}`);
   const c = data.coverage;
-  const attributedTotal = c ? c.attributed + c.unattributed : 0;
-  const attributionPct = attributedTotal > 0 ? Math.round((c!.attributed / attributedTotal) * 100) : null;
-  // "Total reachable surface" = the confirmed API lane + the promoted valid-path (suspected)
-  // lane + in-scope client-side page routes (Starbucks QA #5). Types stay DISTINCT — this is a
-  // DISPLAY-ONLY roll-up; OpenAPI + probe never see page routes (the backend endpoint set is
-  // unchanged), so a page route can't leak in as a fake API operation. A page route counts when
-  // it's relative (same-origin, no host) or its host is one the egress guard marked in-scope; an
-  // out-of-scope sibling link (e.g. a `.ca` host) stays a finding but isn't THIS target's surface.
+  const attributionPct = computeAttributionPct(c);
+  // surfaceParts is OverviewPanel-specific display: the breakdown subtitle under the Endpoints card.
   const apiEndpoints = countType(data.findings, "endpoint");
   const suspectedEndpoints = countType(data.findings, "endpoint_suspected");
-  const inScopeHosts = new Set((hosts?.hosts ?? []).filter((h) => h.in_scope).map((h) => h.host));
+  const hostRows = hosts?.hosts ?? [];
+  const inScopeHostSet = new Set(hostRows.filter((h) => h.in_scope).map((h) => h.host));
   const pageRoutes = data.findings.filter((f) => {
     if (f.type !== "page_route") return false;
     const host = f.occurrences.find((o) => o.host)?.host;
-    return !host || inScopeHosts.has(host);
+    return !host || inScopeHostSet.has(host);
   }).length;
-  const surface = apiEndpoints + suspectedEndpoints + pageRoutes;
+  const surface = computeEndpoints(data.findings, hostRows);
   const surfaceParts = [`${apiEndpoints} API`];
   if (suspectedEndpoints > 0) surfaceParts.push(`${suspectedEndpoints} endpoint`);
   if (pageRoutes > 0) surfaceParts.push(`${pageRoutes} page${pageRoutes === 1 ? "" : "s"}`);
   const graphql = countType(data.findings, "graphql");
-  const secrets = c ? c.secrets : countType(data.findings, "secret");
+  const secrets = computeSecrets(c, data.findings);
   // D33-B: the opt-in recall count, surfaced on the Secrets card so an operator who
   // turned the lane on sees it (distinct from the precision `secrets` headline value).
   const suspectedSecrets = countType(data.findings, "secret_suspected");
@@ -105,19 +97,8 @@ export function OverviewPanel(
 
   const top = [...data.findings].sort((a, b) => priorityRank(a) - priorityRank(b)).slice(0, 6);
 
-  // Coverage-gap notes shown under ONE "Partial" banner — a run can be both curtailed AND
-  // have a skipped map, so collect the reasons rather than stacking two identical chips.
-  const partialNotes: string[] = [];
-  if (c?.curtailed) {
-    partialNotes.push(
-      "Extraction hit the analyzer's size budget on a very large bundle — some endpoints and hosts may be missing.",
-    );
-  }
-  if (c?.source_map === "skipped") {
-    partialNotes.push(
-      "A referenced source map couldn't be fetched (too large or unavailable) — recovered original sources, and any secrets in them, may be incomplete.",
-    );
-  }
+  // Coverage-gap notes shown under ONE "Partial" banner (curtailed + skipped collapse into one).
+  const partialNotes = computePartialNotes(c);
 
   return (
     <div className="ov">
