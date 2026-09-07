@@ -17,6 +17,10 @@ import { isRelevantInlineScript } from './modules/inline-relevance.js';
 import { normalizeObservedUrl, isApiIshObservation, isTelemetryPath } from './modules/observation-filter.js';
 import { prepareRequestBody, redactBody, capBody } from './modules/body-capture.js';
 
+// D46(c): capture history — persisted list of past session summaries (FIFO, capped).
+const CAPTURE_HISTORY_KEY = 'captureHistory';
+const HISTORY_MAX = 10;
+
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
   { tag: 'CMS', pattern: '/wp-content/plugins/*' },
@@ -87,6 +91,9 @@ class JSExtractor {
     // them to the observation (DEBT D45b2). bodyBytesUsed bounds total captured body bytes/session.
     this.pendingRequestBodies = new Map();
     this.bodyBytesUsed = 0;
+    // D46(c): last successful findings summary fetched for the current session; cached so
+    // _saveSessionToHistory can persist it before rotating to a new session.
+    this._lastFindingsSummary = null;
     this.processingStats = {
       processedFiles: 0,
       failedFiles: 0,
@@ -161,6 +168,48 @@ class JSExtractor {
       lastFailureUrl: null,
       lastFailureMessage: null
     };
+  }
+
+  // D46(c): persist a snapshot of the current session to the capture history list before
+  // rotating to a new session. Skipped when there are no captured files (nothing worth saving).
+  async _saveSessionToHistory() {
+    if (!this.capturedFiles.size) return;
+    let mapsCount = 0, secretCount = 0;
+    for (const f of this.capturedFiles.values()) {
+      if (f.hasSourceMap) mapsCount++;
+      secretCount += f.secretCount || 0;
+    }
+    const uploaderStats = this.batchUploader.getStats();
+    const entry = {
+      sessionId: this.sessionId,
+      timestamp: new Date().toISOString(),
+      projectId: uploaderStats.projectId || null,
+      scope: this.settings
+        ? { rootDomains: this.settings.domainScopes || [], includeSubdomains: this.settings.includeSubdomains !== false }
+        : null,
+      fileCount: this.capturedFiles.size,
+      mapsCount,
+      secretCount,
+      findingsSummary: this._lastFindingsSummary || null,
+      workspaceUrl: this.settings?.workspaceUrl || null,
+    };
+    try {
+      const stored = await chrome.storage.local.get(CAPTURE_HISTORY_KEY);
+      const history = Array.isArray(stored[CAPTURE_HISTORY_KEY]) ? stored[CAPTURE_HISTORY_KEY] : [];
+      history.unshift(entry);
+      if (history.length > HISTORY_MAX) history.length = HISTORY_MAX;
+      await chrome.storage.local.set({ [CAPTURE_HISTORY_KEY]: history });
+    } catch (e) { /* storage unavailable — non-fatal */ }
+  }
+
+  // D46(c): return the persisted capture history list.
+  async getHistory(sendResponse) {
+    try {
+      const stored = await chrome.storage.local.get(CAPTURE_HISTORY_KEY);
+      sendResponse({ history: stored[CAPTURE_HISTORY_KEY] || [] });
+    } catch (e) {
+      sendResponse({ history: [] });
+    }
   }
 
   buildProcessingError(code, message) {
@@ -1101,7 +1150,15 @@ class JSExtractor {
       testConnection: async () => { try { sendResponse(await this.workspaceClient.testConnection()); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
       analyzeSession: async () => { try { sendResponse(await this.workspaceClient.analyzeSession()); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
       getAnalysisProgress: async () => { try { sendResponse(await this.workspaceClient.getAnalysisProgress()); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
-      getSessionFindingsSummary: async (req) => { try { sendResponse(await this.workspaceClient.getSessionFindingsSummary(req.sessionId)); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
+      getSessionFindingsSummary: async (req) => {
+        try {
+          const result = await this.workspaceClient.getSessionFindingsSummary(req.sessionId);
+          // D46(c): cache the summary so _saveSessionToHistory can persist it before rotation.
+          if (result && result.status === 'complete') this._lastFindingsSummary = result;
+          sendResponse(result);
+        } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); }
+      },
+      getHistory: async () => { await this.getHistory(sendResponse); },
       listProjects: () => this.listProjects(sendResponse),
       createProject: async (req) => { try { sendResponse(await this.workspaceClient.createProject(req.project)); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
       login: (req) => this.login(req, sendResponse),
@@ -1547,6 +1604,10 @@ class JSExtractor {
     // flush them under the previous session first.
     this.processingQueue = [];
     await this.batchUploader.flushAll();
+
+    // D46(c): save the current session summary to history before clearing state.
+    await this._saveSessionToHistory();
+    this._lastFindingsSummary = null;
 
     // Rotate to a fresh, PERSISTED session id and drop the previous session's captured
     // state (mirrors clearFiles) so the new session starts clean and survives respawns.
