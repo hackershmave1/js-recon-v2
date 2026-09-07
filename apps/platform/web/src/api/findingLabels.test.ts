@@ -17,6 +17,11 @@ describe("typeLabel", () => {
     expect(typeLabel("internal_ip")).toBe("internal IP");
   });
 
+  it("labels the data-sink lanes (D52)", () => {
+    expect(typeLabel("postmessage_sink")).toBe("postMessage");
+    expect(typeLabel("storage_sink")).toBe("storage write");
+  });
+
   it("falls back to the raw wire token for types with no human label", () => {
     expect(typeLabel("secret")).toBe("secret");
     expect(typeLabel("param")).toBe("param");

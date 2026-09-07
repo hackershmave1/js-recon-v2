@@ -32,6 +32,11 @@ _TYPE_BASE: dict[str, int] = {
     "endpoint_unresolved": 25,
     "endpoint_generic": 20,
     "page_route": 15,
+    # Client-side data-flow sinks (D52): informational, not exploitable by themselves.
+    # postMessage listener (XSS-via-message attack surface) outranks a storage write
+    # because it is the injection point; storage writes are lower-signal alone.
+    "postmessage_sink": 35,
+    "storage_sink": 25,
 }
 _DEFAULT_BASE = 20
 

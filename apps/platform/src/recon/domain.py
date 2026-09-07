@@ -126,6 +126,16 @@ class FindingType(StrEnum):
     # attribution recall, and the future REQ-D5 removal diff) deliberately stay endpoint-only.
     # Same distinct-type-per-confidence-tier pattern as SECRET_SUSPECTED.
     ENDPOINT_SUSPECTED = "endpoint_suspected"
+    # Client-side data-flow sinks: postMessage listener (XSS-via-message attack surface)
+    # and Web Storage / cookie writes (persistence of user-controlled data). A NON-secret,
+    # NON-endpoint informational family — the value is stored CLEARTEXT (never hashed or
+    # reveal-gated), counted SEPARATELY from secrets and endpoints, and EXCLUDED from every
+    # `type == 'endpoint'` read model and the REQ-C2 coverage counters automatically. A
+    # DISTINCT type per sink class so each stays filterable and never collides on
+    # `finding_hash`. Both are informational (not exploitable by themselves), so they are
+    # outside the REQ-D5 removal diff (scoped to `secret` + confirmed endpoint lanes).
+    POSTMESSAGE_SINK = "postmessage_sink"
+    STORAGE_SINK = "storage_sink"
 
 
 # The finding types that roll up into the "total endpoints found" headline — the confirmed

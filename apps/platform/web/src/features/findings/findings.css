@@ -67,6 +67,11 @@
 /* GraphQL (Slice 6): a distinct confident category — solid border + orange, its own
    hue apart from the endpoint (info) / param (purple) / secret (pink) lanes. */
 .fp-type-graphql { color: var(--orange); }
+/* Data sinks (D52): postMessage listener + Web Storage / cookie writes — informational
+   (not exploitable by themselves), so a neutral info/blue tone with a solid border matches
+   the internal_ip lane rather than the dashed warning lanes of the suspected/unconfirmed types. */
+.fp-type-postmessage_sink { color: var(--info); }
+.fp-type-storage_sink { color: var(--info); }
 .fp-val { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fp-host { font-family: var(--font-mono); font-size: 11px; color: var(--muted); flex: 0 0 auto; }
 .fp-empty { padding: 60px 20px; text-align: center; color: var(--faint); }

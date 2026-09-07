@@ -37,6 +37,7 @@ from recon.events.log import RecordedEvent, publish, record_event
 from recon.fetch import egress
 from recon.findings import (
     _modulegraph,
+    data_sinks,
     deobfuscate,
     engines,
     graphql_ops,
@@ -777,6 +778,21 @@ def _analyze_blob(
             asset_url=asset_url,
         )
         internal_ips_sighted += 1
+    # Client-side data-flow sinks (D52): postMessage listeners + Web Storage / cookie writes.
+    # Scanned on the raw bundle (the same source unit as the internal-IP and secret passes).
+    # Values are stored CLEARTEXT (never hashed/redacted/reveal-gated) and counted separately —
+    # no REQ-C2 counter movement, no `type == 'endpoint'` model inclusion, no REQ-D5 diff.
+    for sink in data_sinks.find_data_sinks(source):
+        written += _record_data_sink(
+            session,
+            tenant_id,
+            run_id,
+            secret_path,
+            _SOURCE_NAME,
+            sink,
+            run_asset_id=run_asset_id,
+            asset_url=asset_url,
+        )
     # GraphQL definitions (query/mutation/subscription + fragments): located FindingType.GRAPHQL
     # findings AND the unchanged operations-only export artifact (decision 2 = both). A distinct
     # type keeps them out of the HTTP-endpoints read model and the REQ-C2 coverage counters.
@@ -1491,6 +1507,49 @@ def _record_internal_ip(
             asset_url=asset_url,
         ),
         attributes={"category": sighting.category},
+    )
+
+
+def _record_data_sink(
+    session: Session,
+    tenant_id: str,
+    run_id: str,
+    path: str,
+    source_path: str,
+    sighting: data_sinks.DataSinkSighting,
+    *,
+    run_asset_id: str | None = None,
+    asset_url: str | None = None,
+) -> int:
+    # value = the matched source snippet, trimmed to _MAX_VALUE_LEN chars by the detector.
+    # Like ``_record_internal_ip``, this is info-disclosure (NOT a secret): the value is stored
+    # CLEARTEXT as ``finding.value`` (``finding_hash`` folds in the cleartext value only for
+    # identity/dedup — REQ-D3), never server-redacted, and never reveal-gated. ``finding_type``
+    # is threaded from the sighting so the two distinct types (postmessage_sink / storage_sink)
+    # each get their own ``finding_hash`` space and neither collides with the other or with
+    # the info-disclosure / endpoint / secret families. ``confidence`` is fixed per type (see
+    # ``data_sinks`` module) and stored as an informational attribute for the findings rail.
+    confidence = "0.7" if sighting.sink_type == "postmessage_sink" else "0.6"
+    return _write(
+        session,
+        tenant_id,
+        run_id,
+        sighting.sink_type,
+        sighting.value,
+        path,
+        occurrence=store.Occurrence(
+            source_path=source_path,
+            line=sighting.line,
+            col=None,
+            offset_start=sighting.offset_start,
+            offset_end=sighting.offset_end,
+            evidence=sighting.evidence,
+            engine="vespasian",
+            confidence=None,
+            run_asset_id=run_asset_id,
+            asset_url=asset_url,
+        ),
+        attributes={"confidence": confidence},
     )
 
 

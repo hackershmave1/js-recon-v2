@@ -20,5 +20,10 @@ export const TYPE_LABELS: Record<string, string> = {
   // cleartext, never redacted/revealable. Labelled "internal IP".
   internal_ip: "internal IP",
   graphql: "GraphQL",
+  // Client-side data-flow sinks (D52): postMessage listener (XSS-via-message attack
+  // surface) and Web Storage / cookie writes (persistence of user-controlled data).
+  // Informational — NOT secrets, NOT endpoints.
+  postmessage_sink: "postMessage",
+  storage_sink: "storage write",
 };
 export const typeLabel = (t: string): string => TYPE_LABELS[t] ?? t;
