@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
+  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, DiffResponse, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -226,6 +226,18 @@ export function getFindings(
   if (params.offset != null && params.offset > 0) qs.set("offset", String(params.offset));
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request(`/runs/${encodeURIComponent(runId)}/findings${suffix}`, {}, tenantId);
+}
+
+export function getRunDiff(
+  tenantId: string,
+  runId: string,
+  baseRunId: string,
+): Promise<DiffResponse> {
+  return request(
+    `/runs/${encodeURIComponent(runId)}/diff?base=${encodeURIComponent(baseRunId)}`,
+    {},
+    tenantId,
+  );
 }
 
 export function getTechnologies(tenantId: string, runId: string): Promise<TechnologiesResponse> {

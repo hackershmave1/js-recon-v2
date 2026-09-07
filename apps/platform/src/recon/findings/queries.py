@@ -157,6 +157,37 @@ class FindingsView:
 
 
 @dataclass(frozen=True)
+class DiffEntry:
+    """A single finding as it appears in a run-to-run diff result."""
+
+    finding_hash: str
+    type: str
+    value: str
+    path: str
+    severity: str | None
+    priority: int
+
+
+@dataclass(frozen=True)
+class DiffView:
+    """Run-to-run finding-set diff (REQ-D5).
+
+    ``new`` = in run but not base; ``gone`` = in base but not run; ``persisted``
+    = in both. ``base_incomplete`` is set when the base run is PARTIAL, FAILED,
+    or CANCELLED — in that case ``gone`` findings may simply not have been
+    analysed (the base missed them), not erased from the attack surface.
+    The router surfaces this as a warning so an operator knows not to treat
+    absent-in-base as "fixed"."""
+
+    run_id: str
+    base_run_id: str
+    base_incomplete: bool
+    new: list[DiffEntry]
+    persisted: list[DiffEntry]
+    gone: list[DiffEntry]
+
+
+@dataclass(frozen=True)
 class TechnologyView:
     name: str
     categories: list[str]
@@ -418,9 +449,7 @@ def list_findings(
                 for f in findings
                 if risk_set
                 & frozenset(
-                    f.attributes.get("risk_tags", [])
-                    if isinstance(f.attributes, dict)
-                    else []
+                    f.attributes.get("risk_tags", []) if isinstance(f.attributes, dict) else []
                 )
             ]
         if q:
@@ -491,6 +520,74 @@ def list_findings(
                 else None
             ),
             total=total,
+        )
+
+
+_INCOMPLETE_STATES: frozenset[str] = frozenset({"partial", "failed", "cancelled"})
+
+
+def diff_runs(tenant_id: str, run_id: str, base_run_id: str) -> DiffView | None:
+    """Finding-set diff between two runs (REQ-D5).
+
+    Compares the finding_hash sets of the two runs and splits findings into
+    ``new`` (in run but not base), ``gone`` (in base but not run), and
+    ``persisted`` (in both). Returns ``None`` when either run is absent for
+    this tenant (RLS-invisible); the HTTP layer maps that to 404.
+
+    ``base_incomplete`` is set when the base run is PARTIAL, FAILED, or
+    CANCELLED — the ``gone`` bucket may contain findings the base simply
+    missed rather than ones that disappeared from the attack surface."""
+    with tenant_session(tenant_id) as session:
+        run = session.get(Run, run_id)
+        if run is None:
+            return None
+        base = session.get(Run, base_run_id)
+        if base is None:
+            return None
+
+        def _load(rid: str) -> dict[str, DiffEntry]:
+            rows = session.execute(
+                select(
+                    Finding.finding_hash,
+                    Finding.type,
+                    Finding.value,
+                    Finding.path,
+                    Finding.attributes,
+                ).where(Finding.run_id == rid)
+            ).all()
+            out: dict[str, DiffEntry] = {}
+            for fhash, ftype, fvalue, fpath, fattrs in rows:
+                score, label = priority.derive_priority(ftype, fattrs or {})
+                out[fhash] = DiffEntry(
+                    finding_hash=fhash,
+                    type=ftype,
+                    value=fvalue,
+                    path=fpath,
+                    severity=label,
+                    priority=score,
+                )
+            return out
+
+        run_findings = _load(str(run_id))
+        base_findings = _load(str(base_run_id))
+
+        run_hashes = frozenset(run_findings)
+        base_hashes = frozenset(base_findings)
+
+        def _sorted(entries: dict[str, DiffEntry]) -> list[DiffEntry]:
+            return sorted(entries.values(), key=lambda e: (-e.priority, e.type, e.value))
+
+        new_hashes = run_hashes - base_hashes
+        gone_hashes = base_hashes - run_hashes
+        persisted_hashes = run_hashes & base_hashes
+
+        return DiffView(
+            run_id=str(run_id),
+            base_run_id=str(base_run_id),
+            base_incomplete=str(base.state) in _INCOMPLETE_STATES,
+            new=_sorted({h: run_findings[h] for h in new_hashes}),
+            gone=_sorted({h: base_findings[h] for h in gone_hashes}),
+            persisted=_sorted({h: run_findings[h] for h in persisted_hashes}),
         )
 
 

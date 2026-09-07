@@ -128,3 +128,20 @@
 /* REQ-TU5: CTA inside the no-results empty state to open the tuning rail. */
 .fp-tune-cta { display: block; margin-top: 8px; padding: 6px 14px; border: 1px solid var(--accent-line); border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent); cursor: pointer; font-size: 12.5px; font-weight: 600; font-family: var(--font-sans); }
 .fp-tune-cta:hover { background: var(--accent); color: var(--accent-ink); }
+
+/* D54: run-to-run diff page */
+.diff-page { display: flex; flex-direction: column; gap: 20px; }
+.diff-header { display: flex; flex-direction: column; gap: 6px; }
+.diff-title { font-family: var(--font-display); font-weight: 700; font-size: 18px; color: var(--text); margin: 0; }
+.diff-meta { display: flex; gap: 18px; font-size: 12.5px; }
+.diff-warning { background: var(--panel); border: 1px solid var(--warn, var(--border-strong)); border-radius: var(--r-lg); padding: 10px 14px; font-size: 12.5px; color: var(--text); }
+.diff-section { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
+.diff-section-title { display: flex; align-items: center; gap: 8px; font-family: var(--font-display); font-weight: 600; font-size: 14px; color: var(--text); padding: 12px 16px; border-bottom: 1px solid var(--border); margin: 0; }
+.diff-new > .diff-section-title { border-left: 3px solid var(--accent); }
+.diff-gone > .diff-section-title { border-left: 3px solid var(--warn, #f59e0b); }
+.diff-persisted > .diff-section-title { border-left: 3px solid var(--border-strong); }
+.diff-count { background: var(--surface); border-radius: var(--r-sm); padding: 1px 6px; font-size: 11px; color: var(--muted); }
+.diff-list { list-style: none; margin: 0; padding: 0; }
+.diff-li { display: flex; align-items: center; gap: 8px; padding: 7px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.diff-li:last-child { border-bottom: none; }
+.diff-val { color: var(--text); font-family: var(--font-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }

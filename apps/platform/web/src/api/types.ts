@@ -218,5 +218,18 @@ export interface HostsResponse {
   endpoints_unattributed: number; suspected_unattributed: number; hosts: HostRow[];
 }
 
+// D54: run-to-run finding-set diff (REQ-D5).
+// `base_incomplete` is true when the base run was PARTIAL/FAILED/CANCELLED —
+// findings in `gone` may have been missed by the base run, not fixed. Surface
+// as a warning so an operator doesn't treat absent-in-base as "resolved".
+export interface DiffEntry {
+  finding_hash: string; type: string; value: string | null; path: string | null;
+  severity: string | null; priority: number;
+}
+export interface DiffResponse {
+  run_id: string; base_run_id: string; base_incomplete: boolean;
+  new: DiffEntry[]; persisted: DiffEntry[]; gone: DiffEntry[];
+}
+
 export const TERMINAL_STATES = new Set(["done", "partial", "failed", "cancelled"]);
 export const TRIAGE_STATUSES = ["open", "confirmed", "dismissed"] as const;

@@ -143,6 +143,43 @@ def _coverage_dict(coverage: queries.CoverageView | None) -> dict | None:
     }
 
 
+@router.get("/runs/{run_id}/diff")
+def get_run_diff(
+    run_id: str,
+    base: str,
+    tenant_id: str = Depends(get_tenant_id),
+) -> dict:
+    """REQ-D5: finding-set diff between two runs of the same session.
+
+    ``base`` is the base run id to compare against. Returns 404 when either
+    run is absent for this tenant. ``base_incomplete`` in the response signals
+    that the base run was PARTIAL/FAILED/CANCELLED — the ``gone`` bucket may
+    contain findings the base simply missed, not ones that disappeared from
+    the attack surface."""
+    result = queries.diff_runs(tenant_id, run_id, base)
+    if result is None:
+        raise HTTPException(status_code=404, detail="run or base run not found")
+    return {
+        "run_id": result.run_id,
+        "base_run_id": result.base_run_id,
+        "base_incomplete": result.base_incomplete,
+        "new": [_diff_entry_dict(e) for e in result.new],
+        "persisted": [_diff_entry_dict(e) for e in result.persisted],
+        "gone": [_diff_entry_dict(e) for e in result.gone],
+    }
+
+
+def _diff_entry_dict(e: queries.DiffEntry) -> dict:
+    return {
+        "finding_hash": e.finding_hash,
+        "type": e.type,
+        "value": e.value,
+        "path": e.path,
+        "severity": e.severity,
+        "priority": e.priority,
+    }
+
+
 def _spec_summary_dict(summary: queries.SpecSummary | None) -> dict | None:
     if summary is None:
         return None
