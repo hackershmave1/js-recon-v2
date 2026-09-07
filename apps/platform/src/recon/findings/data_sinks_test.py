@@ -211,3 +211,24 @@ def test_cap_override_is_honoured() -> None:
     sightings = find_data_sinks(source, cap=10)
     st = [s for s in sightings if s.sink_type == "storage_sink"]
     assert len(st) == 10
+
+
+# ---------------------------------------------------------------------------
+# Evidence snippet (minified-file guard)
+# ---------------------------------------------------------------------------
+
+
+def test_evidence_is_windowed_on_minified_single_line() -> None:
+    """On a minified file (one very long line) evidence must be a ≤302-char snippet, not the full line."""
+    # Simulate a minified file: 5000-char line with the sink buried in the middle.
+    padding = "x" * 2000
+    match_text = "window.addEventListener('message', h);"
+    minified = padding + match_text + padding
+    (s,) = [s for s in find_data_sinks(minified) if s.sink_type == "postmessage_sink"]
+    # evidence must be capped; +2 for possible ellipsis chars
+    assert len(s.evidence) <= 302, f"evidence too long: {len(s.evidence)} chars"
+    # The matched snippet must appear in the evidence window
+    assert "addEventListener" in s.evidence
+    # Ellipsis markers present since we clipped both sides
+    assert s.evidence.startswith("\u2026")
+    assert s.evidence.endswith("\u2026")

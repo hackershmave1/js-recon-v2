@@ -170,7 +170,7 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
                   </div>
                   <div className="sx-metric">
                     <span className="sx-metric-n ep">{statText(s.endpoints)}</span>
-                    <span className="sx-metric-l">endpoints</span>
+                    <span className="sx-metric-l" title="Confirmed API endpoints + suspected endpoints (excludes page routes — see Overview for full surface)">API endpoints</span>
                   </div>
                   <div className="sx-metric">
                     <span className="sx-metric-n sec">{statText(s.secrets)}</span>

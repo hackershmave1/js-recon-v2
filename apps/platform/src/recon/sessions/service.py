@@ -494,13 +494,10 @@ def _run_stats(db: Session, run: Run) -> tuple[int, int, int, int | None]:
             .group_by(Finding.type)
         ).all()
     )
-    # "Total reachable surface" = confirmed API lane + suspected lane + page routes.
-    # Mirrors the OverviewPanel's surface calculation so the session card count stays
-    # consistent with the run detail headline (TOTAL_ENDPOINT_TYPES is kept separate —
-    # OpenAPI / probe / probe-coverage never include page routes).
-    endpoints = sum(int(type_counts.get(t.value, 0)) for t in TOTAL_ENDPOINT_TYPES) + int(
-        type_counts.get(FindingType.PAGE_ROUTE.value, 0)
-    )
+    # "Total endpoints found" = the confirmed API lane + the promoted valid-path suspected lane.
+    # The API-vs-Endpoint breakdown lives in the findings list; coverage_pct below stays
+    # confirmed-only (it is attribution recall, never inflated by a suspected promotion).
+    endpoints = sum(int(type_counts.get(t.value, 0)) for t in TOTAL_ENDPOINT_TYPES)
     secrets = int(type_counts.get(FindingType.SECRET.value, 0))
     # files (§4 fold M1): the run's discovered-asset count for a crawl; 1 for a
     # single-blob upload; else 0. NOT coverage.files (which is per-source-path and

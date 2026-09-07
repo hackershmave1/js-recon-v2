@@ -31,6 +31,10 @@ from dataclasses import dataclass
 # Maximum snippet length stored as the finding value (long call-site text trimmed).
 _MAX_VALUE_LEN = 120
 
+# Maximum chars stored as the occurrence evidence snippet. Minified files have one giant
+# line — storing the whole line inflates DB rows and breaks the occurrence card UI.
+_MAX_EVIDENCE_LEN = 300
+
 # Default per-blob cap per sink type — a blob dense with storage calls must not blow up emit.
 _DEFAULT_CAP = 500
 
@@ -79,6 +83,33 @@ def _extract_line(text: str, offset: int) -> str:
     return text[line_start:line_end]
 
 
+def _extract_snippet(text: str, offset_start: int, offset_end: int) -> str:
+    """Return a compact evidence snippet around the match.
+
+    For normal source the full containing line is returned. For minified files where
+    a 'line' is the entire file, we return a _MAX_EVIDENCE_LEN-char window centred on
+    the match with … markers so the occurrence card stays readable.
+    """
+    line_start = text.rfind("\n", 0, offset_start)
+    line_start = 0 if line_start == -1 else line_start + 1
+    line_end = text.find("\n", offset_start)
+    line_end = len(text) if line_end == -1 else line_end
+    line = text[line_start:line_end]
+    if len(line) <= _MAX_EVIDENCE_LEN:
+        return line
+    match_in_line = offset_start - line_start
+    half = _MAX_EVIDENCE_LEN // 2
+    start = max(0, match_in_line - half)
+    end = min(len(line), start + _MAX_EVIDENCE_LEN)
+    # Shift start left if we hit the right edge
+    if end - start < _MAX_EVIDENCE_LEN:
+        start = max(0, end - _MAX_EVIDENCE_LEN)
+    snippet = line[start:end]
+    prefix = "\u2026" if start > 0 else ""
+    suffix = "\u2026" if end < len(line) else ""
+    return prefix + snippet + suffix
+
+
 def find_data_sinks(text: str, *, cap: int = _DEFAULT_CAP) -> list[DataSinkSighting]:
     """Return every data-sink call site in ``text``, in source order.
 
@@ -113,7 +144,7 @@ def find_data_sinks(text: str, *, cap: int = _DEFAULT_CAP) -> list[DataSinkSight
 
         matched_text = match.group(0)
         value = matched_text[:_MAX_VALUE_LEN]
-        evidence = _extract_line(text, offset_start)
+        evidence = _extract_snippet(text, offset_start, match.end())
         line = text.count("\n", 0, offset_start) + 1
         sightings.append(
             DataSinkSighting(
