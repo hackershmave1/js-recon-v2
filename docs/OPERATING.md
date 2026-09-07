@@ -49,7 +49,7 @@ docker compose run --rm api python -m recon.bootstrap seed-admin \
 2. The run walks its state machine `discovering → fetching → ingesting → analyzing → correlating →
    done`; status streams live (SSE, with an ETag/304 polling fallback).
 3. When it reaches `done` (or `partial`), read **Findings**, **Hosts**, **Tech stack**, **Sources**,
-   and export the **API Spec** — see [§2](#2-reading-the-output).
+   **GraphQL**, and **Probe**; export the **API Spec** — see [§2](#2-reading-the-output).
 
 ### First run — runtime capture (post-auth JS)
 
@@ -78,15 +78,38 @@ resolve is *counted, never guessed*. Learning a few terms makes the output unamb
 
 ### Findings
 
-Each finding is one of six `type`s:
+Each finding has one of the following `type` values:
+
+**Endpoint lanes** (the API surface)
 
 | type | meaning |
 |---|---|
-| `endpoint` | A resolved backend call — a concrete method + URL/path recovered from a `fetch` / `XMLHttpRequest` / `axios` / jQuery-ajax / `WebSocket` sink. |
+| `endpoint` | A resolved backend call — confirmed method + URL/path recovered from a `fetch` / `XMLHttpRequest` / `axios` / jQuery-ajax / `WebSocket` sink. |
+| `endpoint_suspected` | A suspected endpoint promoted from a generic-client call or unresolved sink whose URL still carries ≥1 static path segment. Included in the "total endpoints" headline and OpenAPI/probe surface; excluded from confirmed-only coverage counters. |
 | `endpoint_unresolved` | A real network sink whose **URL didn't statically resolve** (e.g. built from a runtime variable). Reported as a *suspected* backend call, never invented. |
-| `endpoint_generic` | A **suspected custom HTTP client** — a call shape that looks like a request wrapper but isn't a known sink. Also suspected, not confirmed. |
+| `endpoint_generic` | A **suspected custom HTTP client** — a call shape that looks like a request wrapper but isn't a known sink. Suspected, not confirmed. |
 | `page_route` | A client-side navigation / document-link target (`href`/`src`/`action`, nav sinks). Deliberately **kept out of the API surface** — it's where the app links, not a backend. |
-| `secret` | A secret Kingfisher matched. Stored as `provider:sha256(token)` + location — **never plaintext**; reveal is ephemeral and audit-logged. |
+
+**Secret lanes**
+
+| type | meaning |
+|---|---|
+| `secret` | A secret Kingfisher matched (precision lane). Stored as `provider:sha256(token)` + location — **never plaintext**; reveal is ephemeral and audit-logged. |
+| `secret_suspected` | Low-confidence secret sighting from the opt-in Kingfisher `--confidence low` sweep (~50% FP by design). Uses the same reveal/redaction machinery but excluded from the `secret` headline count. |
+
+**Info-disclosure and data-flow lanes**
+
+| type | meaning |
+|---|---|
+| `internal_ip` | A cleartext internal-IP literal (info-disclosure). Stored and shown in cleartext — never hashed or reveal-gated; counted separately from secrets. |
+| `graphql` | A GraphQL operation (query/mutation/subscription) or fragment definition. Not an HTTP endpoint — excluded from the endpoint surface and coverage counters; surfaced in a dedicated workspace tab. |
+| `postmessage_sink` | A `postMessage` listener — indicates XSS-via-message attack surface. Stored cleartext; informational (not exploitable by itself). |
+| `storage_sink` | A Web Storage or cookie write — indicates persistence of user-controlled data. Same cleartext-informational handling as `postmessage_sink`. |
+
+**Other**
+
+| type | meaning |
+|---|---|
 | `param` | A request parameter, optionally carrying advisory **risk tags** (`auth`/`admin`/`idor`/`flag`) to point you at what's worth poking first. |
 
 - **Attributed vs unattributed** — every source file shows an attributed/unattributed coverage
@@ -128,6 +151,29 @@ Postman / a future threat model. It is security-enriched: `x-recon-risk` param t
 `x-recon-graphql-operations`, and an `x-recon-confidence` marker. Responses and severity are absent
 by design — static reconstruction never observes a response, and severity is the (planned) threat
 model's job.
+
+### GraphQL
+
+A dedicated **GraphQL** tab surfaces every `graphql` finding — operations (queries, mutations,
+subscriptions) and fragment definitions located in the bundle, with the originating file and
+line/offset. GraphQL ops are excluded from the endpoint surface and coverage counters (one POST to a
+`/graphql` route is not a distinct endpoint per op); they surface here as their own first-class
+artifact. The OpenAPI export embeds them under `x-recon-graphql-operations` for Burp/Postman replay.
+
+### Probe
+
+The **Probe** tab is a master-detail explorer of the full endpoint surface (confirmed `endpoint` +
+promoted `endpoint_suspected` findings). For each endpoint it emits a ready-to-fire request artifact:
+
+- **curl** — a complete `curl -X METHOD URL` command with one placeholder per observed auth header
+  scheme (e.g. `Authorization: Bearer <token>`) so authenticated endpoints don't 401 on first use.
+- **Raw HTTP** — the equivalent HTTP/1.1 wire format for direct Burp import.
+- **websocat** — a `websocat` scaffold for `ws://`/`wss://` operations (WebSocket findings that
+  would otherwise dead-end as "not probeable").
+
+Filter by method, lane (confirmed vs suspected), or host; search by path. Triage findings directly
+from Probe (the same triage state is shared with the Findings view). The **artifact tabs** show the
+request + any OpenAPI operation spec side-by-side.
 
 ---
 
