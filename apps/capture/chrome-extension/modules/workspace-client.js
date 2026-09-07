@@ -234,4 +234,54 @@ export class WorkspaceClient {
       return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
     }
   }
+
+  // Save LLM provider config for the current session. The platform encrypts the key at rest.
+  // Sends the extension's session id (external_id); the platform resolves it to its UUID.
+  async saveLlmConfig({ provider, model, apiKey }) {
+    const target = `${this.resolveApiBase()}/api/sessions/${encodeURIComponent(this.getSessionId())}/llm-config`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      const resp = await fetch(target, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+        body: JSON.stringify({ provider, model, api_key: apiKey }),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        let detail = `HTTP ${resp.status}`;
+        try { const body = await resp.json(); if (body && body.detail) detail = body.detail; } catch (e) { /* keep default */ }
+        return { ok: false, error: detail };
+      }
+      return { ok: true };
+    } catch (error) {
+      clearTimeout(timer);
+      return { ok: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    }
+  }
+
+  // Test the stored LLM config by firing a minimal API call server-side.
+  async testLlmConfig() {
+    const target = `${this.resolveApiBase()}/api/sessions/${encodeURIComponent(this.getSessionId())}/llm-config/test`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000); // LLM calls can be slow
+    try {
+      const resp = await fetch(target, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        let detail = `HTTP ${resp.status}`;
+        try { const body = await resp.json(); if (body && body.detail) detail = body.detail; } catch (e) { /* keep default */ }
+        return { ok: false, error: detail };
+      }
+      return { ok: true, ...(await resp.json()) };
+    } catch (error) {
+      clearTimeout(timer);
+      return { ok: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    }
+  }
 }

@@ -620,6 +620,40 @@ class SessionWrapper(Base):
     updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
 
+class SessionLlmConfig(Base):
+    """Per-session LLM provider configuration (threat-model generation).
+
+    One row per session (UNIQUE). The raw API key is NEVER stored in this row —
+    ``encrypted_api_key`` holds a Fernet ciphertext (base64 text); the server
+    decrypts it on demand using ``RECON_LLM_ENCRYPTION_KEY``. If the key env var
+    is empty (dev mode), the value is stored cleartext — operators must set the
+    key in any real deployment."""
+
+    __tablename__ = "session_llm_config"
+    __table_args__ = (
+        UniqueConstraint("session_id", name="uq_session_llm_config_session"),
+        CheckConstraint(
+            "provider IN ('anthropic', 'openrouter', 'gemini')",
+            name="ck_session_llm_config_provider",
+        ),
+        Index("ix_session_llm_config_session", "tenant_id", "session_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("session.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    # Fernet-encrypted API key ciphertext, or cleartext in dev (empty encryption key).
+    encrypted_api_key: Mapped[str | None] = mapped_column(Text)
+    configured_at: Mapped[dt.datetime] = _now_col(nullable=False)
+    tested_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 # Tables carrying a tenant_id get FORCE RLS in the migration.
 TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "app_user",
@@ -641,6 +675,9 @@ TRIAGE_TABLES: tuple[str, ...] = ("finding_triage",)
 
 # Slice-Y addition, RLS-enabled by migration 0005.
 ASSET_TABLES: tuple[str, ...] = ("run_asset",)
+
+# LLM config addition, RLS-enabled by migration 0026.
+LLM_TABLES: tuple[str, ...] = ("session_llm_config",)
 
 # Shadow-API spec-diff addition, RLS-enabled by migration 0006.
 SPEC_TABLES: tuple[str, ...] = ("session_spec", "finding_spec_status")

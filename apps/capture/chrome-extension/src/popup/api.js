@@ -40,6 +40,9 @@ export const getAnalysisProgress = () => send('getAnalysisProgress');
 export const getSessionFindingsSummary = (sessionId) => send('getSessionFindingsSummary', { sessionId });
 // D46(c): fetch the persisted capture history list (past sessions).
 export const getHistory = () => send('getHistory');
+// LLM provider config — save encrypts the key on the platform server.
+export const saveLlmConfig = (config) => send('saveLlmConfig', { config });
+export const testLlmConfig = () => send('testLlmConfig');
 
 // Active tab hostname for the capture-target card. Falls back gracefully.
 export async function getActiveTabHost() {

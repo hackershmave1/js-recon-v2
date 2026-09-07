@@ -9,6 +9,31 @@ import {
   PulseIcon, SpinnerIcon, CloseIcon
 } from '../icons.jsx';
 
+const LLM_PROVIDERS = [
+  { value: 'anthropic', label: 'Anthropic (Claude)' },
+  { value: 'openrouter', label: 'OpenRouter' },
+  { value: 'gemini', label: 'Google Gemini' },
+];
+
+const LLM_MODELS = {
+  anthropic: [
+    { value: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
+    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+    { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+  ],
+  openrouter: [
+    { value: 'anthropic/claude-opus-4-7', label: 'Claude Opus 4.7' },
+    { value: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    { value: 'openai/gpt-4o', label: 'GPT-4o' },
+    { value: 'meta-llama/llama-3.3-70b-instruct', label: 'Llama 3.3 70B' },
+  ],
+  gemini: [
+    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+  ],
+};
+
 const inputStyle = {
   width: '100%', background: C.inset, border: `1px solid ${C.lineStrong}`, borderRadius: '8px',
   color: C.text, fontFamily: F.mono, fontSize: '12px', padding: '9px 11px', outline: 'none'
@@ -224,6 +249,74 @@ export function SettingsView({ vm }) {
               background: C.lime, color: C.onLime, cursor: 'pointer', fontSize: '12px', fontWeight: 700
             }}>Add</button>
           </div>
+        </Card>
+
+        {/* LLM PROVIDER — used by the platform for threat model generation */}
+        <SectionHeader>LLM PROVIDER</SectionHeader>
+        <Card>
+          <Label mb={8}>Provider</Label>
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
+            {LLM_PROVIDERS.map((p) => {
+              const on = vm.llmProvider === p.value;
+              return (
+                <button key={p.value} onClick={() => vm.setLlmProvider(p.value)} style={{
+                  flex: 1, padding: '7px 4px', borderRadius: '8px', fontSize: '10.5px', fontWeight: 600,
+                  border: `1px solid ${on ? C.lime : C.lineStrong}`,
+                  background: on ? C.lime : 'transparent', color: on ? C.onLime : C.muted,
+                  cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}>{p.label}</button>
+              );
+            })}
+          </div>
+          <Label mb={5}>Model</Label>
+          <select value={vm.llmModel} onChange={(e) => vm.setLlmModel(e.target.value)} style={{
+            ...inputStyle, marginBottom: '12px', cursor: 'pointer',
+          }}>
+            {(LLM_MODELS[vm.llmProvider] || []).map((m) => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
+          <Label mb={5}>API Key</Label>
+          <input
+            type="password"
+            value={vm.llmApiKeyDraft}
+            onInput={(e) => vm.setLlmApiKeyDraft(e.target.value)}
+            placeholder={vm.llmConfigured ? '(key saved — paste to replace)' : 'Paste API key…'}
+            style={{ ...inputStyle, marginBottom: '12px' }}
+          />
+          <div style={{ display: 'flex', gap: '7px' }}>
+            <button onClick={vm.saveLlmConfig} disabled={vm.llmSaving} style={{
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
+              padding: '9px', borderRadius: '9px',
+              border: `1px solid ${vm.llmSaving ? C.amber : C.lineHover}`,
+              background: C.control, color: vm.llmSaving ? C.amber : C.textSoft,
+              cursor: vm.llmSaving ? 'default' : 'pointer', fontSize: '12.5px', fontWeight: 600,
+            }}>
+              {vm.llmSaving ? <SpinnerIcon /> : null}
+              {vm.llmSaving ? 'Saving…' : 'Save'}
+            </button>
+            {vm.llmConfigured && (
+              <button onClick={vm.testLlmConfig} disabled={vm.llmTesting} style={{
+                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
+                padding: '9px', borderRadius: '9px',
+                border: `1px solid ${vm.llmTesting ? C.amber : C.lineHover}`,
+                background: C.control, color: vm.llmTesting ? C.amber : C.textSoft,
+                cursor: vm.llmTesting ? 'default' : 'pointer', fontSize: '12.5px', fontWeight: 600,
+              }}>
+                {vm.llmTesting ? <SpinnerIcon /> : <PulseIcon />}
+                {vm.llmTesting ? 'Testing…' : 'Test'}
+              </button>
+            )}
+          </div>
+          {vm.llmStatusMsg && (
+            <div style={{
+              marginTop: '9px', fontSize: '10.5px', display: 'flex', alignItems: 'center', gap: '6px',
+              color: vm.llmStatusOk ? C.lime : C.pink,
+            }}>
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: vm.llmStatusOk ? C.lime : C.pink, flex: '0 0 auto' }} />
+              {vm.llmStatusMsg}
+            </div>
+          )}
         </Card>
 
         {/* CAPTURED DATA — reachable "clear captures" (D46): the worker handler existed but had no UI */}

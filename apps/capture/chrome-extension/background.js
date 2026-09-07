@@ -1165,7 +1165,9 @@ class JSExtractor {
       logout: () => this.logout(sendResponse),
       dynamicScriptDetected: (req) => this.handleDynamicScript(req, sender),
       inlineScriptDetected: (req) => this.handleInlineScript(req, sender),
-      responseBodyObserved: (req) => this.handleResponseBody(req)
+      responseBodyObserved: (req) => this.handleResponseBody(req),
+      saveLlmConfig: async (req) => { try { sendResponse(await this.workspaceClient.saveLlmConfig(req.config || {})); } catch (e) { sendResponse({ ok: false, error: e?.message || 'unknown' }); } },
+      testLlmConfig: async () => { try { sendResponse(await this.workspaceClient.testLlmConfig()); } catch (e) { sendResponse({ ok: false, error: e?.message || 'unknown' }); } }
     };
 
     const handler = handlers[request.action];
