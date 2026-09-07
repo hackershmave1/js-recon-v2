@@ -110,7 +110,7 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
   useEffect(() => {
     if (!showAnalytics || !tenantId) { setWithNoise(null); return; }
     let live = true;
-    getFindings(tenantId, runId, true).then((r) => { if (live) setWithNoise(r); }).catch(() => {});
+    getFindings(tenantId, runId, { includeNoise: true }).then((r) => { if (live) setWithNoise(r); }).catch(() => {});
     return () => { live = false; };
   }, [showAnalytics, tenantId, runId]);
   const view = showAnalytics && withNoise ? withNoise : data;

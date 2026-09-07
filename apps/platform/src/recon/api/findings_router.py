@@ -7,7 +7,7 @@ deliberately distinct from a run with zero findings (200 + empty list).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from recon.api.deps import get_tenant_id
 from recon.findings import queries
@@ -23,13 +23,36 @@ def get_run_findings(
     # view's "show analytics" toggle passes ?include_noise=true to bring them back. A reversible
     # read overlay — the findings are stored either way, never deleted.
     include_noise: bool = False,
+    # D50: server-side filter + pagination params. All are optional; omitting them
+    # preserves the existing behaviour (full unfiltered result, limit=2000).
+    types: list[str] = Query(default=[]),
+    triage_statuses: list[str] = Query(default=[]),
+    q: str | None = None,
+    risk_tags: list[str] = Query(default=[]),
+    limit: int = Query(default=2000, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
 ) -> dict:
-    result = queries.list_findings(tenant_id, run_id, include_noise=include_noise)
+    result = queries.list_findings(
+        tenant_id,
+        run_id,
+        include_noise=include_noise,
+        types=types,
+        triage_statuses=triage_statuses,
+        q=q,
+        risk_tags=risk_tags,
+        limit=limit,
+        offset=offset,
+    )
     if result is None:
         raise HTTPException(status_code=404, detail="run not found")
     return {
         "run_id": result.run_id,
         "count": len(result.findings),
+        # D50: total before pagination so the FE can show "N of M" and decide whether
+        # a "load more" fetch would return more results.
+        "total": result.total,
+        "offset": offset,
+        "limit": limit,
         # REQ-C2: coverage is reported honestly alongside the findings it qualifies;
         # null until the analyze stage has run. Completeness is NOT guaranteed.
         "coverage": _coverage_dict(result.coverage),

@@ -152,6 +152,8 @@ class FindingsView:
     # attached to the run's session at all (distinct from "attached but every
     # bucket is 0") -- mirrors `coverage`'s "null until analyze has run" shape.
     spec_summary: SpecSummary | None = None
+    # D50: total count BEFORE offset/limit so the client knows how many more pages exist.
+    total: int = 0
 
 
 @dataclass(frozen=True)
@@ -318,11 +320,24 @@ def get_session_findings_summary(tenant_id: str, session_id: str) -> SessionFind
 
 
 def list_findings(
-    tenant_id: str, run_id: str, *, include_noise: bool = False
+    tenant_id: str,
+    run_id: str,
+    *,
+    include_noise: bool = False,
+    types: Sequence[str] = (),
+    triage_statuses: Sequence[str] = (),
+    q: str | None = None,
+    risk_tags: Sequence[str] = (),
+    limit: int = 2000,
+    offset: int = 0,
 ) -> FindingsView | None:
     """Every finding for a run with its occurrences and the analyze coverage
     counters, or ``None`` if the run does not exist for this tenant. Ordered
-    deterministically for stable output."""
+    deterministically for stable output.
+
+    D50: ``types``, ``triage_statuses``, ``q``, ``risk_tags`` filter the
+    result set server-side; ``limit``/``offset`` paginate it. ``FindingsView.total``
+    carries the count BEFORE pagination so callers know how many pages remain."""
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
         if run is None:
@@ -358,7 +373,10 @@ def list_findings(
             if engagement_id is not None
             else None
         )
-        findings = session.scalars(
+        # D50: apply type filter at SQL level (most selective, avoids loading occurrences for
+        # unwanted types). All other filters are applied in Python after the query because they
+        # depend on related data (triage_by_hash, attributes JSON, occurrence text).
+        findings_query = (
             select(Finding)
             .where(Finding.run_id == str(run_id))
             # finding_hash is the stable tiebreaker: (type, value) is unique per run
@@ -366,7 +384,10 @@ def list_findings(
             # arrive (Sourcemapper) two findings can share (type, value).
             .order_by(Finding.type, Finding.value, Finding.finding_hash)
             .options(selectinload(Finding.occurrences))
-        ).all()
+        )
+        if types:
+            findings_query = findings_query.where(Finding.type.in_(list(types)))
+        findings = session.scalars(findings_query).all()
         # #3: hide third-party analytics/telemetry/vendor noise (amplitude, google-analytics,
         # sentry, stripe, ...) by DEFAULT — a READ-TIME, reversible overlay (nothing is deleted).
         # A finding is dropped only when it HAS an attributed host and EVERY one is a known noise
@@ -376,6 +397,55 @@ def list_findings(
             findings = [
                 f for f in findings if not noise_hosts.is_all_noise({o.host for o in f.occurrences})
             ]
+        # D50: additional server-side filters applied in Python (after noise filter, before pagination).
+        if triage_statuses:
+            triage_set = frozenset(triage_statuses)
+            findings = [
+                f
+                for f in findings
+                if (
+                    (f.finding_hash not in triage_by_hash and "untriaged" in triage_set)
+                    or (
+                        f.finding_hash in triage_by_hash
+                        and triage_by_hash[f.finding_hash].status in triage_set
+                    )
+                )
+            ]
+        if risk_tags:
+            risk_set = frozenset(risk_tags)
+            findings = [
+                f
+                for f in findings
+                if risk_set
+                & frozenset(
+                    f.attributes.get("risk_tags", [])
+                    if isinstance(f.attributes, dict)
+                    else []
+                )
+            ]
+        if q:
+            q_lower = q.lower()
+
+            def _matches_q(f: Finding) -> bool:
+                for v in (f.value, f.path, f.type):
+                    if v and q_lower in v.lower():
+                        return True
+                return any(
+                    (o.host and q_lower in o.host.lower())
+                    or (o.source_path and q_lower in o.source_path.lower())
+                    for o in f.occurrences
+                )
+
+            findings = [f for f in findings if _matches_q(f)]
+        # Record total BEFORE pagination so the client can show "N of M" and knows
+        # whether a "load more" request would yield additional results.
+        total = len(findings)
+        # Apply server-side pagination. The spec_summary uses the PRE-pagination findings list
+        # (all findings in scope of the session's spec classification, not just the shown page)
+        # so we compute it before slicing, then slice only the findigs list for FindingView.
+        findings_for_summary = list(findings)
+        findings = findings[offset : offset + limit]
+
         # Slice Y: a crawl run's bytes live per-asset (run.input_ref is NULL for
         # those runs), so `revealable` must be computed from each occurrence's own
         # asset blob, not the run-level ref — and the FE needs the asset's URL for
@@ -416,8 +486,11 @@ def list_findings(
             ],
             coverage=_latest_coverage(session, run_id, is_multi_asset=bool(asset_refs)),
             spec_summary=(
-                _run_spec_summary(findings, spec_status_by_hash) if has_session_spec else None
+                _run_spec_summary(findings_for_summary, spec_status_by_hash)
+                if has_session_spec
+                else None
             ),
+            total=total,
         )
 
 

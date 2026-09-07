@@ -79,7 +79,10 @@ export interface SpecSummary {
   base_url_incompleteness_ratio: number;
 }
 export interface FindingsResponse {
-  run_id: string; count: number; coverage: Coverage | null; spec: SpecSummary | null; findings: Finding[];
+  run_id: string; count: number;
+  // D50: total BEFORE pagination; offset/limit echo the request params.
+  total?: number; offset?: number; limit?: number;
+  coverage: Coverage | null; spec: SpecSummary | null; findings: Finding[];
 }
 // Per-asset fetch/analyze outcome (recon.domain.AssetStatus). "pending" until the
 // corresponding stage has touched the asset.
