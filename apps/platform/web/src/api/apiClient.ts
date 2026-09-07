@@ -330,6 +330,13 @@ export function resumeRun(tenantId: string, runId: string): Promise<RunControlRe
 // Blob variant: the export route streams a file (Content-Disposition), not JSON, so it
 // bypasses request<T> (which forces Accept: application/json + res.json()). A bare
 // <a href> can't carry X-Tenant-Id, so we fetch + trigger the download in JS.
+export function getThreatModel(tenantId: string, sessionId: string): Promise<import("./types").ThreatModelResponse> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/threat-model`, {}, tenantId);
+}
+export function triggerThreatModel(tenantId: string, sessionId: string): Promise<import("./types").ThreatModelResponse> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/threat-model`, { method: "POST" }, tenantId);
+}
+
 export async function exportOpenApi(tenantId: string, runId: string, format: "json" | "yaml"): Promise<Blob> {
   const res = await fetch(
     `/runs/${encodeURIComponent(runId)}/export/openapi?format=${format}`,

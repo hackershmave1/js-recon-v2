@@ -11,6 +11,7 @@ import { SourcesPage } from "./features/sources/SourcesPage";
 import { ApiSpecPage } from "./features/apispec/ApiSpecPage";
 import { ProbePanel } from "./features/probe/ProbePanel";
 import { TechPage } from "./features/tech/TechPage";
+import { ThreatModelPage } from "./features/threat-model/ThreatModelPage";
 import { GraphQLPage } from "./features/graphql/GraphQLPage";
 import { HostsPage } from "./features/hosts/HostsPage";
 import { OverviewPanel } from "./features/overview/OverviewPanel";
@@ -196,6 +197,13 @@ export function HostsRoute() {
   if (!loaded) return <NotReady title="Loading…" body="Fetching this run's hosts." />;
   if (!hosts) return <NotReady title="No hosts yet" body="Discovered hosts appear here once analysis has run." />;
   return <HostsPage data={hosts} />;
+}
+
+export function ThreatModelRoute() {
+  const { sessionId, loaded } = useRunData();
+  if (!loaded) return <NotReady title="Loading…" body="Fetching session info." />;
+  if (!sessionId) return <NotReady title="No session" body="This run has no associated session." />;
+  return <ThreatModelPage sessionId={sessionId} />;
 }
 
 export function ApiSpecRoute() {

@@ -37,6 +37,7 @@ from recon.domain import QueueName
 from recon.llm import router as llm_router
 from recon.observability import configure_logging, get_logger
 from recon.queue import streams
+from recon.threat_model import router as threat_model_router
 
 log = get_logger("recon.api")
 
@@ -71,6 +72,7 @@ def create_app() -> FastAPI:
     app.include_router(base_url_router.router)
     app.include_router(wrappers_router.router)
     app.include_router(llm_router.router)
+    app.include_router(threat_model_router.router)
 
     # Flag-gated (Phase 1, extension->platform convergence): mount the extension's
     # save-files ingest + analyze/start onto the platform. Blob storage is the

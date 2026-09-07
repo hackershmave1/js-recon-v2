@@ -30,7 +30,7 @@ function CurrentRunCard({ runId }: { runId?: string }) {
 // Left-nav sections. ANALYZE items view a run's data, so each is a real route under
 // /runs/:id (Overview is the index route, the rest are child segments); on the
 // Sessions route they render inert. "Sessions" is a real cross-run route (its own
-// GET /sessions page); "Threat Model" stays SOON (Slice 4) with no backend/page yet.
+// GET /sessions page).
 export type NavItem = { id: string; label: string; icon: string; soon?: boolean };
 export const NAV_ITEMS: NavItem[] = [
   { id: "overview", label: "Overview", icon: "grid" },
@@ -40,7 +40,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "probe", label: "Probe", icon: "target" },
   { id: "tech", label: "Tech stack", icon: "layers" },
   { id: "hosts", label: "Hosts", icon: "globe" },
-  { id: "threat-model", label: "Threat Model", icon: "shield", soon: true },
+  { id: "threat-model", label: "Threat Model", icon: "shield" },
   { id: "sources", label: "Sources", icon: "folder" },
 ];
 
