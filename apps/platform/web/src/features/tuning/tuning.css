@@ -1,0 +1,133 @@
+/* Extraction tuning rail — right-side collapsible panel available on Findings and Probe.
+   Mirrors the left filter rail pattern (fp-rail / fp-resizer) but reversed for right-side layout.
+   Design reference: Workspace Redesign.dc.html#1b. */
+
+/* The resizer sits to the LEFT of the tuning rail (between main content and rail). */
+.tu-resizer {
+  flex: 0 0 6px;
+  align-self: stretch;
+  cursor: col-resize;
+  position: relative;
+  background: transparent;
+  touch-action: none;
+}
+.tu-resizer::before {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0; right: 2px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background .12s ease;
+}
+.tu-resizer:hover::before,
+.tu-resizer:active::before { background: var(--accent-line); }
+
+/* Rail body */
+.tu-rail {
+  flex: 0 0 auto;
+  width: 280px;
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+}
+.tu-rail-collapsed {
+  width: 36px !important;
+  flex-basis: 36px !important;
+  overflow: hidden;
+}
+
+/* Header row */
+.tu-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  flex: 0 0 auto;
+}
+.tu-rail-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  margin: 0;
+  color: var(--text);
+}
+.tu-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  padding: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--faint);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.tu-toggle:hover { color: var(--text-2); background: var(--surface); border-color: var(--border); }
+
+/* Coverage gap banner (REQ-TU2) */
+.tu-banner {
+  margin: 0 10px 10px;
+  padding: 8px 10px;
+  background: rgba(255,199,61,0.08);
+  border: 1px solid rgba(255,199,61,0.28);
+  border-radius: var(--r);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tu-banner-count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn);
+}
+.tu-banner-tip {
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.4;
+}
+
+/* Lever sections */
+.tu-levers {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex: 1 1 0;
+  overflow-y: auto;
+  padding: 0 10px 20px;
+}
+.tu-lever { position: relative; }
+
+/* Recommended lever highlight (REQ-TU2) */
+.tu-lever-recommended {
+  border-radius: var(--r);
+  outline: 1px solid var(--accent-line);
+  outline-offset: 2px;
+}
+.tu-lever-badge {
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-radius: var(--r-pill);
+  padding: 1px 7px;
+  margin: 6px 0 4px;
+}
+
+/* Collapsed state: show icon only */
+.tu-rail-collapsed .tu-levers,
+.tu-rail-collapsed .tu-banner,
+.tu-rail-collapsed .tu-rail-title {
+  display: none;
+}
+.tu-rail-collapsed .tu-rail-head {
+  justify-content: center;
+  padding: 10px 0 8px;
+}

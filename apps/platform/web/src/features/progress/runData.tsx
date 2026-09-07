@@ -77,6 +77,8 @@ export interface RunData {
   failureReason: string | null;
   failureHost: string | null;
   handleControlResult: (res: RunControlResult) => void;
+  // REQ-TU4: call after a tuning lever applies to refresh findings + coverage in place.
+  refreshFindings: () => Promise<void>;
 }
 
 const RunDataContext = createContext<RunData | null>(null);
@@ -139,6 +141,11 @@ function useRunStream(runId: string): RunData {
     if (ACTIVE_STAGES.has(s)) setStage(s);
     return true;
   }, []);
+  const refreshFindings = useCallback(async () => {
+    if (!tenantId) return;
+    try { setFindings(await getFindings(tenantId, runId)); } catch { /* best-effort */ }
+  }, [tenantId, runId]);
+
   // A control POST returns the authoritative state + flags; lift them so gating
   // reflects the action immediately, without waiting for the SSE round-trip.
   const handleControlResult = useCallback((res: RunControlResult) => {
@@ -291,7 +298,7 @@ function useRunStream(runId: string): RunData {
   return {
     runId, sessionId, state, stage, pct, done, total, eta, error, assets, events, findings, loaded,
     pauseRequested, cancelRequested, captureStatus, technologies, hosts,
-    failureCategory, failureReason, failureHost, handleControlResult,
+    failureCategory, failureReason, failureHost, handleControlResult, refreshFindings,
   };
 }
 

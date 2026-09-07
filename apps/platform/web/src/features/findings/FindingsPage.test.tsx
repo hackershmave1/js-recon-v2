@@ -115,9 +115,11 @@ describe("FindingsPage", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("keeps the extraction-tuning knobs available (provisional home)", () => {
+  it("renders the extraction-tuning rail with levers accessible", () => {
+    localStorage.removeItem("recon.tuningRailCollapsed"); // ensure expanded
     view();
-    expect(screen.getByText(/API spec/i)).toBeInTheDocument(); // SpecUpload mounted in the tuning block
+    // Rail is expanded — levers render immediately; "API spec" comes from SpecUpload.
+    expect(screen.getByText(/API spec/i)).toBeInTheDocument();
   });
 
   // Slice 4: cross-run sightings badge + the ungrouped tri-state hint.

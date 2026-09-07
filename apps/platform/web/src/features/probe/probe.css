@@ -1,0 +1,3 @@
+/* Probe page layout: main card + right tuning rail in a flex row. */
+.probe-outer { display: flex; align-items: stretch; min-height: 420px; }
+.probe-content { flex: 1 1 0; min-width: 0; }

@@ -4,7 +4,7 @@ import { useTenant } from "../../tenant/TenantContext";
 import { addWrapperRule, deleteWrapperRule, listWrapperRules, ApiError } from "../../api/apiClient";
 import type { WrapperRule } from "../../api/types";
 
-export function WrapperPanel({ runId }: { runId: string }) {
+export function WrapperPanel({ runId, onApplied }: { runId: string; onApplied?: () => void }) {
   const { tenantId } = useTenant();
   const [rules, setRules] = useState<WrapperRule[]>([]);
   const [callee, setCallee] = useState("");
@@ -28,6 +28,7 @@ export function WrapperPanel({ runId }: { runId: string }) {
       setRules((prev) => [...prev.filter((r) => r.callee !== res.rule.callee), res.rule]);
       setRecovered(res.recovered);
       setCallee("");
+      onApplied?.();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to add wrapper");
     } finally {

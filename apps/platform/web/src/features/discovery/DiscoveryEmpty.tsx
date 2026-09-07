@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { useTenant } from "../../tenant/TenantContext";
 import { getAssets } from "../../api/apiClient";
 import { TERMINAL_STATES, type AssetsManifest } from "../../api/types";
+import { useTuningRail } from "../tuning/TuningRailContext";
 import "./discovery.css";
 
 // A short headline per failure category. The detailed, SAFE copy is the backend
@@ -60,6 +61,7 @@ export function DiscoveryEmpty({
 }) {
   const { tenantId } = useTenant();
   const navigate = useNavigate();
+  const { open: openTuningRail } = useTuningRail();
   const [manifest, setManifest] = useState<AssetsManifest | null>(null);
   const terminal = state != null && TERMINAL_STATES.has(state);
   const failed = terminal && failureCategory != null && failureReason != null;
@@ -114,9 +116,14 @@ export function DiscoveryEmpty({
         or a third-party host — those files were skipped. Start a new run with those hosts in scope,
         or upload the bundle directly.
       </p>
-      <button type="button" className="btn-primary de-cta" onClick={() => navigate("/")}>
-        Start a new run
-      </button>
+      <div className="de-ctas">
+        <button type="button" className="btn-primary de-cta" onClick={() => navigate("/")}>
+          Start a new run
+        </button>
+        <button type="button" className="btn-secondary de-cta" onClick={openTuningRail}>
+          Attach a spec or teach wrappers
+        </button>
+      </div>
     </div>
   );
 }
