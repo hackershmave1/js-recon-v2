@@ -59,8 +59,12 @@ export function FindingDetail({ finding, runId, onJumpToSource }: {
             {primary}{o.line != null ? `:${o.line}` : ""}
             {/* Owning bundle, shown only alongside a distinct recovered path. */}
             {bundle ? ` · ${bundle}` : ""}
-            {/* evidence is server-redacted for secrets; render only when present */}
-            {o.evidence && !isSecret ? ` — ${o.evidence}` : ""}
+            {/* evidence is server-redacted for secrets; render only when present.
+                Cap at 200 chars — minified files produce single-line evidence that would
+                otherwise dump the entire file into the occurrence label. */}
+            {o.evidence && !isSecret
+              ? ` — ${o.evidence.length > 200 ? o.evidence.slice(0, 200) + "…" : o.evidence}`
+              : ""}
             {o.engine ? ` [${o.engine}]` : ""}
           </>;
           // Clickable only when wired AND the occurrence has a source location to
