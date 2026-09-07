@@ -72,7 +72,12 @@ def create_app() -> FastAPI:
     app.include_router(base_url_router.router)
     app.include_router(wrappers_router.router)
     app.include_router(llm_router.router)
+    # Extension calls these at /api/sessions/{id}/llm-config (capture_router uses prefix="/api").
+    # Mount a second time under /api so both the web SPA (/sessions/…) and the extension
+    # (/api/sessions/…) reach the same handlers without duplicating route logic.
+    app.include_router(llm_router.router, prefix="/api")
     app.include_router(threat_model_router.router)
+    app.include_router(threat_model_router.router, prefix="/api")
 
     # Flag-gated (Phase 1, extension->platform convergence): mount the extension's
     # save-files ingest + analyze/start onto the platform. Blob storage is the
