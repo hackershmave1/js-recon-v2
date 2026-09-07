@@ -237,8 +237,12 @@ correct the OPERATING.md claim.
 > fetches it once analysis completes and shows a compact "N findings: X endpoints · Y secrets · Z IPs"
 > card with a "View →" workspace link. Bug-fixed 2026-09-07: endpoint now resolves the extension's
 > own UUID via `external_id` fallback so the card actually renders (previously the platform UUID
-> mismatch always returned `no_run`). **STILL OPEN:** (c) a persisted capture history;
-> and the Burp/Caido/HAR interchange export.
+> mismatch always returned `no_run`).
+> ✅ **(c) persisted capture history RESOLVED 2026-09-07** — `chrome.storage.local` FIFO-10 history
+> (`CAPTURE_HISTORY_KEY`/`HISTORY_MAX`), saved in `_saveSessionToHistory()` before every session
+> rotation; `getHistory` handler + `getHistory` API; "PAST SESSIONS" card in HomeView.jsx; structural
+> test `tests/test_capture_history.mjs`.
+> **STILL OPEN:** Burp/Caido/HAR interchange export.
 The extension is a one-way uploader: value never returns to where the operator works, and first-run
 activation is unguided. Bundle of feature gaps: (a) **no results in the popup** — after Analyze only
 progress counts return; endpoints/secrets/OpenAPI require leaving to the web workspace
@@ -323,13 +327,12 @@ priority score (shadow status + risk tags + secret/internal-IP type + unattribut
 sort key + badge; render `attributes.risk_tags` as a badge + 5th facet (near-free, data is client-side).
 
 #### D50 · Findings triage & reporting don't scale [M]  ·  performance — Tier 1  ◆2
-> 🟡 **PARTIAL 2026-09-04** (PR #127). Shipped (a) multi-select + bulk triage (loops the existing
-> per-finding endpoint, local overlay reflects it without a refetch), (b) client-side CSV/JSON findings
-> export, and (c) a render cap ("show more") that bounds the DOM. **STILL OPEN:** server-side limit/offset
-> pagination — the rich client-side facets/search/sort depend on the full set in memory, so real
-> pagination needs those moved server-side too; the render cap is the pragmatic freeze fix for the
-> realistic range, and true windowing is complicated by variable finding-row heights (unlike [[D35]]'s
-> fixed-height code lines).
+> ✅ **RESOLVED 2026-09-07**. Shipped (a) multi-select + bulk triage, (b) client-side CSV/JSON export,
+> (c) render cap ("show more"). Server-side filter + pagination shipped in this session:
+> `GET /runs/{id}/findings` now accepts `types`, `triage_statuses`, `q`, `risk_tags`, `limit`,
+> `offset` query params; `FindingsView.total` carries the pre-pagination count; `FindingsParams`
+> object wraps the API call on the FE; `FindingsResponse.total/offset/limit` added to `types.ts`.
+> Fast-lane router tests verify param threading + response envelope (1295 passing).
 Breaks at exactly the scale the tool just built for (crawl cap 500→2000; an E2E already hit 567
 findings): (a) **triage is one-at-a-time** — `TriageControls` takes a single hash
 (`apps/platform/web/src/features/findings/TriageControls.tsx:6`, `apps/platform/src/recon/api/probe_router.py:48-73`),
@@ -403,13 +406,13 @@ per-queue pending/DLQ; a worker liveness healthcheck; a documented `pg_dump` + `
 derive the consumer name from hostname/PID.
 
 #### D54 · Continuous-use & collaboration features [L]  ·  maintainability — Tier 2
-> 🟡 **PARTIAL 2026-09-04** (PR #127). Shipped (b) a run-finished browser Notification (fires on the
-> transition into terminal, only when the tab is hidden + permission granted; pure `shouldNotifyRunFinished`
-> helper) and (d) a real global search (the inert "coming soon" TopBar pill is now a live client-side
-> session search jumping to a session's latest run). **STILL OPEN:** (a) run-to-run diff (a real REQ-D5
-> feature with correctness traps — a curtailed/skipped run's absent findings must diff as UNKNOWN, not
-> REMOVED; needs dedicated design) and (c) the in-product invite endpoint (creates users; security-sensitive,
-> wants its own review). A server-side findings/endpoints/files search index is the follow-up to (d).
+> 🟡 **PARTIAL 2026-09-04** (PR #127). Shipped (b) a run-finished browser Notification and (d) global
+> session search.
+> ✅ **(a) run-to-run diff RESOLVED 2026-09-07** — `GET /runs/{id}/diff?base={base_id}` returns
+> new/persisted/gone buckets; `base_incomplete` flag when base is PARTIAL/FAILED/CANCELLED (correctness
+> trap: absent ≠ fixed). `DiffPage.tsx` + `DiffRoute` + "Compare to prev run" button in OverviewPanel
+> (auto-picks immediately preceding done/partial run). 3 fast-lane router tests.
+> **STILL OPEN:** (c) in-product invite endpoint.
 The product is built to re-run a target over time and be used by a team, but the payoff features are
 absent: (a) **no run-to-run diff** — `REQ-D5` specifies it; only a same-hash *sightings count* exists
 (`apps/platform/src/recon/findings/queries.py:84-268`), no diff route, so "what's new/gone since last
