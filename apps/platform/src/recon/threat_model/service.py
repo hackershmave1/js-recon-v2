@@ -129,14 +129,14 @@ def _assemble_context(tenant_id: str, session_id: str) -> tuple[str, frozenset[s
         session_name = (session_row.name or session_id[:8]) if session_row else session_id[:8]
         scope_hosts: list[str] = (session_row.scope_hosts or []) if session_row else []
 
-        # Latest terminal run.
+        # Latest terminal run. Run.id is UUID v4 (random) — sort by created_at.
         run_row = db.execute(
             select(Run.id)
             .where(
                 Run.session_id == session_id,
                 Run.state.in_(_TERMINAL_STATES),
             )
-            .order_by(Run.id.desc())
+            .order_by(Run.created_at.desc())
             .limit(1)
         ).first()
         if run_row is None:
