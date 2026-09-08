@@ -604,6 +604,12 @@ def _dispatch_member(
         _axios_member(call, prop, result, env, base=base or "")
     elif obj in callees:  # taught wrapper — MUST be last so native/instance collisions win
         _axios_member(call, prop, result, env, base="", wrapper=obj)
+    elif prop in _GENERIC_METHODS and obj.startswith("this.") and _is_http_client_name(obj):
+        # Angular-style injected HTTP client: `this.http.get(…)` / `this.apiService.post(…)`.
+        # A `this.`-prefixed receiver is a class field (injected dependency), giving enough
+        # confidence to promote from suspected (Tier 5 generic) to a confirmed sink — so URL
+        # resolution runs and the full endpoint is attributed. MUST precede the Tier-5 branch.
+        _axios_member(call, prop, result, env, base="")
     elif prop in _GENERIC_METHODS and _is_http_client_name(obj):
         # Tier 5 (generic-call): unrecognised receiver + verb method + path-shaped arg = a
         # SUSPECTED custom client. STRICTLY last — every real sink, axios instance, and taught

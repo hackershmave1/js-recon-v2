@@ -617,9 +617,11 @@ def test_generic_call_reads_verb_as_method():
 
 
 def test_generic_call_this_http_angular_pattern():
-    # `this.http.get("/x")` — receiver text "this.http" carries the `http` hint.
+    # `this.http.get("/x")` — `this.`-prefixed HTTP client is promoted from Tier 5
+    # generic (suspected) to a confirmed endpoint so URL resolution runs.
     r = extract('this.http.get("/api/orders")')
-    assert len(r.generic) == 1 and r.generic[0].url == "/api/orders"
+    assert r.generic == []
+    assert len(r.endpoints) == 1 and r.endpoints[0].url == "/api/orders"
 
 
 def test_generic_call_keeps_template_and_concat_shape():
@@ -681,10 +683,13 @@ def test_generic_call_computed_member_is_surfaced():
 
 def test_generic_call_skips_dotted_non_http_receiver():
     # A denylisted object reached through a member chain (`this.store`, `this.cache`) is excluded
-    # by matching the LAST dotted segment — while a dotted HTTP client (`this.http`) still fires.
+    # by matching the LAST dotted segment — a dotted HTTP client (`this.http`) is promoted to
+    # confirmed endpoint (not generic), so all three produce no generic entries.
     assert extract('this.store.get("/api/x")').generic == []
     assert extract('this.cache.get("/api/x")').generic == []
-    assert len(extract('this.http.get("/api/x")').generic) == 1
+    r = extract('this.http.get("/api/x")')
+    assert r.generic == []
+    assert len(r.endpoints) == 1 and r.endpoints[0].url == "/api/x"
 
 
 # --- enrichment B: auth header capture --------------------------------------- #

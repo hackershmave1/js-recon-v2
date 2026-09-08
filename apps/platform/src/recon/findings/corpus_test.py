@@ -53,15 +53,16 @@ _BLOCKED_HOST_SUFFIXES = frozenset(
 
 
 def _normalize(url: str) -> str:
-    """Strip query string and normalize ``${varName}`` → ``{varName}`` for comparison.
+    """Strip query string and normalize placeholder tokens for comparison.
 
     Extractor output may include runtime params in the URL (``?QueueId=${queueId}``)
-    or use ``${id}`` placeholder notation; expected.json uses ``{id}`` and no query
-    string.  Strip and normalise so the comparison is about path coverage, not
+    or use ``${id}``/``:id`` placeholder notation; expected.json uses ``{id}`` and no
+    query string.  Strip and normalise so the comparison is about path coverage, not
     parameter encoding.
     """
     url = url.split("?")[0]
-    url = re.sub(r"\$\{(\w+)\}", r"{\1}", url)
+    url = re.sub(r"\$\{(\w+)\}", r"{\1}", url)       # ${varName} → {varName}
+    url = re.sub(r":([a-zA-Z_]\w*)", r"{\1}", url)   # :varName  → {varName} (holder tokens)
     return url.rstrip("/")
 
 

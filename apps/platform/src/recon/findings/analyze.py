@@ -1265,6 +1265,8 @@ def _record_endpoint(
             asset_url=asset_url,
         ),
         attributes=endpoint_attributes,
+        resolution=ep.resolution,
+        at_sink=ep.at_sink,
     )
     operation = normalize.endpoint_operation(ep.method, ep.url)
     for param in ep.params:
@@ -1798,6 +1800,8 @@ def _write(
     *,
     occurrence: store.Occurrence,
     attributes: dict[str, Any],
+    resolution: str | None = None,
+    at_sink: bool | None = None,
 ) -> int:
     result = store.record_finding(
         session,
@@ -1809,5 +1813,7 @@ def _write(
         occurrence=occurrence,
         attributes=attributes,
         first_stage="analyzing",
+        resolution=resolution,
+        at_sink=at_sink,
     )
     return int(result.finding_created) + int(result.occurrence_created)

@@ -327,6 +327,9 @@ class Finding(Base):
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     first_stage: Mapped[str | None] = mapped_column(String(20))
+    # Taxonomy fields (schema v2): NULL for pre-0028 rows and non-endpoint types.
+    resolution: Mapped[str | None] = mapped_column(String(16))
+    at_sink: Mapped[bool | None] = mapped_column(Boolean)
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
     occurrences: Mapped[list[FindingOccurrence]] = relationship(

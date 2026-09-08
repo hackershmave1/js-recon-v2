@@ -119,6 +119,8 @@ def record_finding(
     severity: str | None = None,
     attributes: dict[str, Any] | None = None,
     first_stage: str | None = None,
+    resolution: str | None = None,
+    at_sink: bool | None = None,
 ) -> RecordResult:
     """Idempotently record one finding + one of its occurrences.
 
@@ -139,6 +141,8 @@ def record_finding(
             severity=severity,
             attributes=attributes or {},
             first_stage=first_stage,
+            resolution=resolution,
+            at_sink=at_sink,
         )
         .on_conflict_do_nothing(index_elements=["run_id", "finding_hash"])
         .returning(models.Finding.id)
@@ -146,8 +150,13 @@ def record_finding(
     finding_id = session.execute(insert_finding).scalar()
     finding_created = finding_id is not None
     if finding_id is None:  # already present (retry or a normalization merge)
-        existing_id, existing_attrs = session.execute(
-            select(models.Finding.id, models.Finding.attributes).where(
+        existing_id, existing_attrs, existing_resolution, existing_at_sink = session.execute(
+            select(
+                models.Finding.id,
+                models.Finding.attributes,
+                models.Finding.resolution,
+                models.Finding.at_sink,
+            ).where(
                 models.Finding.run_id == str(run_id),
                 models.Finding.finding_hash == finding_hash,
             )
@@ -159,11 +168,22 @@ def record_finding(
         # win and a later sighting's observed header (attack surface) is silently lost
         # (REQ-C2). Write only on an actual change so an A3 retry stays a no-op.
         merged_attrs = _merge_attributes(existing_attrs or {}, attributes or {})
+        # Backfill taxonomy fields on pre-0028 rows (NULL) when a re-analyze now
+        # supplies them — never overwrite a value already present.
+        taxonomy_update: dict[str, object] = {}
+        if existing_resolution is None and resolution is not None:
+            taxonomy_update["resolution"] = resolution
+        if existing_at_sink is None and at_sink is not None:
+            taxonomy_update["at_sink"] = at_sink
+        update_values: dict[str, object] = {}
         if merged_attrs != (existing_attrs or {}):
+            update_values["attributes"] = merged_attrs
+        update_values.update(taxonomy_update)
+        if update_values:
             session.execute(
                 update(models.Finding)
                 .where(models.Finding.id == existing_id)
-                .values(attributes=merged_attrs)
+                .values(**update_values)
             )
 
     occurrence_hash = normalize.occurrence_hash(**occurrence._identity())
