@@ -19,7 +19,7 @@ router = APIRouter(tags=["llm-config"])
 class LlmConfigIn(BaseModel):
     provider: str
     model: str
-    api_key: str  # plaintext in transit (TLS), encrypted at rest by service
+    api_key: str = ""  # omit or leave empty to keep the existing stored key
 
 
 @router.post("/sessions/{session_id}/llm-config", status_code=201)
@@ -35,8 +35,6 @@ async def save_llm_config(
         )
     if not body.model.strip():
         raise HTTPException(status_code=422, detail="model must not be empty")
-    if not body.api_key.strip():
-        raise HTTPException(status_code=422, detail="api_key must not be empty")
 
     result = await run_in_threadpool(
         service.save_config,

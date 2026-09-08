@@ -22,7 +22,7 @@ const LLM_MODELS = {
     { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
   ],
   openrouter: [
-    { value: 'anthropic/claude-sonnet-4-5', label: 'Claude Sonnet 4.5 (recommended)' },
+    { value: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (recommended)' },
     { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash (budget)' },
     { value: 'anthropic/claude-opus-4-7', label: 'Claude Opus 4.7 (expensive)' },
     { value: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },

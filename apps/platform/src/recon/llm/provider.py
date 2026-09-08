@@ -6,7 +6,7 @@ Token field names differ across SDKs; this module normalises them so callers
 never deal with ``candidates_token_count`` vs ``completion_tokens``.
 
 Usage:
-    provider = build_provider("openrouter", api_key="sk-...", model="anthropic/claude-sonnet-4-5")
+    provider = build_provider("openrouter", api_key="sk-...", model="anthropic/claude-sonnet-4-6")
     response = await provider.generate_structured(system, user, MyOutputModel)
     result: MyOutputModel = response.parsed
 """
@@ -27,7 +27,7 @@ VALID_PROVIDERS = frozenset({"anthropic", "openrouter", "gemini"})
 # Sensible defaults per provider — callers may override.
 DEFAULT_MODELS: dict[str, str] = {
     "anthropic": "claude-sonnet-4-6",
-    "openrouter": "anthropic/claude-sonnet-4-5",
+    "openrouter": "anthropic/claude-sonnet-4-6",
     "gemini": "gemini-2.5-flash",
 }
 
@@ -139,8 +139,28 @@ class OpenRouterProvider(LLMProvider):
             ],
             response_format={"type": "json_object"},
         )
-        raw = response.choices[0].message.content or "{}"
-        content = json.loads(raw)
+        raw = (response.choices[0].message.content or "").strip()
+        if not raw:
+            raise ValueError(
+                f"OpenRouter returned empty content for model {self.model!r}; "
+                "check the model slug is valid and the key has access to it"
+            )
+        finish_reason = response.choices[0].finish_reason
+        if finish_reason == "length":
+            raise ValueError(
+                f"OpenRouter model {self.model!r} hit max_tokens before finishing; "
+                "increase max_tokens or reduce prompt length"
+            )
+        # Some models wrap JSON in ```json ... ``` despite json_object mode — strip fences.
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        try:
+            content = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"OpenRouter model {self.model!r} returned non-JSON content "
+                f"(finish_reason={finish_reason!r}): {raw[:500]!r}"
+            ) from exc
         u = response.usage
         usage = LLMUsage(
             prompt_tokens=u.prompt_tokens if u else 0,

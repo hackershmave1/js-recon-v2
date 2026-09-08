@@ -294,7 +294,10 @@ Rules:
 - severity: must be exactly one of: critical, high, medium, low, info.
 - citations: leave as empty array [] — citation verification is done server-side.
 - Each threat MUST reference specific endpoints from the provided surface.
-- Output ONLY the JSON object — no other text.
+- Output at most 12 threats — prioritise by severity (critical first).
+- Each threat has at most 3 test_steps.
+- description: max 2 sentences. command: max 200 chars. Keep all strings concise.
+- Output ONLY the JSON object — no other text, no markdown, no code fences.
 """
 
 
@@ -417,7 +420,7 @@ async def run_generation(tenant_id: str, session_id: str) -> None:
             system_prompt=_SYSTEM_PROMPT,
             user_prompt=context_md,
             output_schema=ThreatModelOutput,
-            max_tokens=4096,
+            max_tokens=12000,
         )
         output = ThreatModelOutput.model_validate(response.content)
     except Exception as exc:
