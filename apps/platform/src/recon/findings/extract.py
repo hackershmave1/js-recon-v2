@@ -133,6 +133,22 @@ def extract(
     return result
 
 
+_STATIC_ASSET_EXTS = frozenset(
+    {
+        ".webm", ".mp4", ".mp3", ".ogg", ".wav", ".flac",  # media
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".avif", ".webp",  # images
+        ".woff", ".woff2", ".ttf", ".otf", ".eot",  # fonts
+        ".pdf", ".zip", ".gz", ".tar",  # binary blobs
+        # NOTE: intentionally excludes .js/.css — a legitimate API path could end in those
+        # (though uncommon); the Vite-hash pattern filter below catches bundled chunks.
+    }
+)
+
+# Vite/webpack content-hash suffix: "Name-XXXXXXXX.ext" where XXXXXXXX is 7-10 base64url chars.
+# These are bundler output files, not API paths.
+_VITE_HASH_RE = re.compile(r"-[A-Za-z0-9_-]{7,12}\.[a-z0-9]+$")
+
+
 def _emit_declared_consts(result: Extraction, env: BaseEnv, data: bytes) -> None:
     """Emit URL constants declared in this file but not used at a confirmed network sink.
 
@@ -145,9 +161,11 @@ def _emit_declared_consts(result: Extraction, env: BaseEnv, data: bytes) -> None
     Intermediate building blocks (``const base = "https://h"; const url = `${base}/x```) are
     excluded: any const whose name appears as a ``${name}`` template substitution anywhere in
     the source is a prefix used to build another const, not a terminal endpoint declaration.
-    Absolute URLs only; namespace boilerplate filtered via ``_harvest_denied``; query/fragment
-    stripped (the dynamic param portion is caller-supplied at runtime); deduped against
-    already-emitted sink URLs so a const used at a sink in THIS file is never double-emitted.
+    Absolute URLs only; namespace boilerplate filtered via ``_harvest_denied``; static asset
+    URLs (images, fonts, media, Vite-hashed chunks) filtered via extension + hash-suffix check;
+    query/fragment stripped (the dynamic param portion is caller-supplied at runtime); deduped
+    against already-emitted sink URLs so a const used at a sink in THIS file is never
+    double-emitted.
     """
 
     def _norm(u: str) -> str:
@@ -176,6 +194,12 @@ def _emit_declared_consts(result: Extraction, env: BaseEnv, data: bytes) -> None
             continue
         url = value.split("?")[0].split("#")[0]
         if not _is_absolute_url(url):
+            continue
+        path_part = url.split("://", 1)[-1].split("/", 1)[-1] if "/" in url.split("://", 1)[-1] else ""
+        path_lower = ("/" + path_part).lower()
+        if any(path_lower.endswith(ext) for ext in _STATIC_ASSET_EXTS):
+            continue
+        if _VITE_HASH_RE.search(path_lower):
             continue
         normalized = url.rstrip("/")
         if normalized in already:
