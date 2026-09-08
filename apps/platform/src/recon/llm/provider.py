@@ -6,7 +6,7 @@ Token field names differ across SDKs; this module normalises them so callers
 never deal with ``candidates_token_count`` vs ``completion_tokens``.
 
 Usage:
-    provider = build_provider("openrouter", api_key="sk-...", model="anthropic/claude-opus-4-7")
+    provider = build_provider("openrouter", api_key="sk-...", model="anthropic/claude-sonnet-4-5")
     response = await provider.generate_structured(system, user, MyOutputModel)
     result: MyOutputModel = response.parsed
 """
@@ -26,9 +26,9 @@ VALID_PROVIDERS = frozenset({"anthropic", "openrouter", "gemini"})
 
 # Sensible defaults per provider — callers may override.
 DEFAULT_MODELS: dict[str, str] = {
-    "anthropic": "claude-opus-4-7",
-    "openrouter": "anthropic/claude-opus-4-7",
-    "gemini": "gemini-2.5-pro",
+    "anthropic": "claude-sonnet-4-6",
+    "openrouter": "anthropic/claude-sonnet-4-5",
+    "gemini": "gemini-2.5-flash",
 }
 
 

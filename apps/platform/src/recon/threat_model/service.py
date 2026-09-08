@@ -417,7 +417,7 @@ async def run_generation(tenant_id: str, session_id: str) -> None:
             system_prompt=_SYSTEM_PROMPT,
             user_prompt=context_md,
             output_schema=ThreatModelOutput,
-            max_tokens=16000,
+            max_tokens=4096,
         )
         output = ThreatModelOutput.model_validate(response.content)
     except Exception as exc:
