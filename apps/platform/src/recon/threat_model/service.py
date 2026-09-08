@@ -66,26 +66,29 @@ _INFO_TYPES = frozenset(
 
 
 class TestStep(BaseModel):
-    action: str
-    tool: str
-    command: str
-    expected_if_vulnerable: str
-    expected_if_secure: str
+    model_config = {"extra": "ignore"}
+    action: str = ""
+    tool: str = ""
+    command: str = ""
+    expected_if_vulnerable: str = ""
+    expected_if_secure: str = ""
 
 
 class ThreatItem(BaseModel):
+    model_config = {"extra": "ignore"}
     title: str
-    owasp_category: str
-    severity: str
-    description: str
-    affected_endpoints: list[str]
-    test_steps: list[TestStep]
-    citations: list[str]
+    owasp_category: str = ""
+    severity: str = "medium"
+    description: str = ""
+    affected_endpoints: list[str] = []
+    test_steps: list[TestStep] = []
+    citations: list[str] = []
 
 
 class ThreatModelOutput(BaseModel):
-    analysis_summary: str
-    threats: list[ThreatItem]
+    model_config = {"extra": "ignore"}
+    analysis_summary: str = ""
+    threats: list[ThreatItem] = []
 
 
 # ---------------------------------------------------------------------------
@@ -261,16 +264,37 @@ API endpoints, secrets detected (counts only — values redacted), technologies,
 
 Your job: identify concrete, testable security threats from this surface.
 
+Output ONLY a valid JSON object with exactly this structure — no prose, no markdown, no code fences:
+
+{
+  "analysis_summary": "2-3 sentence summary of the attack surface and risk posture",
+  "threats": [
+    {
+      "title": "Short threat title (max 80 chars)",
+      "owasp_category": "A01:2021",
+      "severity": "critical|high|medium|low|info",
+      "description": "1-2 sentence description referencing specific endpoints or findings",
+      "affected_endpoints": ["/api/endpoint1", "/api/endpoint2"],
+      "test_steps": [
+        {
+          "action": "what to do",
+          "tool": "burp|curl|browser|custom",
+          "command": "exact curl command or Burp payload",
+          "expected_if_vulnerable": "what you see if vulnerable",
+          "expected_if_secure": "what you see if secure"
+        }
+      ],
+      "citations": []
+    }
+  ]
+}
+
 Rules:
-- Each threat MUST reference specific endpoints or findings from the provided surface.
-- Severity: critical | high | medium | low | info.
-- OWASP 2021 category: use the standard codes A01:2021 through A10:2021, or "Other".
-- test_steps: each step must have action (what to do), tool (burp|curl|browser|custom),
-  command (exact command or Burp payload), expected_if_vulnerable, expected_if_secure.
-- citations: list the finding_hash values from the surface that this threat is based on.
-  Only include hashes that appear in the provided surface. Leave empty if none apply.
-- analysis_summary: 2-3 sentences summarising the overall attack surface and risk posture.
-- Output ONLY the JSON — no prose outside the JSON object.
+- owasp_category: use OWASP Top 10 2021 codes A01:2021 through A10:2021, or "Other".
+- severity: must be exactly one of: critical, high, medium, low, info.
+- citations: leave as empty array [] — citation verification is done server-side.
+- Each threat MUST reference specific endpoints from the provided surface.
+- Output ONLY the JSON object — no other text.
 """
 
 
@@ -297,8 +321,14 @@ def trigger_generation(tenant_id: str, session_id: str) -> dict[str, Any]:
             .first()
         )
         if existing:
-            if existing.status in ("pending", "running"):
+            if existing.status == "pending":
                 return _serialize(existing)
+            if existing.status == "running":
+                # Only block if the row was updated within the last 5 minutes — otherwise
+                # treat it as orphaned by a server restart and allow re-trigger.
+                age = (dt.datetime.now(dt.UTC) - existing.updated_at).total_seconds()
+                if age < 300:
+                    return _serialize(existing)
             # Re-trigger: reset status, clear old result.
             existing.status = "pending"
             existing.error = None

@@ -126,11 +126,10 @@ class OpenRouterProvider(LLMProvider):
                 "X-OpenRouter-Title": "JS Recon Platform",
             },
         )
-        schema = output_schema.model_json_schema()
-        # Remove unsupported keywords from strict mode.
-        schema.pop("title", None)
-        schema.pop("$defs", None)
-
+        # Use json_object mode rather than strict json_schema — strict mode requires
+        # all $defs to be inlined, which Pydantic's generated schema doesn't do for
+        # nested models, causing the model to silently drop constrained fields.
+        # The system prompt carries the full structural contract instead.
         response = await client.chat.completions.create(
             model=self.model,
             max_tokens=max_tokens,
@@ -138,14 +137,7 @@ class OpenRouterProvider(LLMProvider):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "structured_output",
-                    "strict": True,
-                    "schema": schema,
-                },
-            },
+            response_format={"type": "json_object"},
         )
         raw = response.choices[0].message.content or "{}"
         content = json.loads(raw)
