@@ -96,13 +96,9 @@ class ThreatModelOutput(BaseModel):
 def _resolve_session_id(tenant_id: str, session_id: str) -> str:
     """Accept platform UUID or extension external_id. Returns platform UUID or raises."""
     try:
-        sid_uuid = uuid.UUID(session_id)
-        with Session(engine) as db:
-            row = (
-                db.query(EngagementSession)
-                .filter_by(id=sid_uuid, tenant_id=uuid.UUID(tenant_id))
-                .first()
-            )
+        uuid.UUID(session_id)  # validate format
+        with tenant_session(tenant_id) as db:
+            row = db.query(EngagementSession).filter_by(id=uuid.UUID(session_id)).first()
             if row is not None:
                 return session_id
     except (ValueError, AttributeError):

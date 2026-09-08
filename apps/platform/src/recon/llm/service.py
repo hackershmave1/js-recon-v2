@@ -17,7 +17,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from recon.config import get_settings
-from recon.db.base import engine
+from recon.db.base import engine, tenant_session
 from recon.db.models import EngagementSession, SessionLlmConfig
 from recon.llm.provider import VALID_PROVIDERS, build_provider
 from recon.sessions import service as sessions_service
@@ -27,13 +27,10 @@ def _resolve_session_id(tenant_id: str, session_id: str) -> str:
     """Accept either a platform UUID or the extension's external_id (same fallback
     pattern as sessions_router). Returns the platform UUID, or raises ValueError."""
     try:
-        sid_uuid = uuid.UUID(session_id)
-        with Session(engine) as db:
-            row = (
-                db.query(EngagementSession)
-                .filter_by(id=sid_uuid, tenant_id=uuid.UUID(tenant_id))
-                .first()
-            )
+        uuid.UUID(session_id)  # validate format; raises ValueError if not a UUID
+        # Use tenant_session so app.tenant_id is set and FORCE RLS lets the query through.
+        with tenant_session(tenant_id) as db:
+            row = db.query(EngagementSession).filter_by(id=uuid.UUID(session_id)).first()
             if row is not None:
                 return session_id
     except (ValueError, AttributeError):
