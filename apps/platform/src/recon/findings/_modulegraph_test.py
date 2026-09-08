@@ -98,6 +98,52 @@ def test_exports_realias_skips_reexport_with_source():
     assert _exports('export { X as A } from "./y.js";') == {}
 
 
+# --- template-literal const expansion in re-alias exports ------------------- #
+# The Vite/Rollup micro-frontend pattern: a base URL const + template-literal
+# derived consts, all re-exported with short aliases. Without expansion, the
+# exported values keep the verbatim "${Base}/path" text and never match at sinks.
+
+
+def test_exports_realias_template_literal_const_expands():
+    # `const Base="https://…"; const URL=`${Base}/orders`; export{URL as u}` ->
+    # the export value must be the full URL, not the verbatim template text.
+    src = (
+        'const Base = "https://api.acme.com/v1";'
+        " const URL = `${Base}/orders`;"
+        " export { URL as u };"
+    )
+    assert _exports(src) == {"u": "https://api.acme.com/v1/orders"}
+
+
+def test_exports_realias_template_with_query_string():
+    src = (
+        'const Api = "https://gw.example.com/v2";'
+        " const listURL = `${Api}/items?active=1`;"
+        " export { listURL as L };"
+    )
+    assert _exports(src) == {"L": "https://gw.example.com/v2/items?active=1"}
+
+
+def test_exports_realias_template_unresolvable_sub_omitted():
+    # The sub references a name not in scope -> honest omission, not a guess.
+    src = "const url = `${ExternalBase}/orders`; export { url as u };"
+    assert _exports(src) == {}
+
+
+def test_exports_realias_template_multi_level_chain_expands():
+    # Base -> mid -> url, all re-exported; mid and url must both expand.
+    src = (
+        'const Base = "https://api.acme.com";'
+        " const mid = `${Base}/v1`;"
+        " const url = `${mid}/orders`;"
+        " export { url as u, mid as m };"
+    )
+    assert _exports(src) == {
+        "u": "https://api.acme.com/v1/orders",
+        "m": "https://api.acme.com/v1",
+    }
+
+
 # --- url_module_key (no-map chunk identity) ----------------------------------- #
 
 
