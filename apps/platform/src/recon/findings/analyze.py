@@ -554,11 +554,15 @@ def _extract_endpoints(
             webpack_members=webpack_members,
         )
         path = normalize.normalize_source_path(source_name)
-        attributed += len(extraction.endpoints)
+        # Only at_sink=True endpoints count as attributed (confirmed network sinks whose URL
+        # was resolved). at_sink=False declared consts are real findings but are not detected
+        # sinks — counting them would inflate coverage and break REQ-C2 honesty.
+        at_sink_count = sum(1 for ep in extraction.endpoints if ep.at_sink)
+        attributed += at_sink_count
         unattributed += extraction.unattributed
         curtailed = curtailed or extraction.curtailed
         bucket = per_file.setdefault(path, [0, 0])
-        bucket[0] += len(extraction.endpoints)
+        bucket[0] += at_sink_count
         bucket[1] += extraction.unattributed
         for endpoint in extraction.endpoints:
             written += _record_endpoint(

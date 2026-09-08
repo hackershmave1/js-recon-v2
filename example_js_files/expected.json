@@ -1,0 +1,1448 @@
+{
+  "schema_version": 2,
+  "fields": [
+    "url",
+    "resolution",
+    "at_sink",
+    "scope",
+    "kind",
+    "method",
+    "base_source",
+    "bucket",
+    "flags"
+  ],
+  "files": {
+    "01-vite-react-baseurl-consts.js": [
+      {
+        "url": "https://apigatewayazeu-dev.accenture.com/idvs/mfe/dev/v1.0/AssignedQueue",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": [
+          "params:QueueId,Page"
+        ]
+      },
+      {
+        "url": "https://apigatewayazeu-dev.accenture.com/idvs/mfe/dev/v1.0/GDPR",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "PUT",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "https://apigatewayazeu-dev.accenture.com/idvs/mfe/dev/v1.0/health",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "HEAD",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "https://apigatewayazeu-dev.accenture.com/idvs/mfe/dev/v1.0/AgenticAI/GetFilteredDocumentDetails",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "https://apigatewayazeu-dev.accenture.com/idvs/mfe/dev/v1.0/DocumentDetailsPagination",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "api",
+        "method": null,
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "https://apigatewayazeu-dev.accenture.com/idvs/mfe/dev/v1.0/Authentication",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "api",
+        "method": null,
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "https://apigatewayazeu-dev.accenture.com/idvs/mfe/dev/v1.0/Authentication/AIG",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "api",
+        "method": null,
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": [
+          "params:ClientId"
+        ]
+      },
+      {
+        "url": "https://apigatewayazeu-dev.accenture.com/idvs/mfe/dev/v1.0/FieldHistory",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "api",
+        "method": null,
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "https://legacy-idvs.accenture.com/api/Document/Upload",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "api",
+        "method": null,
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": [
+          "branch_fallback"
+        ]
+      }
+    ],
+    "02-webpack-minified-runtime.js": [
+      {
+        "url": "https://api.acme.io/v2/orders",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": [
+          "via_wrapper"
+        ]
+      },
+      {
+        "url": "https://api.acme.io/v2/orders/{id}",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": [
+          "via_wrapper"
+        ]
+      },
+      {
+        "url": "https://api.acme.io/v2/orders/{id}/cancel",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": [
+          "via_wrapper"
+        ]
+      },
+      {
+        "url": "https://api.acme.io/v2/users/me",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": [
+          "via_wrapper"
+        ]
+      },
+      {
+        "url": "https://api.acme.io/v2/internal/orders/bulk-export",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": [
+          "via_wrapper"
+        ]
+      },
+      {
+        "url": "https://api.acme.io/v2/search",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": [
+          "params:q"
+        ]
+      },
+      {
+        "url": "https://cdn.acme.io/static/build/locales/en-US.json",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "asset",
+        "method": "GET",
+        "base_source": "webpack_public_path",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "EXPR:e.settingsUrl",
+        "resolution": "dynamic",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_RUNTIME",
+        "flags": []
+      }
+    ],
+    "03-nextjs-app-router-chunk.js": [
+      {
+        "url": "/api/documents",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "same_origin_promotable",
+          "params:status"
+        ]
+      },
+      {
+        "url": "/api/documents/{id}",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "PATCH",
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "same_origin_promotable"
+        ]
+      },
+      {
+        "url": "/api/revalidate",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "params:tag"
+        ]
+      },
+      {
+        "url": "{NEXT_PUBLIC_API_BASE}/graph/summary",
+        "resolution": "dynamic",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "env",
+        "bucket": "NEEDS_RUNTIME",
+        "flags": []
+      },
+      {
+        "url": "/queue/{queueId}/review",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": []
+      },
+      {
+        "url": "/admin/users",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": []
+      },
+      {
+        "url": "/legal/gdpr",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": []
+      },
+      {
+        "url": "/_next/image",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "asset",
+        "method": null,
+        "base_source": "none",
+        "bucket": "DROP",
+        "flags": []
+      }
+    ],
+    "04-angular-environment-interceptor.js": [
+      {
+        "url": "https://idvs-api.acme.corp/api/DocumentTab",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": [
+          "params:DocumentId"
+        ]
+      },
+      {
+        "url": "https://idvs-api.acme.corp/api/FieldHistory",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "https://reporting.acme.corp/rpt/v3/export",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "/SiteLinks",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "interceptor",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "resolvable_via_interceptor",
+          "params:active"
+        ]
+      },
+      {
+        "url": "/Document/{id}",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "DELETE",
+        "base_source": "interceptor",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "resolvable_via_interceptor"
+        ]
+      },
+      {
+        "url": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/v2.0",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "third_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "auth"
+        ]
+      }
+    ],
+    "05-nuxt-vue-usefetch.js": [
+      {
+        "url": "/DocumentContent",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "option_baseurl",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "params:documentId"
+        ]
+      },
+      {
+        "url": "/DocumentSplitDetailsPagination",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "option_baseurl",
+        "bucket": "NEEDS_HOST",
+        "flags": []
+      },
+      {
+        "url": "/api/_nuxt/translations",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "params:locale"
+        ]
+      },
+      {
+        "url": "https://idvs-legacy.acme.dev/api/ping",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "/auth/login",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "params:next"
+        ]
+      }
+    ],
+    "06-axios-instance-baseurl.js": [
+      {
+        "url": "https://apigatewayazeu-dev.accenture.com/idvs/mfe/dev/v1.0/AssignedQueue",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "axios_instance",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "https://apigatewayazeu-dev.accenture.com/idvs/mfe/dev/v1.0/AssignedDocument",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "axios_instance",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "https://apigatewayazeu-dev.accenture.com/idvs/mfe/dev/v1.0/Authentication",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "axios_instance",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "https://apigatewayazeu-dev.accenture.com/idvs/mfe/dev/v1.0/Authentication/Client",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "axios_instance",
+        "bucket": "PROBE",
+        "flags": [
+          "params:ClientName"
+        ]
+      },
+      {
+        "url": "https://apigatewayazeu-dev.accenture.com/idvs/mfe/dev/v1.0/DocumentHistory",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "axios_instance",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "/users/{id}",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "DELETE",
+        "base_source": "axios_instance",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "base_unresolved"
+        ]
+      },
+      {
+        "url": "/users/{id}/impersonate",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "axios_instance",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "base_unresolved",
+          "high_signal"
+        ]
+      },
+      {
+        "url": "https://auth.accenture.com/oauth2/token/refresh",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "auth"
+        ]
+      }
+    ],
+    "07-dynamic-url-assembly.js": [
+      {
+        "url": "{proto}//{host}/{tenant}/v1/{resource}",
+        "resolution": "dynamic",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "none",
+        "bucket": "NEEDS_RUNTIME",
+        "flags": [
+          "template_only"
+        ]
+      },
+      {
+        "url": "/v1/{a}/{b}/settings",
+        "resolution": "dynamic",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "PUT",
+        "base_source": "none",
+        "bucket": "NEEDS_RUNTIME",
+        "flags": [
+          "url_constructor"
+        ]
+      },
+      {
+        "url": "/AssignedQueue",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "from_lookup_table"
+        ]
+      },
+      {
+        "url": "/DocumentSplitDetailsPagination",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "from_lookup_table"
+        ]
+      },
+      {
+        "url": "/admin/purge-all",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "from_lookup_table",
+          "high_signal"
+        ]
+      },
+      {
+        "url": "EXPR:cfg.url",
+        "resolution": "dynamic",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "unknown",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_RUNTIME",
+        "flags": []
+      },
+      {
+        "url": "EXPR:row.href",
+        "resolution": "dynamic",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "unknown",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_RUNTIME",
+        "flags": []
+      },
+      {
+        "url": "EXPR:this.props.endpoint",
+        "resolution": "dynamic",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "unknown",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_RUNTIME",
+        "flags": []
+      },
+      {
+        "url": "{API}/documents/{id}",
+        "resolution": "dynamic",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "POST|PUT",
+        "base_source": "none",
+        "bucket": "NEEDS_RUNTIME",
+        "flags": [
+          "method_dynamic"
+        ]
+      },
+      {
+        "url": "/api/v1/keys",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "join_fold"
+        ]
+      }
+    ],
+    "08-router-table-and-auth-redirects.js": [
+      {
+        "url": "/queue/{queueId}/review",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "route_table"
+        ]
+      },
+      {
+        "url": "/admin/users",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "route_table"
+        ]
+      },
+      {
+        "url": "/admin/feature-flags",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "route_table"
+        ]
+      },
+      {
+        "url": "/internal/debug-console",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "route_table",
+          "high_signal"
+        ]
+      },
+      {
+        "url": "/legal/gdpr",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "route_table"
+        ]
+      },
+      {
+        "url": "/api/admin/users",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "route_loader"
+        ]
+      },
+      {
+        "url": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/oauth2/v2.0/authorize",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "third_party",
+        "kind": "page",
+        "method": "GET",
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": [
+          "auth",
+          "params:client_id,response_type,redirect_uri,scope,state",
+          "high_signal"
+        ]
+      },
+      {
+        "url": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/v2.0/.well-known/openid-configuration",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "third_party",
+        "kind": "api",
+        "method": null,
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": [
+          "high_signal"
+        ]
+      },
+      {
+        "url": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/oauth2/v2.0/logout",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "third_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "const_fold",
+        "bucket": "PROBE",
+        "flags": [
+          "params:post_logout_redirect_uri"
+        ]
+      },
+      {
+        "url": "https://idvs-api.acme.corp/swagger/index.html",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "high_signal"
+        ]
+      },
+      {
+        "url": "https://idvs-api.acme.corp/swagger/v1/swagger.json",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "api",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "high_signal",
+          "spec"
+        ]
+      }
+    ],
+    "09-graphql-ws-beacon-worker.js": [
+      {
+        "url": "https://gql.acme.io/graphql",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "graphql",
+          "operations:GetQueue,PurgeQueue",
+          "high_signal"
+        ]
+      },
+      {
+        "url": "wss://rt.acme.io/socket",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "sink:WebSocket",
+          "params:token"
+        ]
+      },
+      {
+        "url": "ws://rt-legacy.acme.io:8080/stream",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "sink:WebSocket",
+          "cleartext"
+        ]
+      },
+      {
+        "url": "/api/events/stream",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "sink:EventSource"
+        ]
+      },
+      {
+        "url": "/api/telemetry/client-error",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "sink:sendBeacon"
+        ]
+      },
+      {
+        "url": "https://idvs-api.acme.corp/api/Document/{docId}",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "DELETE",
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "sink:XHR"
+        ]
+      },
+      {
+        "url": "https://cdn.acme.io/worker/v3/ocr-parser.js",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "asset",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "sink:importScripts",
+          "rescan"
+        ]
+      },
+      {
+        "url": "https://idvs-api.acme.corp/api/Document/Upload",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "sink:form.action"
+        ]
+      }
+    ],
+    "10-third-party-telemetry.js": [
+      {
+        "url": "https://o1234567.ingest.sentry.io/4505123456789",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "third_party",
+        "kind": "api",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "vendor:sentry",
+          "secret:dsn"
+        ]
+      },
+      {
+        "url": "https://idvs-api.acme.corp/api",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "api",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "leaked_via_vendor_config",
+          "high_signal"
+        ]
+      },
+      {
+        "url": "https://www.googletagmanager.com/gtag/js",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "third_party",
+        "kind": "asset",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "DROP",
+        "flags": [
+          "vendor:google"
+        ]
+      },
+      {
+        "url": "https://www.google-analytics.com/g/collect",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "third_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "literal",
+        "bucket": "DROP",
+        "flags": [
+          "vendor:google"
+        ]
+      },
+      {
+        "url": "https://cdn.segment.com/analytics.js/v1/9f3a2c8811d4/analytics.min.js",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "third_party",
+        "kind": "asset",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "DROP",
+        "flags": [
+          "vendor:segment"
+        ]
+      },
+      {
+        "url": "https://api.segment.io/v1/track",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "third_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "literal",
+        "bucket": "DROP",
+        "flags": [
+          "vendor:segment"
+        ]
+      },
+      {
+        "url": "https://api.stripe.com/v1/payment_intents",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "third_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "vendor:stripe",
+          "secret:pk_live"
+        ]
+      },
+      {
+        "url": "https://api-iam.intercom.io",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "third_party",
+        "kind": "api",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "DROP",
+        "flags": [
+          "vendor:intercom"
+        ]
+      },
+      {
+        "url": "https://api.launchdarkly.com/sdk/evalx/6540ab/users/{b64}",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "third_party",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "vendor:launchdarkly"
+        ]
+      }
+    ],
+    "11-vendor-noise-xmlns.js": [
+      {
+        "url": "http://schemas.openxmlformats.org/*",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "third_party",
+        "kind": "noise",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "DROP",
+        "flags": [
+          "xml_namespace"
+        ]
+      },
+      {
+        "url": "http://purl.org/dc/*",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "third_party",
+        "kind": "noise",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "DROP",
+        "flags": [
+          "schema_uri"
+        ]
+      },
+      {
+        "url": "http://www.w3.org/2001/XMLSchema",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "third_party",
+        "kind": "noise",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "DROP",
+        "flags": [
+          "schema_uri"
+        ]
+      },
+      {
+        "url": "http://www.w3.org/2000/svg",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "third_party",
+        "kind": "noise",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "DROP",
+        "flags": [
+          "dom_namespace"
+        ]
+      },
+      {
+        "url": "urn:schemas-microsoft-com:office:*",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "third_party",
+        "kind": "noise",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "DROP",
+        "flags": [
+          "urn"
+        ]
+      },
+      {
+        "url": "http://www.apache.org/licenses/LICENSE-2.0",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "third_party",
+        "kind": "noise",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "DROP",
+        "flags": [
+          "license",
+          "in_comment"
+        ]
+      },
+      {
+        "url": "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "third_party",
+        "kind": "noise",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "DROP",
+        "flags": [
+          "doctype"
+        ]
+      },
+      {
+        "url": "REGEX:^(https?://)?...",
+        "resolution": "dynamic",
+        "at_sink": false,
+        "scope": "unknown",
+        "kind": "noise",
+        "method": null,
+        "base_source": "none",
+        "bucket": "DROP",
+        "flags": [
+          "regex_literal"
+        ]
+      },
+      {
+        "url": "https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/locale/he.js",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "third_party",
+        "kind": "asset",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "DROP",
+        "flags": [
+          "cdn"
+        ]
+      },
+      {
+        "url": "xlsx.full.min.js.map",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "asset",
+        "method": null,
+        "base_source": "source_map",
+        "bucket": "PROBE",
+        "flags": [
+          "high_signal",
+          "source_map"
+        ]
+      }
+    ],
+    "12-encoded-and-obfuscated.js": [
+      {
+        "url": "https://api.acme.io/v2/admin/impersonate",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "base64_decode",
+        "bucket": "PROBE",
+        "flags": [
+          "obfuscated",
+          "high_signal"
+        ]
+      },
+      {
+        "url": "/api/internal/debug/dump",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "base64_decode",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "obfuscated",
+          "high_signal"
+        ]
+      },
+      {
+        "url": "/api/v1/secrets",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "hex_unescape",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "obfuscated",
+          "high_signal"
+        ]
+      },
+      {
+        "url": "/api/v1/keys/rotate",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "join_fold",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "obfuscated",
+          "high_signal"
+        ]
+      },
+      {
+        "url": "/api/v1/flags",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "fromcharcode_fold",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "obfuscated"
+        ]
+      },
+      {
+        "url": "/api/internal/debug/dump",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "unknown",
+        "kind": "api",
+        "method": "GET",
+        "base_source": "reverse_fold",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "obfuscated",
+          "duplicate_of_earlier"
+        ]
+      }
+    ],
+    "13-service-worker-and-manifests.js": [
+      {
+        "url": "/",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "precache"
+        ]
+      },
+      {
+        "url": "/queue",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "precache"
+        ]
+      },
+      {
+        "url": "/admin/users",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "precache"
+        ]
+      },
+      {
+        "url": "/admin/feature-flags",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "precache"
+        ]
+      },
+      {
+        "url": "/internal/debug-console",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "page",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "precache",
+          "high_signal"
+        ]
+      },
+      {
+        "url": "/static/js/main.4f2a91c.js",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "asset",
+        "method": null,
+        "base_source": "none",
+        "bucket": "DROP",
+        "flags": [
+          "rescan"
+        ]
+      },
+      {
+        "url": "/static/js/vendor.2c9.js",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "asset",
+        "method": null,
+        "base_source": "none",
+        "bucket": "DROP",
+        "flags": [
+          "rescan"
+        ]
+      },
+      {
+        "url": "/api/documents/*",
+        "resolution": "relative",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "api",
+        "method": null,
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": [
+          "workbox_regex"
+        ]
+      },
+      {
+        "url": "/api/sw-sync",
+        "resolution": "relative",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "none",
+        "bucket": "NEEDS_HOST",
+        "flags": []
+      },
+      {
+        "url": "https://idvs-api.acme.corp/api/Notification/ack",
+        "resolution": "absolute",
+        "at_sink": true,
+        "scope": "first_party",
+        "kind": "api",
+        "method": "POST",
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": []
+      },
+      {
+        "url": "https://config.acme.io/idvs/prod/config.json",
+        "resolution": "absolute",
+        "at_sink": false,
+        "scope": "first_party",
+        "kind": "asset",
+        "method": null,
+        "base_source": "literal",
+        "bucket": "PROBE",
+        "flags": [
+          "high_signal",
+          "remote_config"
+        ]
+      }
+    ]
+  },
+  "counts": {
+    "01-vite-react-baseurl-consts.js": 9,
+    "02-webpack-minified-runtime.js": 8,
+    "03-nextjs-app-router-chunk.js": 8,
+    "04-angular-environment-interceptor.js": 6,
+    "05-nuxt-vue-usefetch.js": 5,
+    "06-axios-instance-baseurl.js": 8,
+    "07-dynamic-url-assembly.js": 10,
+    "08-router-table-and-auth-redirects.js": 11,
+    "09-graphql-ws-beacon-worker.js": 8,
+    "10-third-party-telemetry.js": 9,
+    "11-vendor-noise-xmlns.js": 10,
+    "12-encoded-and-obfuscated.js": 6,
+    "13-service-worker-and-manifests.js": 11
+  },
+  "total": 109
+}

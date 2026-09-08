@@ -247,7 +247,9 @@ def _normalize_query(query: str) -> str:
 def endpoint_operation(method: str, url: str) -> str:
     """`METHOD + templated path` (no query, no host) — the param's owning op."""
     path = urlsplit(url).path or "/"
-    return f"{method.strip().upper()} {_templatize_path(path)}"
+    verb = method.strip().upper()
+    template = _templatize_path(path)
+    return f"{verb} {template}" if verb else template
 
 
 def normalize_endpoint(method: str, url: str) -> Endpoint:

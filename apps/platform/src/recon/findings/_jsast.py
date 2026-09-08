@@ -149,6 +149,13 @@ class RawEndpoint:
     # or an href/src/action value, "low" for an off-sink harvested literal. Every other
     # lane leaves it at the default and never reads it.
     confidence: str = "high"
+    # Taxonomy fields (schema v2): computed at emit time, additive — old consumers that
+    # don't read these fields are unaffected.
+    # "absolute" = scheme+host present; "relative" = path-only; "dynamic" = unresolvable.
+    resolution: str = "dynamic"
+    # True when the URL was the argument of a confirmed or suspected network/nav sink;
+    # False only for off-sink harvested string literals (confidence=="low" routes).
+    at_sink: bool = True
 
 
 @dataclass
@@ -671,6 +678,25 @@ def _auth_headers(headers_node: Node | None) -> list[HeaderRef]:
     return result
 
 
+def _url_resolution(url: str) -> str:
+    """Classify a resolved URL string as 'absolute', 'relative', or 'dynamic'.
+
+    'dynamic' covers collapse artifacts (EXPR tokens, ${...} template holes) and empty
+    strings — anything that can't be used as-is without runtime context.
+    """
+    if not url or url == "EXPR":
+        return "dynamic"
+    scheme_end = url.find("://")
+    if scheme_end > 0 and "/" not in url[:scheme_end] and " " not in url[:scheme_end]:
+        return "absolute"
+    if url.startswith("/"):
+        return "relative"
+    # Partial template: ${...} somewhere in the URL before a scheme could be resolved
+    if "${" in url or url.startswith("EXPR"):
+        return "dynamic"
+    return "dynamic"
+
+
 def _endpoint(
     kind: str,
     method: str,
@@ -699,4 +725,6 @@ def _endpoint(
         wrapper=wrapper,
         headers=tuple(headers or ()),
         confidence=confidence,
+        resolution=_url_resolution(url),
+        at_sink=confidence != "low",
     )
