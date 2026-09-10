@@ -17,5 +17,6 @@ build/
 HANDOFF-*.md
 HANDOFF.md
 .superpowers/
+.agents/
 apps/platform/docker-compose.override.yml
 apps/platform/docs/*.pdf
