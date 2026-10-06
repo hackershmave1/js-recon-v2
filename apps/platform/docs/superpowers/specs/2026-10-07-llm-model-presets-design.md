@@ -38,12 +38,22 @@ applies only when the credential's provider equals the team config's provider.
 - Keep only models whose `supported_parameters` contains `response_format`. The OpenRouter
   provider sends `response_format={"type": "json_object"}`
   (`recon/llm/provider.py`, OpenRouterProvider).
-- Normalized item: `{id, name, context_length, prompt_price, completion_price}`. Prices are
-  USD per token, parsed from OpenRouter's string fields with `Decimal`. Unparseable or
-  negative prices drop the model.
-- **Cache:** in-process, 1 h TTL (single uvicorn worker, `docker-compose.yml` api command). On
-  fetch failure, serve the last good copy if there is one (`stale: true`), else return
-  `{models: [], available: false}`. The UI then falls back to the free-text model field.
+- Also drop: `:batch` variants (async batch endpoints, near-duplicates of the base model), and
+  models whose `top_provider.max_completion_tokens` is set and below **12000** (threat models
+  send `max_tokens=12000`, and `finish_reason == "length"` is a hard failure in
+  OpenRouterProvider) or whose `context_length` is below **32000**.
+- Normalized item: `{id, name, context_length, max_completion_tokens, prompt_price,
+  completion_price}`. Only `pricing.prompt` and `pricing.completion` are parsed (other keys
+  are ignored), as `Decimal` USD per token. Unparseable or negative values (OpenRouter uses
+  `"-1"` for variable-priced routers) drop the model. `"0"` is kept and shown as **free**.
+- **Cache:** in-process, 1 h TTL for a good fetch and **5 min for a failed fetch**, so an
+  unreachable OpenRouter isn't retried on every request (single uvicorn worker,
+  `docker-compose.yml` api command). The fetch is async (`httpx.AsyncClient`) behind an
+  `asyncio.Lock`, so concurrent requests share one fetch. On failure, serve the last good
+  copy if there is one (`stale: true`), else `{models: [], available: false}`, and the UI
+  falls back to the free-text model field. `catalog.reset()` clears the module cache for tests.
+- **Only `GET /settings/llm/models` may fetch.** `GET /settings/llm` reads whatever is cached
+  and never blocks on OpenRouter.
 - Endpoint `GET /settings/llm/models` (any team member, `get_tenant_id`) returns
   `{available, stale, fetched_at, models: [...], estimate: {prompt_tokens, completion_tokens,
   basis}}`. See §2 for `estimate`.
@@ -54,7 +64,10 @@ applies only when the credential's provider equals the team config's provider.
 
 `estimate` gives the token counts the UI multiplies by each model's price:
 - **basis `"history"`:** the average `prompt_tokens` and `completion_tokens` over this tenant's
-  completed threat models (`session_threat_model`, `status='done'`), read in `tenant_session`.
+  completed threat models (`session_threat_model`, `status='done'`, **`prompt_tokens > 0`**:
+  some providers report 0 when usage is missing), read in `tenant_session`. It's one row per
+  session, so this is the latest run per session, across whatever models were used. The UI
+  labels the number as an estimate.
 - **basis `"assumed"`:** when there is no history, a labelled assumption: 20,000 prompt and
   4,000 completion tokens. The UI says "assumed, no history yet".
 - The UI shows `≈ $X.XX per threat model` = `prompt_price*prompt_tokens +
@@ -64,11 +77,17 @@ applies only when the credential's provider equals the team config's provider.
 
 - `PRESETS = ("cheapest", "balanced", "strongest")`.
 - `BUILTIN_PRESET_MODELS: dict[provider, dict[preset, model_id]]` covers anthropic,
-  openrouter and gemini. Haiku / Sonnet / Opus class for anthropic and openrouter; flash-lite /
+  openrouter and gemini. **OpenRouter IDs must be catalog IDs**, which use dots
+  (`anthropic/claude-sonnet-4.6`); the direct Anthropic API uses hyphens (`claude-sonnet-4-6`).
+  Today's `DEFAULT_MODELS["openrouter"] = "anthropic/claude-sonnet-4-6"` isn't in the catalog
+  (verified live 2026-10-07: 466 models, the dotted ID present, the hyphenated one absent). The
+  plan corrects it, after checking whether OpenRouter accepts the hyphenated form at request
+  time. A test asserts every OpenRouter built-in ID exists in a recorded catalog fixture. Haiku / Sonnet / Opus class for anthropic and openrouter; flash-lite /
   flash / pro for gemini. The exact IDs are fixed in the plan. A test asserts every provider in
   `VALID_PROVIDERS` has all three presets, and that `balanced` equals `DEFAULT_MODELS[provider]`
   (today's default stays the middle option).
-- `resolve_model(preset, credential_provider, team_provider, overrides, fallback_model) -> str`:
+- `resolve_model(preset, credential_provider, team_provider, overrides, fallback_model) -> str | None`
+  (the env-key path has `model=None`; `build_provider` then uses the provider default):
   1. `preset is None` → `fallback_model` (the credential's own model; current behaviour).
   2. `credential_provider == team_provider` and `overrides.get(preset)` → that override.
   3. else `BUILTIN_PRESET_MODELS[credential_provider][preset]`.
@@ -77,8 +96,13 @@ applies only when the credential's provider equals the team config's provider.
   (`{"cheapest": "...", ...}`), migration **`0030_llm_preset_models`** (`ADD COLUMN IF NOT
   EXISTS`). The table is already RLS-protected, so no new policy is needed.
 - `PUT /settings/llm` accepts optional `preset_models` (keys ⊆ PRESETS, non-blank strings;
-  else 422). **Changing `provider` clears `preset_models`**, since they're IDs for the old
-  provider, unless the same PUT supplies new ones.
+  else 422). Semantics: **omitted → keep the stored value**; `null` or `{}` → clear; a map →
+  replace. **Changing `provider` clears `preset_models`** (they're IDs for the old provider)
+  unless the same PUT supplies a map. `TeamLlmConfigIn` requires provider and model, so
+  editing or resetting one preset is a full PUT (provider, model, blank key, full map). The
+  existing `ProviderKeyRequired` rule still runs first.
+- `tenant_config.load_preset_context(tenant_id) -> (team_provider | None, overrides)` reads
+  provider and overrides **without decrypting** the key (`load_key` decrypts and can raise).
 - `GET /settings/llm` adds `presets: {preset: {model, source: "team"|"builtin", available}}`
   for the team provider, plus `builtin_preset_models` so the UI can show what "reset" means.
   `available` is `true`/`false` when the team provider is `openrouter` and the catalog is
@@ -91,7 +115,19 @@ applies only when the credential's provider equals the team config's provider.
   "balanced" | "strongest"}`. Anything else → 422. No body → today's behaviour.
 - `load_credentials` is unchanged. `run_generation(tenant_id, session_id, preset=None)`
   resolves the model with `resolve_model(...)` after loading credentials, using
-  `tenant_config` for `team_provider` + `overrides`.
+  `load_preset_context`. **Both calls sit inside the existing try/except** that marks the run
+  `failed`, so a lookup error can never leave it stuck at `running`.
+- **Re-trigger while pending.** Today a POST on a pending row re-queues a second
+  `run_generation`, and the check-then-set guard lets both run: two paid calls, last write
+  wins. The guard becomes atomic: `UPDATE session_threat_model SET status='running' WHERE
+  id=… AND status='pending' RETURNING id`, and the task exits if no row came back. A POST
+  while pending or running returns the existing state and **ignores its preset**; the UI
+  already disables Generate in those states.
+- `OpenRouterProvider` sends `extra_body={"provider": {"require_parameters": True}}`, so
+  routing (and `:floor`'s price sort) only picks hosts that honour `response_format`.
+- `GET /sessions/{id}/threat-model` adds `credential_provider` (provider name only, no
+  decrypt; `null` if no key resolves), so the per-run select shows models and costs for the
+  provider that will actually run, not just the team's.
 - The chosen preset and resolved model are logged (`threat_model.generation_model` with
   preset, provider, model) and stored in the existing `provider`/`model` columns. Nothing new
   is persisted per run.
@@ -108,7 +144,11 @@ applies only when the credential's provider equals the team config's provider.
   For direct providers (anthropic, gemini) the picker isn't offered; free text stays.
 - **Settings, analyst view:** the presets render read-only.
 - **Threat Model tab:** next to *Generate*, a select **Default · Cheapest · Balanced ·
-  Strongest**, each with its ≈ cost when known. Sends `{preset}` (omitted for Default).
+  Strongest**, each with its ≈ cost when known (costs only when `credential_provider` is
+  `openrouter`). Sends `{preset}` (omitted for Default). The stale empty-state copy
+  ("Configure your LLM provider in the extension settings") now points to Settings.
+- New client calls go in `features/settings/settingsApi.ts` (apiClient.ts is over the line
+  cap). Only `triggerThreatModel` gains an optional body.
 
 ## 6. Testing
 
@@ -121,6 +161,20 @@ applies only when the credential's provider equals the team config's provider.
   preset → the run uses the resolved model (stub provider records the model).
 - Vitest: picker search, sort and cost formatting, unavailable fallback; preset rows edit and
   reset; Generate sends the preset.
+
+## Adversarial review (2026-10-07)
+
+Verdict **SOUND WITH FIXES**. Blocking, all folded in above: (1) the OpenRouter default ID
+isn't a catalog ID (verified live); (2) the preset lookup must sit inside the run's
+failure handling; (3) re-trigger while pending can double-run, so the guard is now atomic.
+Non-blocking, adopted: `require_parameters`, output-cap/context filter, drop `:batch`,
+prompt/completion-only price parsing with free models shown as free, negative cache + lock +
+no fetch on `GET /settings/llm`, history excludes zero-token rows, `credential_provider` for
+per-run costs, pinned PUT semantics, `str | None` return type, client calls outside
+apiClient, stale empty-state copy. Verified correct: catalog is public, `response_format` is
+the right filter for our request, the invariant holds across all three key sources,
+migration 0030 is safe (ADD COLUMN IF NOT EXISTS; RLS covers new columns), single-process
+cache, httpx present, model stored per run without schema change.
 
 ## Accepted limits
 
