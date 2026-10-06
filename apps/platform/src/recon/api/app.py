@@ -35,6 +35,7 @@ from recon.config import get_settings
 from recon.db.base import engine
 from recon.domain import QueueName
 from recon.llm import router as llm_router
+from recon.llm import settings_router as llm_settings_router
 from recon.observability import configure_logging, get_logger
 from recon.queue import streams
 from recon.threat_model import router as threat_model_router
@@ -72,6 +73,8 @@ def create_app() -> FastAPI:
     app.include_router(base_url_router.router)
     app.include_router(wrappers_router.router)
     app.include_router(llm_router.router)
+    # Mounted once (no /api twin): the extension doesn't use team settings.
+    app.include_router(llm_settings_router.router)
     # Extension calls these at /api/sessions/{id}/llm-config (capture_router uses prefix="/api").
     # Mount a second time under /api so both the web SPA (/sessions/…) and the extension
     # (/api/sessions/…) reach the same handlers without duplicating route logic.
