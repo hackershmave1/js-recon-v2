@@ -25,10 +25,10 @@ from sqlalchemy.orm import Session
 from recon import storage
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
-from recon.db.models import Engagement, EngagementSession, Finding, Run, RunAsset, Tenant
+from recon.db.models import Engagement, EngagementSession, Run, RunAsset, Tenant
 from recon.domain import TOTAL_ENDPOINT_TYPES, FindingType
 from recon.fetch import egress
-from recon.findings.queries import _latest_coverage, files_collected
+from recon.findings.queries import _latest_coverage, files_collected, visible_type_counts
 from recon.observability import get_logger
 
 _logger = get_logger(__name__)
@@ -484,14 +484,9 @@ def _run_stats(db: Session, run: Run) -> tuple[int, int, int, int | None]:
     """(files, endpoints, secrets, coverage_pct) for one run — a cheap read, not
     the heavy findings read-model (§4 fold M4)."""
     run_id = str(run.id)
-    # endpoints / secrets: COUNT(*) grouped by finding type, this run only.
-    type_counts = dict(
-        db.execute(
-            select(Finding.type, func.count())
-            .where(Finding.run_id == run_id)
-            .group_by(Finding.type)
-        ).all()
-    )
+    # endpoints / secrets: per-type counts with the workspace's default third-party noise
+    # filter applied (queries.visible_type_counts), so this card matches the run's workspace.
+    type_counts = visible_type_counts(db, run_id)
     # "Total endpoints found" = the confirmed API lane + the promoted valid-path suspected lane.
     # The API-vs-Endpoint breakdown lives in the findings list; coverage_pct below stays
     # confirmed-only (it is attribution recall, never inflated by a suspected promotion).

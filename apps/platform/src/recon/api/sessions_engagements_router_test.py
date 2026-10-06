@@ -104,6 +104,61 @@ def test_files_counts_collected_js_the_same_on_every_surface(tenant, redis):
     assert findings["files"] == 2
 
 
+def test_card_popup_and_workspace_count_the_same_findings(tenant, redis):
+    # QA: the Sessions card said 18 API endpoints where the workspace showed 15 — it counted
+    # Google Analytics / Sentry / Stripe calls the workspace hides as third-party noise, and
+    # the popup summary also folded suspected calls and suspected secrets into its headline
+    # counts. All three now count the same findings by the same definitions.
+    client = _client()
+    session_id = _new_session(client, tenant)
+    run_id = _upload_run(client, tenant, session_id)
+    seeded = [
+        # (hash, type, value, occurrence hosts)
+        ("e1", "endpoint", "GET /api/users", ["api.acme.io"]),
+        ("e2", "endpoint", "GET /api/me", [None]),  # host-less -> always kept
+        ("e3", "endpoint", "GET /g/collect", ["www.google-analytics.com"]),  # noise -> hidden
+        ("e4", "endpoint", "POST /v1/x", ["www.google-analytics.com", "api.acme.io"]),  # kept
+        ("i1", "endpoint_suspected", "GET /api/hidden", [None]),
+        ("u1", "endpoint_unresolved", "GET :url", [None]),  # a lead, not an endpoint
+        ("s1", "secret", "aws:abc", [None]),
+        ("s2", "secret_suspected", "generic:def", [None]),  # opt-in lane, not headline
+    ]
+    with tenant_session(tenant) as db:
+        db.get(models.Run, run_id).state = "done"
+        for finding_hash, ftype, value, hosts in seeded:
+            finding = models.Finding(
+                tenant_id=tenant,
+                run_id=run_id,
+                finding_hash=finding_hash,
+                type=ftype,
+                value=value,
+                path="input.js",
+            )
+            db.add(finding)
+            db.flush()
+            for i, host in enumerate(hosts):
+                db.add(
+                    models.FindingOccurrence(
+                        tenant_id=tenant,
+                        finding_id=str(finding.id),
+                        occurrence_hash=f"{finding_hash}-{i}",
+                        host=host,
+                    )
+                )
+
+    card = client.get("/sessions", headers=_hdr(tenant)).json()["sessions"][0]
+    popup = client.get(f"/sessions/{session_id}/findings/summary", headers=_hdr(tenant)).json()
+    listed = client.get(f"/runs/{run_id}/findings", headers=_hdr(tenant)).json()["findings"]
+    ws_endpoints = sum(f["type"] in ("endpoint", "endpoint_suspected") for f in listed)
+    ws_secrets = sum(f["type"] == "secret" for f in listed)
+
+    assert ws_endpoints == 4  # e1, e2, e4, i1 — e3 is hidden noise
+    assert card["endpoints"] == popup["counts"]["endpoints"] == ws_endpoints
+    assert card["secrets"] == popup["counts"]["secrets"] == ws_secrets == 1
+    assert popup["counts"]["total"] == len(listed) == 7  # every visible finding, noise excluded
+    assert "GET /g/collect" not in [f["value"] for f in popup["top_findings"]]
+
+
 def test_sessions_are_tenant_isolated(tenant, redis):
     client = _client()
     mine = _new_session(client, tenant)
