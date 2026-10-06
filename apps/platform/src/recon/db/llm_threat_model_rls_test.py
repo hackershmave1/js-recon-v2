@@ -15,7 +15,7 @@ from recon.sessions import service as sessions_service
 
 pytestmark = pytest.mark.integration
 
-_TABLES = models.LLM_TABLES + models.THREAT_MODEL_TABLES
+_TABLES = models.LLM_TABLES + models.THREAT_MODEL_TABLES + models.TENANT_LLM_TABLES
 
 
 @pytest.mark.parametrize("table", _TABLES)
@@ -82,3 +82,14 @@ def test_llm_service_round_trips_through_rls(monkeypatch):
     assert llm_service.load_credentials(tenant_b, sv.id) is None
     assert llm_service.delete_config(tenant_a, sv.id) is True
     assert llm_service.get_config(tenant_a, sv.id) is None
+
+
+def test_team_llm_config_is_tenant_isolated_by_rls():
+    tenant_a = sessions_service.create_tenant("team-llm-a")
+    tenant_b = sessions_service.create_tenant("team-llm-b")
+    with tenant_session(tenant_a) as session:
+        session.add(models.TenantLlmConfig(tenant_id=tenant_a, provider="anthropic", model="m"))
+    with tenant_session(tenant_a) as session:
+        assert session.query(models.TenantLlmConfig).count() == 1
+    with tenant_session(tenant_b) as session:
+        assert session.query(models.TenantLlmConfig).count() == 0
