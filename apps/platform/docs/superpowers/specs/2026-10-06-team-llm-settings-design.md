@@ -33,6 +33,8 @@ per-session keys (the extension keeps that), any role-management UI.
 | 3 | `OPENROUTER_API_KEY`, then `ANTHROPIC_API_KEY` | that env key's provider; the session's saved model only if it is for the same provider, else `None` (provider default) |
 | 4 | none of the above | `None`; `run_generation` fails with the existing "no LLM API key" message |
 
+Saving with a blank key keeps the stored key only if the provider is unchanged; switching provider requires a new key (422 otherwise).
+
 Decrypt failures: `load_credentials` can raise (`InvalidToken` after a
 `RECON_LLM_ENCRYPTION_KEY` rotation). `run_generation` calls it after setting `running`, so
 today a bad key leaves the threat model stuck at `running` until the 5-minute orphan window.
@@ -89,7 +91,7 @@ A new file keeps `llm/service.py` under the ~300-line cap. Every DB access goes 
   concurrent first saves can't collide. An empty `api_key` keeps the stored key (same
   contract as the session endpoint). Stamps `configured_at` and `configured_by`, clears
   `tested_at`. `delete_config` uses the same DB role check.
-- `delete_config(tenant_id) -> bool`
+- `delete_config(tenant_id, user_id) -> bool | None` (None = caller isn't an admin)
 - Testing a key is **split across the thread boundary**. The existing session `test_config`
   calls `asyncio.get_event_loop().run_until_complete(_ping(…))` inside `run_in_threadpool`,
   which on Python 3.11 raises `RuntimeError: There is no current event loop` in the worker
