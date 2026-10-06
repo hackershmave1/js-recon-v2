@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from recon.api.app import create_app
+from recon.config import get_settings
 from recon.llm import service as llm_service
 from recon.sessions import service as sessions_service
 
@@ -99,3 +100,23 @@ def test_session_same_provider_blank_key_keeps_key(client, tenant):
     )
     assert r.status_code == 201, r.text
     assert r.json()["has_key"] is True
+
+
+def test_session_save_with_misconfigured_encryption_key_is_500_not_422(tenant, monkeypatch):
+    # Only the provider-switch rule is a client error. A malformed RECON_LLM_ENCRYPTION_KEY
+    # makes encryption raise ValueError too; that's a server misconfig, not a 422.
+    monkeypatch.setenv("RECON_LLM_ENCRYPTION_KEY", "not-a-fernet-key")
+    get_settings.cache_clear()
+    try:
+        sv = sessions_service.create_session(
+            tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
+        )
+        r = TestClient(create_app(), raise_server_exceptions=False).post(
+            f"/sessions/{sv.id}/llm-config",
+            json={"provider": "anthropic", "model": "m", "api_key": "k"},
+            headers={"X-Tenant-Id": tenant},
+        )
+    finally:
+        get_settings.cache_clear()
+    assert r.status_code == 500
+    assert "Fernet" not in r.text

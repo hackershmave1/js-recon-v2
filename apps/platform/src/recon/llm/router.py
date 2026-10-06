@@ -10,7 +10,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from recon.api.deps import get_tenant_id
-from recon.llm import service
+from recon.llm import service, tenant_config
 from recon.llm.provider import VALID_PROVIDERS
 
 router = APIRouter(tags=["llm-config"])
@@ -45,7 +45,7 @@ async def save_llm_config(
             body.model.strip(),
             body.api_key.strip(),
         )
-    except ValueError as exc:  # provider validated above, so: switched without a new key
+    except tenant_config.ProviderKeyRequired as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="session not found")

@@ -26,6 +26,15 @@ log = get_logger("recon.llm.team_config")
 NEW_PROVIDER_NEEDS_KEY = "a new provider needs its own API key"
 
 
+class ProviderKeyRequired(ValueError):
+    """A blank-key save tried to change provider. The one save error that's the caller's
+    fault (routers map it to 422); any other ValueError, e.g. a malformed
+    RECON_LLM_ENCRYPTION_KEY, is a server problem and must stay a 500."""
+
+    def __init__(self) -> None:
+        super().__init__(NEW_PROVIDER_NEEDS_KEY)
+
+
 def _is_admin(db: Session, user_id: str) -> bool:
     role = db.execute(
         select(AppUser.role).where(AppUser.id == uuid.UUID(user_id))
@@ -71,7 +80,7 @@ def save_config(
 ) -> dict[str, Any] | None:
     """Upsert the team config. None if the caller isn't an admin (per the DB).
 
-    Raises ValueError(NEW_PROVIDER_NEEDS_KEY) for a blank key with a changed provider."""
+    Raises ProviderKeyRequired for a blank key with a changed provider."""
     with tenant_session(tenant_id) as db:
         if not _is_admin(db, user_id):
             return None
@@ -82,7 +91,7 @@ def save_config(
             and existing.encrypted_api_key
             and existing.provider != provider
         ):
-            raise ValueError(NEW_PROVIDER_NEEDS_KEY)
+            raise ProviderKeyRequired
         values: dict[str, Any] = {
             "provider": provider,
             "model": model,

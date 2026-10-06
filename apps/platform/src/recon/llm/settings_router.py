@@ -66,7 +66,7 @@ async def save_team_llm_settings(
             body.model.strip(),
             body.api_key.strip(),
         )
-    except ValueError as exc:  # provider switched without a new key
+    except tenant_config.ProviderKeyRequired as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=403, detail=_NOT_ADMIN)

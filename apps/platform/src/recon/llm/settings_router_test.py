@@ -168,3 +168,18 @@ def test_header_only_read_cannot_edit_and_hides_actor(client, team, monkeypatch)
     assert body["can_edit"] is False
     assert body["config"]["provider"] == "anthropic"
     assert body["config"]["configured_by"] is None
+
+
+def test_save_with_misconfigured_encryption_key_is_500_not_422(client, team, monkeypatch):
+    # Only the provider-switch rule is a client error; a malformed encryption key is a
+    # server misconfig and must not surface as a 422 carrying Fernet's message.
+    _, admin_h, _ = team
+    monkeypatch.setenv("RECON_LLM_ENCRYPTION_KEY", "not-a-fernet-key")
+    get_settings.cache_clear()
+    r = TestClient(create_app(), raise_server_exceptions=False).put(
+        "/settings/llm",
+        json={"provider": "anthropic", "model": "m", "api_key": "k"},
+        headers=admin_h,
+    )
+    assert r.status_code == 500
+    assert "Fernet" not in r.text
