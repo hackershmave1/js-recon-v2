@@ -184,6 +184,23 @@ Filter by method, lane (confirmed vs suspected), or host; search by path. Triage
 from Probe (the same triage state is shared with the Findings view). The **artifact tabs** show the
 request + any OpenAPI operation spec side-by-side.
 
+### Threat Model
+
+The workspace's **Threat Model** tab asks an LLM to generate a threat model of the session's latest
+run. It needs an LLM key.
+
+**LLM key for threat models.** Generation uses the first key it finds, each with its own provider:
+
+1. a key saved on the **session** (browser extension → Settings)
+2. the **team key**: workspace sidebar → **Settings** (admins only)
+3. the server's `OPENROUTER_API_KEY`, then `ANTHROPIC_API_KEY` (set in the untracked
+   `docker-compose.override.yml` under `api:`). Every team without its own key spends
+   this one, so leave both unset on multi-tenant deployments.
+
+Keys are encrypted with `RECON_LLM_ENCRYPTION_KEY` (stored in cleartext if it's empty:
+dev only). After rotating that key, re-save the stored keys; a key that can't be
+decrypted fails the threat model with "re-save it".
+
 ---
 
 ## 3. Security posture
@@ -245,8 +262,8 @@ Deliberately deferred — safe for internal single-operator use, revisit before 
 - **Static recall has an honest ceiling (DEBT D29/D30).** URLs computed at runtime or passed
   interprocedurally in minified-no-map bundles stay `unattributed` rather than guessed. Runtime capture
   (post-auth JS) is the lever for what static analysis can't reach.
-- **The AI threat model + consolidated recon report are planned, not built.** Only the OpenAPI export
-  ships today; the "Threat Model" workspace tab is marked SOON.
+- **The consolidated recon report is planned, not built.** The OpenAPI export and the LLM-generated
+  threat model ship today (the latter needs an LLM key; see §2 Threat Model).
 
 ---
 
