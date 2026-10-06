@@ -31,7 +31,15 @@ import pytest
 
 from recon.findings.extract import extract
 
-CORPUS_DIR = pathlib.Path(__file__).parents[5] / "example_js_files"
+_PARENTS = pathlib.Path(__file__).parents
+CORPUS_DIR = _PARENTS[5] / "example_js_files" if len(_PARENTS) > 5 else None
+# The app image ships src/ only (shallower path, no repo-root fixtures); without this the
+# module-level read below crashes collection and the whole integration lane runs nothing.
+if CORPUS_DIR is None or not CORPUS_DIR.is_dir():
+    pytest.skip(
+        "source tree not present (installed image); covered by the host-tests lane",
+        allow_module_level=True,
+    )
 _EXPECTED: dict[str, list[dict[str, object]]] = json.loads(
     (CORPUS_DIR / "expected.json").read_text(encoding="utf-8")
 )["files"]
