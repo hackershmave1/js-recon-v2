@@ -17,6 +17,7 @@ from typing import Any
 
 from recon.db.base import tenant_session
 from recon.db.models import EngagementSession, SessionLlmConfig
+from recon.llm import tenant_config
 from recon.llm.crypto import decrypt_api_key, encrypt_api_key
 from recon.llm.provider import VALID_PROVIDERS, build_provider
 from recon.sessions import service as sessions_service
@@ -199,8 +200,8 @@ _ENV_KEYS = (("openrouter", "OPENROUTER_API_KEY"), ("anthropic", "ANTHROPIC_API_
 def load_credentials(tenant_id: str, session_id: str) -> tuple[str, str | None, str] | None:
     """``(provider, model, api_key)`` for internal use (threat model generation), or None.
 
-    A key saved on the session wins. Otherwise an operator-wide env key is used, with
-    its own provider. Never exposed via the HTTP API."""
+    A key saved on the session wins, then the team key (Settings), then an operator-wide
+    env key, each with its own provider. Never exposed via the HTTP API."""
     try:
         resolved = _resolve_session_id(tenant_id, session_id)
     except ValueError:
@@ -214,6 +215,10 @@ def load_credentials(tenant_id: str, session_id: str) -> tuple[str, str | None, 
         if row is not None and row.encrypted_api_key:
             return row.provider, row.model, decrypt_api_key(row.encrypted_api_key)
         saved_provider, saved_model = (row.provider, row.model) if row else (None, None)
+    # Team key next: it carries its own provider + model, never the session's.
+    team = tenant_config.load_key(tenant_id)
+    if team is not None:
+        return team
     for provider, env_var in _ENV_KEYS:
         if api_key := os.environ.get(env_var):
             # Model ids are provider-specific, so a saved model only carries over to its own
