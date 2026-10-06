@@ -393,22 +393,17 @@ async def run_generation(tenant_id: str, session_id: str) -> None:
         log.warning("threat_model.context_failed", session_id=resolved, error=str(exc))
         return
 
-    api_key = llm_service.load_api_key(tenant_id, resolved)
-    if not api_key:
-        _set_status(tenant_id, resolved, "failed", error="no LLM config saved for this session")
-        return
-
-    # Load provider + model from saved config.
-    with tenant_session(tenant_id) as db:
-        from recon.db.models import SessionLlmConfig
-
-        config_row = (
-            db.query(SessionLlmConfig)
-            .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
-            .first()
+    credentials = llm_service.load_credentials(tenant_id, resolved)
+    if credentials is None:
+        _set_status(
+            tenant_id,
+            resolved,
+            "failed",
+            error="no LLM API key: save one for this session, or set "
+            "OPENROUTER_API_KEY / ANTHROPIC_API_KEY on the server",
         )
-        provider_name = config_row.provider if config_row else "anthropic"
-        model_name = config_row.model if config_row else None
+        return
+    provider_name, model_name, api_key = credentials
 
     try:
         provider = build_provider(provider_name, api_key=api_key, model=model_name)

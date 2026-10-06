@@ -19,6 +19,9 @@ x-app-env: &app-env
   # here; the /metrics endpoint aggregates them via MultiProcessCollector.
   # The prometheusdata volume is shared between the two containers.
   PROMETHEUS_MULTIPROC_DIR: /tmp/prom
+  # Optional: global LLM API key for threat-model generation (skips per-session key entry).
+  # Use OPENROUTER_API_KEY (preferred) or ANTHROPIC_API_KEY. In production inject via a
+  # secret store; locally set it in docker-compose.override.yml (untracked).
 
 x-app-base: &app-base
   build:

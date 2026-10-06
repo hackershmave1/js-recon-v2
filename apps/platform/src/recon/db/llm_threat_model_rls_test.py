@@ -64,9 +64,11 @@ def test_llm_config_and_threats_are_tenant_isolated_by_rls():
             assert session.query(model).count() == 0
 
 
-def test_llm_service_round_trips_through_rls():
+def test_llm_service_round_trips_through_rls(monkeypatch):
     # The services used to open plain Session(engine) with no tenant GUC; under real RLS
     # that reads nothing and the WITH CHECK rejects the insert.
+    for env_var in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)  # else tenant B gets the operator key
     tenant_a = sessions_service.create_tenant("llm-svc-a")
     tenant_b = sessions_service.create_tenant("llm-svc-b")
     sv = sessions_service.create_session(
@@ -75,8 +77,8 @@ def test_llm_service_round_trips_through_rls():
     saved = llm_service.save_config(tenant_a, sv.id, "anthropic", "m", "k-test")
     assert saved is not None and saved["has_key"]
     assert llm_service.get_config(tenant_a, sv.id)["model"] == "m"
-    assert llm_service.load_api_key(tenant_a, sv.id) == "k-test"
+    assert llm_service.load_credentials(tenant_a, sv.id) == ("anthropic", "m", "k-test")
     assert llm_service.get_config(tenant_b, sv.id) is None
-    assert llm_service.load_api_key(tenant_b, sv.id) is None
+    assert llm_service.load_credentials(tenant_b, sv.id) is None
     assert llm_service.delete_config(tenant_a, sv.id) is True
     assert llm_service.get_config(tenant_a, sv.id) is None
