@@ -138,10 +138,10 @@ describe("ProbePanel", () => {
   it("defaults to the primary in-scope host and re-resolves when another is picked", async () => {
     vi.mocked(useRunDataOptional).mockReturnValue({
       hosts: {
-        run_id: "r", count: 2, in_scope: 2, endpoints_unattributed: 0, suspected_unattributed: 0,
+        run_id: "r", count: 2, in_scope: 2, endpoints_unattributed: 0, inferred_unattributed: 0, suspected_unattributed: 0,
         hosts: [
-          { host: "api.acme.io", in_scope: true, declared: false, assets: 0, endpoints: 2, suspected: 0, routes: 0, techs: 0 },
-          { host: "www.acme.io", in_scope: true, declared: false, assets: 1, endpoints: 0, suspected: 0, routes: 0, techs: 0 },
+          { host: "api.acme.io", in_scope: true, declared: false, assets: 0, endpoints: 2, inferred: 0, suspected: 0, routes: 0, techs: 0 },
+          { host: "www.acme.io", in_scope: true, declared: false, assets: 1, endpoints: 0, inferred: 0, suspected: 0, routes: 0, techs: 0 },
         ],
       },
       assets: { domain: "https://www.acme.io/", status: "ok", assets: [] },

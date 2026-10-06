@@ -31,10 +31,10 @@ const mkAssets = (domain: string | null = "app.acme.io"): AssetsManifest => ({
 });
 const mkHosts = (rows: HostsResponse["hosts"] = []): HostsResponse => ({
   run_id: "r", count: rows.length, in_scope: rows.filter((h) => h.in_scope).length,
-  endpoints_unattributed: 0, suspected_unattributed: 0, hosts: rows,
+  endpoints_unattributed: 0, inferred_unattributed: 0, suspected_unattributed: 0, hosts: rows,
 });
 const hostRow = (host: string, in_scope: boolean) => ({
-  host, in_scope, declared: false, assets: 0, endpoints: 0, suspected: 0, routes: 0, techs: 0,
+  host, in_scope, declared: false, assets: 0, endpoints: 0, inferred: 0, suspected: 0, routes: 0, techs: 0,
 });
 
 const BASE: RunData = {

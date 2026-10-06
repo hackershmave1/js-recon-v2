@@ -25,10 +25,10 @@ from sqlalchemy.orm import Session
 from recon import storage
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
-from recon.db.models import Engagement, EngagementSession, Finding, Run, RunAsset, Tenant
+from recon.db.models import Engagement, EngagementSession, Run, RunAsset, Tenant
 from recon.domain import TOTAL_ENDPOINT_TYPES, FindingType
 from recon.fetch import egress
-from recon.findings.queries import _latest_coverage
+from recon.findings.queries import _latest_coverage, files_collected, visible_type_counts
 from recon.observability import get_logger
 
 _logger = get_logger(__name__)
@@ -484,31 +484,21 @@ def _run_stats(db: Session, run: Run) -> tuple[int, int, int, int | None]:
     """(files, endpoints, secrets, coverage_pct) for one run — a cheap read, not
     the heavy findings read-model (§4 fold M4)."""
     run_id = str(run.id)
-    # endpoints / secrets: COUNT(*) grouped by finding type, this run only.
-    type_counts = dict(
-        db.execute(
-            select(Finding.type, func.count())
-            .where(Finding.run_id == run_id)
-            .group_by(Finding.type)
-        ).all()
-    )
+    # endpoints / secrets: per-type counts with the workspace's default third-party noise
+    # filter applied (queries.visible_type_counts), so this card matches the run's workspace.
+    type_counts = visible_type_counts(db, run_id)
     # "Total endpoints found" = the confirmed API lane + the promoted valid-path suspected lane.
     # The API-vs-Endpoint breakdown lives in the findings list; coverage_pct below stays
     # confirmed-only (it is attribution recall, never inflated by a suspected promotion).
     endpoints = sum(int(type_counts.get(t.value, 0)) for t in TOTAL_ENDPOINT_TYPES)
     secrets = int(type_counts.get(FindingType.SECRET.value, 0))
-    # files (§4 fold M1): the run's discovered-asset count for a crawl; 1 for a
-    # single-blob upload; else 0. NOT coverage.files (which is per-source-path and
-    # double-counts across assets).
+    # files: the shared "files collected" definition (queries.files_collected) so this
+    # list, the run header and the Overview card can never disagree. asset_count (every
+    # discovered asset, fetched or not) still decides the coverage merge mode below.
     asset_count = (
         db.scalar(select(func.count()).select_from(RunAsset).where(RunAsset.run_id == run_id)) or 0
     )
-    if asset_count:
-        files = int(asset_count)
-    elif run.input_ref:
-        files = 1
-    else:
-        files = 0
+    files = files_collected(db, run)
     # coverage (§4 fold M2): attribution coverage = attributed / (attributed +
     # unattributed), reusing the multi-asset-correct merge. None until analyze
     # emits — the UI labels this "% attributed", never "% analyzed".

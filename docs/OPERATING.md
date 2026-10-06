@@ -78,7 +78,14 @@ resolve is *counted, never guessed*. Learning a few terms makes the output unamb
 
 ### Findings
 
-Each finding has one of the following `type` values:
+Each finding has one of the following `type` values. The workspace shows each lane under a
+human label: `endpoint` → **API**, `endpoint_suspected` → **inferred API**, `endpoint_unresolved` →
+**suspected call**, `endpoint_generic` → **generic call**, `page_route` → **page route**,
+`secret_suspected` → **suspected secret**. Headline counts (Secrets, Endpoints) are distinct
+findings, not sightings; a finding seen in several files lists each sighting as an occurrence.
+**Files** is the JS files collected from the target (assets fetched successfully, or 1 for an
+upload) and reads the same on the run header, Overview and Sessions; the Overview sub-line adds how
+many original sources the bundles' source maps recovered (vendor libraries included).
 
 **Endpoint lanes** (the API surface)
 
@@ -126,9 +133,11 @@ Each finding has one of the following `type` values:
 
 Every host a run touched: from fetched assets, resolved-host endpoints, the suspected lanes, tech
 detection, and declared base-URL rules — each badged **in / out of scope** by the same egress guard
-the crawl enforces. A separate **Suspected** column counts the generic/unresolved (suspected-backend)
-hosts. `page_route` hosts (client-nav destinations) are listed but excluded from the suspected-backend
-count.
+the crawl enforces. Each endpoint lane has its own column, named like the Findings Type filter:
+**API** (confirmed only), **Inferred API**, **Suspected calls** (generic/unresolved) and **Page
+routes** (client-nav destinations). The summary line counts each lane's findings with no resolved
+host, so a column plus its "no resolved host" figure equals that lane's number on the Overview
+Endpoints card.
 
 ### Sources
 

@@ -1,6 +1,7 @@
 import { useNavigate, useParams } from "react-router";
 import type { FindingsResponse, Finding, HostsResponse, TechnologiesResponse } from "../../api/types";
 import { typeLabel } from "../../api/findingLabels";
+import { occLocation, primaryOccurrence } from "../../api/occurrenceSource";
 import { countType, computeAttributionPct, computeEndpoints, computeSecrets, computePartialNotes } from "./metrics";
 import "./overview.css";
 
@@ -46,18 +47,24 @@ export function OverviewPanel(
     return !host || inScopeHostSet.has(host);
   }).length;
   const surface = computeEndpoints(data.findings, hostRows);
-  const surfaceParts = [`${apiEndpoints} API`];
-  if (suspectedEndpoints > 0) surfaceParts.push(`${suspectedEndpoints} endpoint`);
-  if (pageRoutes > 0) surfaceParts.push(`${pageRoutes} page${pageRoutes === 1 ? "" : "s"}`);
+  // Each part reuses the lane's Type-facet label (typeLabel) so the breakdown reads in the
+  // same words as the Findings filter it links to.
+  const surfaceParts = [`${apiEndpoints} ${typeLabel("endpoint")}`];
+  if (suspectedEndpoints > 0) surfaceParts.push(`${suspectedEndpoints} ${typeLabel("endpoint_suspected")}`);
+  if (pageRoutes > 0) {
+    surfaceParts.push(`${pageRoutes} ${typeLabel("page_route")}${pageRoutes === 1 ? "" : "s"}`);
+  }
   const graphql = countType(data.findings, "graphql");
-  const secrets = computeSecrets(c, data.findings);
+  const secrets = computeSecrets(data.findings);
   // D33-B: the opt-in recall count, surfaced on the Secrets card so an operator who
   // turned the lane on sees it (distinct from the precision `secrets` headline value).
   const suspectedSecrets = countType(data.findings, "secret_suspected");
   // Cleartext internal-IP info-disclosure: no coverage field exists for it, so count it
   // client-side from the findings list (like the suspected-secret tally above).
   const internalIps = countType(data.findings, "internal_ip");
-  const files = c ? c.files.length : null;
+  // JS files collected (backend files_collected — same number as the Sessions list). Not
+  // c.files.length: that counts recovered analysis units, vendor libraries included (QA).
+  const files = data.files ?? null;
   // `count` is the FLAT total of technologies across every host (not a host count).
   const techCount = technologies ? technologies.count : null;
   const techTop = technologies
@@ -69,7 +76,11 @@ export function OverviewPanel(
   const metrics = [
     { key: "files", label: "Files", section: "sources",
       value: files == null ? DASH : String(files),
-      sub: c ? `${c.sources_recovered} via source maps` : "awaiting analysis" },
+      sub: c
+        ? c.sources_recovered > 0
+          ? `${c.sources_recovered} original sources recovered`
+          : "no source maps recovered"
+        : "awaiting analysis" },
     { key: "endpoints", label: "Endpoints", section: "findings",
       value: String(surface),
       sub: surfaceParts.length > 1
@@ -138,10 +149,8 @@ export function OverviewPanel(
         ) : (
           <ul className="ov-list">
             {top.map((f) => {
-              const occ = f.occurrences[0];
-              const where = occ?.source_path
-                ? `${occ.source_path}${occ.line != null ? `:${occ.line}` : ""}`
-                : null;
+              const occ = primaryOccurrence(f);
+              const where = occ ? occLocation(occ) : null;
               const isShadow = f.type === "endpoint" && f.spec_status?.status === "shadow";
               return (
                 <li key={f.finding_hash} className="ov-row">

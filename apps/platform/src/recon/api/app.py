@@ -30,6 +30,7 @@ from recon.api import (
     wrappers_router,
 )
 from recon.api.deps import get_redis
+from recon.api.errors import register_error_handlers
 from recon.config import get_settings
 from recon.db.base import engine
 from recon.domain import QueueName
@@ -54,6 +55,7 @@ def create_app() -> FastAPI:
     configure_logging(settings.log_level, json=settings.env != "local")
     _assert_auth_config(settings)
     app = FastAPI(title="Recon platform", version="0.1.0")
+    register_error_handlers(app)
     app.include_router(auth_router.router)
     app.include_router(sessions_router.router)
     app.include_router(engagements_router.router)

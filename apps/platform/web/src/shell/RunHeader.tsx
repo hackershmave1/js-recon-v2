@@ -30,7 +30,7 @@ export function RunHeader({ onOpenTuning }: { onOpenTuning?: () => void }) {
   const hostRows = hosts?.hosts ?? [];
   const attributionPct = computeAttributionPct(c);
   const endpoints = findings ? computeEndpoints(findings.findings, hostRows) : null;
-  const secrets = findings ? computeSecrets(c, findings.findings) : null;
+  const secrets = findings ? computeSecrets(findings.findings) : null;
   const hostCount = hosts?.count ?? null;
   const shadow = findings?.spec?.shadow ?? null;
   const partialNotes = computePartialNotes(c);
@@ -38,7 +38,7 @@ export function RunHeader({ onOpenTuning }: { onOpenTuning?: () => void }) {
 
   const domain = assets?.domain ?? null;
   const shortId = (id ?? runId).slice(0, 8);
-  const files = c?.files.length ?? null;
+  const files = findings?.files ?? null; // JS files collected — same as the Overview card
   const dashOffset = attributionPct != null ? (1 - attributionPct / 100) * CIRCUM : CIRCUM;
 
   function nudgeText(): string {
@@ -55,7 +55,7 @@ export function RunHeader({ onOpenTuning }: { onOpenTuning?: () => void }) {
         <span className="rh-meta">
           <span className={stateChipClass(state)}>{state}</span>
           <span className="rh-runid">{shortId}</span>
-          {files != null && <span className="rh-files">{files} files</span>}
+          {files != null && <span className="rh-files">{files} file{files === 1 ? "" : "s"}</span>}
         </span>
       </div>
 

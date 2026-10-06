@@ -83,6 +83,10 @@ export interface FindingsResponse {
   // D50: total BEFORE pagination; offset/limit echo the request params.
   total?: number; offset?: number; limit?: number;
   coverage: Coverage | null; spec: SpecSummary | null; findings: Finding[];
+  // The run's "Files" metric: JS files collected (backend queries.files_collected) — the
+  // same number the Sessions list shows. NOT coverage.files, which counts recovered
+  // analysis units (every source-map original, vendor libraries included).
+  files?: number;
 }
 // Per-asset fetch/analyze outcome (recon.domain.AssetStatus). "pending" until the
 // corresponding stage has touched the asset.
@@ -211,11 +215,13 @@ export interface TechnologiesResponse {
 // operator base-URL host (REQ-C2) that may have no directly-attributed asset/endpoint/tech.
 export interface HostRow {
   host: string; in_scope: boolean; declared: boolean;
-  assets: number; endpoints: number; suspected: number; routes: number; techs: number;
+  // `inferred` = inferred APIs (endpoint_suspected) on this host; `suspected` = suspected
+  // calls (endpoint_unresolved/generic) only.
+  assets: number; endpoints: number; inferred: number; suspected: number; routes: number; techs: number;
 }
 export interface HostsResponse {
   run_id: string; count: number; in_scope: number;
-  endpoints_unattributed: number; suspected_unattributed: number; hosts: HostRow[];
+  endpoints_unattributed: number; inferred_unattributed: number; suspected_unattributed: number; hosts: HostRow[];
 }
 
 // D54: run-to-run finding-set diff (REQ-D5).

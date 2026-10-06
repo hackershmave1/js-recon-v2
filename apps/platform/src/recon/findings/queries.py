@@ -33,7 +33,7 @@ from recon.db.models import (
     SessionSpec,
     SessionWrapper,
 )
-from recon.domain import FindingType
+from recon.domain import TOTAL_ENDPOINT_TYPES, AssetStatus, FindingType
 from recon.findings import noise_hosts, priority
 from recon.findings.base_url import BaseUrlRule
 from recon.findings.wrappers import WrapperRule
@@ -154,6 +154,9 @@ class FindingsView:
     spec_summary: SpecSummary | None = None
     # D50: total count BEFORE offset/limit so the client knows how many more pages exist.
     total: int = 0
+    # The run's "Files" metric (see files_collected) — one definition shared with the
+    # Sessions summary so every surface shows the same number.
+    files: int = 0
 
 
 @dataclass(frozen=True)
@@ -246,25 +249,51 @@ class SessionFindingsSummary:
     top_findings: list[TopFinding]
 
 
-# The finding types that roll up into the "endpoints" counter for the summary.
-# Includes the four endpoint lanes (confirmed, suspected, unresolved, generic)
-# so the number matches what an operator sees in the workspace.
-_ENDPOINT_TYPES: frozenset[str] = frozenset(
-    {
-        FindingType.ENDPOINT.value,
-        FindingType.ENDPOINT_SUSPECTED.value,
-        FindingType.ENDPOINT_UNRESOLVED.value,
-        FindingType.ENDPOINT_GENERIC.value,
-    }
-)
-_SECRET_TYPES: frozenset[str] = frozenset(
-    {FindingType.SECRET.value, FindingType.SECRET_SUSPECTED.value}
-)
+# The finding types behind the popup's "endpoints" / "secrets" counters. They are the
+# workspace's own headline definitions so the numbers match what an operator sees there:
+# endpoints = API + inferred API (domain.TOTAL_ENDPOINT_TYPES, the Sessions card's count —
+# suspected calls are leads, not endpoints); secrets = the precision `secret` lane only (the
+# opt-in ~50%-FP suspected lane is never in the headline). Anything else lands in "other".
+_ENDPOINT_TYPES: frozenset[str] = frozenset(t.value for t in TOTAL_ENDPOINT_TYPES)
+_SECRET_TYPES: frozenset[str] = frozenset({FindingType.SECRET.value})
 # Terminal states that constitute a "completed" run for the summary.
 # ``done`` = fully complete; ``partial`` = failed_partial (analyze finished even if some
 # assets failed). Both are terminal and represent a run the operator can read findings
 # from — the session summary should surface either rather than saying "no_run".
 _TERMINAL_RUN_STATES: frozenset[str] = frozenset({"done", "partial", "failed"})
+
+
+def noise_finding_ids(session: Session, run_id: str) -> set[str]:
+    """Ids of the run's findings the workspace hides by default as third-party noise — the
+    exact rule ``list_findings`` applies (``noise_hosts.is_all_noise`` over the finding's raw
+    occurrence hosts). Shared so every count of "the run's findings" (Sessions card, extension
+    popup) hides the same findings the workspace does (QA: the card said 18 API endpoints where
+    the workspace showed 15 — the difference was Google Analytics, Sentry and Stripe calls)."""
+    hosts_by_finding: dict[str, set[str | None]] = {}
+    for finding_id, host in session.execute(
+        select(FindingOccurrence.finding_id, FindingOccurrence.host)
+        .join(Finding, Finding.id == FindingOccurrence.finding_id)
+        .where(Finding.run_id == str(run_id), FindingOccurrence.host.is_not(None))
+    ).all():
+        hosts_by_finding.setdefault(str(finding_id), set()).add(host)
+    return {fid for fid, hosts in hosts_by_finding.items() if noise_hosts.is_all_noise(hosts)}
+
+
+def visible_type_counts(
+    session: Session, run_id: str, *, hidden: set[str] | None = None
+) -> dict[str, int]:
+    """Per-type counts of the run's findings with the default noise filter applied — the
+    counts behind the workspace's own headline numbers. ``hidden`` reuses an already
+    computed ``noise_finding_ids`` result."""
+    if hidden is None:
+        hidden = noise_finding_ids(session, run_id)
+    counts: dict[str, int] = {}
+    for finding_id, finding_type in session.execute(
+        select(Finding.id, Finding.type).where(Finding.run_id == str(run_id))
+    ).all():
+        if str(finding_id) not in hidden:
+            counts[finding_type] = counts.get(finding_type, 0) + 1
+    return counts
 
 
 def get_session_findings_summary(tenant_id: str, session_id: str) -> SessionFindingsSummary | None:
@@ -294,15 +323,9 @@ def get_session_findings_summary(tenant_id: str, session_id: str) -> SessionFind
             return None
         run_id = str(run_row[0])
 
-        # Count findings by type bucket in a single grouped query.
-        type_counts: dict[str, int] = {}
-        rows = session.execute(
-            select(Finding.type, func.count().label("n"))
-            .where(Finding.run_id == run_id)
-            .group_by(Finding.type)
-        ).all()
-        for finding_type, count in rows:
-            type_counts[finding_type] = count
+        # Count by type over the findings the workspace shows by default (noise hidden).
+        hidden = noise_finding_ids(session, run_id)
+        type_counts = visible_type_counts(session, run_id, hidden=hidden)
 
         total = sum(type_counts.values())
         endpoints = sum(type_counts.get(t, 0) for t in _ENDPOINT_TYPES)
@@ -315,13 +338,15 @@ def get_session_findings_summary(tenant_id: str, session_id: str) -> SessionFind
         # Secrets are redacted: the value is replaced by a type-only label so the
         # popup never surfaces raw secret material (REQ-S2).
         finding_rows = session.execute(
-            select(Finding.type, Finding.value, Finding.attributes)
+            select(Finding.id, Finding.type, Finding.value, Finding.attributes)
             .where(Finding.run_id == run_id)
             .order_by(Finding.type)  # stable secondary; priority computed in Python
         ).all()
 
         top: list[TopFinding] = []
-        for ftype, fvalue, fattributes in finding_rows:
+        for fid, ftype, fvalue, fattributes in finding_rows:
+            if str(fid) in hidden:
+                continue  # a hidden vendor call is never the popup's "top" finding
             score, _ = priority.derive_priority(ftype, fattributes or {})
             is_secret = ftype in (FindingType.SECRET.value, FindingType.SECRET_SUSPECTED.value)
             top.append(
@@ -520,6 +545,7 @@ def list_findings(
                 else None
             ),
             total=total,
+            files=files_collected(session, run),
         )
 
 
@@ -745,6 +771,30 @@ def graphql_operations(tenant_id: str, run_id: str) -> list[dict[str, Any]]:
             tuple(op["fields"]),
             op["source_path"],
         ),
+    )
+
+
+def files_collected(session: Session, run: Run) -> int:
+    """The run's "Files" metric: the JS files actually COLLECTED from the target — a crawl or
+    capture run's assets whose fetch succeeded, else 1 for a single uploaded bundle.
+
+    This is the one definition every surface shows (Overview card, run header, Sessions list).
+    It is deliberately NOT ``coverage.files``: that counts analysis UNITS — every original a
+    source map recovered (vendor libraries included) plus a fallback per map-less bundle, with
+    an original shared by two bundles counted once per bundle — so it is a recovery figure, not
+    a file count (QA: "65 files" for 5 fetched bundles). A failed fetch was never collected or
+    analyzed, so it is not a file either (the run progress reports it separately)."""
+    run_id = str(run.id)
+    has_assets = session.scalar(select(RunAsset.id).where(RunAsset.run_id == run_id).limit(1))
+    if has_assets is None:
+        return 1 if run.input_ref else 0
+    return int(
+        session.scalar(
+            select(func.count())
+            .select_from(RunAsset)
+            .where(RunAsset.run_id == run_id, RunAsset.fetch_status == AssetStatus.OK.value)
+        )
+        or 0
     )
 
 
