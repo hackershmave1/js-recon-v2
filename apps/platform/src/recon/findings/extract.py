@@ -135,10 +135,29 @@ def extract(
 
 _STATIC_ASSET_EXTS = frozenset(
     {
-        ".webm", ".mp4", ".mp3", ".ogg", ".wav", ".flac",  # media
-        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".avif", ".webp",  # images
-        ".woff", ".woff2", ".ttf", ".otf", ".eot",  # fonts
-        ".pdf", ".zip", ".gz", ".tar",  # binary blobs
+        ".webm",
+        ".mp4",
+        ".mp3",
+        ".ogg",
+        ".wav",
+        ".flac",  # media
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".ico",
+        ".avif",
+        ".webp",  # images
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
+        ".eot",  # fonts
+        ".pdf",
+        ".zip",
+        ".gz",
+        ".tar",  # binary blobs
         # NOTE: intentionally excludes .js/.css — a legitimate API path could end in those
         # (though uncommon); the Vite-hash pattern filter below catches bundled chunks.
     }
@@ -195,7 +214,9 @@ def _emit_declared_consts(result: Extraction, env: BaseEnv, data: bytes) -> None
         url = value.split("?")[0].split("#")[0]
         if not _is_absolute_url(url):
             continue
-        path_part = url.split("://", 1)[-1].split("/", 1)[-1] if "/" in url.split("://", 1)[-1] else ""
+        path_part = (
+            url.split("://", 1)[-1].split("/", 1)[-1] if "/" in url.split("://", 1)[-1] else ""
+        )
         path_lower = ("/" + path_part).lower()
         if any(path_lower.endswith(ext) for ext in _STATIC_ASSET_EXTS):
             continue

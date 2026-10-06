@@ -69,8 +69,8 @@ def _normalize(url: str) -> str:
     parameter encoding.
     """
     url = url.split("?")[0]
-    url = re.sub(r"\$\{(\w+)\}", r"{\1}", url)       # ${varName} → {varName}
-    url = re.sub(r":([a-zA-Z_]\w*)", r"{\1}", url)   # :varName  → {varName} (holder tokens)
+    url = re.sub(r"\$\{(\w+)\}", r"{\1}", url)  # ${varName} → {varName}
+    url = re.sub(r":([a-zA-Z_]\w*)", r"{\1}", url)  # :varName  → {varName} (holder tokens)
     return url.rstrip("/")
 
 
@@ -91,14 +91,7 @@ def test_corpus_no_namespace_host_in_output(filename: str) -> None:
     """No XML-namespace or schema-registrar host must leak into extracted URLs."""
     source = (CORPUS_DIR / filename).read_text(encoding="utf-8")
     found = _all_extracted(source)
-    leaked = {
-        url
-        for url in found
-        if any(
-            host in url
-            for host in _BLOCKED_HOST_SUFFIXES
-        )
-    }
+    leaked = {url for url in found if any(host in url for host in _BLOCKED_HOST_SUFFIXES)}
     assert not leaked, (
         f"[{filename}] namespace/boilerplate URLs leaked into extraction output:\n"
         + "\n".join(f"  {u}" for u in sorted(leaked))
@@ -125,9 +118,8 @@ def test_corpus_fixture01_template_literal_at_sink_urls() -> None:
     source = (CORPUS_DIR / "01-vite-react-baseurl-consts.js").read_text(encoding="utf-8")
     found = _all_extracted(source)
     missing = _F01_AT_SINK - found
-    assert not missing, (
-        "template-literal URLs missing from extraction:\n"
-        + "\n".join(f"  {u}" for u in sorted(missing))
+    assert not missing, "template-literal URLs missing from extraction:\n" + "\n".join(
+        f"  {u}" for u in sorted(missing)
     )
 
 
@@ -153,9 +145,8 @@ def test_corpus_fixture06_axios_instance_resolution() -> None:
     source = (CORPUS_DIR / "06-axios-instance-baseurl.js").read_text(encoding="utf-8")
     found = _all_extracted(source)
     missing = _F06_AT_SINK - found
-    assert not missing, (
-        "axios-instance URLs missing from extraction:\n"
-        + "\n".join(f"  {u}" for u in sorted(missing))
+    assert not missing, "axios-instance URLs missing from extraction:\n" + "\n".join(
+        f"  {u}" for u in sorted(missing)
     )
 
 
@@ -181,9 +172,8 @@ def test_corpus_fixture01_declared_const_urls() -> None:
     result = extract(source)
     declared = {_normalize(ep.url) for ep in result.endpoints if not ep.at_sink}
     missing = _F01_DECLARED - declared
-    assert not missing, (
-        "declared URL constants missing from extraction:\n"
-        + "\n".join(f"  {u}" for u in sorted(missing))
+    assert not missing, "declared URL constants missing from extraction:\n" + "\n".join(
+        f"  {u}" for u in sorted(missing)
     )
 
 
@@ -202,11 +192,7 @@ def test_corpus_recall_snapshot(capsys: pytest.CaptureFixture[str]) -> None:
     for filename, findings in _EXPECTED.items():
         source = (CORPUS_DIR / filename).read_text(encoding="utf-8")
         found = _all_extracted(source)
-        targets = [
-            f
-            for f in findings
-            if f["bucket"] in ("PROBE", "NEEDS_HOST")
-        ]
+        targets = [f for f in findings if f["bucket"] in ("PROBE", "NEEDS_HOST")]
         hit = sum(1 for f in targets if _normalize(str(f["url"])) in found)
         rows.append((filename, hit, len(targets)))
 

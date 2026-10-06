@@ -108,9 +108,7 @@ def test_exports_realias_template_literal_const_expands():
     # `const Base="https://…"; const URL=`${Base}/orders`; export{URL as u}` ->
     # the export value must be the full URL, not the verbatim template text.
     src = (
-        'const Base = "https://api.acme.com/v1";'
-        " const URL = `${Base}/orders`;"
-        " export { URL as u };"
+        'const Base = "https://api.acme.com/v1"; const URL = `${Base}/orders`; export { URL as u };'
     )
     assert _exports(src) == {"u": "https://api.acme.com/v1/orders"}
 

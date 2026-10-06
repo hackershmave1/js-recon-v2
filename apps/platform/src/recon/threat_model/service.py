@@ -46,9 +46,7 @@ _TERMINAL_STATES = frozenset(
 )
 
 # Finding types that feed the threat model context.
-_ENDPOINT_TYPES = frozenset(
-    {FindingType.ENDPOINT.value, FindingType.ENDPOINT_SUSPECTED.value}
-)
+_ENDPOINT_TYPES = frozenset({FindingType.ENDPOINT.value, FindingType.ENDPOINT_SUSPECTED.value})
 _SECRET_TYPES = frozenset({FindingType.SECRET.value, FindingType.SECRET_SUSPECTED.value})
 _INFO_TYPES = frozenset(
     {
@@ -182,15 +180,13 @@ def _assemble_context(tenant_id: str, session_id: str) -> tuple[str, frozenset[s
             .where(RunTechnology.run_id == run_id)
             .order_by(RunTechnology.name)
         ).all()
-        techs = [
-            f"{name} {version}" if version else name
-            for name, version, _ in tech_rows
-        ]
+        techs = [f"{name} {version}" if version else name for name, version, _ in tech_rows]
 
         # OpenAPI spec summary.
         spec_row = db.execute(
-            select(SessionSpec.operation_count, SessionSpec.server_bases, SessionSpec.spec_format)
-            .where(SessionSpec.session_id == session_id)
+            select(
+                SessionSpec.operation_count, SessionSpec.server_bases, SessionSpec.spec_format
+            ).where(SessionSpec.session_id == session_id)
         ).first()
 
     # Build the markdown context.
@@ -406,6 +402,7 @@ async def run_generation(tenant_id: str, session_id: str) -> None:
     # Load provider + model from saved config.
     with Session(engine) as db:
         from recon.db.models import SessionLlmConfig
+
         config_row = (
             db.query(SessionLlmConfig)
             .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))

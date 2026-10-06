@@ -683,7 +683,9 @@ class Threat(Base):
         UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
     )
     threat_model_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("session_threat_model.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("session_threat_model.id", ondelete="CASCADE"),
+        nullable=False,
     )
     rank: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)

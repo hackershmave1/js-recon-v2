@@ -26,17 +26,33 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "session_llm_config",
-        sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True),
-                  server_default=sa.text("gen_random_uuid()"), primary_key=True),
-        sa.Column("tenant_id", sa.dialects.postgresql.UUID(as_uuid=True),
-                  sa.ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("session_id", sa.dialects.postgresql.UUID(as_uuid=True),
-                  sa.ForeignKey("session.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "id",
+            sa.dialects.postgresql.UUID(as_uuid=True),
+            server_default=sa.text("gen_random_uuid()"),
+            primary_key=True,
+        ),
+        sa.Column(
+            "tenant_id",
+            sa.dialects.postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("tenant.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "session_id",
+            sa.dialects.postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("session.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("provider", sa.String(32), nullable=False),
         sa.Column("model", sa.Text, nullable=False),
         sa.Column("encrypted_api_key", sa.Text, nullable=True),
-        sa.Column("configured_at", sa.DateTime(timezone=True),
-                  server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "configured_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("tested_at", sa.DateTime(timezone=True), nullable=True),
         sa.UniqueConstraint("session_id", name="uq_session_llm_config_session"),
         sa.CheckConstraint(

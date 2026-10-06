@@ -361,7 +361,7 @@ def test_template_literal_same_name_escaped_sub_uses_correct_position():
         # any literal "${A}" bytes only BEFORE the https:// scheme (as a prefix from
         # the raw escape-sequence bytes), not inside the URL after the scheme.
         if "https://" in u:
-            after_scheme = u[u.index("https://"):]
+            after_scheme = u[u.index("https://") :]
             assert "${A}" not in after_scheme, f"unexpanded substitution after scheme: {u!r}"
 
 

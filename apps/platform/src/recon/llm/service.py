@@ -197,7 +197,7 @@ async def _ping(provider) -> None:
         ok: bool
 
     await provider.generate_structured(
-        system_prompt="Reply with JSON: {\"ok\": true}",
+        system_prompt='Reply with JSON: {"ok": true}',
         user_prompt="ping",
         output_schema=_Pong,
         max_tokens=16,
