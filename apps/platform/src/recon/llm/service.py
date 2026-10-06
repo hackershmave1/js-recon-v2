@@ -15,9 +15,9 @@ import os
 import uuid
 from typing import Any
 
-from recon.config import get_settings
 from recon.db.base import tenant_session
 from recon.db.models import EngagementSession, SessionLlmConfig
+from recon.llm.crypto import decrypt_api_key, encrypt_api_key
 from recon.llm.provider import VALID_PROVIDERS, build_provider
 from recon.sessions import service as sessions_service
 
@@ -38,29 +38,6 @@ def _resolve_session_id(tenant_id: str, session_id: str) -> str:
     if platform_id is None:
         raise ValueError("session not found")
     return platform_id
-
-
-# ---------------------------------------------------------------------------
-# Encryption helpers
-# ---------------------------------------------------------------------------
-
-
-def _encrypt(plaintext: str) -> str:
-    key = get_settings().llm_encryption_key
-    if not key:
-        return plaintext  # dev mode — no encryption
-    from cryptography.fernet import Fernet
-
-    return Fernet(key.encode()).encrypt(plaintext.encode()).decode()
-
-
-def _decrypt(ciphertext: str) -> str:
-    key = get_settings().llm_encryption_key
-    if not key:
-        return ciphertext  # dev mode
-    from cryptography.fernet import Fernet
-
-    return Fernet(key.encode()).decrypt(ciphertext.encode()).decode()
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +68,7 @@ def save_config(
             .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
             .first()
         )
-        encrypted = _encrypt(api_key) if api_key else None
+        encrypted = encrypt_api_key(api_key) if api_key else None
 
         if existing:
             existing.provider = provider
@@ -168,7 +145,7 @@ def get_test_target(tenant_id: str, session_id: str) -> tuple[str, str, str] | s
         if not row.encrypted_api_key:
             return "no API key stored"
         try:
-            return row.provider, row.model, _decrypt(row.encrypted_api_key)
+            return row.provider, row.model, decrypt_api_key(row.encrypted_api_key)
         except Exception as exc:
             return f"key decryption failed: {exc}"
 
@@ -235,7 +212,7 @@ def load_credentials(tenant_id: str, session_id: str) -> tuple[str, str | None, 
             .first()
         )
         if row is not None and row.encrypted_api_key:
-            return row.provider, row.model, _decrypt(row.encrypted_api_key)
+            return row.provider, row.model, decrypt_api_key(row.encrypted_api_key)
         saved_provider, saved_model = (row.provider, row.model) if row else (None, None)
     for provider, env_var in _ENV_KEYS:
         if api_key := os.environ.get(env_var):
