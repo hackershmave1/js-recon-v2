@@ -59,6 +59,20 @@ def test_unknown_session_is_404(client, tenant):
     assert resp.status_code == 404
 
 
+@pytest.mark.parametrize("bad_id", ["", "abc"])
+def test_malformed_session_id_is_404_not_500(client, tenant, bad_id):
+    resp = client.post("/runs", json={"session_id": bad_id}, headers=_headers(tenant))
+    assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("suffix", ["status", "findings", "hosts", "assets"])
+def test_malformed_run_id_in_path_is_404_not_500(client, tenant, suffix):
+    resp = client.get(
+        f"/runs/not-a-uuid/{suffix}", headers={**_headers(tenant), "Accept": "application/json"}
+    )
+    assert resp.status_code == 404
+
+
 def test_session_creation_allows_scopeless_upload_session(client, tenant):
     # S3: scope is optional (an upload needs none); authorized_by still gates it.
     resp = client.post(

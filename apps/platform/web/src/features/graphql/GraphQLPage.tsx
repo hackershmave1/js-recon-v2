@@ -1,4 +1,5 @@
 import type { FindingsResponse, Finding, Occurrence, SourceJump } from "../../api/types";
+import { occLocation, occSource, primaryOccurrence } from "../../api/occurrenceSource";
 import "./graphql.css";
 
 // The run's GraphQL surface: operations/fragments the analyze stage promoted to
@@ -42,16 +43,16 @@ function gqlAttributes(finding: Finding): GqlAttributes {
   };
 }
 
-// The first sighting's JS location as a jump-to-Sources control, matching how the
+// The primary sighting's JS location as a jump-to-Sources control, matching how the
 // Findings drawer links an occurrence. Rendered only when the occurrence carries a
 // location to open; `occurrence` is already non-null here (guarded by the caller).
 function SourceLink({ occurrence, onJumpToSource }: {
   occurrence: Occurrence;
   onJumpToSource: (jump: SourceJump) => void;
 }) {
-  const where = occurrence.asset_url ?? occurrence.source_path;
-  if (!where) return null;
-  const location = `${where}${occurrence.line != null ? `:${occurrence.line}` : ""}`;
+  const location = occLocation(occurrence);
+  if (!location) return null;
+  const where = occSource(occurrence).primary;
   return (
     <button
       type="button"
@@ -74,7 +75,7 @@ function GraphQLOperationRow({ finding, onJumpToSource }: {
 }) {
   const { name, fields, onType } = gqlAttributes(finding);
   const label = name ?? finding.value ?? "(anonymous)";
-  const occurrence = finding.occurrences[0] ?? null;
+  const occurrence = primaryOccurrence(finding) ?? null;
   return (
     <li className="gql-row">
       <div className="gql-row-head">

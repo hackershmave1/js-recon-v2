@@ -31,19 +31,19 @@ const finding = (over: Partial<Finding> = {}): Finding => ({
 const card = (label: string) => screen.getByText(label).closest("button") as HTMLElement;
 
 describe("OverviewPanel", () => {
-  it("shows the unconfirmed lane under its label, never the raw wire token", () => {
+  it("shows the unresolved lane under its label, never the raw wire token", () => {
     renderPanel({
       run_id: "r", count: 1, coverage: null, spec: null,
       findings: [finding({ finding_hash: "u1", type: "endpoint_unresolved", value: "GET /api/EXPR" })],
     });
     expect(screen.getByText("GET /api/EXPR")).toBeInTheDocument();
-    expect(screen.getByText("unconfirmed")).toBeInTheDocument();
+    expect(screen.getByText("suspected call")).toBeInTheDocument();
     expect(screen.queryByText("endpoint_unresolved")).toBeNull();
   });
 
   it("derives the four metric cards from real coverage + findings", () => {
     const data: FindingsResponse = {
-      run_id: "r", count: 3,
+      run_id: "r", count: 4,
       coverage: {
         attributed: 3, unattributed: 1, secrets: 2, secrets_engine: "ok",
         sources_recovered: 5, source_map: "capture",
@@ -55,6 +55,7 @@ describe("OverviewPanel", () => {
           spec_status: { status: "shadow", reason: null, matched_operation: null },
           occurrences: [occ({ source_path: "admin.js", line: 12 })] }),
         finding({ finding_hash: "s1", type: "secret", value: "AKIA..." }),
+        finding({ finding_hash: "s2", type: "secret", value: "sk_live..." }),
         finding({ finding_hash: "e2", type: "endpoint", value: "/api/health" }),
       ],
     };
@@ -62,8 +63,49 @@ describe("OverviewPanel", () => {
 
     expect(within(card("Files")).getByText("2")).toBeInTheDocument();        // files.length
     expect(within(card("Endpoints")).getByText("2")).toBeInTheDocument();    // e1 + e2
-    expect(within(card("Secrets")).getByText("2")).toBeInTheDocument();      // coverage.secrets
+    expect(within(card("Secrets")).getByText("2")).toBeInTheDocument();      // s1 + s2 (distinct findings)
     expect(within(card("Attribution")).getByText("75%")).toBeInTheDocument(); // 3 / (3+1)
+  });
+
+  it("counts distinct secrets, not sightings, so the card matches the list (QA)", () => {
+    // coverage.secrets counts SIGHTINGS: 3 secrets each seen in the bundle AND the recovered
+    // original = 6. The card must show the 3 the Findings list shows.
+    const bundle = "http://t.test/assets/index.js";
+    const twoSightings = [
+      occ({ source_path: "input.js", line: 1, asset_url: bundle }),
+      occ({ source_path: "src/secrets.js", line: 3, asset_url: bundle }),
+    ];
+    renderPanel({
+      run_id: "r", count: 3, spec: null,
+      coverage: {
+        attributed: 0, unattributed: 0, secrets: 6, secrets_engine: "ok",
+        sources_recovered: 1, source_map: "capture", files: [],
+      },
+      findings: ["s1", "s2", "s3"].map((h) =>
+        finding({ finding_hash: h, type: "secret", value: `aws:${h}`, occurrences: twoSightings })),
+    });
+    expect(within(card("Secrets")).getByText("3")).toBeInTheDocument();
+    expect(within(card("Secrets")).queryByText("6")).toBeNull();
+  });
+
+  it("locates a top finding by its real file, never the input.js placeholder (QA)", () => {
+    const bundle = "http://t.test/assets/index.js";
+    renderPanel({
+      run_id: "r", count: 2, coverage: null, spec: null,
+      findings: [
+        // seen in the bundle and the recovered original -> the original names the file
+        finding({ finding_hash: "s1", type: "secret", value: "aws:abc", occurrences: [
+          occ({ source_path: "input.js", line: 1, asset_url: bundle }),
+          occ({ source_path: "src/secrets.js", line: 3, asset_url: bundle }),
+        ] }),
+        // seen only in the bundle (no source map) -> the real bundle URL
+        finding({ finding_hash: "p1", type: "postmessage_sink", value: "addEventListener(\"message\"",
+          occurrences: [occ({ source_path: "input.js", line: 1, asset_url: bundle })] }),
+      ],
+    });
+    expect(screen.getByText("src/secrets.js:3")).toBeInTheDocument();
+    expect(screen.getByText(`${bundle}:1`)).toBeInTheDocument();
+    expect(screen.queryByText(/input\.js/)).toBeNull();
   });
 
   it("counts total endpoints as API + promoted (suspected) and shows the split", () => {
@@ -75,9 +117,10 @@ describe("OverviewPanel", () => {
         finding({ finding_hash: "s1", type: "endpoint_suspected", value: "GET /inbox/subjects" }),
       ],
     });
-    // Headline = total (2 API + 1 promoted valid-path endpoint); the sub shows the split.
+    // Headline = total (2 API + 1 promoted valid-path inferred API); the sub shows the split
+    // in the same words the Type facet uses.
     expect(within(card("Endpoints")).getByText("3")).toBeInTheDocument();
-    expect(within(card("Endpoints")).getByText("2 API · 1 endpoint")).toBeInTheDocument();
+    expect(within(card("Endpoints")).getByText("2 API · 1 inferred API")).toBeInTheDocument();
   });
 
   it("rolls IN-SCOPE page routes into the reachable-surface total, excluding out-of-scope links (QA #5)", () => {
@@ -109,7 +152,7 @@ describe("OverviewPanel", () => {
     render(<RouterProvider router={router} />);
     // surface = 1 API + 2 in-scope routes (relative + in-scope host); the .ca link is excluded.
     expect(within(card("Endpoints")).getByText("3")).toBeInTheDocument();
-    expect(within(card("Endpoints")).getByText("1 API · 2 pages")).toBeInTheDocument();
+    expect(within(card("Endpoints")).getByText("1 API · 2 page routes")).toBeInTheDocument();
   });
 
   it("counts cleartext internal-IP findings on the Internal IPs card", () => {

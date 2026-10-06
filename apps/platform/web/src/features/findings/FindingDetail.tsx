@@ -1,25 +1,8 @@
-import type { Finding, Occurrence, SourceJump } from "../../api/types";
+import type { Finding, SourceJump } from "../../api/types";
 import { typeLabel } from "../../api/findingLabels";
 import { TriageControls } from "./TriageControls";
 import { RevealButton } from "./RevealButton";
-
-// The bundle-wide placeholder the analyze stage assigns when no source map recovered
-// real per-file paths (backend recon.findings.analyze._SOURCE_NAME). It is NOT a real
-// file, so it must never be shown as an occurrence's source — the actual bundle the
-// sighting came from is carried on `asset_url` (Slice Y), and a source-map-recovered
-// original path (when present) is better still. Keep in sync with the backend constant.
-const BUNDLE_FALLBACK = "input.js";
-
-// The occurrence's real source for display: a source-map-recovered original path wins;
-// otherwise the actual bundle URL it was sighted in; the "input.js" placeholder is only
-// ever a last resort (a legacy single-blob upload that has no asset_url). `bundle` is the
-// owning asset shown as a secondary tag ONLY when the primary is a distinct recovered
-// path — otherwise the bundle already IS the primary and repeating it is noise.
-function occSource(o: Occurrence): { primary: string; bundle: string | null } {
-  const recovered = o.source_path && o.source_path !== BUNDLE_FALLBACK ? o.source_path : null;
-  const primary = recovered ?? o.asset_url ?? o.source_path ?? o.host ?? "?";
-  return { primary, bundle: recovered && o.asset_url ? o.asset_url : null };
-}
+import { occSource } from "../../api/occurrenceSource";
 
 // `onJumpToSource` is optional (the shared ApiSpec drawer omits it): when present,
 // an occurrence with a source location becomes a button that reveals it in Sources.

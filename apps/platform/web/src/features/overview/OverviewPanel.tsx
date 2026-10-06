@@ -1,6 +1,7 @@
 import { useNavigate, useParams } from "react-router";
 import type { FindingsResponse, Finding, HostsResponse, TechnologiesResponse } from "../../api/types";
 import { typeLabel } from "../../api/findingLabels";
+import { occLocation, primaryOccurrence } from "../../api/occurrenceSource";
 import { countType, computeAttributionPct, computeEndpoints, computeSecrets, computePartialNotes } from "./metrics";
 import "./overview.css";
 
@@ -46,11 +47,15 @@ export function OverviewPanel(
     return !host || inScopeHostSet.has(host);
   }).length;
   const surface = computeEndpoints(data.findings, hostRows);
-  const surfaceParts = [`${apiEndpoints} API`];
-  if (suspectedEndpoints > 0) surfaceParts.push(`${suspectedEndpoints} endpoint`);
-  if (pageRoutes > 0) surfaceParts.push(`${pageRoutes} page${pageRoutes === 1 ? "" : "s"}`);
+  // Each part reuses the lane's Type-facet label (typeLabel) so the breakdown reads in the
+  // same words as the Findings filter it links to.
+  const surfaceParts = [`${apiEndpoints} ${typeLabel("endpoint")}`];
+  if (suspectedEndpoints > 0) surfaceParts.push(`${suspectedEndpoints} ${typeLabel("endpoint_suspected")}`);
+  if (pageRoutes > 0) {
+    surfaceParts.push(`${pageRoutes} ${typeLabel("page_route")}${pageRoutes === 1 ? "" : "s"}`);
+  }
   const graphql = countType(data.findings, "graphql");
-  const secrets = computeSecrets(c, data.findings);
+  const secrets = computeSecrets(data.findings);
   // D33-B: the opt-in recall count, surfaced on the Secrets card so an operator who
   // turned the lane on sees it (distinct from the precision `secrets` headline value).
   const suspectedSecrets = countType(data.findings, "secret_suspected");
@@ -138,10 +143,8 @@ export function OverviewPanel(
         ) : (
           <ul className="ov-list">
             {top.map((f) => {
-              const occ = f.occurrences[0];
-              const where = occ?.source_path
-                ? `${occ.source_path}${occ.line != null ? `:${occ.line}` : ""}`
-                : null;
+              const occ = primaryOccurrence(f);
+              const where = occ ? occLocation(occ) : null;
               const isShadow = f.type === "endpoint" && f.spec_status?.status === "shadow";
               return (
                 <li key={f.finding_hash} className="ov-row">

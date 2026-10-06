@@ -128,7 +128,7 @@ export function HostsPage({ data }: { data: HostsResponse }) {
               {numHead(
                 "suspected",
                 "Suspected",
-                "Suspected-backend calls (generic / unresolved) whose host resolved — not a confirmed endpoint",
+                "Inferred APIs and suspected backend calls whose host resolved — not a confirmed API",
               )}
               {numHead(
                 "routes",

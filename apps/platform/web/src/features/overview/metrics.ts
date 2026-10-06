@@ -28,10 +28,13 @@ export function computeEndpoints(findings: Finding[], hostRows: HostRow[]): numb
   return api + suspected + routes;
 }
 
-// Prefer the coverage.secrets scalar (Kingfisher's deduplicated count) over the
-// raw finding count; fall back to counting when coverage is absent.
-export function computeSecrets(c: Coverage | null, findings: Finding[]): number {
-  return c ? c.secrets : countType(findings, "secret");
+// Distinct secrets = the `secret` findings themselves. NOT coverage.secrets: that scalar counts
+// SIGHTINGS (analyze.py — a token in both the minified bundle and its recovered original counts
+// twice), so using it showed "6 secrets" over a list of 3 and disagreed with the Sessions page
+// and extension popup, which both count distinct findings. The findings list is the full run
+// (server default limit covers it), so counting it here is exact.
+export function computeSecrets(findings: Finding[]): number {
+  return countType(findings, "secret");
 }
 
 // Partial-coverage notes: one note per condition, callers display under one banner.

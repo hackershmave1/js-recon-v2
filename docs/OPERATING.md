@@ -78,7 +78,11 @@ resolve is *counted, never guessed*. Learning a few terms makes the output unamb
 
 ### Findings
 
-Each finding has one of the following `type` values:
+Each finding has one of the following `type` values. The workspace shows each lane under a
+human label: `endpoint` → **API**, `endpoint_suspected` → **inferred API**, `endpoint_unresolved` →
+**suspected call**, `endpoint_generic` → **generic call**, `page_route` → **page route**,
+`secret_suspected` → **suspected secret**. Headline counts (Secrets, Endpoints) are distinct
+findings, not sightings; a finding seen in several files lists each sighting as an occurrence.
 
 **Endpoint lanes** (the API surface)
 

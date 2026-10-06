@@ -84,8 +84,10 @@ describe("GraphQLPage", () => {
     ]);
     render(<GraphQLPage data={data} onJumpToSource={onJump} />);
 
-    const jump = screen.getByRole("button", { name: /open https:\/\/acme\.io\/app\.js in sources/i });
-    expect(jump).toHaveTextContent("https://acme.io/app.js:42");
+    // Same rule as the Findings drawer: a recovered original path names the file; the bundle
+    // URL is only the label when nothing was recovered.
+    const jump = screen.getByRole("button", { name: /open app\.js in sources/i });
+    expect(jump).toHaveTextContent("app.js:42");
     await userEvent.click(jump);
     expect(onJump).toHaveBeenCalledWith({ sourcePath: "app.js", assetUrl: "https://acme.io/app.js", line: 42 });
   });
