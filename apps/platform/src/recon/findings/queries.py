@@ -33,7 +33,7 @@ from recon.db.models import (
     SessionSpec,
     SessionWrapper,
 )
-from recon.domain import FindingType
+from recon.domain import AssetStatus, FindingType
 from recon.findings import noise_hosts, priority
 from recon.findings.base_url import BaseUrlRule
 from recon.findings.wrappers import WrapperRule
@@ -154,6 +154,9 @@ class FindingsView:
     spec_summary: SpecSummary | None = None
     # D50: total count BEFORE offset/limit so the client knows how many more pages exist.
     total: int = 0
+    # The run's "Files" metric (see files_collected) — one definition shared with the
+    # Sessions summary so every surface shows the same number.
+    files: int = 0
 
 
 @dataclass(frozen=True)
@@ -520,6 +523,7 @@ def list_findings(
                 else None
             ),
             total=total,
+            files=files_collected(session, run),
         )
 
 
@@ -745,6 +749,30 @@ def graphql_operations(tenant_id: str, run_id: str) -> list[dict[str, Any]]:
             tuple(op["fields"]),
             op["source_path"],
         ),
+    )
+
+
+def files_collected(session: Session, run: Run) -> int:
+    """The run's "Files" metric: the JS files actually COLLECTED from the target — a crawl or
+    capture run's assets whose fetch succeeded, else 1 for a single uploaded bundle.
+
+    This is the one definition every surface shows (Overview card, run header, Sessions list).
+    It is deliberately NOT ``coverage.files``: that counts analysis UNITS — every original a
+    source map recovered (vendor libraries included) plus a fallback per map-less bundle, with
+    an original shared by two bundles counted once per bundle — so it is a recovery figure, not
+    a file count (QA: "65 files" for 5 fetched bundles). A failed fetch was never collected or
+    analyzed, so it is not a file either (the run progress reports it separately)."""
+    run_id = str(run.id)
+    has_assets = session.scalar(select(RunAsset.id).where(RunAsset.run_id == run_id).limit(1))
+    if has_assets is None:
+        return 1 if run.input_ref else 0
+    return int(
+        session.scalar(
+            select(func.count())
+            .select_from(RunAsset)
+            .where(RunAsset.run_id == run_id, RunAsset.fetch_status == AssetStatus.OK.value)
+        )
+        or 0
     )
 
 

@@ -1,20 +1,22 @@
 import { useMemo, useState } from "react";
 import type { HostsResponse, HostRow } from "../../api/types";
 import { Icon } from "../../shell/icons";
+import { typeLabel } from "../../api/findingLabels";
 import "./hosts.css";
 
 // The discovered-host inventory (DEBT D26): EVERY host recon surfaced — from fetched
 // assets, resolved-host endpoints, suspected-backend calls, client-navigation page
 // routes, tech detection, and declared base-URL rules — with an in/out-of-scope badge
 // (the canonical egress classification the server computed) and per-host roll-up counts.
-// Filterable by scope and by name, sortable by any count. Honesty (design §5):
-// "Endpoints" counts only CONFIRMED endpoints whose host resolved; "Suspected" (generic
-// /unresolved lanes, DEBT D24/D26) and "Routes" (page_route client-nav targets, QA #5)
-// are SEPARATE columns so backend and non-backend hosts never blur — and each endpoint
-// lane's host-less total is surfaced in the summary rather than hidden.
+// Filterable by scope and by name, sortable by any count. Honesty (design §5): one column
+// per Findings lane, named with that lane's Type-facet label — "API" (confirmed only),
+// "Inferred API", "Suspected calls" (generic/unresolved, DEBT D24/D26) and "Page routes"
+// (client-nav targets, QA #5) — so no lane is blended or renamed between pages. Each
+// endpoint lane's host-less total is surfaced in the summary, so a column plus its
+// "no host" count adds up to the same lane's number in the Overview Endpoints split.
 
 type ScopeFilter = "all" | "in" | "out";
-type SortKey = "host" | "assets" | "endpoints" | "suspected" | "routes" | "techs";
+type SortKey = "host" | "assets" | "endpoints" | "inferred" | "suspected" | "routes" | "techs";
 
 const SCOPE_LABEL: Record<ScopeFilter, string> = { all: "All", in: "In scope", out: "Out of scope" };
 
@@ -48,6 +50,15 @@ export function HostsPage({ data }: { data: HostsResponse }) {
   }
 
   const out = data.count - data.in_scope;
+  // Host-less findings per endpoint lane, in the lanes' own labels (see header comment).
+  const hostless = [
+    [data.endpoints_unattributed, typeLabel("endpoint")],
+    [data.inferred_unattributed, typeLabel("endpoint_suspected")],
+    [data.suspected_unattributed, typeLabel("endpoint_unresolved")],
+  ] as const;
+  const hostlessParts = hostless
+    .filter(([n]) => n > 0)
+    .map(([n, label]) => `${n} ${label}${n === 1 || label === "API" ? "" : "s"}`);
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortAsc((asc) => !asc);
     else { setSortKey(key); setSortAsc(key === "host"); } // counts default high→low
@@ -67,21 +78,10 @@ export function HostsPage({ data }: { data: HostsResponse }) {
         <h2 className="rp-title">Hosts</h2>
         <p className="hosts-sub muted">
           {data.count} discovered · {data.in_scope} in scope · {out} out of scope
-          {data.endpoints_unattributed > 0 && (
+          {hostlessParts.length > 0 && (
             <>
               {" · "}
-              <span className="hosts-note">
-                {data.endpoints_unattributed} endpoint{data.endpoints_unattributed === 1 ? "" : "s"}{" "}
-                with no resolved host
-              </span>
-            </>
-          )}
-          {data.suspected_unattributed > 0 && (
-            <>
-              {" · "}
-              <span className="hosts-note">
-                {data.suspected_unattributed} suspected with no host
-              </span>
+              <span className="hosts-note">no resolved host: {hostlessParts.join(" · ")}</span>
             </>
           )}
         </p>
@@ -124,15 +124,20 @@ export function HostsPage({ data }: { data: HostsResponse }) {
               </th>
               <th>Scope</th>
               {numHead("assets", "Assets")}
-              {numHead("endpoints", "Endpoints", "Confirmed endpoints whose host resolved")}
+              {numHead("endpoints", "API", "Confirmed APIs whose host resolved")}
+              {numHead(
+                "inferred",
+                "Inferred API",
+                "Inferred APIs (a valid path recovered from a generic or unresolved call) whose host resolved",
+              )}
               {numHead(
                 "suspected",
-                "Suspected",
-                "Inferred APIs and suspected backend calls whose host resolved — not a confirmed API",
+                "Suspected calls",
+                "Suspected backend calls (URL not statically resolved) whose host resolved — not a confirmed API",
               )}
               {numHead(
                 "routes",
-                "Routes",
+                "Page routes",
                 "Client-navigation / referenced hosts (page routes) — not a backend the client calls",
               )}
               {numHead("techs", "Tech")}
@@ -168,6 +173,7 @@ function HostTableRow({ row }: { row: HostRow }) {
       </td>
       <td className="hosts-num">{row.assets}</td>
       <td className="hosts-num">{row.endpoints}</td>
+      <td className="hosts-num">{row.inferred}</td>
       <td className="hosts-num">
         {row.suspected > 0 ? (
           <span className="hosts-suspected-val">{row.suspected}</span>

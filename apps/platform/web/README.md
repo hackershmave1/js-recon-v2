@@ -14,7 +14,7 @@ Key surfaces (a cross-run **Sessions** route, plus per-run pages under `/runs/:i
 - **API Spec** — the tag-grouped operation list; export the reconstructed OpenAPI (JSON/YAML).
 - **Probe** — inspect and issue single requests against a resolved endpoint.
 - **Tech stack** — per-host technology detection.
-- **Hosts** — every host the run discovered, badged in/out of scope (+ a suspected-backend column).
+- **Hosts** — every host the run discovered, badged in/out of scope (one column per endpoint lane: API · Inferred API · Suspected calls · Page routes).
 - **Sources viewer** — read the analyzed JS (fetched chunks + source-map-recovered originals) with
   syntax highlighting; jump to the source line behind a finding.
 - **Threat Model** — marked **SOON** (not built yet).

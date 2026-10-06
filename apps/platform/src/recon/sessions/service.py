@@ -28,7 +28,7 @@ from recon.db.base import admin_session, tenant_session
 from recon.db.models import Engagement, EngagementSession, Finding, Run, RunAsset, Tenant
 from recon.domain import TOTAL_ENDPOINT_TYPES, FindingType
 from recon.fetch import egress
-from recon.findings.queries import _latest_coverage
+from recon.findings.queries import _latest_coverage, files_collected
 from recon.observability import get_logger
 
 _logger = get_logger(__name__)
@@ -497,18 +497,13 @@ def _run_stats(db: Session, run: Run) -> tuple[int, int, int, int | None]:
     # confirmed-only (it is attribution recall, never inflated by a suspected promotion).
     endpoints = sum(int(type_counts.get(t.value, 0)) for t in TOTAL_ENDPOINT_TYPES)
     secrets = int(type_counts.get(FindingType.SECRET.value, 0))
-    # files (§4 fold M1): the run's discovered-asset count for a crawl; 1 for a
-    # single-blob upload; else 0. NOT coverage.files (which is per-source-path and
-    # double-counts across assets).
+    # files: the shared "files collected" definition (queries.files_collected) so this
+    # list, the run header and the Overview card can never disagree. asset_count (every
+    # discovered asset, fetched or not) still decides the coverage merge mode below.
     asset_count = (
         db.scalar(select(func.count()).select_from(RunAsset).where(RunAsset.run_id == run_id)) or 0
     )
-    if asset_count:
-        files = int(asset_count)
-    elif run.input_ref:
-        files = 1
-    else:
-        files = 0
+    files = files_collected(db, run)
     # coverage (§4 fold M2): attribution coverage = attributed / (attributed +
     # unattributed), reusing the multi-asset-correct merge. None until analyze
     # emits — the UI labels this "% attributed", never "% analyzed".

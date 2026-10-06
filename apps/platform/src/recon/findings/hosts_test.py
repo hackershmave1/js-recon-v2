@@ -15,6 +15,7 @@ def _agg(
     asset_urls: list[str] | None = None,
     endpoint_occurrences: list[tuple[str | None, str]] | None = None,
     suspected_occurrences: list[tuple[str | None, str]] | None = None,
+    inferred_occurrences: list[tuple[str | None, str]] | None = None,
     route_occurrences: list[tuple[str | None, str]] | None = None,
     tech_hosts: list[str] | None = None,
     declared_hosts: list[str] | None = None,
@@ -31,6 +32,7 @@ def _agg(
         declared_hosts or [],
         scope_hosts or [],
         allow_local=allow_local,
+        inferred_occurrences=inferred_occurrences,
     )
 
 
@@ -141,6 +143,27 @@ def test_route_lane_rolls_up_separately_and_adds_route_only_hosts():
     assert gh.routes == 1 and not gh.in_scope
     # The host-less route added no row (a host inventory has no entry for same-origin nav).
     assert [r.host for r in view.hosts] == ["about.acme.io", "api.acme.io", "github.com"]
+
+
+def test_inferred_api_lane_rolls_up_in_its_own_column():
+    # QA: inferred APIs (endpoint_suspected) were blended into `suspected`, so that column
+    # matched no other surface. They get their own column + unattributed tally, leaving the
+    # confirmed `endpoints` and the `suspected` calls untouched — each column now reconciles
+    # with exactly one lane of the Overview split.
+    view = _agg(
+        endpoint_occurrences=[("api.acme.io", "e1"), (None, "e2")],
+        inferred_occurrences=[("api.acme.io", "i1"), ("inf.acme.io", "i2"), (None, "i3")],
+        suspected_occurrences=[("api.acme.io", "s1"), (None, "s2")],
+        scope_hosts=["acme.io"],
+    )
+    api = _row(view, "api.acme.io")
+    assert (api.endpoints, api.inferred, api.suspected) == (1, 1, 1)
+    inf = _row(view, "inf.acme.io")  # an inferred-only host still enters the universe
+    assert (inf.endpoints, inf.inferred, inf.suspected) == (0, 1, 0)
+    # per lane: resolved-on-a-host + unattributed == the lane's findings
+    assert view.endpoints_unattributed == 1  # e2 -> 1 + 1 == 2 confirmed
+    assert view.inferred_unattributed == 1  # i3 -> 2 + 1 == 3 inferred
+    assert view.suspected_unattributed == 1  # s2 -> 1 + 1 == 2 suspected calls
 
 
 def test_suspected_only_host_enters_the_universe():

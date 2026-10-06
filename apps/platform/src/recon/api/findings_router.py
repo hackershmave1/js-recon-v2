@@ -56,6 +56,9 @@ def get_run_findings(
         # REQ-C2: coverage is reported honestly alongside the findings it qualifies;
         # null until the analyze stage has run. Completeness is NOT guaranteed.
         "coverage": _coverage_dict(result.coverage),
+        # The run's "Files" metric: JS files collected (queries.files_collected) — the same
+        # number the Sessions list shows. NOT coverage.files (recovered analysis units).
+        "files": result.files,
         # Design §6.4: null until a spec is attached to the run's session at all —
         # distinct from an attached spec whose buckets are all zero.
         "spec": _spec_summary_dict(result.spec_summary),

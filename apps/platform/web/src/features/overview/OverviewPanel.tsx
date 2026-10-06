@@ -62,7 +62,9 @@ export function OverviewPanel(
   // Cleartext internal-IP info-disclosure: no coverage field exists for it, so count it
   // client-side from the findings list (like the suspected-secret tally above).
   const internalIps = countType(data.findings, "internal_ip");
-  const files = c ? c.files.length : null;
+  // JS files collected (backend files_collected — same number as the Sessions list). Not
+  // c.files.length: that counts recovered analysis units, vendor libraries included (QA).
+  const files = data.files ?? null;
   // `count` is the FLAT total of technologies across every host (not a host count).
   const techCount = technologies ? technologies.count : null;
   const techTop = technologies
@@ -74,7 +76,11 @@ export function OverviewPanel(
   const metrics = [
     { key: "files", label: "Files", section: "sources",
       value: files == null ? DASH : String(files),
-      sub: c ? `${c.sources_recovered} via source maps` : "awaiting analysis" },
+      sub: c
+        ? c.sources_recovered > 0
+          ? `${c.sources_recovered} original sources recovered`
+          : "no source maps recovered"
+        : "awaiting analysis" },
     { key: "endpoints", label: "Endpoints", section: "findings",
       value: String(surface),
       sub: surfaceParts.length > 1

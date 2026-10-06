@@ -172,7 +172,27 @@ def _seed_run(tenant, session_id) -> str:
             value="https://cdn.mui.com/docs",
             path="app.js",
         )
-        session.add_all([generic, unresolved, unresolved_hostless, page_route])
+        # An inferred API (endpoint_suspected) on api.acme.io + a host-less one: their OWN
+        # `inferred` column, never folded into `suspected` or the confirmed `endpoints` (QA).
+        inferred = models.Finding(
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_hash="i1",
+            type="endpoint_suspected",
+            value="GET https://api.acme.io/v1/hidden",
+            path="app.js",
+        )
+        inferred_hostless = models.Finding(
+            tenant_id=tenant,
+            run_id=run_id,
+            finding_hash="i2",
+            type="endpoint_suspected",
+            value="GET /v1/other",
+            path="app.js",
+        )
+        session.add_all(
+            [generic, unresolved, unresolved_hostless, page_route, inferred, inferred_hostless]
+        )
         session.flush()
         session.add_all(
             [
@@ -200,6 +220,18 @@ def _seed_run(tenant, session_id) -> str:
                     occurrence_hash="o8",
                     host="cdn.mui.com",
                 ),
+                models.FindingOccurrence(
+                    tenant_id=tenant,
+                    finding_id=str(inferred.id),
+                    occurrence_hash="o9",
+                    host="api.acme.io",
+                ),
+                models.FindingOccurrence(
+                    tenant_id=tenant,
+                    finding_id=str(inferred_hostless.id),
+                    occurrence_hash="o10",
+                    host=None,
+                ),
             ]
         )
         return run_id
@@ -216,6 +248,7 @@ def test_get_hosts_aggregates_and_classifies_scope(client, authorized_session):
     assert body["in_scope"] == 3  # guess.acme.io in; cdn.evil.com + cdn.mui.com out
     assert body["endpoints_unattributed"] == 1  # only h2; the host-less sink is suspected
     assert body["suspected_unattributed"] == 1  # u2 (host-less unresolved), NOT the host-less param
+    assert body["inferred_unattributed"] == 1  # i2, in its own lane — not in suspected_unattributed
 
     by_host = {h["host"]: h for h in body["hosts"]}
     # guess.acme.io joins via the suspected lane; cdn.mui.com via the page_route lane —
@@ -238,7 +271,8 @@ def test_get_hosts_aggregates_and_classifies_scope(client, authorized_session):
     # api.acme.io carries a confirmed endpoint AND a suspected sink — counted once each;
     # the SECRET occurrence on the same host leaks into NEITHER (the allowlist proof).
     assert by_host["api.acme.io"]["endpoints"] == 1
-    assert by_host["api.acme.io"]["suspected"] == 1
+    assert by_host["api.acme.io"]["suspected"] == 1  # u1 only — the inferred API is NOT here
+    assert by_host["api.acme.io"]["inferred"] == 1  # i1
     assert by_host["api.acme.io"]["in_scope"] is True
     # guess.acme.io exists ONLY because of the generic lane (a suspected-only host).
     assert by_host["guess.acme.io"]["suspected"] == 1

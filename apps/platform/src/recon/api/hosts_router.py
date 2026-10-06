@@ -31,6 +31,7 @@ def get_run_hosts(
         "count": result.count,
         "in_scope": result.in_scope,
         "endpoints_unattributed": result.endpoints_unattributed,
+        "inferred_unattributed": result.inferred_unattributed,
         "suspected_unattributed": result.suspected_unattributed,
         "hosts": [
             {
@@ -39,6 +40,7 @@ def get_run_hosts(
                 "declared": row.declared,
                 "assets": row.assets,
                 "endpoints": row.endpoints,
+                "inferred": row.inferred,
                 "suspected": row.suspected,
                 "routes": row.routes,
                 "techs": row.techs,

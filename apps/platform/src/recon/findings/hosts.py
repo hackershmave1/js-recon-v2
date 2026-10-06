@@ -28,8 +28,11 @@ Suspected-backend lanes (DEBT D24/D26 follow-up): the unconfirmed lanes
 (a detected sink we couldn't statically resolve) also carry a recovered
 ``occurrence.host`` when their value is an absolute URL (DEBT D24). Those roll up
 into a SEPARATE ``suspected`` per-host count — never the confirmed ``endpoints``
-count — so the confirmed-endpoint reconciliation with the Overview "Endpoints"
-card is unaffected and the confirmed vs suspected surfaces stay distinguishable.
+count — so the confirmed vs suspected surfaces stay distinguishable. Inferred APIs
+(``endpoint_suspected``, a valid path promoted from those sinks) get their OWN ``inferred``
+column: they count toward the Overview "Endpoints" total but the confirmed inventory stays
+``endpoint``-only (32fd2b9), so each column maps to exactly one Findings Type-facet lane and
+reconciles with its part of the Overview split (API / inferred API / suspected call).
 ``page_route`` targets (client-nav / doc-link hosts like ``about.example.com``,
 ``github.com``) are NOT backends the client calls, so they roll up into their OWN
 SEPARATE ``routes`` per-host count — never ``endpoints`` or ``suspected``. But the
@@ -100,7 +103,13 @@ class HostRow:
     declared: bool
     assets: int
     endpoints: int
-    # Suspected-backend findings (endpoint_generic + endpoint_unresolved) whose host
+    # Inferred APIs (``endpoint_suspected``: a valid path recovered from a generic/unresolved
+    # sink) whose host resolved. Their OWN column, never folded into ``endpoints`` (the
+    # confirmed inventory stays ENDPOINT-only by product decision, 32fd2b9) nor into
+    # ``suspected`` (that blend matched no other surface's count — QA). Each column now maps
+    # 1:1 to a Findings Type-facet lane, so per-lane totals reconcile with the Overview split.
+    inferred: int
+    # Suspected backend calls (endpoint_generic + endpoint_unresolved) whose host
     # resolved to this host — a SUSPECTED custom client / unresolved sink, kept as a
     # count SEPARATE from the confirmed ``endpoints`` above (DEBT D24/D26 follow-up).
     suspected: int
@@ -116,10 +125,13 @@ class HostsView:
     run_id: str
     count: int
     in_scope: int
-    # Endpoint findings with NO resolved host (relative paths not yet resolved to
-    # a host). count(resolved endpoints) + endpoints_unattributed == the run's
-    # total endpoint findings, so this reconciles with the Overview "Endpoints" card.
+    # Confirmed endpoint findings with NO resolved host (relative paths not yet resolved
+    # to a host). Every lane below reconciles the same way with its part of the Overview
+    # "Endpoints" split: findings resolved to >=1 host + <lane>_unattributed == the
+    # run's findings of that lane (a finding on two hosts counts under each row).
     endpoints_unattributed: int
+    # Inferred-API findings with NO resolved host.
+    inferred_unattributed: int
     # Suspected-backend findings (endpoint_generic + endpoint_unresolved) with NO
     # resolved host — the honest host-less suspected surface, parallel to
     # endpoints_unattributed but kept SEPARATE so neither denominator mixes lanes.
@@ -171,6 +183,7 @@ def _aggregate_hosts(
     *,
     allow_local: bool,
     include_noise: bool = False,
+    inferred_occurrences: list[tuple[str | None, str]] | None = None,
 ) -> HostsView:
     """Pure roll-up (no DB/network) so the host-universe + scope logic is unit
     testable. ``endpoint_occurrences`` / ``suspected_occurrences`` / ``route_occurrences``
@@ -203,6 +216,7 @@ def _aggregate_hosts(
     # "Endpoints" card, and the suspected lane never dilutes it.
     endpoints_by_host, endpoints_unattributed = _group_occurrences_by_host(endpoint_occurrences)
     suspected_by_host, suspected_unattributed = _group_occurrences_by_host(suspected_occurrences)
+    inferred_by_host, inferred_unattributed = _group_occurrences_by_host(inferred_occurrences or [])
     # page_route targets are client-nav / doc-link hosts (not backends): counted into
     # their OWN per-host column, disjoint from the two lanes above. A route with no
     # resolved host is a relative same-origin path, not an unknown host, so its
@@ -219,6 +233,7 @@ def _aggregate_hosts(
         set(assets_by_host)
         | set(tech_by_host)
         | set(endpoints_by_host)
+        | set(inferred_by_host)
         | set(suspected_by_host)
         | set(routes_by_host)
         | declared
@@ -236,6 +251,7 @@ def _aggregate_hosts(
             declared=h in declared,
             assets=assets_by_host.get(h, 0),
             endpoints=endpoints_by_host.get(h, 0),
+            inferred=inferred_by_host.get(h, 0),
             suspected=suspected_by_host.get(h, 0),
             routes=routes_by_host.get(h, 0),
             techs=tech_by_host.get(h, 0),
@@ -247,6 +263,7 @@ def _aggregate_hosts(
         count=len(rows),
         in_scope=sum(1 for r in rows if r.in_scope),
         endpoints_unattributed=endpoints_unattributed,
+        inferred_unattributed=inferred_unattributed,
         suspected_unattributed=suspected_unattributed,
         hosts=rows,
     )
@@ -257,8 +274,8 @@ def list_hosts(tenant_id: str, run_id: str, *, include_noise: bool = False) -> H
     for this tenant (RLS-invisible → 404). Bounded run-scoped reads (each covered
     by an existing index: ix_run_asset_run, ix_finding_run, ix_occurrence_finding,
     ix_run_technology_run, ix_base_url_session); the endpoint + suspected-backend
-    hosts come from two ``Finding⋈FindingOccurrence`` joins (confirmed ``endpoint``
-    vs ``endpoint_generic``/``endpoint_unresolved``), never the heavy
+    hosts come from three ``Finding⋈FindingOccurrence`` joins (confirmed ``endpoint``
+    vs ``endpoint_suspected`` vs ``endpoint_generic``/``endpoint_unresolved``), never the heavy
     ``list_findings``."""
     with tenant_session(tenant_id) as session:
         run = session.get(Run, run_id)
@@ -285,6 +302,18 @@ def list_hosts(tenant_id: str, run_id: str, *, include_noise: bool = False) -> H
                 )
             ).all()
         ]
+        # Inferred APIs: their own lane (see HostRow.inferred).
+        inferred_occurrences: list[tuple[str | None, str]] = [
+            (row[0], row[1])
+            for row in session.execute(
+                select(FindingOccurrence.host, Finding.finding_hash)
+                .join(Finding, Finding.id == FindingOccurrence.finding_id)
+                .where(
+                    Finding.run_id == str(run_id),
+                    Finding.type == FindingType.ENDPOINT_SUSPECTED.value,
+                )
+            ).all()
+        ]
         # Suspected-backend lanes, as an explicit ALLOWLIST (never `type != endpoint`):
         # PARAM and SECRET occurrences also carry a resolved host, so a denylist would
         # leak their hosts into the suspected count. page_route is intentionally out.
@@ -297,7 +326,6 @@ def list_hosts(tenant_id: str, run_id: str, *, include_noise: bool = False) -> H
                     Finding.run_id == str(run_id),
                     Finding.type.in_(
                         [
-                            FindingType.ENDPOINT_SUSPECTED.value,
                             FindingType.ENDPOINT_GENERIC.value,
                             FindingType.ENDPOINT_UNRESOLVED.value,
                         ]
@@ -341,4 +369,5 @@ def list_hosts(tenant_id: str, run_id: str, *, include_noise: bool = False) -> H
         list(scope_hosts),
         allow_local=get_settings().allow_local_egress,
         include_noise=include_noise,
+        inferred_occurrences=inferred_occurrences,
     )

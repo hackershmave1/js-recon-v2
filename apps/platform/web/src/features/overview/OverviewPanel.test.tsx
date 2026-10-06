@@ -61,10 +61,26 @@ describe("OverviewPanel", () => {
     };
     renderPanel(data);
 
-    expect(within(card("Files")).getByText("2")).toBeInTheDocument();        // files.length
+    expect(within(card("Files")).getByText("—")).toBeInTheDocument();        // no `files` metric -> dash, never coverage.files
     expect(within(card("Endpoints")).getByText("2")).toBeInTheDocument();    // e1 + e2
     expect(within(card("Secrets")).getByText("2")).toBeInTheDocument();      // s1 + s2 (distinct findings)
     expect(within(card("Attribution")).getByText("75%")).toBeInTheDocument(); // 3 / (3+1)
+  });
+
+  it("shows JS files collected, not recovered analysis units, on the Files card (QA)", () => {
+    // 5 bundles fetched; their source maps recovered 65 originals (mostly a vendor library).
+    // The card must say 5 — the Sessions list's number — with the 65 as a labelled sub-line.
+    renderPanel({
+      run_id: "r", count: 0, spec: null, findings: [], files: 5,
+      coverage: {
+        attributed: 0, unattributed: 0, secrets: 0, secrets_engine: "ok",
+        sources_recovered: 65, source_map: "capture",
+        files: Array.from({ length: 65 }, (_, i) => ({ path: `src/f${i}.js`, attributed: 0, unattributed: 0 })),
+      },
+    });
+    expect(within(card("Files")).getByText("5")).toBeInTheDocument();
+    expect(within(card("Files")).getByText("65 original sources recovered")).toBeInTheDocument();
+    expect(within(card("Files")).queryByText("65")).toBeNull();
   });
 
   it("counts distinct secrets, not sightings, so the card matches the list (QA)", () => {
@@ -139,10 +155,10 @@ describe("OverviewPanel", () => {
       ],
     };
     const hostsResp: HostsResponse = {
-      run_id: "r", count: 2, in_scope: 1, endpoints_unattributed: 0, suspected_unattributed: 0,
+      run_id: "r", count: 2, in_scope: 1, endpoints_unattributed: 0, inferred_unattributed: 0, suspected_unattributed: 0,
       hosts: [
-        { host: "www.starbucks.com", in_scope: true, declared: false, assets: 0, endpoints: 0, suspected: 0, routes: 1, techs: 0 },
-        { host: "careers.starbucks.ca", in_scope: false, declared: false, assets: 0, endpoints: 0, suspected: 0, routes: 1, techs: 0 },
+        { host: "www.starbucks.com", in_scope: true, declared: false, assets: 0, endpoints: 0, inferred: 0, suspected: 0, routes: 1, techs: 0 },
+        { host: "careers.starbucks.ca", in_scope: false, declared: false, assets: 0, endpoints: 0, inferred: 0, suspected: 0, routes: 1, techs: 0 },
       ],
     };
     const router = createMemoryRouter(

@@ -16,6 +16,8 @@ from fastapi.testclient import TestClient
 
 from recon import storage
 from recon.api.app import create_app
+from recon.db import models
+from recon.db.base import tenant_session
 from recon.sessions import service as sessions_service
 
 pytestmark = pytest.mark.integration
@@ -74,6 +76,32 @@ def test_list_sessions_returns_card_with_latest_run_stats(tenant, redis):
     assert card["endpoints"] == 0
     assert card["secrets"] == 0
     assert card["coverage_pct"] is None
+
+
+def test_files_counts_collected_js_the_same_on_every_surface(tenant, redis):
+    # QA: "Files" read 65 on the Overview (recovered analysis units) but 5 on Sessions
+    # (assets, failed fetches included). One definition now: assets whose fetch
+    # succeeded — a failed fetch was never collected or analyzed — and the Sessions card
+    # and the findings response (run header + Overview card) report the same number.
+    client = _client()
+    session_id = _new_session(client, tenant)
+    run_id = _upload_run(client, tenant, session_id)
+    with tenant_session(tenant) as db:
+        for url, status in [
+            ("https://acme.io/a.js", "ok"),
+            ("https://acme.io/b.js", "ok"),
+            ("https://acme.io/blocked.js", "failed"),
+        ]:
+            db.add(
+                models.RunAsset(
+                    tenant_id=tenant, run_id=run_id, url=url, input_ref=None, fetch_status=status
+                )
+            )
+
+    card = client.get("/sessions", headers=_hdr(tenant)).json()["sessions"][0]
+    findings = client.get(f"/runs/{run_id}/findings", headers=_hdr(tenant)).json()
+    assert card["files"] == 2
+    assert findings["files"] == 2
 
 
 def test_sessions_are_tenant_isolated(tenant, redis):
