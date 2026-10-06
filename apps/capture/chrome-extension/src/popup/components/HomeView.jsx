@@ -8,6 +8,7 @@ import {
   LogoMark, GearIcon, PauseIcon, PlayIcon, DownloadIcon, ArrowRightIcon
 } from '../icons.jsx';
 import { EngagementPicker } from './EngagementPicker.jsx';
+import { typeLabel } from '../../../modules/finding-labels.js';
 
 const FLAG = { c: C.pink, bg: 'rgba(255,107,138,0.13)' };
 
@@ -326,7 +327,7 @@ export function HomeView({ vm }) {
               </div>
               {(s.top_findings || []).length > 0 && (
                 <div style={{ marginTop: '5px', fontSize: '10.5px', color: C.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  Top: {s.top_findings[0].type}{s.top_findings[0].value && s.top_findings[0].value !== '[redacted]' ? ` · ${s.top_findings[0].value}` : ''}
+                  Top: {typeLabel(s.top_findings[0].type)}{s.top_findings[0].value && s.top_findings[0].value !== '[redacted]' ? ` · ${s.top_findings[0].value}` : ''}
                 </div>
               )}
             </div>
