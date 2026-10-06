@@ -29,5 +29,7 @@ def decrypt_api_key(ciphertext: str) -> str:
 
     try:
         return Fernet(key.encode()).decrypt(ciphertext.encode()).decode()
-    except InvalidToken as exc:
+    # ValueError: a malformed RECON_LLM_ENCRYPTION_KEY. Callers already turn
+    # KeyDecryptError into "re-save the key" instead of a 500 mid-generation.
+    except (InvalidToken, ValueError) as exc:
         raise KeyDecryptError("stored LLM key could not be decrypted") from exc
