@@ -14,10 +14,8 @@ import datetime as dt
 import uuid
 from typing import Any
 
-from sqlalchemy.orm import Session
-
 from recon.config import get_settings
-from recon.db.base import engine, tenant_session
+from recon.db.base import tenant_session
 from recon.db.models import EngagementSession, SessionLlmConfig
 from recon.llm.provider import VALID_PROVIDERS, build_provider
 from recon.sessions import service as sessions_service
@@ -28,7 +26,7 @@ def _resolve_session_id(tenant_id: str, session_id: str) -> str:
     pattern as sessions_router). Returns the platform UUID, or raises ValueError."""
     try:
         uuid.UUID(session_id)  # validate format; raises ValueError if not a UUID
-        # Use tenant_session so app.tenant_id is set and FORCE RLS lets the query through.
+        # tenant_session sets app.current_tenant, which the RLS policy filters on.
         with tenant_session(tenant_id) as db:
             row = db.query(EngagementSession).filter_by(id=uuid.UUID(session_id)).first()
             if row is not None:
@@ -86,7 +84,7 @@ def save_config(
     except ValueError:
         return None
 
-    with Session(engine) as db:
+    with tenant_session(tenant_id) as db:
         existing = (
             db.query(SessionLlmConfig)
             .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
@@ -112,7 +110,7 @@ def save_config(
             )
             db.add(row)
 
-        db.commit()
+        db.flush()
         db.refresh(row)
         return _serialize(row)
 
@@ -124,7 +122,7 @@ def get_config(tenant_id: str, session_id: str) -> dict[str, Any] | None:
         resolved = _resolve_session_id(tenant_id, session_id)
     except ValueError:
         return None
-    with Session(engine) as db:
+    with tenant_session(tenant_id) as db:
         row = (
             db.query(SessionLlmConfig)
             .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
@@ -139,7 +137,7 @@ def delete_config(tenant_id: str, session_id: str) -> bool:
         resolved = _resolve_session_id(tenant_id, session_id)
     except ValueError:
         return False
-    with Session(engine) as db:
+    with tenant_session(tenant_id) as db:
         row = (
             db.query(SessionLlmConfig)
             .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
@@ -148,7 +146,7 @@ def delete_config(tenant_id: str, session_id: str) -> bool:
         if row is None:
             return False
         db.delete(row)
-        db.commit()
+        db.flush()
         return True
 
 
@@ -161,7 +159,7 @@ def test_config(tenant_id: str, session_id: str) -> dict[str, Any]:
         resolved = _resolve_session_id(tenant_id, session_id)
     except ValueError:
         return {"ok": False, "error": "session not found"}
-    with Session(engine) as db:
+    with tenant_session(tenant_id) as db:
         row = (
             db.query(SessionLlmConfig)
             .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
@@ -183,7 +181,7 @@ def test_config(tenant_id: str, session_id: str) -> dict[str, Any]:
             provider = build_provider(row.provider, api_key=api_key, model=row.model)
             asyncio.get_event_loop().run_until_complete(_ping(provider))
             row.tested_at = dt.datetime.now(dt.UTC)
-            db.commit()
+            db.flush()
             return {"ok": True, "provider": row.provider, "model": row.model}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
@@ -211,7 +209,7 @@ def load_api_key(tenant_id: str, session_id: str) -> str | None:
         resolved = _resolve_session_id(tenant_id, session_id)
     except ValueError:
         return None
-    with Session(engine) as db:
+    with tenant_session(tenant_id) as db:
         row = (
             db.query(SessionLlmConfig)
             .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))

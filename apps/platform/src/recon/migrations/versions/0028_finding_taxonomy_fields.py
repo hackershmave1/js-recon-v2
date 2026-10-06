@@ -11,7 +11,6 @@ RawEndpoint.resolution / RawEndpoint.at_sink; all other finding types stay NULL.
 
 from __future__ import annotations
 
-import sqlalchemy as sa
 from alembic import op
 
 revision = "0028_finding_taxonomy_fields"
@@ -21,8 +20,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("finding", sa.Column("resolution", sa.String(16), nullable=True))
-    op.add_column("finding", sa.Column("at_sink", sa.Boolean, nullable=True))
+    # IF NOT EXISTS: 0001's create_all already built these columns from the live model on
+    # a fresh DB / CI, so a bare add_column crashes there (DuplicateColumn).
+    op.execute("ALTER TABLE finding ADD COLUMN IF NOT EXISTS resolution VARCHAR(16)")
+    op.execute("ALTER TABLE finding ADD COLUMN IF NOT EXISTS at_sink BOOLEAN")
 
 
 def downgrade() -> None:

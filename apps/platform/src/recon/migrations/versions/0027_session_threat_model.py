@@ -17,128 +17,44 @@ other tenant-scoped table.
 
 from __future__ import annotations
 
-import sqlalchemy as sa
 from alembic import op
+
+from recon.db import models
+from recon.db.base import Base
 
 revision = "0027_session_threat_model"
 down_revision = "0026_session_llm_config"
 branch_labels = None
 depends_on = None
 
+APP_ROLE = "recon_app"
+
 
 def upgrade() -> None:
-    op.create_table(
-        "session_threat_model",
-        sa.Column(
-            "id",
-            sa.dialects.postgresql.UUID(as_uuid=True),
-            server_default=sa.text("gen_random_uuid()"),
-            primary_key=True,
-        ),
-        sa.Column(
-            "tenant_id",
-            sa.dialects.postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("tenant.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-        sa.Column(
-            "session_id",
-            sa.dialects.postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("session.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-        sa.Column("status", sa.String(16), nullable=False, server_default="pending"),
-        sa.Column("provider", sa.String(32), nullable=True),
-        sa.Column("model", sa.Text, nullable=True),
-        sa.Column("prompt_tokens", sa.Integer, nullable=True),
-        sa.Column("completion_tokens", sa.Integer, nullable=True),
-        sa.Column("analysis_summary", sa.Text, nullable=True),
-        sa.Column("error", sa.Text, nullable=True),
-        sa.Column("generated_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
-        sa.UniqueConstraint("session_id", name="uq_session_threat_model_session"),
-        sa.CheckConstraint(
-            "status IN ('pending', 'running', 'done', 'failed')",
-            name="ck_session_threat_model_status",
-        ),
-    )
-    op.create_index(
-        "ix_session_threat_model_tenant",
-        "session_threat_model",
-        ["tenant_id", "session_id"],
-    )
-
-    op.create_table(
-        "threat",
-        sa.Column(
-            "id",
-            sa.dialects.postgresql.UUID(as_uuid=True),
-            server_default=sa.text("gen_random_uuid()"),
-            primary_key=True,
-        ),
-        sa.Column(
-            "tenant_id",
-            sa.dialects.postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("tenant.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-        sa.Column(
-            "threat_model_id",
-            sa.dialects.postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("session_threat_model.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-        sa.Column("rank", sa.Integer, nullable=False),
-        sa.Column("title", sa.Text, nullable=False),
-        sa.Column("owasp_category", sa.String(32), nullable=False),
-        sa.Column("severity", sa.String(16), nullable=False),
-        sa.Column("description", sa.Text, nullable=False),
-        sa.Column(
-            "affected_endpoints",
-            sa.dialects.postgresql.JSONB,
-            nullable=False,
-            server_default=sa.text("'[]'::jsonb"),
-        ),
-        sa.Column(
-            "test_steps",
-            sa.dialects.postgresql.JSONB,
-            nullable=False,
-            server_default=sa.text("'[]'::jsonb"),
-        ),
-        sa.Column(
-            "citations",
-            sa.dialects.postgresql.JSONB,
-            nullable=False,
-            server_default=sa.text("'[]'::jsonb"),
-        ),
-        sa.CheckConstraint(
-            "severity IN ('critical', 'high', 'medium', 'low', 'info')",
-            name="ck_threat_severity",
-        ),
-    )
-    op.create_index("ix_threat_model", "threat", ["tenant_id", "threat_model_id"])
-
-    for table in ("session_threat_model", "threat"):
-        op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
+    bind = op.get_bind()
+    # NOTE: 0001 runs create_all from the *live* models, so on a fresh DB / CI session_threat_model + threat
+    # already exists and a bare op.create_table() crashes (DuplicateTable). create_all is
+    # idempotent (builds only what's missing, incl. the model-declared indexes), so this
+    # is a no-op there and adds the table(s) on an older dev DB. Same pattern as 0017.
+    Base.metadata.create_all(bind)
+    # 0001 only applies RLS to TENANT_SCOPED_TABLES, so these need it here. ENABLE is
+    # required (FORCE alone never activates RLS), and the policy must read
+    # app.current_tenant: the GUC tenant_session() sets (recon.db.base).
+    for table in models.THREAT_MODEL_TABLES:
+        op.execute(f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY')
+        op.execute(f'ALTER TABLE "{table}" FORCE ROW LEVEL SECURITY')
+        op.execute(f'DROP POLICY IF EXISTS tenant_isolation ON "{table}"')
         op.execute(
-            f"CREATE POLICY tenant_isolation ON {table} "
-            f"USING (tenant_id = current_setting('app.tenant_id')::uuid)"
+            f'CREATE POLICY tenant_isolation ON "{table}" '
+            "USING (tenant_id::text = current_setting('app.current_tenant', true)) "
+            "WITH CHECK (tenant_id::text = current_setting('app.current_tenant', true))"
         )
-        op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO recon_app")
+        op.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON "{table}" TO {APP_ROLE}')
 
 
 def downgrade() -> None:
+    for table in ("threat", "session_threat_model"):
+        op.execute(f'DROP POLICY IF EXISTS tenant_isolation ON "{table}"')
     op.drop_index("ix_threat_model", table_name="threat")
     op.drop_table("threat")
     op.drop_index("ix_session_threat_model_tenant", table_name="session_threat_model")

@@ -21,9 +21,8 @@ from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from recon.db.base import engine, tenant_session
+from recon.db.base import tenant_session
 from recon.db.models import (
     EngagementSession,
     Finding,
@@ -313,7 +312,7 @@ def trigger_generation(tenant_id: str, session_id: str) -> dict[str, Any]:
     except ValueError:
         return {}
 
-    with Session(engine) as db:
+    with tenant_session(tenant_id) as db:
         existing = (
             db.query(SessionThreatModel)
             .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
@@ -334,7 +333,7 @@ def trigger_generation(tenant_id: str, session_id: str) -> dict[str, Any]:
             existing.analysis_summary = None
             existing.generated_at = None
             existing.updated_at = dt.datetime.now(dt.UTC)
-            db.commit()
+            db.flush()
             db.refresh(existing)
             return _serialize(existing)
 
@@ -344,7 +343,7 @@ def trigger_generation(tenant_id: str, session_id: str) -> dict[str, Any]:
             status="pending",
         )
         db.add(row)
-        db.commit()
+        db.flush()
         db.refresh(row)
         return _serialize(row)
 
@@ -376,7 +375,7 @@ async def run_generation(tenant_id: str, session_id: str) -> None:
         return
 
     # Guard against double-execution (e.g. two concurrent POST triggers).
-    with Session(engine) as db:
+    with tenant_session(tenant_id) as db:
         guard = (
             db.query(SessionThreatModel)
             .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
@@ -400,7 +399,7 @@ async def run_generation(tenant_id: str, session_id: str) -> None:
         return
 
     # Load provider + model from saved config.
-    with Session(engine) as db:
+    with tenant_session(tenant_id) as db:
         from recon.db.models import SessionLlmConfig
 
         config_row = (
@@ -470,7 +469,7 @@ def _set_status(
     status: str,
     error: str | None = None,
 ) -> None:
-    with Session(engine) as db:
+    with tenant_session(tenant_id) as db:
         row = (
             db.query(SessionThreatModel)
             .filter_by(session_id=uuid.UUID(session_id), tenant_id=uuid.UUID(tenant_id))
@@ -481,7 +480,7 @@ def _set_status(
         row.status = status
         row.error = error
         row.updated_at = dt.datetime.now(dt.UTC)
-        db.commit()
+        db.flush()
 
 
 def _store_results(
@@ -494,7 +493,7 @@ def _store_results(
     model: str,
     usage: Any,
 ) -> None:
-    with Session(engine) as db:
+    with tenant_session(tenant_id) as db:
         row = (
             db.query(SessionThreatModel)
             .filter_by(session_id=uuid.UUID(session_id), tenant_id=uuid.UUID(tenant_id))
@@ -531,7 +530,7 @@ def _store_results(
                 citations=t.citations,
             )
             db.add(threat)
-        db.commit()
+        db.flush()
 
 
 def _serialize(row: SessionThreatModel, *, include_threats: bool = False) -> dict[str, Any]:
