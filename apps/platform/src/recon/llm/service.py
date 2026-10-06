@@ -54,7 +54,8 @@ def save_config(
     api_key: str,
 ) -> dict[str, Any] | None:
     """Upsert the LLM config for a session. Returns the config dict, or None if
-    the session does not exist (caller maps to 404)."""
+    the session does not exist (caller maps to 404). Raises ValueError for an
+    unsupported provider or a blank key with a changed provider (caller maps to 422)."""
     if provider not in VALID_PROVIDERS:
         raise ValueError(f"unsupported provider: {provider!r}")
 
@@ -72,6 +73,9 @@ def save_config(
         encrypted = encrypt_api_key(api_key) if api_key else None
 
         if existing:
+            # The stored key belongs to the stored provider; never carry it to another.
+            if not api_key and existing.encrypted_api_key and existing.provider != provider:
+                raise ValueError(tenant_config.NEW_PROVIDER_NEEDS_KEY)
             existing.provider = provider
             existing.model = model
             if api_key:

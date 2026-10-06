@@ -127,3 +127,20 @@ def test_test_endpoint_reaches_ping(client, team, monkeypatch):
     assert r.status_code == 200, r.text
     assert r.json() == {"ok": True, "provider": "anthropic", "model": "m"}
     assert client.get("/settings/llm", headers=admin_h).json()["config"]["tested_at"] is not None
+
+
+def test_switching_provider_with_blank_key_is_422(client, team):
+    _, admin_h, _ = team
+    client.put(
+        "/settings/llm",
+        json={"provider": "openrouter", "model": "m", "api_key": "or-key"},
+        headers=admin_h,
+    )
+    r = client.put(
+        "/settings/llm",
+        json={"provider": "anthropic", "model": "m", "api_key": ""},
+        headers=admin_h,
+    )
+    assert r.status_code == 422
+    assert r.json()["detail"] == "a new provider needs its own API key"
+    assert client.get("/settings/llm", headers=admin_h).json()["config"]["provider"] == "openrouter"

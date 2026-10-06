@@ -51,6 +51,8 @@ export function SettingsPage({ tenantId }: { tenantId: string }) {
   if (!settings) return <section className="card settings-card"><p>Loading…</p></section>;
 
   const cfg = settings.config;
+  // A saved key belongs to its provider; switching provider needs a new key (the API 422s).
+  const keepsSavedKey = !!cfg?.has_key && provider === cfg.provider;
   return (
     <section className="card settings-card" aria-labelledby="team-llm-title">
       <h2 id="team-llm-title" className="rp-title">Team LLM provider</h2>
@@ -86,11 +88,14 @@ export function SettingsPage({ tenantId }: { tenantId: string }) {
               autoComplete="off"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder={cfg?.has_key ? "A key is saved. Leave blank to keep it." : "Paste your API key"}
+              placeholder={
+                keepsSavedKey ? "A key is saved. Leave blank to keep it."
+                  : cfg?.has_key ? "Enter a key for this provider" : "Paste your API key"
+              }
             />
           </label>
           <div className="settings-actions">
-            <button type="submit" className="btn-primary" disabled={busy || !model.trim() || (!cfg?.has_key && !apiKey)}>
+            <button type="submit" className="btn-primary" disabled={busy || !model.trim() || (!keepsSavedKey && !apiKey)}>
               Save
             </button>
             <button type="button" className="shell-btn" disabled={busy || !cfg?.has_key}

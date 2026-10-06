@@ -36,14 +36,17 @@ async def save_llm_config(
     if not body.model.strip():
         raise HTTPException(status_code=422, detail="model must not be empty")
 
-    result = await run_in_threadpool(
-        service.save_config,
-        tenant_id,
-        session_id,
-        body.provider,
-        body.model.strip(),
-        body.api_key.strip(),
-    )
+    try:
+        result = await run_in_threadpool(
+            service.save_config,
+            tenant_id,
+            session_id,
+            body.provider,
+            body.model.strip(),
+            body.api_key.strip(),
+        )
+    except ValueError as exc:  # provider validated above, so: switched without a new key
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="session not found")
     return result

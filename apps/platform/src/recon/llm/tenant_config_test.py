@@ -40,6 +40,15 @@ def test_empty_key_keeps_the_stored_key():
     assert tenant_config.load_key(tenant) == ("anthropic", "m2", "k1")
 
 
+def test_switching_provider_with_blank_key_is_rejected():
+    # The stored key belongs to openrouter; keeping it under anthropic would send it there.
+    tenant, admin = _seed_user("admin")
+    tenant_config.save_config(tenant, admin, "openrouter", "m1", "or-key")
+    with pytest.raises(ValueError, match="a new provider needs its own API key"):
+        tenant_config.save_config(tenant, admin, "anthropic", "m2", "")
+    assert tenant_config.load_key(tenant) == ("openrouter", "m1", "or-key")
+
+
 def test_analyst_cannot_write():
     tenant, analyst = _seed_user("analyst")
     assert tenant_config.save_config(tenant, analyst, "anthropic", "m", "k") is None

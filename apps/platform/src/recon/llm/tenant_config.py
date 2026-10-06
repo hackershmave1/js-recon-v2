@@ -21,6 +21,10 @@ from recon.observability import get_logger
 
 log = get_logger("recon.llm.team_config")
 
+# A stored key belongs to the provider it was saved with; a blank-key save that changes
+# the provider would keep, say, an OpenRouter key and send it to Anthropic.
+NEW_PROVIDER_NEEDS_KEY = "a new provider needs its own API key"
+
 
 def _is_admin(db: Session, user_id: str) -> bool:
     role = db.execute(
@@ -65,10 +69,20 @@ def get_config(tenant_id: str, *, include_actor: bool) -> dict[str, Any] | None:
 def save_config(
     tenant_id: str, user_id: str, provider: str, model: str, api_key: str
 ) -> dict[str, Any] | None:
-    """Upsert the team config. None if the caller isn't an admin (per the DB)."""
+    """Upsert the team config. None if the caller isn't an admin (per the DB).
+
+    Raises ValueError(NEW_PROVIDER_NEEDS_KEY) for a blank key with a changed provider."""
     with tenant_session(tenant_id) as db:
         if not _is_admin(db, user_id):
             return None
+        existing = _row(db, tenant_id)
+        if (
+            not api_key
+            and existing is not None
+            and existing.encrypted_api_key
+            and existing.provider != provider
+        ):
+            raise ValueError(NEW_PROVIDER_NEEDS_KEY)
         values: dict[str, Any] = {
             "provider": provider,
             "model": model,

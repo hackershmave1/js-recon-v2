@@ -57,14 +57,17 @@ async def save_team_llm_settings(
         )
     if not body.model.strip():
         raise HTTPException(status_code=422, detail="model must not be empty")
-    result = await run_in_threadpool(
-        tenant_config.save_config,
-        principal.tenant_id,
-        principal.user_id,
-        body.provider,
-        body.model.strip(),
-        body.api_key.strip(),
-    )
+    try:
+        result = await run_in_threadpool(
+            tenant_config.save_config,
+            principal.tenant_id,
+            principal.user_id,
+            body.provider,
+            body.model.strip(),
+            body.api_key.strip(),
+        )
+    except ValueError as exc:  # provider switched without a new key
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=403, detail=_NOT_ADMIN)
     return result

@@ -51,6 +51,19 @@ describe("SettingsPage", () => {
     expect(screen.getByText(/admin@acme\.io/)).toBeInTheDocument();
   });
 
+  it("switching provider when a key is saved requires a new key", async () => {
+    vi.spyOn(api, "getTeamLlmSettings").mockResolvedValue(SAVED);
+    render(<SettingsPage tenantId="t1" />);
+    const save = await screen.findByRole("button", { name: "Save" });
+    expect(save).toBeEnabled(); // same provider: blank keeps the saved key
+    await userEvent.selectOptions(screen.getByLabelText("Provider"), "anthropic");
+    expect(save).toBeDisabled();
+    const key = screen.getByLabelText("API key");
+    expect(key).toHaveAttribute("placeholder", "Enter a key for this provider");
+    await userEvent.type(key, "sk-anthropic");
+    expect(save).toBeEnabled();
+  });
+
   it("analyst sees a read-only view with no key field", async () => {
     vi.spyOn(api, "getTeamLlmSettings").mockResolvedValue({ ...SAVED, can_edit: false });
     render(<SettingsPage tenantId="t1" />);
