@@ -151,15 +151,12 @@ def delete_config(tenant_id: str, session_id: str) -> bool:
         return True
 
 
-def test_config(tenant_id: str, session_id: str) -> dict[str, Any]:
-    """Fire a minimal API call to verify the stored key works.
-
-    Returns ``{"ok": True}`` on success, ``{"ok": False, "error": "..."}`` on
-    any failure. Stamps ``tested_at`` on success."""
+def get_test_target(tenant_id: str, session_id: str) -> tuple[str, str, str] | str:
+    """``(provider, model, api_key)`` to test for a session, or an error message."""
     try:
         resolved = _resolve_session_id(tenant_id, session_id)
     except ValueError:
-        return {"ok": False, "error": "session not found"}
+        return "session not found"
     with tenant_session(tenant_id) as db:
         row = (
             db.query(SessionLlmConfig)
@@ -167,25 +164,38 @@ def test_config(tenant_id: str, session_id: str) -> dict[str, Any]:
             .first()
         )
         if row is None:
-            return {"ok": False, "error": "no config saved"}
+            return "no config saved"
         if not row.encrypted_api_key:
-            return {"ok": False, "error": "no API key stored"}
-
+            return "no API key stored"
         try:
-            api_key = _decrypt(row.encrypted_api_key)
+            return row.provider, row.model, _decrypt(row.encrypted_api_key)
         except Exception as exc:
-            return {"ok": False, "error": f"key decryption failed: {exc}"}
+            return f"key decryption failed: {exc}"
 
-        try:
-            import asyncio
 
-            provider = build_provider(row.provider, api_key=api_key, model=row.model)
-            asyncio.get_event_loop().run_until_complete(_ping(provider))
+def mark_tested(tenant_id: str, session_id: str) -> None:
+    resolved = _resolve_session_id(tenant_id, session_id)
+    with tenant_session(tenant_id) as db:
+        row = (
+            db.query(SessionLlmConfig)
+            .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
+            .first()
+        )
+        if row is not None:
             row.tested_at = dt.datetime.now(dt.UTC)
-            db.flush()
-            return {"ok": True, "provider": row.provider, "model": row.model}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+
+
+async def ping_credentials(provider_name: str, model: str | None, api_key: str) -> str | None:
+    """None if the key works, else the error text.
+
+    NOTE: must be awaited on the request's own event loop. The old version ran
+    get_event_loop().run_until_complete() inside run_in_threadpool, which raises
+    RuntimeError in a worker thread on Python 3.11, so Test always failed."""
+    try:
+        await _ping(build_provider(provider_name, api_key=api_key, model=model))
+    except Exception as exc:
+        return str(exc)
+    return None
 
 
 async def _ping(provider) -> None:
