@@ -53,6 +53,24 @@ def test_session_key_test_without_key_is_400(client, tenant):
     assert r.json()["detail"] == "no config saved"
 
 
+def test_session_key_test_provider_error_is_400_with_its_text(client, tenant, monkeypatch):
+    class _Failing:
+        async def generate_structured(self, **_kwargs):
+            raise RuntimeError("invalid x-api-key")
+
+    monkeypatch.setattr(
+        llm_service, "build_provider", lambda provider, api_key, model=None: _Failing()
+    )
+    sv = sessions_service.create_session(
+        tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
+    )
+    llm_service.save_config(tenant, sv.id, "anthropic", "m", "k-test")
+    r = client.post(f"/sessions/{sv.id}/llm-config/test", headers={"X-Tenant-Id": tenant})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "invalid x-api-key"
+    assert llm_service.get_config(tenant, sv.id)["tested_at"] is None
+
+
 def test_session_switching_provider_with_blank_key_is_422(client, tenant):
     # A stored key travels with its provider: no blank-key provider switch.
     sv = sessions_service.create_session(

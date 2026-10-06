@@ -105,6 +105,7 @@ async def test_team_llm_settings(principal: Principal = Depends(require_admin)) 
         tenant_id=principal.tenant_id,
         user_id=principal.user_id,
         provider=provider_name,
+        model=model,
         ok=error is None,
     )
     if error is not None:

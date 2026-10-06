@@ -6,6 +6,7 @@ unfiltered queries below only return 0 for the other tenant if the database enfo
 """
 
 import pytest
+from sqlalchemy import exc as sa_exc
 from sqlalchemy import text
 
 from recon.db import models
@@ -91,5 +92,15 @@ def test_team_llm_config_is_tenant_isolated_by_rls():
         session.add(models.TenantLlmConfig(tenant_id=tenant_a, provider="anthropic", model="m"))
     with tenant_session(tenant_a) as session:
         assert session.query(models.TenantLlmConfig).count() == 1
+    with tenant_session(tenant_b) as session:
+        assert session.query(models.TenantLlmConfig).count() == 0
+
+
+def test_team_llm_config_insert_for_another_tenant_is_rejected_by_with_check():
+    tenant_a = sessions_service.create_tenant("team-llm-wc-a")
+    tenant_b = sessions_service.create_tenant("team-llm-wc-b")
+    with pytest.raises(sa_exc.DBAPIError), tenant_session(tenant_a) as session:
+        session.add(models.TenantLlmConfig(tenant_id=tenant_b, provider="anthropic", model="m"))
+        session.flush()
     with tenant_session(tenant_b) as session:
         assert session.query(models.TenantLlmConfig).count() == 0

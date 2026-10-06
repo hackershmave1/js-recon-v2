@@ -1,6 +1,7 @@
 """/settings/llm: anyone in the team reads; only a current DB admin writes."""
 
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +11,7 @@ from recon.auth import service as auth_service
 from recon.auth import token as auth_token
 from recon.config import get_settings
 from recon.llm import service as llm_service
+from recon.llm import settings_router
 
 pytestmark = pytest.mark.integration
 
@@ -118,6 +120,10 @@ def test_test_endpoint_reaches_ping(client, team, monkeypatch):
     monkeypatch.setattr(
         llm_service, "build_provider", lambda provider, api_key, model=None: _Stub()
     )
+    logged = []
+    monkeypatch.setattr(
+        settings_router, "log", SimpleNamespace(info=lambda event, **kw: logged.append((event, kw)))
+    )
     client.put(
         "/settings/llm",
         json={"provider": "anthropic", "model": "m", "api_key": "k"},
@@ -126,6 +132,7 @@ def test_test_endpoint_reaches_ping(client, team, monkeypatch):
     r = client.post("/settings/llm/test", headers=admin_h)
     assert r.status_code == 200, r.text
     assert r.json() == {"ok": True, "provider": "anthropic", "model": "m"}
+    assert dict(logged)["llm.team_config.tested"]["model"] == "m"
     assert client.get("/settings/llm", headers=admin_h).json()["config"]["tested_at"] is not None
 
 
@@ -144,3 +151,20 @@ def test_switching_provider_with_blank_key_is_422(client, team):
     assert r.status_code == 422
     assert r.json()["detail"] == "a new provider needs its own API key"
     assert client.get("/settings/llm", headers=admin_h).json()["config"]["provider"] == "openrouter"
+
+
+def test_header_only_read_cannot_edit_and_hides_actor(client, team, monkeypatch):
+    tenant_id, admin_h, _ = team
+    client.put(
+        "/settings/llm",
+        json={"provider": "anthropic", "model": "m", "api_key": "k"},
+        headers=admin_h,
+    )
+    monkeypatch.setenv("RECON_ALLOW_HEADER_TENANT", "1")
+    get_settings.cache_clear()
+    r = client.get("/settings/llm", headers={"X-Tenant-Id": tenant_id})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["can_edit"] is False
+    assert body["config"]["provider"] == "anthropic"
+    assert body["config"]["configured_by"] is None

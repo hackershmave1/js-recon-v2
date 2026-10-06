@@ -406,13 +406,22 @@ async def run_generation(tenant_id: str, session_id: str) -> None:
             else "could not load LLM credentials"
         )
         _set_status(tenant_id, resolved, "failed", error=reason)
-        log.error(
-            "llm.credentials.decrypt_failed"
-            if isinstance(exc, KeyDecryptError)
-            else "llm.credentials.load_failed",
-            session_id=resolved,
-            error_type=type(exc).__name__,
-        )
+        if isinstance(exc, KeyDecryptError):
+            # No traceback here: the decrypt frames could carry ciphertext.
+            log.error(
+                "llm.credentials.decrypt_failed",
+                tenant_id=tenant_id,
+                session_id=resolved,
+                error_type=type(exc).__name__,
+            )
+        else:
+            log.error(
+                "llm.credentials.load_failed",
+                tenant_id=tenant_id,
+                session_id=resolved,
+                error_type=type(exc).__name__,
+                exc_info=True,
+            )
         return
     if credentials is None:
         _set_status(
