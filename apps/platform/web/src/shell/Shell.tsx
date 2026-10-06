@@ -28,7 +28,7 @@ function RunShellContent({ children }: { children: ReactNode }) {
 
 export function Shell({ runId, mode = "run", children }: {
   runId?: string;
-  mode?: "run" | "sessions";
+  mode?: "run" | "sessions" | "settings";
   children: ReactNode;
 }) {
   return (

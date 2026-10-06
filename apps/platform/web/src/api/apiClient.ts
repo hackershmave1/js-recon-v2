@@ -39,7 +39,7 @@ export function notifyUnauthorized(): void {
   unauthorizedHandler?.();
 }
 
-async function request<T>(path: string, init: RequestInit, tenantId: string): Promise<T> {
+export async function request<T>(path: string, init: RequestInit, tenantId: string): Promise<T> {
   const headers: Record<string, string> = {
     "X-Tenant-Id": tenantId,
     Accept: "application/json",
@@ -56,7 +56,7 @@ async function request<T>(path: string, init: RequestInit, tenantId: string): Pr
   return res.json() as Promise<T>;
 }
 
-function json(method: string, body: unknown): RequestInit {
+export function json(method: string, body: unknown): RequestInit {
   return { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
 }
 

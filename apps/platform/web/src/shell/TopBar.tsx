@@ -78,7 +78,7 @@ function GlobalSearch() {
 // Export jumps to the run's API-Spec page and only shows in run mode (there is nothing to
 // export without a run); New Recon is a real full-page link to "/" (the standalone New Run page).
 export function TopBar({ mode = "run", runId }: {
-  mode?: "run" | "sessions";
+  mode?: "run" | "sessions" | "settings";
   runId?: string;
 }) {
   const navigate = useNavigate();

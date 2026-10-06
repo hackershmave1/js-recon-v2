@@ -10,6 +10,8 @@ export default defineConfig({
     proxy: {
       "/runs": "http://localhost:8000",
       "/sessions": "http://localhost:8000",
+      // Not "/settings": that's also the SPA route; a hard refresh must stay in Vite.
+      "/settings/llm": "http://localhost:8000",
       "/engagements": "http://localhost:8000",
       "/healthz": "http://localhost:8000",
     },

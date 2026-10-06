@@ -44,7 +44,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "sources", label: "Sources", icon: "folder" },
 ];
 
-export function Sidebar({ mode, runId }: { mode: "run" | "sessions"; runId?: string }) {
+export function Sidebar({ mode, runId }: { mode: "run" | "sessions" | "settings"; runId?: string }) {
   const navigate = useNavigate();
   const inRun = mode === "run";
   return (
@@ -109,6 +109,15 @@ export function Sidebar({ mode, runId }: { mode: "run" | "sessions"; runId?: str
         >
           <span className="shell-nav-ico"><Icon name="layers" /></span>
           <span className="shell-nav-txt">Sessions</span>
+        </button>
+        <button
+          type="button"
+          className={"shell-nav-item" + (mode === "settings" ? " is-active" : "")}
+          aria-current={mode === "settings" ? "page" : undefined}
+          onClick={() => navigate("/settings")}
+        >
+          <span className="shell-nav-ico"><Icon name="gear" /></span>
+          <span className="shell-nav-txt">Settings</span>
         </button>
       </nav>
 
