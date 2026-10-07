@@ -20,7 +20,7 @@ from __future__ import annotations
 import uuid
 from functools import lru_cache
 
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 from redis import Redis
 
 from recon.auth import token as auth_token
@@ -90,6 +90,23 @@ def get_principal(authorization: str | None = Header(default=None)) -> Principal
     if claims is None:
         raise HTTPException(status_code=401, detail="a valid login is required")
     return Principal(user_id=claims.user_id, tenant_id=claims.tenant_id, role=claims.role)
+
+
+def get_optional_principal(authorization: str | None = Header(default=None)) -> Principal | None:
+    """The authenticated identity, or None (auth off / no or bad token). For routes
+    that serve everyone but tailor the response to the caller, like can_edit."""
+    claims = _bearer_claims(authorization, get_settings())
+    if claims is None:
+        return None
+    return Principal(user_id=claims.user_id, tenant_id=claims.tenant_id, role=claims.role)
+
+
+def require_admin(principal: Principal = Depends(get_principal)) -> Principal:
+    """403 unless the token says admin. A fast gate only: services re-check the role in
+    the DB, because a token's role can be up to auth_token_ttl_seconds stale."""
+    if principal.role != "admin":
+        raise HTTPException(status_code=403, detail="admin role required")
+    return principal
 
 
 def get_tenant_id(

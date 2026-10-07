@@ -38,4 +38,5 @@ regexes = [
   '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0''',  # chrome-extension/tests/test_asset_classifier.mjs example JWT
   '''pk_live_9f3a2c8811d4''',                           # example_js_files/02-webpack-minified-runtime.js taxonomy-corpus fixture (fake)
   '''sk_live_abc123''',                                 # techdetect/match_test.py T1 fixture: proves a JS-embedded secret never reaches `evidence`
+  '''^ttl_seconds=600$''',                              # llm/settings_router_test.py: `key=AUTH_KEY, ttl_seconds=600` is code, not a key
 ]

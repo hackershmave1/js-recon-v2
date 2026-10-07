@@ -1,0 +1,9 @@
+.settings-card { max-width: 560px; }
+.settings-hint, .settings-meta { color: var(--text-2, #9aa3b5); font-size: 13px; margin: 6px 0 14px; }
+.settings-form { display: grid; gap: 12px; }
+.settings-form label { display: grid; gap: 4px; font-size: 13px; }
+.settings-actions { display: flex; gap: 8px; margin-top: 4px; }
+.settings-readonly { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0 0 8px; }
+.settings-readonly dd { margin: 0; overflow-wrap: anywhere; }
+.settings-ok { color: var(--lime, #cdeb45); }
+.settings-error { color: var(--danger, #f0716b); }

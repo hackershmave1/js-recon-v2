@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import { getThreatModel, triggerThreatModel } from "../../api/apiClient";
 import { useTenant } from "../../tenant/TenantContext";
 import type { ThreatModelResponse, ThreatEntry } from "../../api/types";
@@ -182,7 +183,12 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
         </div>
       )}
       {data?.status === "failed" && (
-        <p className="tm-error">Generation failed: {data.error ?? "unknown error"}</p>
+        <p className="tm-error">
+          Generation failed: {data.error ?? "unknown error"}
+          {data.error?.startsWith("no LLM API key") && (
+            <> <Link to="/settings">Set a team key in Settings →</Link></>
+          )}
+        </p>
       )}
 
       {data?.status === "done" && (

@@ -739,6 +739,36 @@ class SessionLlmConfig(Base):
     tested_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class TenantLlmConfig(Base):
+    """Team-wide LLM provider + key: one row per tenant (threat-model generation).
+
+    Same encryption contract as SessionLlmConfig. A session's own key overrides it
+    (recon.llm.service.load_credentials). ``configured_by`` is the admin who last
+    saved it; SET NULL on user delete, matching session.created_by."""
+
+    __tablename__ = "tenant_llm_config"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_tenant_llm_config_tenant"),
+        CheckConstraint(
+            "provider IN ('anthropic', 'openrouter', 'gemini')",
+            name="ck_tenant_llm_config_provider",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    encrypted_api_key: Mapped[str | None] = mapped_column(Text)
+    configured_at: Mapped[dt.datetime] = _now_col(nullable=False)
+    configured_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="SET NULL")
+    )
+    tested_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 # Tables carrying a tenant_id get FORCE RLS in the migration.
 TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "app_user",
@@ -763,6 +793,9 @@ ASSET_TABLES: tuple[str, ...] = ("run_asset",)
 
 # LLM config addition, RLS-enabled by migration 0026.
 LLM_TABLES: tuple[str, ...] = ("session_llm_config",)
+
+# Team-wide LLM config, RLS-enabled by migration 0029.
+TENANT_LLM_TABLES: tuple[str, ...] = ("tenant_llm_config",)
 
 # Shadow-API spec-diff addition, RLS-enabled by migration 0006.
 SPEC_TABLES: tuple[str, ...] = ("session_spec", "finding_spec_status")

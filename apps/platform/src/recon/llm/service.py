@@ -15,9 +15,10 @@ import os
 import uuid
 from typing import Any
 
-from recon.config import get_settings
 from recon.db.base import tenant_session
 from recon.db.models import EngagementSession, SessionLlmConfig
+from recon.llm import tenant_config
+from recon.llm.crypto import decrypt_api_key, encrypt_api_key
 from recon.llm.provider import VALID_PROVIDERS, build_provider
 from recon.sessions import service as sessions_service
 
@@ -41,29 +42,6 @@ def _resolve_session_id(tenant_id: str, session_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Encryption helpers
-# ---------------------------------------------------------------------------
-
-
-def _encrypt(plaintext: str) -> str:
-    key = get_settings().llm_encryption_key
-    if not key:
-        return plaintext  # dev mode — no encryption
-    from cryptography.fernet import Fernet
-
-    return Fernet(key.encode()).encrypt(plaintext.encode()).decode()
-
-
-def _decrypt(ciphertext: str) -> str:
-    key = get_settings().llm_encryption_key
-    if not key:
-        return ciphertext  # dev mode
-    from cryptography.fernet import Fernet
-
-    return Fernet(key.encode()).decrypt(ciphertext.encode()).decode()
-
-
-# ---------------------------------------------------------------------------
 # Public service functions
 # ---------------------------------------------------------------------------
 
@@ -76,7 +54,9 @@ def save_config(
     api_key: str,
 ) -> dict[str, Any] | None:
     """Upsert the LLM config for a session. Returns the config dict, or None if
-    the session does not exist (caller maps to 404)."""
+    the session does not exist (caller maps to 404). Raises ValueError for an
+    unsupported provider, and tenant_config.ProviderKeyRequired for a blank key with a
+    changed provider (the router maps only the latter to 422)."""
     if provider not in VALID_PROVIDERS:
         raise ValueError(f"unsupported provider: {provider!r}")
 
@@ -91,9 +71,12 @@ def save_config(
             .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
             .first()
         )
-        encrypted = _encrypt(api_key) if api_key else None
+        encrypted = encrypt_api_key(api_key) if api_key else None
 
         if existing:
+            # The stored key belongs to the stored provider; never carry it to another.
+            if not api_key and existing.encrypted_api_key and existing.provider != provider:
+                raise tenant_config.ProviderKeyRequired
             existing.provider = provider
             existing.model = model
             if api_key:
@@ -151,15 +134,12 @@ def delete_config(tenant_id: str, session_id: str) -> bool:
         return True
 
 
-def test_config(tenant_id: str, session_id: str) -> dict[str, Any]:
-    """Fire a minimal API call to verify the stored key works.
-
-    Returns ``{"ok": True}`` on success, ``{"ok": False, "error": "..."}`` on
-    any failure. Stamps ``tested_at`` on success."""
+def get_test_target(tenant_id: str, session_id: str) -> tuple[str, str, str] | str:
+    """``(provider, model, api_key)`` to test for a session, or an error message."""
     try:
         resolved = _resolve_session_id(tenant_id, session_id)
     except ValueError:
-        return {"ok": False, "error": "session not found"}
+        return "session not found"
     with tenant_session(tenant_id) as db:
         row = (
             db.query(SessionLlmConfig)
@@ -167,25 +147,38 @@ def test_config(tenant_id: str, session_id: str) -> dict[str, Any]:
             .first()
         )
         if row is None:
-            return {"ok": False, "error": "no config saved"}
+            return "no config saved"
         if not row.encrypted_api_key:
-            return {"ok": False, "error": "no API key stored"}
-
+            return "no API key stored"
         try:
-            api_key = _decrypt(row.encrypted_api_key)
+            return row.provider, row.model, decrypt_api_key(row.encrypted_api_key)
         except Exception as exc:
-            return {"ok": False, "error": f"key decryption failed: {exc}"}
+            return f"key decryption failed: {exc}"
 
-        try:
-            import asyncio
 
-            provider = build_provider(row.provider, api_key=api_key, model=row.model)
-            asyncio.get_event_loop().run_until_complete(_ping(provider))
+def mark_tested(tenant_id: str, session_id: str) -> None:
+    resolved = _resolve_session_id(tenant_id, session_id)
+    with tenant_session(tenant_id) as db:
+        row = (
+            db.query(SessionLlmConfig)
+            .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
+            .first()
+        )
+        if row is not None:
             row.tested_at = dt.datetime.now(dt.UTC)
-            db.flush()
-            return {"ok": True, "provider": row.provider, "model": row.model}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+
+
+async def ping_credentials(provider_name: str, model: str | None, api_key: str) -> str | None:
+    """None if the key works, else the error text.
+
+    NOTE: must be awaited on the request's own event loop. The old version ran
+    get_event_loop().run_until_complete() inside run_in_threadpool, which raises
+    RuntimeError in a worker thread on Python 3.11, so Test always failed."""
+    try:
+        await _ping(build_provider(provider_name, api_key=api_key, model=model))
+    except Exception as exc:
+        return str(exc)
+    return None
 
 
 async def _ping(provider) -> None:
@@ -212,8 +205,8 @@ _ENV_KEYS = (("openrouter", "OPENROUTER_API_KEY"), ("anthropic", "ANTHROPIC_API_
 def load_credentials(tenant_id: str, session_id: str) -> tuple[str, str | None, str] | None:
     """``(provider, model, api_key)`` for internal use (threat model generation), or None.
 
-    A key saved on the session wins. Otherwise an operator-wide env key is used, with
-    its own provider. Never exposed via the HTTP API."""
+    A key saved on the session wins, then the team key (Settings), then an operator-wide
+    env key, each with its own provider. Never exposed via the HTTP API."""
     try:
         resolved = _resolve_session_id(tenant_id, session_id)
     except ValueError:
@@ -225,8 +218,12 @@ def load_credentials(tenant_id: str, session_id: str) -> tuple[str, str | None, 
             .first()
         )
         if row is not None and row.encrypted_api_key:
-            return row.provider, row.model, _decrypt(row.encrypted_api_key)
+            return row.provider, row.model, decrypt_api_key(row.encrypted_api_key)
         saved_provider, saved_model = (row.provider, row.model) if row else (None, None)
+    # Team key next: it carries its own provider + model, never the session's.
+    team = tenant_config.load_key(tenant_id)
+    if team is not None:
+        return team
     for provider, env_var in _ENV_KEYS:
         if api_key := os.environ.get(env_var):
             # Model ids are provider-specific, so a saved model only carries over to its own

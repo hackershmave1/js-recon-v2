@@ -7,6 +7,7 @@ import { AuthProvider } from "./auth/AuthProvider";
 import { AuthGate } from "./auth/AuthGate";
 import { Home, RunWorkspace, OverviewRoute, SourcesRoute, FindingsRoute, ApiSpecRoute, ProbeRoute, TechRoute, GraphQLRoute, HostsRoute, DiffRoute, ThreatModelRoute } from "./app";
 import { SessionsView } from "./features/sessions/SessionsView";
+import { SettingsView } from "./features/settings/SettingsView";
 import { installPerfObserver } from "./shell/observability";
 // Self-hosted fonts (a recon tool shouldn't phone home to a font CDN). Imported
 // before styles.css so the @font-face rules are registered when the design tokens
@@ -22,6 +23,7 @@ import "./styles.css";
 const router = createBrowserRouter([
   { path: "/", Component: Home },
   { path: "/sessions", Component: SessionsView },
+  { path: "/settings", Component: SettingsView },
   {
     path: "/runs/:id",
     Component: RunWorkspace,

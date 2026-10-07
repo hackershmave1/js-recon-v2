@@ -34,6 +34,7 @@ from recon.db.models import (
 )
 from recon.domain import FindingType, RunState
 from recon.llm import service as llm_service
+from recon.llm.crypto import KeyDecryptError
 from recon.llm.provider import build_provider
 from recon.observability import get_logger
 from recon.sessions import service as sessions_service
@@ -393,14 +394,42 @@ async def run_generation(tenant_id: str, session_id: str) -> None:
         log.warning("threat_model.context_failed", session_id=resolved, error=str(exc))
         return
 
-    credentials = llm_service.load_credentials(tenant_id, resolved)
+    try:
+        credentials = llm_service.load_credentials(tenant_id, resolved)
+    except Exception as exc:
+        # NOTE: this runs after status=running; an escaped exception would leave the
+        # model stuck there until the 5-minute orphan window, for every session of a
+        # team with a bad team key.
+        reason = (
+            "stored LLM key could not be decrypted; re-save it"
+            if isinstance(exc, KeyDecryptError)
+            else "could not load LLM credentials"
+        )
+        _set_status(tenant_id, resolved, "failed", error=reason)
+        if isinstance(exc, KeyDecryptError):
+            # No traceback here: the decrypt frames could carry ciphertext.
+            log.error(
+                "llm.credentials.decrypt_failed",
+                tenant_id=tenant_id,
+                session_id=resolved,
+                error_type=type(exc).__name__,
+            )
+        else:
+            log.error(
+                "llm.credentials.load_failed",
+                tenant_id=tenant_id,
+                session_id=resolved,
+                error_type=type(exc).__name__,
+                exc_info=True,
+            )
+        return
     if credentials is None:
         _set_status(
             tenant_id,
             resolved,
             "failed",
-            error="no LLM API key: save one for this session, or set "
-            "OPENROUTER_API_KEY / ANTHROPIC_API_KEY on the server",
+            error="no LLM API key: save one for this session, ask an admin to set a team "
+            "key in Settings, or set OPENROUTER_API_KEY / ANTHROPIC_API_KEY on the server",
         )
         return
     provider_name, model_name, api_key = credentials

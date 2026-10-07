@@ -10,7 +10,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from recon.api.deps import get_tenant_id
-from recon.llm import service
+from recon.llm import service, tenant_config
 from recon.llm.provider import VALID_PROVIDERS
 
 router = APIRouter(tags=["llm-config"])
@@ -36,14 +36,17 @@ async def save_llm_config(
     if not body.model.strip():
         raise HTTPException(status_code=422, detail="model must not be empty")
 
-    result = await run_in_threadpool(
-        service.save_config,
-        tenant_id,
-        session_id,
-        body.provider,
-        body.model.strip(),
-        body.api_key.strip(),
-    )
+    try:
+        result = await run_in_threadpool(
+            service.save_config,
+            tenant_id,
+            session_id,
+            body.provider,
+            body.model.strip(),
+            body.api_key.strip(),
+        )
+    except tenant_config.ProviderKeyRequired as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="session not found")
     return result
@@ -76,7 +79,12 @@ async def test_llm_config(
     session_id: str,
     tenant_id: str = Depends(get_tenant_id),
 ) -> dict:
-    result = await run_in_threadpool(service.test_config, tenant_id, session_id)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "test failed"))
-    return result
+    target = await run_in_threadpool(service.get_test_target, tenant_id, session_id)
+    if isinstance(target, str):
+        raise HTTPException(status_code=400, detail=target)
+    provider_name, model, api_key = target
+    error = await service.ping_credentials(provider_name, model, api_key)
+    if error is not None:
+        raise HTTPException(status_code=400, detail=error)
+    await run_in_threadpool(service.mark_tested, tenant_id, session_id)
+    return {"ok": True, "provider": provider_name, "model": model}
