@@ -54,3 +54,34 @@ def test_presets_endpoint_without_any_key(client, tenant):
     sid = _session(tenant)
     r = client.get(f"/sessions/{sid}/threat-model/presets", headers={"X-Tenant-Id": tenant})
     assert r.json() == {"credential_provider": None, "presets": None}
+
+
+@pytest.fixture()
+def recorded_runs(monkeypatch):
+    calls: list[tuple] = []
+
+    async def _record(*args):
+        calls.append(args)
+
+    # The router reads service.run_generation at request time; TestClient runs the
+    # background task after the response, so the recorder is called before post() returns.
+    monkeypatch.setattr("recon.threat_model.service.run_generation", _record)
+    return calls
+
+
+def test_trigger_passes_the_chosen_preset_to_the_run(client, tenant, recorded_runs):
+    sid = _session(tenant)
+    r = client.post(
+        f"/sessions/{sid}/threat-model",
+        json={"preset": "cheapest"},
+        headers={"X-Tenant-Id": tenant},
+    )
+    assert r.status_code == 202
+    assert [(c[0], c[2]) for c in recorded_runs] == [(tenant, "cheapest")]
+
+
+def test_trigger_without_a_body_runs_with_no_preset(client, tenant, recorded_runs):
+    sid = _session(tenant)
+    r = client.post(f"/sessions/{sid}/threat-model", headers={"X-Tenant-Id": tenant})
+    assert r.status_code == 202
+    assert [(c[0], c[2]) for c in recorded_runs] == [(tenant, None)]

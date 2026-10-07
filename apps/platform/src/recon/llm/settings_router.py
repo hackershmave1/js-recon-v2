@@ -22,6 +22,8 @@ router = APIRouter(tags=["settings"])
 log = get_logger("recon.llm.team_config")
 
 _NOT_ADMIN = "admin role required"
+_MAX_MODEL_ID_LENGTH = 200
+_MODEL_TOO_LONG = f"model ids must be at most {_MAX_MODEL_ID_LENGTH} characters"
 
 
 class TeamLlmConfigIn(BaseModel):
@@ -88,6 +90,8 @@ async def save_team_llm_settings(
         )
     if not body.model.strip():
         raise HTTPException(status_code=422, detail="model must not be empty")
+    if len(body.model.strip()) > _MAX_MODEL_ID_LENGTH:
+        raise HTTPException(status_code=422, detail=_MODEL_TOO_LONG)
     preset_models: object = tenant_config.KEEP_PRESETS
     if "preset_models" in body.model_fields_set:
         if body.preset_models is None:
@@ -100,6 +104,8 @@ async def save_team_llm_settings(
                     status_code=422,
                     detail=f"preset_models keys must be among {list(PRESETS)} with non-empty model ids",
                 )
+            if any(len(v.strip()) > _MAX_MODEL_ID_LENGTH for v in body.preset_models.values()):
+                raise HTTPException(status_code=422, detail=_MODEL_TOO_LONG)
             preset_models = {k: v.strip() for k, v in body.preset_models.items()}
     try:
         result = await run_in_threadpool(

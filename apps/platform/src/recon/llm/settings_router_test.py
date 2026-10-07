@@ -286,3 +286,17 @@ def test_preset_models_validation(client, team):
         "/settings/llm", json={**base, "api_key": "", "preset_models": None}, headers=admin_h
     )
     assert cleared.json()["preset_models"] == {}
+
+
+def test_overlong_model_ids_are_422(client, team):
+    _, admin_h, _ = team
+    base = {"provider": "anthropic", "model": "m", "api_key": "k"}
+    long_id = "x" * 201
+    r = client.put("/settings/llm", json={**base, "model": long_id}, headers=admin_h)
+    assert r.status_code == 422 and "200" in r.json()["detail"]
+    r = client.put(
+        "/settings/llm", json={**base, "preset_models": {"cheapest": long_id}}, headers=admin_h
+    )
+    assert r.status_code == 422 and "200" in r.json()["detail"]
+    ok = client.put("/settings/llm", json={**base, "model": "x" * 200}, headers=admin_h)
+    assert ok.status_code == 200
