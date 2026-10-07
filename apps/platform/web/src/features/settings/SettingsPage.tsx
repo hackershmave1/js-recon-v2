@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
+import { getModelCatalog, type ModelCatalog } from "../../api/llmCatalog";
 import { ConfirmModal } from "../../shell/ConfirmModal";
+import { ModelPicker } from "./ModelPicker";
+import { PresetRows } from "./PresetRows";
 import {
   deleteTeamLlmSettings, getTeamLlmSettings, saveTeamLlmSettings, testTeamLlmSettings,
   type TeamLlmSettings,
@@ -19,6 +22,8 @@ export function SettingsPage({ tenantId }: { tenantId: string }) {
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [pickingModel, setPickingModel] = useState(false);
 
   const reload = useCallback(async () => {
     const next = await getTeamLlmSettings(tenantId);
@@ -32,6 +37,20 @@ export function SettingsPage({ tenantId }: { tenantId: string }) {
   useEffect(() => {
     reload().catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)));
   }, [reload]);
+
+  useEffect(() => {
+    // Separate from the settings load so an unreachable OpenRouter never delays the page.
+    // Once the catalog is cached, refresh just the preset availability flags.
+    getModelCatalog(tenantId)
+      .then((c) => {
+        setCatalog(c);
+        if (!c.available) return undefined; // nothing cached to refresh against
+        return getTeamLlmSettings(tenantId).then((s) =>
+          setSettings((prev) => (prev ? { ...prev, presets: s.presets } : prev)),
+        );
+      })
+      .catch(() => setCatalog(null));
+  }, [tenantId]);
 
   async function run(action: () => Promise<unknown>, okText: string) {
     setBusy(true);
@@ -81,6 +100,13 @@ export function SettingsPage({ tenantId }: { tenantId: string }) {
             Model
             <input value={model} onChange={(e) => setModel(e.target.value)} />
           </label>
+          {provider === "openrouter" && catalog?.available && (
+            <button type="button" className="shell-btn" onClick={() => setPickingModel(true)}>Choose from catalog…</button>
+          )}
+          {pickingModel && catalog && (
+            <ModelPicker catalog={catalog} title="Team default model"
+              onPick={(id) => { setModel(id); setPickingModel(false); }} onClose={() => setPickingModel(false)} />
+          )}
           <label>
             API key
             <input
@@ -126,6 +152,19 @@ export function SettingsPage({ tenantId }: { tenantId: string }) {
           {cfg.tested_at ? ` · tested ${when(cfg.tested_at)}` : ""}
         </p>
       )}
+      <PresetRows
+        settings={settings}
+        catalog={catalog}
+        busy={busy}
+        onSave={(presetModels) => {
+          if (!cfg) return;
+          // The saved provider/model, not unsaved form edits: this PUT changes only presets.
+          void run(
+            () => saveTeamLlmSettings(tenantId, { provider: cfg.provider, model: cfg.model, api_key: "", preset_models: presetModels }),
+            "Presets saved",
+          );
+        }}
+      />
       {status && <p role="status" className={status.kind === "ok" ? "settings-ok" : "settings-error"}>{status.text}</p>}
 
       {confirmRemove && (

@@ -201,6 +201,15 @@ Keys are encrypted with `RECON_LLM_ENCRYPTION_KEY` (stored in cleartext if it's 
 dev only). After rotating that key, re-save the stored keys; a key that can't be
 decrypted fails the threat model with "re-save it".
 
+**Choosing a model.** Admins pick the team's default model in **Settings**. With an
+OpenRouter key, **Choose from catalog…** lists OpenRouter's live models that can produce the
+threat model's structured output, each with a cost per threat model (live price × this
+team's average tokens per run, or an assumption until there's history). The three presets,
+**Cheapest · Balanced · Strongest**, have built-in defaults per provider that an admin can
+override (overrides reset when the team provider changes). Anyone can pick a preset next to
+**Generate**; it applies to that run only and always uses the model for the provider of the
+key that will run (a session's own key, else the team key, else the server key).
+
 ---
 
 ## 3. Security posture

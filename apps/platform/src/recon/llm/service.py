@@ -232,6 +232,29 @@ def load_credentials(tenant_id: str, session_id: str) -> tuple[str, str | None, 
     return None
 
 
+def peek_credential_provider(tenant_id: str, session_id: str) -> str | None:
+    """Which provider load_credentials would use, without decrypting anything (for the UI)."""
+    try:
+        resolved = _resolve_session_id(tenant_id, session_id)
+    except ValueError:
+        return None
+    with tenant_session(tenant_id) as db:
+        row = (
+            db.query(SessionLlmConfig)
+            .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
+            .first()
+        )
+        if row is not None and row.encrypted_api_key:
+            return row.provider
+    team = tenant_config.team_key_provider(tenant_id)
+    if team is not None:
+        return team
+    for provider, env_var in _ENV_KEYS:
+        if os.environ.get(env_var):
+            return provider
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Serialization — key is NEVER included
 # ---------------------------------------------------------------------------

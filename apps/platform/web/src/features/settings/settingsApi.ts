@@ -1,4 +1,5 @@
 import { json, request } from "../../api/apiClient";
+import type { Preset } from "../../api/llmCatalog";
 
 export interface TeamLlmConfig {
   provider: string;
@@ -7,13 +8,18 @@ export interface TeamLlmConfig {
   configured_at: string | null;
   configured_by: string | null;
   tested_at: string | null;
+  preset_models: Record<string, string>;
 }
+
+export interface PresetView { model: string; source: "team" | "builtin"; available: boolean | null }
 
 export interface TeamLlmSettings {
   config: TeamLlmConfig | null;
   can_edit: boolean;
   default_models: Record<string, string>;
   providers: string[];
+  presets: Record<Preset, PresetView> | null;
+  builtin_preset_models: Record<string, Record<string, string>>;
 }
 
 export function getTeamLlmSettings(tenantId: string): Promise<TeamLlmSettings> {
@@ -22,7 +28,7 @@ export function getTeamLlmSettings(tenantId: string): Promise<TeamLlmSettings> {
 
 export function saveTeamLlmSettings(
   tenantId: string,
-  body: { provider: string; model: string; api_key: string },
+  body: { provider: string; model: string; api_key: string; preset_models?: Record<string, string> | null },
 ): Promise<TeamLlmConfig> {
   return request("/settings/llm", json("PUT", body), tenantId);
 }

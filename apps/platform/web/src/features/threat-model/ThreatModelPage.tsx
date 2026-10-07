@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { getThreatModel, triggerThreatModel } from "../../api/apiClient";
+import { costLabel, getModelCatalog, PRESET_LABELS, PRESETS, type ModelCatalog, type Preset } from "../../api/llmCatalog";
+import { getRunPresets, type RunPresets } from "./threatModelApi";
 import { useTenant } from "../../tenant/TenantContext";
 import type { ThreatModelResponse, ThreatEntry } from "../../api/types";
 import "./threat-model.css";
@@ -84,6 +86,9 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [runPresets, setRunPresets] = useState<RunPresets | null>(null);
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [preset, setPreset] = useState<Preset | "">("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchState = async () => {
@@ -112,6 +117,20 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
   }, [sessionId, tenantId]);
 
   useEffect(() => {
+    if (!tenantId) return;
+    getRunPresets(tenantId, sessionId)
+      .then((rp) => {
+        setRunPresets(rp);
+        // Prices only exist for OpenRouter's catalog. A catalog failure only drops the
+        // cost labels, never the preset select.
+        if (rp.credential_provider === "openrouter")
+          return getModelCatalog(tenantId).then(setCatalog).catch(() => setCatalog(null));
+        return undefined;
+      })
+      .catch(() => setRunPresets(null));
+  }, [sessionId, tenantId]);
+
+  useEffect(() => {
     if (data?.status === "pending" || data?.status === "running") {
       if (!pollRef.current) {
         pollRef.current = setInterval(fetchState, 3000);
@@ -125,7 +144,7 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
     if (!tenantId) return;
     setTriggering(true);
     try {
-      const result = await triggerThreatModel(tenantId, sessionId);
+      const result = await triggerThreatModel(tenantId, sessionId, preset || undefined);
       setData(result);
       setFetchError(null);
     } catch (err: any) {
@@ -147,6 +166,18 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
       <div className="tm-header">
         <h2 className="rp-title">Threat Model</h2>
         {(!data || data.status === "done" || data.status === "failed") && (
+          <>
+            {runPresets?.presets && (
+              <select aria-label="Model preset" className="tm-preset" value={preset}
+                onChange={(e) => setPreset(e.target.value as Preset | "")}>
+                <option value="">Default model</option>
+                {PRESETS.map((p) => {
+                  const model = runPresets.presets![p];
+                  const cost = costLabel(catalog, model);
+                  return <option key={p} value={p}>{`${PRESET_LABELS[p]} · ${model}${cost ? ` · ${cost}` : ""}`}</option>;
+                })}
+              </select>
+            )}
           <button
             type="button"
             className="btn-primary tm-trigger"
@@ -155,6 +186,7 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
           >
             {triggering ? "Starting…" : data?.status === "done" ? "Regenerate" : "Generate Threat Model"}
           </button>
+          </>
         )}
       </div>
 
@@ -164,7 +196,7 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
         <div className="tm-empty">
           <p>No threat model generated yet.</p>
           <p className="muted">
-            Configure your LLM provider in the extension settings, then click
+            Set an LLM key in <Link to="/settings">Settings</Link> (or on this session from the extension), then click
             <strong> Generate Threat Model</strong> to analyse this session's recon surface.
           </p>
         </div>

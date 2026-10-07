@@ -1,10 +1,13 @@
 """run_generation must fail loudly, never stay 'running', when the stored key can't be decrypted."""
 
 import asyncio
+import uuid
 
 import pytest
 
+from recon.auth import service as auth_service
 from recon.llm import service as llm_service
+from recon.llm import tenant_config
 from recon.llm.crypto import KeyDecryptError
 from recon.sessions import service as sessions_service
 from recon.threat_model import service as tm_service
@@ -77,3 +80,82 @@ def test_no_key_error_names_the_team_settings(tenant, monkeypatch):
     error = tm_service.get_threat_model(tenant, sid)["error"]
     assert error.startswith("no LLM API key")  # the UI's Settings link matches this prefix
     assert "ask an admin to set a team key in Settings" in error
+
+
+def _no_env_keys(monkeypatch):
+    for env_var in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)
+
+
+def _capture_models(monkeypatch) -> list:
+    seen: list = []
+
+    def fake_build(provider_name, api_key, model=None):
+        seen.append((provider_name, model))
+        raise RuntimeError("stub: stop before the LLM call")
+
+    monkeypatch.setattr(tm_service, "build_provider", fake_build)
+    monkeypatch.setattr(tm_service, "_assemble_context", lambda t, s: ("ctx", frozenset()))
+    return seen
+
+
+def test_preset_resolves_for_the_session_keys_provider(tenant, monkeypatch):
+    _no_env_keys(monkeypatch)
+    seen = _capture_models(monkeypatch)
+    sid = _session(tenant)
+    llm_service.save_config(tenant, sid, "openrouter", "anthropic/claude-sonnet-4.6", "k")
+    tm_service.trigger_generation(tenant, sid)
+    asyncio.run(tm_service.run_generation(tenant, sid, "cheapest"))
+    assert seen == [("openrouter", "anthropic/claude-haiku-4.5:floor")]
+
+
+def test_team_override_used_for_the_team_key(tenant, monkeypatch):
+    _no_env_keys(monkeypatch)
+    seen = _capture_models(monkeypatch)
+    admin = auth_service.seed_admin(
+        username=f"a-{uuid.uuid4().hex[:8]}",
+        password="pw",
+        tenant_id=tenant,
+        tenant_name="t",
+        role="admin",
+    )
+    tenant_config.save_config(
+        tenant, admin, "openrouter", "team-model", "k", {"strongest": "vendor/best"}
+    )
+    sid = _session(tenant)
+    tm_service.trigger_generation(tenant, sid)
+    asyncio.run(tm_service.run_generation(tenant, sid, "strongest"))
+    assert seen == [("openrouter", "vendor/best")]
+
+
+def test_no_preset_keeps_the_saved_model(tenant, monkeypatch):
+    _no_env_keys(monkeypatch)
+    seen = _capture_models(monkeypatch)
+    sid = _session(tenant)
+    llm_service.save_config(tenant, sid, "anthropic", "claude-x", "k")
+    tm_service.trigger_generation(tenant, sid)
+    asyncio.run(tm_service.run_generation(tenant, sid))
+    assert seen == [("anthropic", "claude-x")]
+
+
+def test_a_run_is_claimed_once(tenant, monkeypatch):
+    _no_env_keys(monkeypatch)
+    seen = _capture_models(monkeypatch)
+    sid = _session(tenant)
+    llm_service.save_config(tenant, sid, "anthropic", "claude-x", "k")
+    tm_service.trigger_generation(tenant, sid)
+    asyncio.run(tm_service.run_generation(tenant, sid))
+    asyncio.run(tm_service.run_generation(tenant, sid))  # no longer pending → no-op
+    assert len(seen) == 1
+
+
+def test_running_row_is_not_reclaimed(tenant, monkeypatch):
+    _no_env_keys(monkeypatch)
+    seen = _capture_models(monkeypatch)
+    sid = _session(tenant)
+    llm_service.save_config(tenant, sid, "anthropic", "claude-x", "k")
+    tm_service.trigger_generation(tenant, sid)
+    tm_service._set_status(tenant, sid, "running")
+    asyncio.run(tm_service.run_generation(tenant, sid))
+    assert seen == []
+    assert tm_service.get_threat_model(tenant, sid)["status"] == "running"
