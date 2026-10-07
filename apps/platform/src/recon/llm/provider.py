@@ -6,7 +6,7 @@ Token field names differ across SDKs; this module normalises them so callers
 never deal with ``candidates_token_count`` vs ``completion_tokens``.
 
 Usage:
-    provider = build_provider("openrouter", api_key="sk-...", model="anthropic/claude-sonnet-4-6")
+    provider = build_provider("openrouter", api_key="sk-...", model="anthropic/claude-sonnet-4.6")
     response = await provider.generate_structured(system, user, MyOutputModel)
     result: MyOutputModel = response.parsed
 """
@@ -27,7 +27,7 @@ VALID_PROVIDERS = frozenset({"anthropic", "openrouter", "gemini"})
 # Sensible defaults per provider — callers may override.
 DEFAULT_MODELS: dict[str, str] = {
     "anthropic": "claude-sonnet-4-6",
-    "openrouter": "anthropic/claude-sonnet-4-6",
+    "openrouter": "anthropic/claude-sonnet-4.6",
     "gemini": "gemini-2.5-flash",
 }
 
@@ -138,6 +138,9 @@ class OpenRouterProvider(LLMProvider):
                 {"role": "user", "content": user_prompt},
             ],
             response_format={"type": "json_object"},
+            # Without this, OpenRouter may route (incl. :floor's price sort) to a host that
+            # ignores response_format and returns prose, which we can't parse.
+            extra_body={"provider": {"require_parameters": True}},
         )
         raw = (response.choices[0].message.content or "").strip()
         if not raw:
