@@ -333,8 +333,8 @@ export function resumeRun(tenantId: string, runId: string): Promise<RunControlRe
 export function getThreatModel(tenantId: string, sessionId: string): Promise<import("./types").ThreatModelResponse> {
   return request(`/sessions/${encodeURIComponent(sessionId)}/threat-model`, {}, tenantId);
 }
-export function triggerThreatModel(tenantId: string, sessionId: string): Promise<import("./types").ThreatModelResponse> {
-  return request(`/sessions/${encodeURIComponent(sessionId)}/threat-model`, { method: "POST" }, tenantId);
+export function triggerThreatModel(tenantId: string, sessionId: string, preset?: string): Promise<import("./types").ThreatModelResponse> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/threat-model`, preset ? json("POST", { preset }) : { method: "POST" }, tenantId);
 }
 
 export async function exportOpenApi(tenantId: string, runId: string, format: "json" | "yaml"): Promise<Blob> {
