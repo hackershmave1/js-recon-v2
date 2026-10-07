@@ -3,6 +3,7 @@
 import uuid
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -10,8 +11,12 @@ from recon.api.app import create_app
 from recon.auth import service as auth_service
 from recon.auth import token as auth_token
 from recon.config import get_settings
+from recon.db import models
+from recon.db.base import tenant_session
+from recon.llm import catalog, settings_router
 from recon.llm import service as llm_service
-from recon.llm import settings_router
+from recon.llm.catalog_test import SAMPLE
+from recon.sessions import service as sessions_service
 
 pytestmark = pytest.mark.integration
 
@@ -183,3 +188,101 @@ def test_save_with_misconfigured_encryption_key_is_500_not_422(client, team, mon
     )
     assert r.status_code == 500
     assert "Fernet" not in r.text
+
+
+@pytest.fixture()
+def stub_catalog(monkeypatch):
+    catalog.reset()
+    monkeypatch.setattr(
+        catalog,
+        "_client",
+        lambda: httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, json=SAMPLE))
+        ),
+    )
+    yield
+    catalog.reset()
+
+
+def test_models_endpoint_returns_filtered_catalog_and_assumed_estimate(client, team, stub_catalog):
+    _, admin_h, _ = team
+    body = client.get("/settings/llm/models", headers=admin_h).json()
+    assert body["available"] is True
+    assert len(body["models"]) == 4
+    assert body["estimate"] == {
+        "prompt_tokens": 20000,
+        "completion_tokens": 4000,
+        "basis": "assumed",
+        "runs": 0,
+    }
+
+
+def test_estimate_averages_real_runs_and_ignores_zero_token_rows(client, team, stub_catalog):
+    tenant_id, admin_h, _ = team
+    for prompt, completion in ((10000, 2000), (30000, 6000), (0, 0)):
+        sv = sessions_service.create_session(
+            tenant_id, name="e", scope_hosts=["acme.io"], authorized_by="t"
+        )
+        with tenant_session(tenant_id) as db:
+            db.add(
+                models.SessionThreatModel(
+                    tenant_id=tenant_id,
+                    session_id=sv.id,
+                    status="done",
+                    prompt_tokens=prompt,
+                    completion_tokens=completion,
+                )
+            )
+    est = client.get("/settings/llm/models", headers=admin_h).json()["estimate"]
+    assert est == {"prompt_tokens": 20000, "completion_tokens": 4000, "basis": "history", "runs": 2}
+
+
+def test_settings_show_builtin_then_team_presets_with_availability(client, team, stub_catalog):
+    _, admin_h, _ = team
+    assert client.get("/settings/llm", headers=admin_h).json()["presets"] is None
+    client.put(
+        "/settings/llm",
+        json={"provider": "openrouter", "model": "anthropic/claude-sonnet-4.6", "api_key": "k"},
+        headers=admin_h,
+    )
+    client.get("/settings/llm/models", headers=admin_h)  # primes the catalog cache
+    presets_view = client.get("/settings/llm", headers=admin_h).json()["presets"]
+    assert presets_view["cheapest"] == {
+        "model": "anthropic/claude-haiku-4.5",
+        "source": "builtin",
+        "available": True,
+    }
+    client.put(
+        "/settings/llm",
+        json={
+            "provider": "openrouter",
+            "model": "anthropic/claude-sonnet-4.6",
+            "preset_models": {"strongest": "made/up-model"},
+        },
+        headers=admin_h,
+    )
+    body = client.get("/settings/llm", headers=admin_h).json()
+    assert body["presets"]["strongest"] == {
+        "model": "made/up-model",
+        "source": "team",
+        "available": False,
+    }
+    assert body["config"]["preset_models"] == {"strongest": "made/up-model"}
+    assert body["builtin_preset_models"]["openrouter"]["balanced"] == "anthropic/claude-sonnet-4.6"
+
+
+def test_preset_models_validation(client, team):
+    _, admin_h, _ = team
+    base = {"provider": "anthropic", "model": "m", "api_key": "k"}
+    bad_key = {**base, "preset_models": {"fastest": "x"}}
+    assert client.put("/settings/llm", json=bad_key, headers=admin_h).status_code == 422
+    blank = {**base, "preset_models": {"cheapest": "  "}}
+    assert client.put("/settings/llm", json=blank, headers=admin_h).status_code == 422
+    ok = client.put(
+        "/settings/llm", json={**base, "preset_models": {"cheapest": " claude-x "}}, headers=admin_h
+    )
+    assert ok.status_code == 200 and ok.json()["preset_models"] == {"cheapest": "claude-x"}
+    cleared = client.put(
+        "/settings/llm", json={**base, "api_key": "", "preset_models": None}, headers=admin_h
+    )
+    assert cleared.json()["preset_models"] == {}

@@ -11,9 +11,10 @@ from pydantic import BaseModel
 
 from recon.api.deps import get_optional_principal, get_tenant_id, require_admin
 from recon.auth.service import Principal
+from recon.llm import catalog, cost, tenant_config
 from recon.llm import service as llm_service
-from recon.llm import tenant_config
 from recon.llm.crypto import KeyDecryptError
+from recon.llm.presets import BUILTIN_PRESET_MODELS, PRESETS
 from recon.llm.provider import DEFAULT_MODELS, VALID_PROVIDERS
 from recon.observability import get_logger
 
@@ -27,6 +28,25 @@ class TeamLlmConfigIn(BaseModel):
     provider: str
     model: str
     api_key: str = ""  # empty keeps the stored key
+    # Omitted keeps the stored overrides; null or {} clears them (see model_fields_set).
+    preset_models: dict[str, str] | None = None
+
+
+def _preset_views(team_provider: str | None, overrides: dict[str, str]) -> dict | None:
+    if team_provider is None:
+        return None
+    # Cache only: this route must never block on OpenRouter (only /models fetches).
+    ids = catalog.cached_ids() if team_provider == "openrouter" else None
+    views = {}
+    for preset in PRESETS:
+        model = overrides.get(preset) or BUILTIN_PRESET_MODELS[team_provider][preset]
+        views[preset] = {
+            "model": model,
+            "source": "team" if overrides.get(preset) else "builtin",
+            # A catalog variant ("x:free") is listed as-is; a routing variant isn't.
+            "available": None if ids is None else (model in ids or model.split(":")[0] in ids),
+        }
+    return views
 
 
 @router.get("/settings/llm")
@@ -44,7 +64,18 @@ async def get_team_llm_settings(
         "can_edit": principal is not None and principal.role == "admin",
         "default_models": DEFAULT_MODELS,
         "providers": sorted(VALID_PROVIDERS),
+        "presets": _preset_views(
+            config["provider"] if config else None, (config or {}).get("preset_models") or {}
+        ),
+        "builtin_preset_models": BUILTIN_PRESET_MODELS,
     }
+
+
+@router.get("/settings/llm/models")
+async def list_llm_models(tenant_id: str = Depends(get_tenant_id)) -> dict:
+    snapshot = await catalog.get_catalog()
+    estimate = await run_in_threadpool(cost.estimate_tokens, tenant_id)
+    return {**snapshot, "estimate": estimate}
 
 
 @router.put("/settings/llm")
@@ -57,6 +88,19 @@ async def save_team_llm_settings(
         )
     if not body.model.strip():
         raise HTTPException(status_code=422, detail="model must not be empty")
+    preset_models: object = tenant_config.KEEP_PRESETS
+    if "preset_models" in body.model_fields_set:
+        if body.preset_models is None:
+            preset_models = None
+        else:
+            if set(body.preset_models) - set(PRESETS) or any(
+                not v.strip() for v in body.preset_models.values()
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"preset_models keys must be among {list(PRESETS)} with non-empty model ids",
+                )
+            preset_models = {k: v.strip() for k, v in body.preset_models.items()}
     try:
         result = await run_in_threadpool(
             tenant_config.save_config,
@@ -65,6 +109,7 @@ async def save_team_llm_settings(
             body.provider,
             body.model.strip(),
             body.api_key.strip(),
+            preset_models,
         )
     except tenant_config.ProviderKeyRequired as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
