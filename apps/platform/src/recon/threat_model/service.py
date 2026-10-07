@@ -20,7 +20,7 @@ import uuid
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from recon.db.base import tenant_session
 from recon.db.models import (
@@ -34,7 +34,9 @@ from recon.db.models import (
 )
 from recon.domain import FindingType, RunState
 from recon.llm import service as llm_service
+from recon.llm import tenant_config
 from recon.llm.crypto import KeyDecryptError
+from recon.llm.presets import resolve_model
 from recon.llm.provider import build_provider
 from recon.observability import get_logger
 from recon.sessions import service as sessions_service
@@ -367,25 +369,32 @@ def get_threat_model(tenant_id: str, session_id: str) -> dict[str, Any] | None:
         return _serialize(row, include_threats=True)
 
 
-async def run_generation(tenant_id: str, session_id: str) -> None:
-    """Background task: assemble context → call LLM → verify citations → store threats."""
+async def run_generation(tenant_id: str, session_id: str, preset: str | None = None) -> None:
+    """Background task: assemble context → call LLM → verify citations → store threats.
+
+    ``preset`` (cheapest/balanced/strongest) picks the model for this run from the
+    credential's own provider; None keeps the saved model."""
     try:
         resolved = _resolve_session_id(tenant_id, session_id)
     except ValueError:
         log.warning("threat_model.session_not_found", session_id=session_id)
         return
 
-    # Guard against double-execution (e.g. two concurrent POST triggers).
+    # Claim the run atomically: only a pending row flips to running, so a re-trigger (or
+    # two queued tasks) can't start two paid LLM calls.
     with tenant_session(tenant_id) as db:
-        guard = (
-            db.query(SessionThreatModel)
-            .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
-            .first()
-        )
-        if guard is None or guard.status == "running":
-            return
-
-    _set_status(tenant_id, resolved, "running")
+        claimed = db.execute(
+            update(SessionThreatModel)
+            .where(
+                SessionThreatModel.session_id == uuid.UUID(resolved),
+                SessionThreatModel.tenant_id == uuid.UUID(tenant_id),
+                SessionThreatModel.status == "pending",
+            )
+            .values(status="running", updated_at=dt.datetime.now(dt.UTC))
+            .returning(SessionThreatModel.id)
+        ).first()
+    if claimed is None:
+        return
 
     try:
         context_md, valid_hashes = _assemble_context(tenant_id, resolved)
@@ -396,6 +405,15 @@ async def run_generation(tenant_id: str, session_id: str) -> None:
 
     try:
         credentials = llm_service.load_credentials(tenant_id, resolved)
+        if credentials is not None:
+            # Inside the try: a failure here must mark the run failed, not leave it running.
+            team_provider, overrides = tenant_config.load_preset_context(tenant_id)
+            cred_provider, saved_model, cred_key = credentials
+            credentials = (
+                cred_provider,
+                resolve_model(preset, cred_provider, team_provider, overrides, saved_model),
+                cred_key,
+            )
     except Exception as exc:
         # NOTE: this runs after status=running; an escaped exception would leave the
         # model stuck there until the 5-minute orphan window, for every session of a
@@ -433,6 +451,14 @@ async def run_generation(tenant_id: str, session_id: str) -> None:
         )
         return
     provider_name, model_name, api_key = credentials
+    log.info(
+        "threat_model.generation_model",
+        tenant_id=tenant_id,
+        session_id=resolved,
+        preset=preset,
+        provider=provider_name,
+        model=model_name,
+    )
 
     try:
         provider = build_provider(provider_name, api_key=api_key, model=model_name)
