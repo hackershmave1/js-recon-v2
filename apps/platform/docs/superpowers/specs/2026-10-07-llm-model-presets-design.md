@@ -125,8 +125,9 @@ applies only when the credential's provider equals the team config's provider.
   already disables Generate in those states.
 - `OpenRouterProvider` sends `extra_body={"provider": {"require_parameters": True}}`, so
   routing (and `:floor`'s price sort) only picks hosts that honour `response_format`.
-- `GET /sessions/{id}/threat-model` adds `credential_provider` (provider name only, no
-  decrypt; `null` if no key resolves), so the per-run select shows models and costs for the
+- A separate `GET /sessions/{id}/threat-model/presets` returns `{credential_provider, presets}`
+  (provider name only, no decrypt; `null` if no key resolves; `GET threat-model` itself 404s
+  before a first run, so it can't carry this), so the per-run select shows models and costs for the
   provider that will actually run, not just the team's.
 - The chosen preset and resolved model are logged (`threat_model.generation_model` with
   preset, provider, model) and stored in the existing `provider`/`model` columns. Nothing new

@@ -126,6 +126,29 @@ Populate `FindingOccurrence.evidence` at extraction time in Vespasian (walk AST 
 enclosing `function_declaration` / `arrow_function` / `method_definition` node, cap at 60 lines).
 This eliminates the S3 read at generation time entirely — `_assemble_context` just reads from DB.
 
+### 2026-10-07 LLM model presets final review — OPEN (D65–D66)
+
+Found by the final whole-branch review of the OpenRouter model catalog + Cheapest/Balanced/Strongest presets.
+
+#### D65 · Saved hyphenated OpenRouter ids not migrated + no catalog badge on the team default model [S]  ·  correctness
+
+Team and session rows saved with `anthropic/claude-sonnet-4-6` (the old OpenRouter default, hyphenated) are
+not rewritten, and OpenRouter catalog ids use dots (`anthropic/claude-sonnet-4.6`), so the saved id may be
+rejected at run time. `GET /settings/llm` reports catalog availability only for presets
+(`llm/settings_router.py:_preset_views`), not for `config.model`, so Settings can't flag it.
+
+**Fix:** a data migration mapping known hyphenated OpenRouter ids to their catalog ids (team + session
+rows), and an `available` flag for the default model in `GET /settings/llm`.
+
+#### D66 · 5-minute orphan window vs long threat-model runs [S]  ·  reliability
+
+`threat_model/service.py:trigger_generation` resets a `running` row whose `updated_at` is older than 300 s
+back to pending. A Strongest/Opus run with `max_tokens=12000` can legitimately exceed that, so a direct API
+re-trigger can start a second paid call whose results race the first. The UI hides Generate while running,
+so only direct API callers hit it.
+
+**Fix:** heartbeat `updated_at` during the LLM call, or raise the window.
+
 ### 2026-09-03 review swarm — OPEN (D40–D54)
 
 Uncovered by a 7-agent review focused on the chrome-extension capture journey (4 agents) plus the
