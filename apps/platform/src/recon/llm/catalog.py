@@ -140,7 +140,8 @@ async def get_catalog(
                 response = await client.get(CATALOG_URL)
                 response.raise_for_status()
                 models = parse_models(response.json())
-        except (httpx.HTTPError, ValueError) as exc:
+        # A malformed 200 body (list top level, non-dict entries) is a failed fetch too.
+        except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
             _state["expires"] = _now() + _TTL_FAILED
             _state["stale"] = _state["models"] is not None
             log.warning(

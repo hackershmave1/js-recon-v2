@@ -170,3 +170,28 @@ def test_failure_with_cache_serves_the_stale_copy(monkeypatch):
 
 def test_cached_ids_is_none_before_any_fetch():
     assert catalog.cached_ids() is None
+
+
+def _malformed(request):
+    return httpx.Response(200, json=["not", "a", "dict"])
+
+
+def test_malformed_body_with_cache_serves_the_stale_copy(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(catalog, "_now", lambda: now[0])
+    asyncio.run(catalog.get_catalog(_factory(_counting_ok([]))))
+    now[0] += 3601
+    snap = asyncio.run(catalog.get_catalog(_factory(_malformed)))
+    assert snap["available"] is True and snap["stale"] is True
+    assert len(snap["models"]) == len(KEPT)
+
+
+def test_malformed_body_without_cache_is_unavailable_and_negatively_cached(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(catalog, "_now", lambda: now[0])
+    snap = asyncio.run(catalog.get_catalog(_factory(_malformed)))
+    assert snap == {"available": False, "stale": False, "fetched_at": None, "models": []}
+    calls: list[str] = []
+    now[0] += 299
+    asyncio.run(catalog.get_catalog(_factory(_counting_ok(calls))))
+    assert calls == []
