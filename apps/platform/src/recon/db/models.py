@@ -767,6 +767,9 @@ class TenantLlmConfig(Base):
         UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="SET NULL")
     )
     tested_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # Admin overrides for the Cheapest/Balanced/Strongest presets: model ids for THIS
+    # row's provider, so a provider change clears them (llm.tenant_config.save_config).
+    preset_models: Mapped[dict[str, str] | None] = mapped_column(JSONB)
 
 
 # Tables carrying a tenant_id get FORCE RLS in the migration.

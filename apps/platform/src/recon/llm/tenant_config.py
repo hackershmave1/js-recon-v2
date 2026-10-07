@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from collections.abc import Mapping
 from typing import Any
 
 from sqlalchemy import delete, select, update
@@ -33,6 +34,10 @@ class ProviderKeyRequired(ValueError):
 
     def __init__(self) -> None:
         super().__init__(NEW_PROVIDER_NEEDS_KEY)
+
+
+# Sentinel for "PUT omitted preset_models": keep what's stored (None means clear).
+KEEP_PRESETS: Any = object()
 
 
 def _is_admin(db: Session, user_id: str) -> bool:
@@ -61,6 +66,7 @@ def _serialize(db: Session, row: TenantLlmConfig, *, include_actor: bool) -> dic
         "configured_at": row.configured_at.isoformat() if row.configured_at else None,
         "configured_by": email,
         "tested_at": row.tested_at.isoformat() if row.tested_at else None,
+        "preset_models": dict(row.preset_models or {}),
     }
 
 
@@ -76,7 +82,12 @@ def get_config(tenant_id: str, *, include_actor: bool) -> dict[str, Any] | None:
 
 
 def save_config(
-    tenant_id: str, user_id: str, provider: str, model: str, api_key: str
+    tenant_id: str,
+    user_id: str,
+    provider: str,
+    model: str,
+    api_key: str,
+    preset_models: Mapping[str, str] | None | Any = KEEP_PRESETS,
 ) -> dict[str, Any] | None:
     """Upsert the team config. None if the caller isn't an admin (per the DB).
 
@@ -99,6 +110,12 @@ def save_config(
             "configured_by": uuid.UUID(user_id),
             "tested_at": None,
         }
+        if preset_models is KEEP_PRESETS:
+            # Overrides are model ids for the stored provider; they can't follow a switch.
+            if existing is not None and existing.provider != provider:
+                values["preset_models"] = None
+        else:
+            values["preset_models"] = dict(preset_models) if preset_models else None
         if api_key:  # empty keeps the stored key, same contract as the session endpoint
             values["encrypted_api_key"] = encrypt_api_key(api_key)
         # ON CONFLICT so two concurrent first saves can't hit the UNIQUE(tenant_id).
@@ -140,6 +157,31 @@ def load_key(tenant_id: str) -> tuple[str, str, str] | None:
         if row is None or not row.encrypted_api_key:
             return None
         return row.provider, row.model, decrypt_api_key(row.encrypted_api_key)
+
+
+def load_preset_context(tenant_id: str) -> tuple[str | None, dict[str, str]]:
+    """Team provider + preset overrides, without touching the key: load_key decrypts and
+    can raise, and preset resolution must not fail on a bad key."""
+    with tenant_session(tenant_id) as db:
+        row = db.execute(
+            select(TenantLlmConfig.provider, TenantLlmConfig.preset_models).where(
+                TenantLlmConfig.tenant_id == uuid.UUID(tenant_id)
+            )
+        ).first()
+    if row is None:
+        return None, {}
+    return row.provider, dict(row.preset_models or {})
+
+
+def team_key_provider(tenant_id: str) -> str | None:
+    """Provider of the saved team key, if any — no decrypt."""
+    with tenant_session(tenant_id) as db:
+        return db.execute(
+            select(TenantLlmConfig.provider).where(
+                TenantLlmConfig.tenant_id == uuid.UUID(tenant_id),
+                TenantLlmConfig.encrypted_api_key.is_not(None),
+            )
+        ).scalar_one_or_none()
 
 
 def mark_tested(tenant_id: str) -> None:
