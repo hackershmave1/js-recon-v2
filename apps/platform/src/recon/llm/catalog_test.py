@@ -113,6 +113,22 @@ def test_parse_keeps_only_models_our_call_can_use():
     assert [m.id for m in catalog.parse_models(SAMPLE)] == KEPT
 
 
+def test_malformed_entries_are_skipped_individually():
+    good = SAMPLE["data"][0]
+    bad = [
+        "not-a-dict",
+        None,
+        {**good, "id": "x/top-provider-list", "top_provider": []},
+        {**good, "id": "x/pricing-list", "pricing": []},
+        {**good, "id": "x/params-string", "supported_parameters": "response_format"},
+    ]
+    named = {**good, "id": "x/name-number", "name": 42}
+    parsed = catalog.parse_models({"data": [*SAMPLE["data"], *bad, named]})
+    assert [m.id for m in parsed] == sorted([*KEPT, "x/name-number"])
+    assert all(isinstance(m.name, str) for m in parsed)
+    assert {m.id: m.name for m in parsed}["x/name-number"] == "42"
+
+
 def test_openrouter_builtin_presets_exist_in_the_recorded_catalog():
     ids = {m.id for m in catalog.parse_models(SAMPLE)}
     assert set(presets.BUILTIN_PRESET_MODELS["openrouter"].values()) <= ids

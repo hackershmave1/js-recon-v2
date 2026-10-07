@@ -60,25 +60,33 @@ def _price(value: Any) -> Decimal | None:
 def parse_models(payload: dict[str, Any]) -> list[CatalogModel]:
     kept: list[CatalogModel] = []
     for raw in payload.get("data") or []:
+        # One malformed entry is skipped, not allowed to fail the whole catalog.
+        if not isinstance(raw, dict):
+            continue
         model_id = raw.get("id")
         if not isinstance(model_id, str) or model_id.endswith(":batch"):
             continue
-        if "response_format" not in (raw.get("supported_parameters") or []):
+        supported = raw.get("supported_parameters")
+        if not isinstance(supported, list) or "response_format" not in supported:
             continue
         context = raw.get("context_length")
         if not isinstance(context, int) or context < _MIN_CONTEXT:
             continue
-        max_out = (raw.get("top_provider") or {}).get("max_completion_tokens")
+        top_provider, pricing = raw.get("top_provider", {}), raw.get("pricing", {})
+        # A null top_provider means "no output cap published"; any other non-dict is junk.
+        top_provider = {} if top_provider is None else top_provider
+        if not isinstance(top_provider, dict) or not isinstance(pricing, dict):
+            continue
+        max_out = top_provider.get("max_completion_tokens")
         if isinstance(max_out, int) and max_out < _MIN_OUTPUT_TOKENS:
             continue
-        pricing = raw.get("pricing") or {}
         prompt, completion = _price(pricing.get("prompt")), _price(pricing.get("completion"))
         if prompt is None or completion is None:
             continue
         kept.append(
             CatalogModel(
                 id=model_id,
-                name=raw.get("name") or model_id,
+                name=str(raw.get("name") or model_id),
                 context_length=context,
                 max_completion_tokens=max_out if isinstance(max_out, int) else None,
                 prompt_price=prompt,
