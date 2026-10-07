@@ -125,3 +125,22 @@ def test_preset_context_without_team_config():
     tenant, _ = _seed_user("admin")
     assert tenant_config.load_preset_context(tenant) == (None, {})
     assert tenant_config.team_key_provider(tenant) is None
+
+
+def test_preset_only_save_keeps_the_tested_stamp_and_audit_fields_until_the_model_changes():
+    tenant, admin = _seed_user("admin")
+    tenant_config.save_config(tenant, admin, "openrouter", "vendor/m", "k")
+    tenant_config.mark_tested(tenant)
+    before = tenant_config.get_config(tenant, include_actor=True)
+    assert before["tested_at"] is not None
+    # What the Settings preset Edit/Reset sends: same provider/model, blank key, a preset map.
+    after = tenant_config.save_config(
+        tenant, admin, "openrouter", "vendor/m", "", {"cheapest": "vendor/small"}
+    )
+    assert after["preset_models"] == {"cheapest": "vendor/small"}
+    assert after["tested_at"] == before["tested_at"]
+    assert after["configured_at"] == before["configured_at"]
+    assert after["configured_by"] == before["configured_by"]
+    changed = tenant_config.save_config(tenant, admin, "openrouter", "vendor/other", "")
+    assert changed["tested_at"] is None
+    assert changed["configured_at"] != before["configured_at"]

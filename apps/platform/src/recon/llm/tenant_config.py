@@ -103,13 +103,19 @@ def save_config(
             and existing.provider != provider
         ):
             raise ProviderKeyRequired
-        values: dict[str, Any] = {
-            "provider": provider,
-            "model": model,
-            "configured_at": dt.datetime.now(dt.UTC),
-            "configured_by": uuid.UUID(user_id),
-            "tested_at": None,
-        }
+        values: dict[str, Any] = {"provider": provider, "model": model}
+        # A preset-only save (same provider/model, blank key) must not clear the "tested"
+        # stamp or rewrite who configured the key: neither the credentials nor the
+        # model they were tested against changed.
+        credentials_changed = (
+            bool(api_key)
+            or existing is None
+            or (existing.provider, existing.model) != (provider, model)
+        )
+        if credentials_changed:
+            values["configured_at"] = dt.datetime.now(dt.UTC)
+            values["configured_by"] = uuid.UUID(user_id)
+            values["tested_at"] = None
         if preset_models is KEEP_PRESETS:
             # Overrides are model ids for the stored provider; they can't follow a switch.
             if existing is not None and existing.provider != provider:
@@ -133,6 +139,7 @@ def save_config(
         provider=provider,
         model=model,
         key_changed=bool(api_key),
+        presets_changed=preset_models is not KEEP_PRESETS,
     )
     return result
 
