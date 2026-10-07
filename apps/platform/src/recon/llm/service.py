@@ -11,6 +11,7 @@ to match the existing pattern for DB-touching service modules.
 from __future__ import annotations
 
 import datetime as dt
+import os
 import uuid
 from typing import Any
 
@@ -202,9 +203,17 @@ async def _ping(provider) -> None:
     )
 
 
-def load_api_key(tenant_id: str, session_id: str) -> str | None:
-    """Decrypt and return the API key for internal use (threat model generation).
-    Never exposed via the HTTP API."""
+# Operator-wide keys, tried in order when a session has no saved key. Each is bound to the
+# provider it belongs to: the key and the provider must come from the same lookup, or an
+# OpenRouter key ends up sent to Anthropic.
+_ENV_KEYS = (("openrouter", "OPENROUTER_API_KEY"), ("anthropic", "ANTHROPIC_API_KEY"))
+
+
+def load_credentials(tenant_id: str, session_id: str) -> tuple[str, str | None, str] | None:
+    """``(provider, model, api_key)`` for internal use (threat model generation), or None.
+
+    A key saved on the session wins. Otherwise an operator-wide env key is used, with
+    its own provider. Never exposed via the HTTP API."""
     try:
         resolved = _resolve_session_id(tenant_id, session_id)
     except ValueError:
@@ -215,9 +224,15 @@ def load_api_key(tenant_id: str, session_id: str) -> str | None:
             .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
             .first()
         )
-        if row is None or not row.encrypted_api_key:
-            return None
-        return _decrypt(row.encrypted_api_key)
+        if row is not None and row.encrypted_api_key:
+            return row.provider, row.model, _decrypt(row.encrypted_api_key)
+        saved_provider, saved_model = (row.provider, row.model) if row else (None, None)
+    for provider, env_var in _ENV_KEYS:
+        if api_key := os.environ.get(env_var):
+            # Model ids are provider-specific, so a saved model only carries over to its own
+            # provider; otherwise build_provider falls back to that provider's default.
+            return provider, saved_model if saved_provider == provider else None, api_key
+    return None
 
 
 # ---------------------------------------------------------------------------
