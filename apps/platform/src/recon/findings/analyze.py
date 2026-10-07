@@ -554,11 +554,15 @@ def _extract_endpoints(
             webpack_members=webpack_members,
         )
         path = normalize.normalize_source_path(source_name)
-        attributed += len(extraction.endpoints)
+        # Only at_sink=True endpoints count as attributed (confirmed network sinks whose URL
+        # was resolved). at_sink=False declared consts are real findings but are not detected
+        # sinks — counting them would inflate coverage and break REQ-C2 honesty.
+        at_sink_count = sum(1 for ep in extraction.endpoints if ep.at_sink)
+        attributed += at_sink_count
         unattributed += extraction.unattributed
         curtailed = curtailed or extraction.curtailed
         bucket = per_file.setdefault(path, [0, 0])
-        bucket[0] += len(extraction.endpoints)
+        bucket[0] += at_sink_count
         bucket[1] += extraction.unattributed
         for endpoint in extraction.endpoints:
             written += _record_endpoint(
@@ -1261,6 +1265,8 @@ def _record_endpoint(
             asset_url=asset_url,
         ),
         attributes=endpoint_attributes,
+        resolution=ep.resolution,
+        at_sink=ep.at_sink,
     )
     operation = normalize.endpoint_operation(ep.method, ep.url)
     for param in ep.params:
@@ -1794,6 +1800,8 @@ def _write(
     *,
     occurrence: store.Occurrence,
     attributes: dict[str, Any],
+    resolution: str | None = None,
+    at_sink: bool | None = None,
 ) -> int:
     result = store.record_finding(
         session,
@@ -1805,5 +1813,7 @@ def _write(
         occurrence=occurrence,
         attributes=attributes,
         first_stage="analyzing",
+        resolution=resolution,
+        at_sink=at_sink,
     )
     return int(result.finding_created) + int(result.occurrence_created)

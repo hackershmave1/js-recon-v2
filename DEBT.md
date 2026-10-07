@@ -76,6 +76,56 @@ Three co-located maintainability debts: (a) **`background.js` god-file** — the
 
 Four gaps in the test safety net: (a) **`content-script.js` (205 lines) has zero behavioral tests** — the 12 tests that mention it are Pattern-B source-text assertions (regex on the raw string); not a single line executes. The security-critical postMessage relay filter (`event.source !== window`, `d.source` tag, `content-script.js:186–204`) and the new `isCapturing` MutationObserver guard are entirely untested. (b) **Auth context scope suppression never exercised** — `isInScope` is stubbed as `() => true` in every `test_auth_context.mjs` case; a regression that removes the scope gate would pass all current tests; `captureAuthContext: false` and `maxAuthContextEntries` eviction are also untested. (c) **Quantitative caps are presence-only** — `OBSERVATION_CAP` (1000), `INLINE_PER_PAGE_CAP` (100), and `BODY_TOTAL_CAP` (2 MB) are guarded only by Pattern-B name-existence checks; no test verifies that the 1001st item is actually dropped. (d) **Popup (1,820 LOC) has zero tests** — the sign-in gate invariant, tenant-change session reset, and toggle behaviors are entirely untested. **Fix:** add `test_content_script_behavioral.mjs` (Node VM + minimal DOM stub covering classification, MutationObserver guard, postMessage filter); add `test_auth_context_scope.mjs` (out-of-scope, `captureAuthContext:false`, sanitizer edge cases, 64-cookie cap); add `test_caps_enforcement.mjs` (behavioral cap tests); add popup `api.js` unit tests for the sign-in gate state machine.
 
+### 2026-09-08 swarm review — OPEN (D64)
+
+Three-agent architecture swarm (token-budget / agent-tool-call / codebase-audit) commissioned to design
+threat model code-context enrichment. Unanimous verdict documented below.
+
+#### D64 · Threat model sees endpoint URLs but not the code — LLM produces generic threats [M]  ·  correctness — Tier 1
+
+The threat model LLM receives endpoint URLs, secret counts, tech stack, and GraphQL operation names
+(`threat_model/service.py:_assemble_context`). It has no visibility into *how* endpoints are called —
+no parameter names, no auth patterns, no request body shapes, no business logic signals. This forces
+generic threats ("IDOR on parameterised routes") rather than specific ones ("candidate/:id is fetched
+without owner check, auth header is present on write but absent on read, confirmed by call-site at
+`src/api/candidates.js:247`").
+
+**What already exists (no new infrastructure needed):**
+- `FindingOccurrence` table (`db/models.py`) has `source_path`, `line`, `col`, `offset_start`,
+  `offset_end`, `evidence` (optional snippet), and `run_asset_id` → `RunAsset.input_ref` (S3 key).
+  `_assemble_context` currently ignores `FindingOccurrence` entirely — reads `Finding` only.
+- Raw JS stored in S3 under `{tenant_id}/{run_id}/input/{sha256}`; source-mapped readable JS under
+  `reconstructed/`. `storage.get_blob(key)` already used by `probe/sources.py`.
+- `Finding.attributes` already stores `auth` (`[{name, scheme}]`), `kind`, `method`, `wrapper` for
+  endpoint findings — some signal is already there, just not surfaced to the threat model.
+
+**Rejected approaches (swarm consensus):**
+- **Web search / OpenRouter tool**: MinIO is internal — OpenRouter's infrastructure cannot reach it.
+- **Multi-turn tool-call loop**: adds 20-60s latency + failure surfaces at every turn boundary vs.
+  8-25s for a single enriched prompt. The relevant code locations are already known (byte offsets in
+  `FindingOccurrence`) so tool retrieval offers nothing over deterministic pre-fetch.
+- **RAG / vector store**: over-engineered. The "query" is a byte offset — no fuzzy retrieval needed.
+- **OpenRouter Agent SDK**: JS-only, no Python equivalent, not needed.
+
+**Fix (Phase 1 — ~1 day, no pipeline changes):**
+Extend `_assemble_context` in `threat_model/service.py`:
+1. Query `FindingOccurrence JOIN RunAsset` for endpoint findings in the run — get `source_path`,
+   `line`, `offset_start`, `evidence`, `RunAsset.input_ref` (S3 key).
+2. Priority-rank occurrences: (a) co-located secret findings (same run, nearby byte offset); (b)
+   write-semantic URL segments (`create`, `update`, `delete`, `admin`, `upload`, `internal`); (c)
+   IDOR-shape params (`:id`, `:userId`, `:token` in URL value); (d) auth literals in evidence.
+   Take top 25.
+3. For each: use `evidence` if populated; else `get_blob(RunAsset.input_ref)`, prefer `reconstructed/`
+   blob (source-mapped), fallback to `input/` raw JS. Extract ±15 lines around `line`; if minified
+   (single-line file), extract `offset_start ± 500` chars.
+4. Inject as a `## Code Context` section — fenced JS blocks labelled `source_path:line`.
+5. Cap: 30 lines/snippet × 25 snippets ≈ 10K tokens; total prompt stays under 15K.
+
+**Fix (Phase 2 — future, Vespasian pipeline change):**
+Populate `FindingOccurrence.evidence` at extraction time in Vespasian (walk AST ancestors to
+enclosing `function_declaration` / `arrow_function` / `method_definition` node, cap at 60 lines).
+This eliminates the S3 read at generation time entirely — `_assemble_context` just reads from DB.
+
 ### 2026-09-03 review swarm — OPEN (D40–D54)
 
 Uncovered by a 7-agent review focused on the chrome-extension capture journey (4 agents) plus the

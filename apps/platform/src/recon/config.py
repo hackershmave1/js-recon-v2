@@ -228,6 +228,12 @@ class Settings(BaseSettings):
     # chrome-extension://<id> or no Origin. Kill-switch for non-browser ingest clients.
     capture_ingest_origin_lock: bool = True  # env: RECON_CAPTURE_INGEST_ORIGIN_LOCK
 
+    # ---- LLM provider config (threat-model generation) ----
+    # Fernet key (URL-safe base64, 32 bytes) used to encrypt API keys stored in
+    # session_llm_config. Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # EMPTY string disables encryption — API keys are stored in plaintext (dev only).
+    llm_encryption_key: str = ""  # env: RECON_LLM_ENCRYPTION_KEY (secret)
+
     # ---- User authentication (central login) ----
     # A stateless signed session token (recon.auth.token) names the logged-in user +
     # their tenant + role. EMPTY secret => auth DISABLED: /auth/login returns 503 and

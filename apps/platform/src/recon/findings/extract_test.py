@@ -282,6 +282,89 @@ def test_expression_binding_reference_cycle_is_safe():
     assert r.endpoints == [] and r.unattributed == 1
 
 
+# --- Phase 2 shape (c): template-literal bindings with ${CONST} substitutions expand -----
+# `const Base = "https://…"; const url = `${Base}/path`; fetch(url)` — the template is
+# expanded to the full URL rather than kept as the verbatim "${Base}/path" text.
+
+
+def test_template_literal_const_with_identifier_sub_resolves():
+    r = extract(
+        'const ApiUrl = "https://api.acme.com/v1";'
+        " const getOrdersURL = `${ApiUrl}/orders`;"
+        " fetch(getOrdersURL)"
+    )
+    assert r.unattributed == 0
+    assert [(e.method, e.url) for e in r.endpoints] == [("GET", "https://api.acme.com/v1/orders")]
+
+
+def test_template_literal_const_with_query_string_resolves():
+    r = extract(
+        'const Base = "https://api.acme.com/v1";'
+        " const listURL = `${Base}/items?type=active`;"
+        " axios.get(listURL)"
+    )
+    assert [(e.method, e.url) for e in r.endpoints] == [
+        ("GET", "https://api.acme.com/v1/items?type=active")
+    ]
+
+
+def test_template_literal_with_unresolvable_sub_stays_unattributed():
+    # The sub references a CALL result — can't resolve statically (all-or-none, honest).
+    r = extract("const url = `${getBase()}/orders`; fetch(url)")
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_template_literal_with_unknown_const_stays_unattributed():
+    # `ExternalBase` is not declared in this file -> unresolvable (honest).
+    r = extract("const url = `${ExternalBase}/orders`; fetch(url)")
+    assert r.endpoints == [] and r.unattributed == 1
+
+
+def test_template_literal_chain_resolves():
+    # const Base = "https://…"; const url = `${Base}/a`; const full = `${url}/b`; fetch(full)
+    r = extract(
+        'const Base = "https://api.acme.com";'
+        " const mid = `${Base}/a`;"
+        " const full = `${mid}/b`;"
+        " fetch(full)"
+    )
+    assert [(e.method, e.url) for e in r.endpoints] == [("GET", "https://api.acme.com/a/b")]
+
+
+def test_template_literal_same_name_escaped_sub_uses_correct_position():
+    # Adversarial case (byte-offset vs .find() correctness): when the SAME variable name
+    # appears as BOTH an escaped literal (\${A}) and a real substitution (${A}), a
+    # text-searching .find() approach would match the escaped one first, extracting the
+    # wrong prefix and leaving a literal "${A}" in the URL. The byte-offset approach (which
+    # uses AST node positions, not text search) finds the real substitution correctly.
+    #
+    # JS runtime value of `\${A}${A}/path` (with A="https://api.acme.com"):
+    #   "${A}https://api.acme.com/path"  ← literal ${A} + resolved value
+    # The raw resolved URL from our extractor will have the literal "\${A}" prefix (from
+    # the escape sequence bytes), followed by the resolved value. This is NOT a valid URL
+    # and WILL be dropped by the normalizer — the test just verifies we don't produce a
+    # URL where "${A}" appears UNEXPANDED in the middle (the .find() failure mode).
+    r = extract(
+        'const A = "https://api.acme.com";'
+        r" const url = `\${A}${A}/path`;"
+        " fetch(url)"
+    )
+    all_urls = [e.url for e in r.endpoints]
+    # The .find() bug would produce a URL where "${A}" appears UNEXPANDED somewhere after
+    # the first non-backslash character (mixed up chunks). The byte-offset approach produces
+    # a URL that starts with the literal backslash bytes then the resolved value. Either way,
+    # no correctly-structured endpoint URL should contain a literal "${A}" substring after
+    # a non-backslash character (that would be a .find() mis-placement).
+    for u in all_urls:
+        # The .find() bug leaves "${A}" unexpanded AFTER the resolved base URL
+        # (e.g. r"\https://api.acme.com${A}/path"). The byte-offset approach puts
+        # any literal "${A}" bytes only BEFORE the https:// scheme (as a prefix from
+        # the raw escape-sequence bytes), not inside the URL after the scheme.
+        if "https://" in u:
+            after_scheme = u[u.index("https://") :]
+            assert "${A}" not in after_scheme, f"unexpanded substitution after scheme: {u!r}"
+
+
 # --- Phase 2 honesty: ambiguous bindings stay unattributed (0-FP) ------------- #
 
 
@@ -534,9 +617,11 @@ def test_generic_call_reads_verb_as_method():
 
 
 def test_generic_call_this_http_angular_pattern():
-    # `this.http.get("/x")` — receiver text "this.http" carries the `http` hint.
+    # `this.http.get("/x")` — `this.`-prefixed HTTP client is promoted from Tier 5
+    # generic (suspected) to a confirmed endpoint so URL resolution runs.
     r = extract('this.http.get("/api/orders")')
-    assert len(r.generic) == 1 and r.generic[0].url == "/api/orders"
+    assert r.generic == []
+    assert len(r.endpoints) == 1 and r.endpoints[0].url == "/api/orders"
 
 
 def test_generic_call_keeps_template_and_concat_shape():
@@ -598,10 +683,13 @@ def test_generic_call_computed_member_is_surfaced():
 
 def test_generic_call_skips_dotted_non_http_receiver():
     # A denylisted object reached through a member chain (`this.store`, `this.cache`) is excluded
-    # by matching the LAST dotted segment — while a dotted HTTP client (`this.http`) still fires.
+    # by matching the LAST dotted segment — a dotted HTTP client (`this.http`) is promoted to
+    # confirmed endpoint (not generic), so all three produce no generic entries.
     assert extract('this.store.get("/api/x")').generic == []
     assert extract('this.cache.get("/api/x")').generic == []
-    assert len(extract('this.http.get("/api/x")').generic) == 1
+    r = extract('this.http.get("/api/x")')
+    assert r.generic == []
+    assert len(r.endpoints) == 1 and r.endpoints[0].url == "/api/x"
 
 
 # --- enrichment B: auth header capture --------------------------------------- #

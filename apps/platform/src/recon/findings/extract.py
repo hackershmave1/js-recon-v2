@@ -128,18 +128,134 @@ def extract(
         elif node.type == "pair":  # object-literal href/src/action value -> a page route
             _handle_property_url(node, result)
     _harvest_routes(tree.root_node, result, walk_limit)  # off-sink literals, after the sinks
+    _emit_declared_consts(result, env, data)  # URL consts not used at a sink in this file
     _fill_snippets(result, data)  # after all lanes (incl. routes) are populated
     return result
+
+
+_STATIC_ASSET_EXTS = frozenset(
+    {
+        ".webm",
+        ".mp4",
+        ".mp3",
+        ".ogg",
+        ".wav",
+        ".flac",  # media
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".ico",
+        ".avif",
+        ".webp",  # images
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
+        ".eot",  # fonts
+        ".pdf",
+        ".zip",
+        ".gz",
+        ".tar",  # binary blobs
+        # NOTE: intentionally excludes .js/.css — a legitimate API path could end in those
+        # (though uncommon); the Vite-hash pattern filter below catches bundled chunks.
+    }
+)
+
+# Vite/webpack content-hash suffix: "Name-XXXXXXXX.ext" where XXXXXXXX is 7-10 base64url chars.
+# These are bundler output files, not API paths.
+_VITE_HASH_RE = re.compile(r"-[A-Za-z0-9_-]{7,12}\.[a-z0-9]+$")
+
+
+def _emit_declared_consts(result: Extraction, env: BaseEnv, data: bytes) -> None:
+    """Emit URL constants declared in this file but not used at a confirmed network sink.
+
+    At_sink=False findings: the URL is statically known from a module-level ``const`` but
+    the call site lives in an importing consumer (a lazy-loaded MFE chunk, a sibling module).
+    This covers the "URL constants module" pattern where many endpoint consts are exported
+    from one file and consumed elsewhere — the file that declares them shows no fetch/axios
+    call, so the sink walk misses them entirely without this pass.
+
+    Intermediate building blocks (``const base = "https://h"; const url = `${base}/x```) are
+    excluded: any const whose name appears as a ``${name}`` template substitution anywhere in
+    the source is a prefix used to build another const, not a terminal endpoint declaration.
+    Absolute URLs only; namespace boilerplate filtered via ``_harvest_denied``; static asset
+    URLs (images, fonts, media, Vite-hashed chunks) filtered via extension + hash-suffix check;
+    query/fragment stripped (the dynamic param portion is caller-supplied at runtime); deduped
+    against already-emitted sink URLs so a const used at a sink in THIS file is never
+    double-emitted.
+    """
+
+    def _norm(u: str) -> str:
+        return u.split("?")[0].split("#")[0].rstrip("/")
+
+    already = {
+        _norm(ep.url)
+        for ep in (*result.endpoints, *result.unresolved, *result.generic)
+        if "://" in ep.url
+    }
+
+    # Local consts only: cross-module consts are resolution aids for consuming files (so
+    # `fetch(IMPORTED_CONST + "/path")` can fold), NOT declarations in this file. Emitting
+    # them here would add false findings for every base URL imported from another module.
+    all_consts: dict[str, str] = dict(env.const_prefixes)
+
+    for name, value in all_consts.items():
+        # Skip intermediate prefix consts: if ${Name} appears in the source as a template
+        # substitution, this const is a building block (e.g. `const url = `${base}/path``)
+        # used to compose other consts, not a terminal endpoint declaration.
+        if b"${" + name.encode("utf-8") + b"}" in data:
+            continue
+        if "://" not in value:
+            continue
+        if _harvest_denied(value):
+            continue
+        url = value.split("?")[0].split("#")[0]
+        if not _is_absolute_url(url):
+            continue
+        path_part = (
+            url.split("://", 1)[-1].split("/", 1)[-1] if "/" in url.split("://", 1)[-1] else ""
+        )
+        path_lower = ("/" + path_part).lower()
+        if any(path_lower.endswith(ext) for ext in _STATIC_ASSET_EXTS):
+            continue
+        if _VITE_HASH_RE.search(path_lower):
+            continue
+        normalized = url.rstrip("/")
+        if normalized in already:
+            continue
+        already.add(normalized)  # dedup within this pass too
+        result.endpoints.append(
+            RawEndpoint(
+                kind="declared",
+                method="",
+                url=url,
+                params=(),
+                line=0,
+                col=0,
+                start_byte=0,
+                end_byte=0,
+                snippet=f"const {name} = ...",
+                at_sink=False,
+                resolution="absolute",
+            )
+        )
 
 
 def _fill_snippets(result: Extraction, data: bytes) -> None:
     """Fill each endpoint's deferred display snippet from the source bytes, now the walk is
     done and `data` is in hand. `_endpoint` leaves ``snippet=""`` because building it there
     from ``call.text`` is O(node span) — O(n^2) over a nested-sink chain (DoS); `_source_snippet`
-    slices the source O(cap) with byte-identical output. Rebuilds each frozen row in place."""
+    slices the source O(cap) with byte-identical output. Rebuilds each frozen row in place.
+    Entries with no byte range (declared consts: start_byte == end_byte == 0) keep their
+    pre-set snippet — they have no call site in this file to slice from."""
     for lane in (result.endpoints, result.unresolved, result.generic, result.routes):
         lane[:] = [
-            replace(ep, snippet=_source_snippet(data, ep.start_byte, ep.end_byte)) for ep in lane
+            replace(ep, snippet=_source_snippet(data, ep.start_byte, ep.end_byte))
+            if ep.end_byte > ep.start_byte
+            else ep
+            for ep in lane
         ]
 
 
@@ -509,6 +625,12 @@ def _dispatch_member(
         _axios_member(call, prop, result, env, base=base or "")
     elif obj in callees:  # taught wrapper — MUST be last so native/instance collisions win
         _axios_member(call, prop, result, env, base="", wrapper=obj)
+    elif prop in _GENERIC_METHODS and obj.startswith("this.") and _is_http_client_name(obj):
+        # Angular-style injected HTTP client: `this.http.get(…)` / `this.apiService.post(…)`.
+        # A `this.`-prefixed receiver is a class field (injected dependency), giving enough
+        # confidence to promote from suspected (Tier 5 generic) to a confirmed sink — so URL
+        # resolution runs and the full endpoint is attributed. MUST precede the Tier-5 branch.
+        _axios_member(call, prop, result, env, base="")
     elif prop in _GENERIC_METHODS and _is_http_client_name(obj):
         # Tier 5 (generic-call): unrecognised receiver + verb method + path-shaped arg = a
         # SUSPECTED custom client. STRICTLY last — every real sink, axios instance, and taught

@@ -69,6 +69,12 @@ export function App() {
   const [overrides, setOverrides] = useState({});
   const toastTimer = useRef(null);
   const seededProjectRef = useRef(false);
+  // LLM provider config state (threat-model generation)
+  const [llmApiKeyDraft, setLlmApiKeyDraft] = useState('');
+  const [llmSaving, setLlmSaving] = useState(false);
+  const [llmTesting, setLlmTesting] = useState(false);
+  const [llmStatusMsg, setLlmStatusMsg] = useState('');
+  const [llmStatusOk, setLlmStatusOk] = useState(false);
 
   // Local settings is the edit source of truth once loaded; polling refreshes only
   // live status/files so it never clobbers an in-progress text edit. `settings` is null until
@@ -311,6 +317,40 @@ export function App() {
     }
   }
 
+  // LLM provider config — save encrypts the key server-side, never stores it locally.
+  async function saveLlmConfig() {
+    if (!llmApiKeyDraft.trim()) { setLlmStatusMsg('Paste an API key first'); setLlmStatusOk(false); return; }
+    setLlmSaving(true); setLlmStatusMsg(''); setLlmStatusOk(false);
+    const res = await api.saveLlmConfig({
+      provider: settings?.llmProvider || 'anthropic',
+      model: settings?.llmModel || 'claude-opus-4-7',
+      apiKey: llmApiKeyDraft.trim(),
+    });
+    setLlmSaving(false);
+    if (res?.ok) {
+      patchSettings({ llmConfigured: true });
+      setLlmApiKeyDraft('');
+      setLlmStatusMsg('Saved · key encrypted on server');
+      setLlmStatusOk(true);
+    } else {
+      setLlmStatusMsg(res?.error || 'Save failed');
+      setLlmStatusOk(false);
+    }
+  }
+
+  async function testLlmConfig() {
+    setLlmTesting(true); setLlmStatusMsg(''); setLlmStatusOk(false);
+    const res = await api.testLlmConfig();
+    setLlmTesting(false);
+    if (res?.ok) {
+      setLlmStatusMsg(`Connected · ${res.provider} / ${res.model}`);
+      setLlmStatusOk(true);
+    } else {
+      setLlmStatusMsg(res?.error || 'Test failed');
+      setLlmStatusOk(false);
+    }
+  }
+
   // Reachable "clear captures" (D46): the worker's clearFiles handler existed but was wired to no
   // UI. Drops the captured set for the current session and resets the analysis feed.
   async function clearCaptures() {
@@ -535,6 +575,9 @@ export function App() {
     toggleSubdomains: () => patchSettings({ includeSubdomains: !(settings.includeSubdomains !== false) }),
     newRule, setNewRule, addRule, removeRule,
     clearCaptures,
+    saveLlmConfig, testLlmConfig,
+    llmApiKeyDraft, setLlmApiKeyDraft,
+    llmSaving, llmTesting, llmStatusMsg, llmStatusOk,
     version: api.extensionVersion(),
   });
 

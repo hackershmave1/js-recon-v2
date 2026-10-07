@@ -327,6 +327,9 @@ class Finding(Base):
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     first_stage: Mapped[str | None] = mapped_column(String(20))
+    # Taxonomy fields (schema v2): NULL for pre-0028 rows and non-endpoint types.
+    resolution: Mapped[str | None] = mapped_column(String(16))
+    at_sink: Mapped[bool | None] = mapped_column(Boolean)
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
     occurrences: Mapped[list[FindingOccurrence]] = relationship(
@@ -620,6 +623,122 @@ class SessionWrapper(Base):
     updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
 
+class SessionThreatModel(Base):
+    """Session-scoped threat model — one per session, survives re-runs like FindingTriage.
+
+    ``status`` tracks the async generation lifecycle: pending → running → done | failed.
+    ``threat`` rows are the actual threats; they are replaced atomically on regeneration."""
+
+    __tablename__ = "session_threat_model"
+    __table_args__ = (
+        UniqueConstraint("session_id", name="uq_session_threat_model_session"),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'done', 'failed')",
+            name="ck_session_threat_model_status",
+        ),
+        Index("ix_session_threat_model_tenant", "tenant_id", "session_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("session.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
+    provider: Mapped[str | None] = mapped_column(String(32))
+    model: Mapped[str | None] = mapped_column(Text)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    analysis_summary: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    generated_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+    updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
+
+    threats: Mapped[list[Threat]] = relationship(
+        back_populates="threat_model", cascade="all, delete-orphan", order_by="Threat.rank"
+    )
+
+
+class Threat(Base):
+    """One threat within a session's threat model.
+
+    ``test_steps`` is a JSONB list of {action, tool, command, expected_if_vulnerable,
+    expected_if_secure}. ``citations`` is a JSONB list of finding_hash strings — each
+    is verified to exist in the session's findings before storage (REQ-L4)."""
+
+    __tablename__ = "threat"
+    __table_args__ = (
+        CheckConstraint(
+            "severity IN ('critical', 'high', 'medium', 'low', 'info')",
+            name="ck_threat_severity",
+        ),
+        Index("ix_threat_model", "tenant_id", "threat_model_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    threat_model_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("session_threat_model.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    owasp_category: Mapped[str] = mapped_column(String(32), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    affected_endpoints: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    test_steps: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    citations: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
+    threat_model: Mapped[SessionThreatModel] = relationship(back_populates="threats")
+
+
+class SessionLlmConfig(Base):
+    """Per-session LLM provider configuration (threat-model generation).
+
+    One row per session (UNIQUE). The raw API key is NEVER stored in this row —
+    ``encrypted_api_key`` holds a Fernet ciphertext (base64 text); the server
+    decrypts it on demand using ``RECON_LLM_ENCRYPTION_KEY``. If the key env var
+    is empty (dev mode), the value is stored cleartext — operators must set the
+    key in any real deployment."""
+
+    __tablename__ = "session_llm_config"
+    __table_args__ = (
+        UniqueConstraint("session_id", name="uq_session_llm_config_session"),
+        CheckConstraint(
+            "provider IN ('anthropic', 'openrouter', 'gemini')",
+            name="ck_session_llm_config_provider",
+        ),
+        Index("ix_session_llm_config_session", "tenant_id", "session_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("session.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    # Fernet-encrypted API key ciphertext, or cleartext in dev (empty encryption key).
+    encrypted_api_key: Mapped[str | None] = mapped_column(Text)
+    configured_at: Mapped[dt.datetime] = _now_col(nullable=False)
+    tested_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 # Tables carrying a tenant_id get FORCE RLS in the migration.
 TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "app_user",
@@ -642,6 +761,9 @@ TRIAGE_TABLES: tuple[str, ...] = ("finding_triage",)
 # Slice-Y addition, RLS-enabled by migration 0005.
 ASSET_TABLES: tuple[str, ...] = ("run_asset",)
 
+# LLM config addition, RLS-enabled by migration 0026.
+LLM_TABLES: tuple[str, ...] = ("session_llm_config",)
+
 # Shadow-API spec-diff addition, RLS-enabled by migration 0006.
 SPEC_TABLES: tuple[str, ...] = ("session_spec", "finding_spec_status")
 
@@ -656,3 +778,6 @@ ENGAGEMENT_TABLES: tuple[str, ...] = ("engagement",)
 
 # Tech-detection addition, RLS-enabled by migration 0016.
 TECH_TABLES: tuple[str, ...] = ("run_technology",)
+
+# Threat model addition, RLS-enabled by migration 0027.
+THREAT_MODEL_TABLES: tuple[str, ...] = ("session_threat_model", "threat")

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from tree_sitter import Node
 
-from recon.findings._jsast import _string_value, _text
+from recon.findings._jsast import _MAX_URL_SPAN, _string_value, _text
 
 # A binding whose value is a `+` chain (or reference chain) deeper than this is left unresolved
 # rather than recursed into — bounds a crafted `const a = "x" + "y" + …` / `const a = b; const
@@ -58,12 +58,52 @@ def resolve_local_consts(raw: dict[str, Node]) -> dict[str, str]:
             resolved[name] = value
         return value
 
+    def _expand_template(node: Node, active: frozenset[str]) -> str | None:
+        """Expand a template_string's ${IDENTIFIER} substitutions using local consts.
+
+        Returns None (honest) when any substitution is a non-identifier expression or an
+        unresolvable name — all-or-none, never a partial guess. DoS-capped at _MAX_URL_SPAN.
+
+        Uses AST byte-offsets to slice text chunks between substitutions rather than
+        text-searching for the marker — immune to escaped \\${...} literals that a
+        .find() approach would mistake for a real substitution node.
+        """
+        if node.end_byte - node.start_byte > _MAX_URL_SPAN:
+            return None
+        named = node.named_children
+        if not named:
+            return _string_value(node)  # pure literal template, no substitutions
+        src: bytes = node.text or b""
+        if not src.startswith(b"`"):
+            return None  # unexpected shape — bail
+        parts: list[str] = []
+        prev_end = 1  # skip the opening backtick
+        for sub in named:
+            if sub.type != "template_substitution":
+                continue
+            sub_start = sub.start_byte - node.start_byte
+            sub_end = sub.end_byte - node.start_byte
+            if sub_start < prev_end or sub_end > len(src):
+                return None  # AST/byte mismatch — bail
+            parts.append(src[prev_end:sub_start].decode("utf-8", "replace"))
+            sub_children = sub.named_children
+            if len(sub_children) != 1 or sub_children[0].type != "identifier":
+                return None  # complex expression — can't resolve statically (honest)
+            sub_val = resolve_name(_text(sub_children[0]), active)
+            if sub_val is None:
+                return None  # unresolvable name — honest
+            parts.append(sub_val)
+            prev_end = sub_end
+        parts.append(src[prev_end:-1].decode("utf-8", "replace"))  # trailing text before closing `
+        return "".join(parts)
+
     def _resolve_node(node: Node | None, active: frozenset[str], depth: int) -> str | None:
         if node is None or depth > _MAX_RESOLVE_DEPTH:
             return None
-        literal = _string_value(node)  # string / substitution-preserving template literal
-        if literal is not None:
-            return literal
+        if node.type == "string":
+            return _string_value(node)
+        if node.type == "template_string":
+            return _expand_template(node, active)
         if node.type == "identifier":
             return resolve_name(_text(node), active)
         if node.type == "parenthesized_expression":

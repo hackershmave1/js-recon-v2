@@ -1,0 +1,95 @@
+.tm-root { display: flex; flex-direction: column; gap: 16px; }
+
+.tm-header { display: flex; align-items: center; gap: 12px; }
+.tm-header .rp-title { flex: 1; margin: 0; }
+
+.tm-trigger { padding: 6px 14px; font-size: 12.5px; }
+
+.tm-empty { padding: 24px 0; }
+.tm-empty p { margin: 0 0 8px; }
+
+.tm-status {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 0; color: var(--text-2); font-size: 13px;
+}
+
+.tm-spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: tm-spin 0.8s linear infinite;
+}
+@keyframes tm-spin { to { transform: rotate(360deg); } }
+
+.tm-error { color: #ef4444; font-size: 13px; margin: 0; }
+
+.tm-summary {
+  font-size: 13.5px; color: var(--text-2); line-height: 1.6;
+  padding: 12px 14px; background: var(--surface); border-radius: 6px;
+  border-left: 3px solid var(--accent); margin: 0;
+}
+
+.tm-meta {
+  display: flex; gap: 10px; flex-wrap: wrap;
+  font-size: 11.5px; color: var(--dim);
+}
+
+.tm-threat-list { display: flex; flex-direction: column; gap: 6px; }
+
+.tm-card {
+  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+}
+
+.tm-card-header {
+  width: 100%; display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; background: var(--surface);
+  border: none; cursor: pointer; text-align: left;
+  font-family: var(--font-sans); font-size: 13px; color: var(--text);
+  transition: background 0.1s;
+}
+.tm-card-header:hover { background: var(--surface-2, var(--surface)); }
+
+.tm-card-title { flex: 1; font-weight: 600; }
+.tm-owasp { font-family: var(--font-mono); font-size: 11px; color: var(--dim); }
+.tm-chevron { font-size: 10px; color: var(--dim); }
+
+.tm-card-body {
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.tm-description { margin: 0; font-size: 13px; color: var(--text-2); line-height: 1.5; }
+
+.tm-label {
+  display: block; font-size: 10.5px; font-weight: 700; letter-spacing: .5px;
+  text-transform: uppercase; color: var(--faint); margin-bottom: 6px;
+}
+
+.tm-ep-list, .tm-cite-list { margin: 0; padding: 0 0 0 16px; }
+.tm-ep-list li, .tm-cite-list li { font-size: 12px; color: var(--text-2); margin-bottom: 3px; }
+.tm-ep-list code { font-family: var(--font-mono); font-size: 11.5px; }
+
+.tm-steps { margin: 0; padding: 0 0 0 16px; display: flex; flex-direction: column; gap: 10px; }
+.tm-step { font-size: 12.5px; }
+.tm-step-action { display: block; font-weight: 600; color: var(--text); margin-bottom: 3px; }
+.tm-step-cmd {
+  display: block; font-family: var(--font-mono); font-size: 11.5px;
+  background: var(--bg); padding: 4px 8px; border-radius: 4px;
+  border: 1px solid var(--border); margin-bottom: 4px; overflow-x: auto;
+  white-space: pre;
+}
+.tm-step-expect { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; }
+.tm-vuln { color: #ef4444; }
+.tm-secure { color: #22c55e; }
+
+.tm-hash { font-family: var(--font-mono); font-size: 11px; color: var(--dim); }
+
+/* Severity badges */
+.tm-severity {
+  font-size: 10px; font-weight: 700; letter-spacing: .5px; padding: 2px 7px;
+  border-radius: 3px; text-transform: uppercase; flex-shrink: 0;
+}
+.tm-sev-critical { background: #450a0a; color: #fca5a5; }
+.tm-sev-high     { background: #431407; color: #fdba74; }
+.tm-sev-medium   { background: #422006; color: #fcd34d; }
+.tm-sev-low      { background: #0c4a6e; color: #7dd3fc; }
+.tm-sev-info     { background: #1e293b; color: #94a3b8; }

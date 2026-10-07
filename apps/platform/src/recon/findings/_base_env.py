@@ -178,6 +178,15 @@ def collect_base_env(root: Node, data: bytes) -> BaseEnv:
                 continue  # bound/reassigned/shadowed >once -> ambiguous, never resolved (0-FP)
             if _is_axios_create(value):
                 instances[name] = _base_url_arg(value)
+            elif value.type == "object":
+                # Extract string-valued properties as dotted keys so a member access like
+                # `environment.apiBaseUrl` folds at the sink (Angular/Vue environment objects).
+                # Property-level reassignment (`env.x = "new"`) is NOT tracked by `_declared_names`
+                # — that is a known limitation; the object itself IS poison-checked above.
+                for prop_name, prop_value_node in _object_pairs(value).items():
+                    dotted = f"{name}.{prop_name}"
+                    if dotted not in raw_consts:
+                        raw_consts[dotted] = prop_value_node
             elif name not in raw_consts:
                 raw_consts[name] = value
         elif node.type == "assignment_expression":
@@ -274,9 +283,21 @@ def _fold_const_prefix(node: Node, env: BaseEnv) -> str | None:
     if not named or named[0].type != "template_substitution":
         return None
     substitution = named[0].named_children
-    if len(substitution) != 1 or substitution[0].type != "identifier":
+    if len(substitution) != 1:
         return None
-    prefix = env.const_prefixes.get(_text(substitution[0]))
+    sub_node = substitution[0]
+    if sub_node.type == "identifier":
+        prefix = env.const_prefixes.get(_text(sub_node))
+    elif sub_node.type == "member_expression":
+        # `${environment.apiBaseUrl}` — dotted key lookup in const_prefixes
+        obj = sub_node.child_by_field_name("object")
+        prop = sub_node.child_by_field_name("property")
+        if obj is not None and prop is not None and obj.type == "identifier":
+            prefix = env.const_prefixes.get(f"{_text(obj)}.{_text(prop)}")
+        else:
+            prefix = None
+    else:
+        return None
     if prefix is None:
         return None
     text = _text(node)
@@ -332,12 +353,18 @@ def _resolve_concat_operand(node: Node | None, env: BaseEnv, depth: int) -> str 
             return env.cross_module_consts[name]
         return env.const_prefixes.get(name)
     if node.type == "member_expression":
-        # `alias.export` where `alias` was bound to `require(id)` (webpack, 2b). Only a
-        # simple `identifier.property` resolves; a deeper/computed receiver -> None.
+        # Simple `identifier.property` only — a deeper/computed receiver -> None.
         obj = node.child_by_field_name("object")
         prop = node.child_by_field_name("property")
         if obj is not None and prop is not None and obj.type == "identifier":
-            return env.webpack_members.get(_text(obj), {}).get(_text(prop))
+            obj_text = _text(obj)
+            prop_text = _text(prop)
+            # webpack `alias.export` where alias was bound to `require(id)` (2b)
+            webpack_val = env.webpack_members.get(obj_text, {}).get(prop_text)
+            if webpack_val is not None:
+                return webpack_val
+            # Object-property folding: `environment.apiBaseUrl` etc. (dotted key in const_prefixes)
+            return env.const_prefixes.get(f"{obj_text}.{prop_text}")
         return None
     if node.type == "binary_expression":
         operator = node.child_by_field_name("operator")

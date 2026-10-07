@@ -239,3 +239,21 @@ export interface DiffResponse {
 
 export const TERMINAL_STATES = new Set(["done", "partial", "failed", "cancelled"]);
 export const TRIAGE_STATUSES = ["open", "confirmed", "dismissed"] as const;
+
+// Threat model (session-scoped, LLM-generated).
+export interface TestStep {
+  action: string; tool: string; command: string;
+  expected_if_vulnerable: string; expected_if_secure: string;
+}
+export interface ThreatEntry {
+  id: string; rank: number; title: string; owasp_category: string; severity: string;
+  description: string; affected_endpoints: string[]; test_steps: TestStep[]; citations: string[];
+}
+export interface ThreatModelResponse {
+  status: "pending" | "running" | "done" | "failed";
+  provider: string | null; model: string | null;
+  prompt_tokens: number | null; completion_tokens: number | null;
+  analysis_summary: string | null; error: string | null;
+  generated_at: string | null; updated_at: string | null;
+  threats?: ThreatEntry[];
+}

@@ -30,6 +30,7 @@ from urllib.parse import urlsplit
 from tree_sitter import Node
 
 from recon.findings._base_env import _declared_names
+from recon.findings._dataflow import resolve_local_consts
 from recon.findings._jsast import _MAX_URL_SPAN, _PARSER, _string_value, _text, _walk
 
 # A scheme://authority prefix (e.g. `webpack://recon-range`) that a recovered
@@ -123,9 +124,14 @@ def _local_string_consts(root: Node) -> dict[str, str]:
     than resolved to a possibly-wrong value — same discipline as
     :func:`recon.findings._base_env.collect_base_env` (REQ-C2 honesty). Only used to
     back an ``export { local as Name }`` re-alias, so a wrong value can never be
-    presented as a cross-chunk URL."""
+    presented as a cross-chunk URL.
+
+    Uses :func:`resolve_local_consts` so that template-literal constants of the form
+    ``const URL = `${BASE}/path``` style
+    template-literal constants (where BASE is another local const) expand to their
+    full string value rather than being kept as verbatim ``"${BASE}/path"`` text."""
     poisoned = _declared_names(root)
-    consts: dict[str, str] = {}
+    raw: dict[str, Node] = {}
     for node in _walk(root):
         if node.type != "variable_declarator":
             continue
@@ -136,10 +142,9 @@ def _local_string_consts(root: Node) -> dict[str, str]:
         text = _text(name)
         if text in poisoned or value.end_byte - value.start_byte > _MAX_URL_SPAN:
             continue
-        lit = _string_value(value)
-        if lit is not None:
-            consts[text] = lit
-    return consts
+        if text not in raw:
+            raw[text] = value
+    return resolve_local_consts(raw)
 
 
 def collect_named_imports(root: Node) -> list[ImportBinding]:

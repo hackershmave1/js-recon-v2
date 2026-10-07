@@ -310,13 +310,14 @@ def get_session_findings_summary(tenant_id: str, session_id: str) -> SessionFind
     """
     with tenant_session(tenant_id) as session:
         # Find the most recent run in a terminal state for this session.
+        # Run.id is UUID v4 (random) — must sort by created_at, not id.
         run_row = session.execute(
             select(Run.id)
             .where(
                 Run.session_id == session_id,
                 Run.state.in_(_TERMINAL_RUN_STATES),
             )
-            .order_by(Run.id.desc())
+            .order_by(Run.created_at.desc())
             .limit(1)
         ).first()
         if run_row is None:
