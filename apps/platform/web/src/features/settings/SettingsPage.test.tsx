@@ -77,4 +77,29 @@ describe("SettingsPage", () => {
     expect(screen.queryByLabelText("API key")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
+
+  it("a preset save sends the saved provider/model with a blank key and the preset map", async () => {
+    const withPresets: TeamLlmSettings = {
+      ...SAVED,
+      presets: {
+        cheapest: { model: "vendor/small", source: "builtin", available: null },
+        balanced: { model: "vendor/mid", source: "builtin", available: null },
+        strongest: { model: "vendor/big", source: "builtin", available: null },
+      },
+    };
+    vi.spyOn(api, "getTeamLlmSettings").mockResolvedValue(withPresets);
+    const save = vi.spyOn(api, "saveTeamLlmSettings").mockResolvedValue(SAVED.config!);
+    render(<SettingsPage tenantId="t1" />);
+    await screen.findByText("Presets");
+    // Unsaved edits in the main form must not leak into a presets-only PUT.
+    await userEvent.type(await screen.findByLabelText("Model"), "-unsaved");
+    await userEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    const input = screen.getByLabelText(/Cheapest model/);
+    await userEvent.clear(input);
+    await userEvent.type(input, "vendor/tiny");
+    await userEvent.click(screen.getByRole("button", { name: "Save preset" }));
+    expect(save).toHaveBeenCalledWith("t1", {
+      provider: "openrouter", model: "or-model", api_key: "", preset_models: { cheapest: "vendor/tiny" },
+    });
+  });
 });

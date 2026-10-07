@@ -37,6 +37,10 @@ export function PresetRows({ settings, catalog, busy, onSave }: {
             <li key={preset} className="settings-preset">
               <span className="settings-preset-name">{PRESET_LABELS[preset]}</span>
               <code>{view.model}</code>
+              {/* Runs append ":floor" on OpenRouter (see the Threat Model preset select). */}
+              {cfg.provider === "openrouter" && preset === "cheapest" && !view.model.includes(":") && (
+                <span className="settings-hint">routes to the cheapest host</span>
+              )}
               <span className="settings-badge">{view.source === "team" ? "team" : "default"}</span>
               {view.available === false && <span className="settings-error">not in catalog</span>}
               {cost && <span>{cost}</span>}

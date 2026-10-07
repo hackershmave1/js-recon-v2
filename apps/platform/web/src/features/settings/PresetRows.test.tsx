@@ -71,4 +71,16 @@ describe("PresetRows", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save preset" }));
     expect(onSave).toHaveBeenCalledWith({ balanced: "claude-y" });
   });
+  it("hints that Cheapest on OpenRouter routes to the cheapest host, only without a variant", () => {
+    const { rerender } = render(<PresetRows settings={settings()} catalog={CATALOG} busy={false} onSave={vi.fn()} />);
+    expect(screen.getAllByText("routes to the cheapest host")).toHaveLength(1);
+    const withVariant = settings();
+    withVariant.presets!.cheapest = { model: "vendor/x:free", source: "team", available: null };
+    rerender(<PresetRows settings={withVariant} catalog={CATALOG} busy={false} onSave={vi.fn()} />);
+    expect(screen.queryByText("routes to the cheapest host")).toBeNull();
+    const direct = settings();
+    direct.config = { ...direct.config!, provider: "anthropic" };
+    rerender(<PresetRows settings={direct} catalog={null} busy={false} onSave={vi.fn()} />);
+    expect(screen.queryByText("routes to the cheapest host")).toBeNull();
+  });
 });

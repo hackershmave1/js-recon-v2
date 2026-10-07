@@ -58,6 +58,15 @@ describe("ThreatModelPage", () => {
     expect(trigger).toHaveBeenCalledWith("t1", "s1", "strongest");
   });
 
+  it("a catalog failure only drops the cost labels, the preset select stays", async () => {
+    vi.spyOn(api, "getThreatModel").mockRejectedValue(Object.assign(new Error("nf"), { status: 404 }));
+    vi.spyOn(tmApi, "getRunPresets").mockResolvedValue(OR_PRESETS);
+    vi.spyOn(catalogApi, "getModelCatalog").mockRejectedValue(new Error("catalog down"));
+    render(<MemoryRouter><ThreatModelPage sessionId="s1" /></MemoryRouter>);
+    expect(await screen.findByLabelText("Model preset")).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Cheapest · anthropic/claude-haiku-4.5:floor" })).toBeInTheDocument();
+  });
+
   it("no costs for a direct provider, and Default sends no preset", async () => {
     vi.spyOn(api, "getThreatModel").mockRejectedValue(Object.assign(new Error("nf"), { status: 404 }));
     vi.spyOn(tmApi, "getRunPresets").mockResolvedValue({

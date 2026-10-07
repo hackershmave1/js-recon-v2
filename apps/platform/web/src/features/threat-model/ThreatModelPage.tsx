@@ -121,8 +121,10 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
     getRunPresets(tenantId, sessionId)
       .then((rp) => {
         setRunPresets(rp);
-        // Prices only exist for OpenRouter's catalog.
-        if (rp.credential_provider === "openrouter") return getModelCatalog(tenantId).then(setCatalog);
+        // Prices only exist for OpenRouter's catalog. A catalog failure only drops the
+        // cost labels, never the preset select.
+        if (rp.credential_provider === "openrouter")
+          return getModelCatalog(tenantId).then(setCatalog).catch(() => setCatalog(null));
         return undefined;
       })
       .catch(() => setRunPresets(null));
