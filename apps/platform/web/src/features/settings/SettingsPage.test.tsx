@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPage } from "./SettingsPage";
 import * as api from "./settingsApi";
+import * as catalogApi from "../../api/llmCatalog";
 import type { TeamLlmSettings } from "./settingsApi";
 
 const BASE: TeamLlmSettings = {
@@ -10,16 +11,20 @@ const BASE: TeamLlmSettings = {
   can_edit: true,
   default_models: { anthropic: "claude-default", openrouter: "or-default", gemini: "gem-default" },
   providers: ["anthropic", "gemini", "openrouter"],
+  builtin_preset_models: {}, presets: null,
 };
 const SAVED: TeamLlmSettings = {
   ...BASE,
   config: {
     provider: "openrouter", model: "or-model", has_key: true,
-    configured_at: "2026-10-06T00:00:00Z", configured_by: "admin@acme.io", tested_at: null,
+    configured_at: "2026-10-06T00:00:00Z", configured_by: "admin@acme.io", tested_at: null, preset_models: {},
   },
 };
 
-beforeEach(() => { vi.restoreAllMocks(); });
+beforeEach(() => {
+  vi.restoreAllMocks();
+  vi.spyOn(catalogApi, "getModelCatalog").mockResolvedValue({ available: false, stale: false, fetched_at: null, models: [], estimate: { prompt_tokens: 20000, completion_tokens: 4000, basis: "assumed", runs: 0 } });
+});
 
 describe("SettingsPage", () => {
   it("admin saves the typed key, and the key field is empty again afterwards", async () => {
