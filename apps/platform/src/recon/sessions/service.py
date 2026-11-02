@@ -17,6 +17,7 @@ by design (models.py `uq_finding_run_hash`), so summing runs would double-count.
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
@@ -186,6 +187,24 @@ def find_session_id_by_external_id(tenant_id: str, external_id: str) -> str | No
         return session.scalar(
             select(EngagementSession.id).where(EngagementSession.external_id == external_id)
         )
+
+
+def resolve_session_id(tenant_id: str, session_id: str) -> str:
+    """Accept either a platform UUID or the extension's external_id (same fallback
+    pattern as sessions_router). Returns the platform UUID, or raises ValueError."""
+    try:
+        uuid.UUID(session_id)  # validate format; raises ValueError if not a UUID
+        # tenant_session sets app.current_tenant, which the RLS policy filters on.
+        with tenant_session(tenant_id) as db:
+            row = db.query(EngagementSession).filter_by(id=uuid.UUID(session_id)).first()
+            if row is not None:
+                return session_id
+    except (ValueError, AttributeError):
+        pass  # not a UUID — fall through to external_id lookup
+    platform_id = find_session_id_by_external_id(tenant_id, session_id)
+    if platform_id is None:
+        raise ValueError("session not found")
+    return platform_id
 
 
 def seed_scope_hosts_if_empty(tenant_id: str, session_id: str, raw_domains: list[str]) -> None:

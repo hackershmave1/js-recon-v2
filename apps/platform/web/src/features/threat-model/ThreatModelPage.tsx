@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { getThreatModel, triggerThreatModel } from "../../api/apiClient";
 import { costLabel, getModelCatalog, PRESET_LABELS, PRESETS, type ModelCatalog, type Preset } from "../../api/llmCatalog";
 import { getRunPresets, type RunPresets } from "./threatModelApi";
+import { RunDetails } from "./RunDetails";
 import { useTenant } from "../../tenant/TenantContext";
 import type { ThreatModelResponse, ThreatEntry } from "../../api/types";
 import "./threat-model.css";
@@ -222,6 +223,7 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
           )}
         </p>
       )}
+      {data?.status === "failed" && <RunDetails call={data.last_call} />}
 
       {data?.status === "done" && (
         <>
@@ -230,14 +232,16 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
           )}
           <div className="tm-meta">
             <span>{bySeverity.length} threat{bySeverity.length !== 1 ? "s" : ""}</span>
-            {data.model && <span>· {data.provider}/{data.model}</span>}
-            {data.prompt_tokens != null && (
+            {/* Runs from before calls were recorded keep the old provider/model + token total. */}
+            {!data.last_call && data.model && <span>· {data.provider}/{data.model}</span>}
+            {!data.last_call && data.prompt_tokens != null && (
               <span>· {(data.prompt_tokens + (data.completion_tokens ?? 0)).toLocaleString()} tokens</span>
             )}
             {data.generated_at && (
               <span>· {new Date(data.generated_at).toLocaleString()}</span>
             )}
           </div>
+          <RunDetails call={data.last_call} />
 
           {bySeverity.length === 0 ? (
             <p className="muted">No threats identified for this recon surface.</p>

@@ -14,31 +14,15 @@ import datetime as dt
 import uuid
 from typing import Any
 
+from pydantic import BaseModel
+
 from recon.db.base import tenant_session
-from recon.db.models import EngagementSession, SessionLlmConfig
-from recon.llm import tenant_config
+from recon.db.models import SessionLlmConfig
+from recon.llm import calls, tenant_config
 from recon.llm.crypto import decrypt_api_key, encrypt_api_key
-from recon.llm.provider import VALID_PROVIDERS, build_provider
+from recon.llm.provider import VALID_PROVIDERS
+from recon.llm.run_choice import KeySource, RunChoice
 from recon.sessions import service as sessions_service
-
-
-def resolve_session_id(tenant_id: str, session_id: str) -> str:
-    """Accept either a platform UUID or the extension's external_id (same fallback
-    pattern as sessions_router). Returns the platform UUID, or raises ValueError."""
-    try:
-        uuid.UUID(session_id)  # validate format; raises ValueError if not a UUID
-        # tenant_session sets app.current_tenant, which the RLS policy filters on.
-        with tenant_session(tenant_id) as db:
-            row = db.query(EngagementSession).filter_by(id=uuid.UUID(session_id)).first()
-            if row is not None:
-                return session_id
-    except (ValueError, AttributeError):
-        pass  # not a UUID — fall through to external_id lookup
-    platform_id = sessions_service.find_session_id_by_external_id(tenant_id, session_id)
-    if platform_id is None:
-        raise ValueError("session not found")
-    return platform_id
-
 
 # ---------------------------------------------------------------------------
 # Public service functions
@@ -60,7 +44,7 @@ def save_config(
         raise ValueError(f"unsupported provider: {provider!r}")
 
     try:
-        resolved = resolve_session_id(tenant_id, session_id)
+        resolved = sessions_service.resolve_session_id(tenant_id, session_id)
     except ValueError:
         return None
 
@@ -102,7 +86,7 @@ def get_config(tenant_id: str, session_id: str) -> dict[str, Any] | None:
     """Return the current LLM config for a session (key is NEVER returned).
     Returns None when no config exists yet (not a 404 — session may still exist)."""
     try:
-        resolved = resolve_session_id(tenant_id, session_id)
+        resolved = sessions_service.resolve_session_id(tenant_id, session_id)
     except ValueError:
         return None
     with tenant_session(tenant_id) as db:
@@ -117,7 +101,7 @@ def get_config(tenant_id: str, session_id: str) -> dict[str, Any] | None:
 def delete_config(tenant_id: str, session_id: str) -> bool:
     """Remove the config. Returns False if nothing to delete."""
     try:
-        resolved = resolve_session_id(tenant_id, session_id)
+        resolved = sessions_service.resolve_session_id(tenant_id, session_id)
     except ValueError:
         return False
     with tenant_session(tenant_id) as db:
@@ -136,7 +120,7 @@ def delete_config(tenant_id: str, session_id: str) -> bool:
 def get_test_target(tenant_id: str, session_id: str) -> tuple[str, str, str] | str:
     """``(provider, model, api_key)`` to test for a session, or an error message."""
     try:
-        resolved = resolve_session_id(tenant_id, session_id)
+        resolved = sessions_service.resolve_session_id(tenant_id, session_id)
     except ValueError:
         return "session not found"
     with tenant_session(tenant_id) as db:
@@ -156,7 +140,7 @@ def get_test_target(tenant_id: str, session_id: str) -> tuple[str, str, str] | s
 
 
 def mark_tested(tenant_id: str, session_id: str) -> None:
-    resolved = resolve_session_id(tenant_id, session_id)
+    resolved = sessions_service.resolve_session_id(tenant_id, session_id)
     with tenant_session(tenant_id) as db:
         row = (
             db.query(SessionLlmConfig)
@@ -167,32 +151,39 @@ def mark_tested(tenant_id: str, session_id: str) -> None:
             row.tested_at = dt.datetime.now(dt.UTC)
 
 
-async def ping_credentials(provider_name: str, model: str | None, api_key: str) -> str | None:
-    """None if the key works, else the error text.
+class _Pong(BaseModel):
+    ok: bool
+
+
+async def ping_credentials(
+    provider_name: str,
+    model: str | None,
+    api_key: str,
+    *,
+    tenant_id: str,
+    key_source: KeySource,
+    session_id: str | None = None,
+) -> str | None:
+    """None if the key works, else the error text. Recorded as a ``key_test`` LLM call (no
+    bodies: the prompt is this constant ping).
 
     NOTE: must be awaited on the request's own event loop. The old version ran
     get_event_loop().run_until_complete() inside run_in_threadpool, which raises
     RuntimeError in a worker thread on Python 3.11, so Test always failed."""
     try:
-        await _ping(build_provider(provider_name, api_key=api_key, model=model))
+        await calls.generate(
+            RunChoice(provider=provider_name, model=model, source=key_source, api_key=api_key),
+            tenant_id=tenant_id,
+            purpose="key_test",
+            system_prompt='Reply with JSON: {"ok": true}',
+            user_prompt="ping",
+            output_schema=_Pong,
+            max_tokens=16,
+            session_id=session_id,
+        )
     except Exception as exc:
         return str(exc)
     return None
-
-
-async def _ping(provider) -> None:
-    """Minimal call to verify the key is accepted — single short message."""
-    from pydantic import BaseModel
-
-    class _Pong(BaseModel):
-        ok: bool
-
-    await provider.generate_structured(
-        system_prompt='Reply with JSON: {"ok": true}',
-        user_prompt="ping",
-        output_schema=_Pong,
-        max_tokens=16,
-    )
 
 
 # ---------------------------------------------------------------------------

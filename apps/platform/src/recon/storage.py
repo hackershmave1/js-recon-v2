@@ -31,6 +31,9 @@ BLOB_KINDS = frozenset(
         "assets",
         "spec",
         "capture-requests",
+        # LLM call bodies (recon.llm.calls): the prompt sent and the response/error received.
+        "llm-prompt",
+        "llm-response",
         # Run-level GraphQL operations located by analyze (enrichment C, export-only):
         # a JSON list the OpenAPI export unions across the run's assets.
         "graphql",

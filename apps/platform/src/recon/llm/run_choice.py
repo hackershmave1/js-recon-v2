@@ -21,7 +21,7 @@ from recon.db.models import SessionLlmConfig
 from recon.llm import tenant_config
 from recon.llm.crypto import decrypt_api_key
 from recon.llm.presets import PRESETS, resolve_model
-from recon.llm.service import resolve_session_id
+from recon.sessions.service import resolve_session_id
 
 KeySource = Literal["session", "team", "env"]
 

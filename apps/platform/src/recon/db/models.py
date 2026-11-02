@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
@@ -21,6 +22,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -654,6 +656,10 @@ class SessionThreatModel(Base):
     analysis_summary: Mapped[str | None] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text)
     generated_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # The llm_call this run made (recon.llm.calls). Cleared when a new run is triggered, so the
+    # UI never shows a previous run's numbers. No FK: recording is best-effort, so the id may
+    # name a row that was never written ("run details unavailable").
+    llm_call_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
     updated_at: Mapped[dt.datetime] = _now_col(nullable=False)
 
@@ -772,6 +778,46 @@ class TenantLlmConfig(Base):
     preset_models: Mapped[dict[str, str] | None] = mapped_column(JSONB)
 
 
+class LlmCall(Base):
+    """One LLM API call (threat-model generation or a key test): what ran, whose key paid,
+    what it consumed and how it ended (CLAUDE.md section 5). Prompt/response bodies live in
+    run-scoped blobs, so deleting the session purges them with the run (D47)."""
+
+    __tablename__ = "llm_call"
+    __table_args__ = (
+        CheckConstraint("purpose IN ('threat_model', 'key_test')", name="ck_llm_call_purpose"),
+        CheckConstraint("status IN ('ok', 'error')", name="ck_llm_call_status"),
+        Index("ix_llm_call_tenant_session", "tenant_id", "session_id", "purpose", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    # NULL for a team key test (no session).
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("session.id", ondelete="CASCADE")
+    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("run.id", ondelete="CASCADE")
+    )
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    key_source: Mapped[str | None] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    finish_reason: Mapped[str | None] = mapped_column(String(64))
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    # USD at the price known when the call was made; NULL = unknown (never a guess).
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    prompt_blob_key: Mapped[str | None] = mapped_column(Text)
+    response_blob_key: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+
+
 # Tables carrying a tenant_id get FORCE RLS in the migration.
 TENANT_SCOPED_TABLES: tuple[str, ...] = (
     "app_user",
@@ -817,3 +863,6 @@ TECH_TABLES: tuple[str, ...] = ("run_technology",)
 
 # Threat model addition, RLS-enabled by migration 0027.
 THREAT_MODEL_TABLES: tuple[str, ...] = ("session_threat_model", "threat")
+
+# LLM call records, RLS-enabled by migration 0031.
+LLM_CALL_TABLES: tuple[str, ...] = ("llm_call",)

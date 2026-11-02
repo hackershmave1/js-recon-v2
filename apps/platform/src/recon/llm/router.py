@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from recon.api.deps import get_tenant_id
 from recon.llm import service, tenant_config
 from recon.llm.provider import VALID_PROVIDERS
+from recon.sessions import service as sessions_service
 
 router = APIRouter(tags=["llm-config"])
 
@@ -83,7 +84,15 @@ async def test_llm_config(
     if isinstance(target, str):
         raise HTTPException(status_code=400, detail=target)
     provider_name, model, api_key = target
-    error = await service.ping_credentials(provider_name, model, api_key)
+    resolved = await run_in_threadpool(sessions_service.resolve_session_id, tenant_id, session_id)
+    error = await service.ping_credentials(
+        provider_name,
+        model,
+        api_key,
+        tenant_id=tenant_id,
+        key_source="session",
+        session_id=resolved,
+    )
     if error is not None:
         raise HTTPException(status_code=400, detail=error)
     await run_in_threadpool(service.mark_tested, tenant_id, session_id)
