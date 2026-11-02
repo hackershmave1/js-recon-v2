@@ -101,17 +101,3 @@ ratcheting `--cov-fail-under` are the tracked follow-ups (DEBT.md), not a big-ba
   the *how*.
 - **Idempotency + fail-closed** are load-bearing here (SSRF egress guard, at-least-once
   queue, content-addressed blobs). Don't weaken them for convenience.
-
-## Agent skills
-
-### Issue tracker
-
-GitHub Issues on hackershmave1/js-recon-v2 via `gh` (public repo; tech debt stays in DEBT.md). See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Default five-role vocabulary (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix). See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: root `GLOSSARY.md` (created lazily) + `docs/adr/`. See `docs/agents/domain.md`.
