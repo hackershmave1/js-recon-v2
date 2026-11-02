@@ -115,3 +115,11 @@ Default five-role vocabulary (needs-triage, needs-info, ready-for-agent, ready-f
 ### Domain docs
 
 Single-context: root `GLOSSARY.md` (created lazily) + `docs/adr/`. See `docs/agents/domain.md`.
+
+### Shared skills
+
+`.claude/skills/` is per-developer (gitignored) except skills explicitly un-ignored in
+`.gitignore`. Shared: `ub-mode` (vendored from unclebob/ub-mode @ `3da62bf`, MIT) — invoke
+`/ub-mode`. It expects the `crapper`, `dryer`, `mutator` tools (unclebob/*, cloned as
+siblings — mutator needs `../crapper`) on `PATH`; add their checkout dirs to `PATH`, don't
+symlink the launchers.
