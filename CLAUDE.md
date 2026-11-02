@@ -79,8 +79,8 @@ lanes passed:
   `pytest -m "not integration" --cov=recon --cov-fail-under=60`, with
   `RECON_REQUIRE_ENGINES=1` (a missing engine is a hard failure, not a silent skip).
 - **frontend**: `npm ci` → `npm run lint` (oxlint + tsc) → vitest → build.
-- **extension**: runs the MV3 capture extension's `tests/test_*.mjs` Node suites
-  (`apps/capture/chrome-extension`) — dependency-free, so no `npm ci`/build (DEBT D16).
+- **extension**: `npm ci` → `npm run build` (compiles the esbuild/Preact popup) → the MV3
+  capture extension's `tests/test_*.mjs` Node suites in `apps/capture/chrome-extension` (DEBT D16).
 - **integration-tests**: builds the app image (compiles the pinned Sourcemapper),
   brings up the stores, runs the suite incl. real-engine + integration tests via
   `pytest -m 'not dos_timing'` — the wall-clock DoS scaling guards are host-lane-only
