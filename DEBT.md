@@ -149,6 +149,28 @@ so only direct API callers hit it.
 
 **Fix:** heartbeat `updated_at` during the LLM call, or raise the window.
 
+### 2026-11-02 capture history fix — OPEN (D67–D68)
+
+Left on purpose when the past-sessions findings count was fixed (session-keyed cache + tenant-tagged rows).
+
+#### D67 · Past-session finding counts only exist if the popup was open when analysis finished [S]  ·  correctness
+
+The findings summary is fetched by the popup (`src/popup/app.jsx` effect on `analysis.status === 'done'`),
+and the worker caches only what the popup asked for, in memory. Close the popup before analysis finishes,
+or let the MV3 worker idle out (~30 s) after it did, then start a new session, and that history row has no
+count. Separately, logout and a tenant-changing login rotate the session without saving it to history, so
+a same-tenant logout drops that session's row (deliberate for tenant isolation; unchanged by the fix).
+
+**Fix:** have the worker fetch the summary itself at save time (or persist the cache), and decide whether a
+same-tenant logout should save its row.
+
+#### D68 · A history row without a count can mean "0 findings" or "never fetched" [S]  ·  UX
+
+`HomeView.jsx` shows the count only when `counts.total > 0`, and D67 rows have no summary at all, so the two
+cases look identical.
+
+**Fix:** render "0 findings" for a fetched summary with no findings, and nothing (or "—") for no summary.
+
 ### 2026-09-03 review swarm — OPEN (D40–D54)
 
 Uncovered by a 7-agent review focused on the chrome-extension capture journey (4 agents) plus the

@@ -16,10 +16,7 @@ import { normalizeRootDomains } from './modules/normalize-scope.js';
 import { isRelevantInlineScript } from './modules/inline-relevance.js';
 import { normalizeObservedUrl, isApiIshObservation, isTelemetryPath } from './modules/observation-filter.js';
 import { prepareRequestBody, redactBody, capBody } from './modules/body-capture.js';
-
-// D46(c): capture history — persisted list of past session summaries (FIFO, capped).
-const CAPTURE_HISTORY_KEY = 'captureHistory';
-const HISTORY_MAX = 10;
+import { CAPTURE_HISTORY_KEY, summaryToCache, summaryForSession, addToHistory, historyForTenant } from './modules/capture-history.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -91,8 +88,8 @@ class JSExtractor {
     // them to the observation (DEBT D45b2). bodyBytesUsed bounds total captured body bytes/session.
     this.pendingRequestBodies = new Map();
     this.bodyBytesUsed = 0;
-    // D46(c): last successful findings summary fetched for the current session; cached so
-    // _saveSessionToHistory can persist it before rotating to a new session.
+    // D46(c): last finished findings summary, as { sessionId, summary } (capture-history.js), so
+    // _saveSessionToHistory can persist it before rotating — and only onto the session it describes.
     this._lastFindingsSummary = null;
     this.processingStats = {
       processedFiles: 0,
@@ -190,23 +187,22 @@ class JSExtractor {
       fileCount: this.capturedFiles.size,
       mapsCount,
       secretCount,
-      findingsSummary: this._lastFindingsSummary || null,
+      findingsSummary: summaryForSession(this._lastFindingsSummary, this.sessionId),
       workspaceUrl: this.settings?.workspaceUrl || null,
+      tenantId: this.settings?.authTenantId || '',
     };
     try {
       const stored = await chrome.storage.local.get(CAPTURE_HISTORY_KEY);
-      const history = Array.isArray(stored[CAPTURE_HISTORY_KEY]) ? stored[CAPTURE_HISTORY_KEY] : [];
-      history.unshift(entry);
-      if (history.length > HISTORY_MAX) history.length = HISTORY_MAX;
+      const history = addToHistory(stored[CAPTURE_HISTORY_KEY], entry);
       await chrome.storage.local.set({ [CAPTURE_HISTORY_KEY]: history });
     } catch (e) { /* storage unavailable — non-fatal */ }
   }
 
-  // D46(c): return the persisted capture history list.
+  // D46(c): return the persisted capture history list — only the signed-in tenant's rows.
   async getHistory(sendResponse) {
     try {
       const stored = await chrome.storage.local.get(CAPTURE_HISTORY_KEY);
-      sendResponse({ history: stored[CAPTURE_HISTORY_KEY] || [] });
+      sendResponse({ history: historyForTenant(stored[CAPTURE_HISTORY_KEY], this.settings?.authTenantId) });
     } catch (e) {
       sendResponse({ history: [] });
     }
@@ -1154,7 +1150,8 @@ class JSExtractor {
         try {
           const result = await this.workspaceClient.getSessionFindingsSummary(req.sessionId);
           // D46(c): cache the summary so _saveSessionToHistory can persist it before rotation.
-          if (result && result.status === 'complete') this._lastFindingsSummary = result;
+          const cached = summaryToCache(req.sessionId, result);
+          if (cached) this._lastFindingsSummary = cached;
           sendResponse(result);
         } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); }
       },
@@ -1583,6 +1580,7 @@ class JSExtractor {
     // Reset failure counters too (parity with newSession) so a logout / tenant switch doesn't
     // leave stale failure state visible in getStatus.
     this._resetSessionState();
+    this._lastFindingsSummary = null;
     // Drop the engagement binding: clear the live uploader config AND the persisted snapshot so a
     // respawn can't re-bind the fresh session to the old engagement.
     this.batchUploader.setConfig(null);
@@ -1713,6 +1711,7 @@ class JSExtractor {
     this.processingQueue = [];
     this.authTracker.clear();
     this._resetSessionState();
+    this._lastFindingsSummary = null;
     sendResponse({ success: true });
   }
 
