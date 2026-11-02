@@ -20,6 +20,6 @@ assert.ok(enqueueIdx < dedupPutIdx, 'outbox enqueue must precede the dedup put (
 
 // The in-memory dedup guard must still be set (it, not the durable put, blocks same-session
 // re-capture), so the reorder cannot cause a same-session re-upload loop.
-assert.match(bg, /this\.capturedHashes\.set\(contentHash/, 'in-memory dedup guard is still set');
+assert.match(bg, /this\.session\.capturedHashes\.set\(contentHash/, 'in-memory dedup guard is still set');
 
 console.log('test_capture_outbox_ordering: ok');

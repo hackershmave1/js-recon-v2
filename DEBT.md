@@ -149,7 +149,7 @@ so only direct API callers hit it.
 
 **Fix:** heartbeat `updated_at` during the LLM call, or raise the window.
 
-### 2026-11-02 capture history fix — OPEN (D67–D68)
+### 2026-11-02 capture history fix + CaptureSession refactor — OPEN (D67–D70)
 
 Left on purpose when the past-sessions findings count was fixed (session-keyed cache + tenant-tagged rows).
 
@@ -170,6 +170,26 @@ same-tenant logout should save its row.
 cases look identical.
 
 **Fix:** render "0 findings" for a fetched summary with no findings, and nothing (or "—") for no summary.
+
+#### D69 · "New session" leaves the old binding persisted while it rotates [S]  ·  correctness
+
+`CaptureSession.startNew` rotates (and persists) the new session id before it overwrites
+`pendingSessionConfig`. A worker respawn in that window restores the new id with the previous session's
+engagement binding, and the first upload binds the new session to the old engagement (immutable on the
+server). Pre-existing; found by the CaptureSession adversarial design review.
+
+**Fix:** remove `pendingSessionConfig` before `sessionStore.rotate()`, so the window is "unbound" (the
+next `startNew` write re-binds) instead of "wrongly bound".
+
+#### D70 · A batch already taken off the processing queue can be stamped with the new session id [S]  ·  correctness
+
+`processQueue` splices up to 10 requests into a local batch (`background.js` `processQueue`) and stamps
+each file with `this.session.sessionId` as it processes it. A rotation mid-batch empties the queue but not
+that local batch, so its remaining files land in the new session. The "drop stragglers before rotating"
+comment overstated this.
+
+**Fix:** capture the session id when the batch is taken, and drop (or stamp with that id) files whose
+session rotated mid-batch.
 
 ### 2026-09-03 review swarm — OPEN (D40–D54)
 

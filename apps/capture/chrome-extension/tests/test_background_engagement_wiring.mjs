@@ -17,15 +17,24 @@ assert.match(bg, /const uploaderStats = this\.batchUploader\.getStats\(\);/, 'ge
 assert.match(bg, /projectId:\s*uploaderStats\.projectId\s*\|\|\s*null,/, 'getStatus returns projectId');
 assert.match(bg, /standalone:\s*!uploaderStats\.projectId,/, 'getStatus returns derived standalone');
 
-// The reset helper is the single correct "unbind": rotate the session (new external_id), drop the
-// captured state, and clear BOTH the live uploader config and the persisted snapshot.
+// The reset helper delegates the "unbind" (rotate, drop captured state, clear the live + persisted
+// binding, optionally drop the outbox) to CaptureSession.startStandalone — whose ordering is tested
+// at runtime in test_capture_session.mjs.
 const resetStart = bg.indexOf('async resetCaptureSession(');
 assert.ok(resetStart >= 0, 'resetCaptureSession() is defined');
-const resetBody = bg.slice(resetStart, resetStart + 2400);
-assert.match(resetBody, /this\.sessionStore\.rotate\(\)/, 'reset rotates to a fresh session id');
-assert.match(resetBody, /this\.batchUploader\.setConfig\(null\)/, 'reset clears the live uploader binding');
-assert.match(resetBody, /remove\('pendingSessionConfig'\)/, 'reset clears the persisted binding snapshot');
-assert.match(resetBody, /if \(dropOutbox\)[\s\S]*?this\.batchUploader\.clearOutbox\(\)/, 'reset can drop the outbox (tenant isolation)');
+const resetBody = bg.slice(resetStart, resetStart + 600);
+assert.match(resetBody, /await this\.session\.startStandalone\(\{\s*dropOutbox\s*\}\)/, 'reset delegates to CaptureSession.startStandalone, passing dropOutbox through');
+
+// newSession hands the engagement binding + capture-gate patch to startNew in one call, switching
+// the in-memory gate via onRotated (same turn as the rotation), then re-syncs the uploader.
+const newStart = bg.indexOf('async newSession(');
+const newBody = bg.slice(newStart, newStart + 3000);
+assert.match(newBody, /await this\.session\.startNew\(\{\s*binding: \{ projectId, captureConfig, overrideKeys \},\s*persistWith: patch,\s*onRotated: \(\) => Object\.assign\(this\.settings, patch\)\s*\}\)/,
+  'newSession passes binding, persistWith and the onRotated gate switch');
+assert.match(newBody, /startNew\([\s\S]*?this\.batchUploader\.setScope\([\s\S]*?this\.batchUploader\.setPerformAnalysisOnUpload\(/, 'uploader scope + analyze flag re-synced after the transition');
+
+// clearFiles refreshes the badge only after the counters reset (else it stays orange on stale failures).
+assert.match(bg, /async clearFiles\(sendResponse\) \{\s*await this\.session\.clearCaptured\(\);[\s\S]{0,80}this\.updateBadge\(\);/, 'clearFiles updates the badge after clearCaptured');
 
 // Logout clears the token + identity but KEEPS authTenantId (so a later different-tenant login is
 // still detected), and resets to a fresh Standalone session with capture stopped (capture must not
