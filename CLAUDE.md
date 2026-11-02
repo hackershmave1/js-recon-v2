@@ -79,8 +79,8 @@ lanes passed:
   `pytest -m "not integration" --cov=recon --cov-fail-under=60`, with
   `RECON_REQUIRE_ENGINES=1` (a missing engine is a hard failure, not a silent skip).
 - **frontend**: `npm ci` → `npm run lint` (oxlint + tsc) → vitest → build.
-- **extension**: runs the MV3 capture extension's `tests/test_*.mjs` Node suites
-  (`apps/capture/chrome-extension`) — dependency-free, so no `npm ci`/build (DEBT D16).
+- **extension**: `npm ci` → `npm run build` (compiles the esbuild/Preact popup) → the MV3
+  capture extension's `tests/test_*.mjs` Node suites in `apps/capture/chrome-extension` (DEBT D16).
 - **integration-tests**: builds the app image (compiles the pinned Sourcemapper),
   brings up the stores, runs the suite incl. real-engine + integration tests via
   `pytest -m 'not dos_timing'` — the wall-clock DoS scaling guards are host-lane-only
@@ -101,3 +101,17 @@ ratcheting `--cov-fail-under` are the tracked follow-ups (DEBT.md), not a big-ba
   the *how*.
 - **Idempotency + fail-closed** are load-bearing here (SSRF egress guard, at-least-once
   queue, content-addressed blobs). Don't weaken them for convenience.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on hackershmave1/js-recon-v2 via `gh` (public repo; tech debt stays in DEBT.md). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` (created lazily) + `docs/adr/`. See `docs/agents/domain.md`.
