@@ -194,8 +194,10 @@ export class WorkspaceClient {
   // Called by the popup after analysis completes to render the compact findings card.
   // Returns { success, summary } on 200, { success: false } otherwise. The caller
   // treats a non-success result as "no summary yet" and hides the card gracefully.
+  // NOTE: no /api prefix — this endpoint is on the platform's sessions router, mounted at the root
+  // (only the capture routes live under /api). The /api path 404s, silently hiding the card.
   async getSessionFindingsSummary(sessionId) {
-    const target = `${this.resolveApiBase()}/api/sessions/${encodeURIComponent(sessionId)}/findings/summary`;
+    const target = `${this.resolveApiBase()}/sessions/${encodeURIComponent(sessionId)}/findings/summary`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
