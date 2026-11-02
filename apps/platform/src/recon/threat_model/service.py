@@ -33,10 +33,8 @@ from recon.db.models import (
     Threat,
 )
 from recon.domain import FindingType, RunState
-from recon.llm import service as llm_service
-from recon.llm import tenant_config
+from recon.llm import run_choice
 from recon.llm.crypto import KeyDecryptError
-from recon.llm.presets import resolve_model
 from recon.llm.provider import build_provider
 from recon.observability import get_logger
 from recon.sessions import service as sessions_service
@@ -404,16 +402,8 @@ async def run_generation(tenant_id: str, session_id: str, preset: str | None = N
         return
 
     try:
-        credentials = llm_service.load_credentials(tenant_id, resolved)
-        if credentials is not None:
-            # Inside the try: a failure here must mark the run failed, not leave it running.
-            team_provider, overrides = tenant_config.load_preset_context(tenant_id)
-            cred_provider, saved_model, cred_key = credentials
-            credentials = (
-                cred_provider,
-                resolve_model(preset, cred_provider, team_provider, overrides, saved_model),
-                cred_key,
-            )
+        # Inside the try: a failure here must mark the run failed, not leave it running.
+        choice = run_choice.resolve(tenant_id, resolved, preset, with_key=True)
     except Exception as exc:
         # NOTE: this runs after status=running; an escaped exception would leave the
         # model stuck there until the 5-minute orphan window, for every session of a
@@ -441,7 +431,7 @@ async def run_generation(tenant_id: str, session_id: str, preset: str | None = N
                 exc_info=True,
             )
         return
-    if credentials is None:
+    if choice is None:
         _set_status(
             tenant_id,
             resolved,
@@ -450,18 +440,18 @@ async def run_generation(tenant_id: str, session_id: str, preset: str | None = N
             "key in Settings, or set OPENROUTER_API_KEY / ANTHROPIC_API_KEY on the server",
         )
         return
-    provider_name, model_name, api_key = credentials
     log.info(
         "threat_model.generation_model",
         tenant_id=tenant_id,
         session_id=resolved,
         preset=preset,
-        provider=provider_name,
-        model=model_name,
+        provider=choice.provider,
+        model=choice.model,
+        key_source=choice.source,
     )
 
     try:
-        provider = build_provider(provider_name, api_key=api_key, model=model_name)
+        provider = build_provider(choice.provider, api_key=choice.api_key, model=choice.model)
         response = await provider.generate_structured(
             system_prompt=_SYSTEM_PROMPT,
             user_prompt=context_md,
@@ -495,7 +485,7 @@ async def run_generation(tenant_id: str, session_id: str, preset: str | None = N
         session_id=resolved,
         output=output,
         verified_threats=verified_threats,
-        provider=provider_name,
+        provider=choice.provider,
         model=provider.model,
         usage=response.usage,
     )

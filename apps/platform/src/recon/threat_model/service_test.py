@@ -6,8 +6,8 @@ import uuid
 import pytest
 
 from recon.auth import service as auth_service
+from recon.llm import run_choice, tenant_config
 from recon.llm import service as llm_service
-from recon.llm import tenant_config
 from recon.llm.crypto import KeyDecryptError
 from recon.sessions import service as sessions_service
 from recon.threat_model import service as tm_service
@@ -37,10 +37,10 @@ def test_undecryptable_key_marks_failed(tenant, monkeypatch):
     tm_service.trigger_generation(tenant, sid)
     monkeypatch.setattr(tm_service, "_assemble_context", lambda t, s: ("ctx", frozenset()))
 
-    def _boom(t, s):
+    def _boom(t, s, preset=None, *, with_key=False):
         raise KeyDecryptError("stored LLM key could not be decrypted")
 
-    monkeypatch.setattr(llm_service, "load_credentials", _boom)
+    monkeypatch.setattr(run_choice, "resolve", _boom)
     recorder = _LogRecorder()
     monkeypatch.setattr(tm_service, "log", recorder)
     asyncio.run(tm_service.run_generation(tenant, sid))
@@ -57,10 +57,10 @@ def test_credential_load_crash_marks_failed_and_logs_traceback(tenant, monkeypat
     tm_service.trigger_generation(tenant, sid)
     monkeypatch.setattr(tm_service, "_assemble_context", lambda t, s: ("ctx", frozenset()))
 
-    def _boom(t, s):
+    def _boom(t, s, preset=None, *, with_key=False):
         raise RuntimeError("db went away")
 
-    monkeypatch.setattr(llm_service, "load_credentials", _boom)
+    monkeypatch.setattr(run_choice, "resolve", _boom)
     recorder = _LogRecorder()
     monkeypatch.setattr(tm_service, "log", recorder)
     asyncio.run(tm_service.run_generation(tenant, sid))
