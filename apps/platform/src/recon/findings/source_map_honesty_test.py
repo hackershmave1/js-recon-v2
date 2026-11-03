@@ -15,8 +15,8 @@ in-process honesty glue.
 
 from __future__ import annotations
 
-from recon.findings import analyze, queries
-from recon.findings.analyze import Coverage
+from recon.findings import analyze
+from recon.findings.coverage import Coverage, merge
 
 # --- _analysis_units: the "skipped" vs "none" decision ----------------------- #
 
@@ -43,29 +43,18 @@ def test_analysis_units_none_when_no_map_referenced():
 # --- merge / read-model propagation (REQ-C2 must survive the roll-up) -------- #
 
 
-def test_merge_coverage_skipped_dominates():
-    # The in-process aggregate (analyze_run's return) must not lose "skipped" when the
-    # skipped asset is not the last one merged — mirrors curtailed's OR.
-    none = Coverage(1, 0, 1)  # source_map defaults "none"
-    skipped = Coverage(1, 0, 1, source_map="skipped")
-    assert analyze._merge_coverage(none, none).source_map == "none"
-    assert analyze._merge_coverage(none, skipped).source_map == "skipped"
-    assert analyze._merge_coverage(skipped, none).source_map == "skipped"  # non-last skip survives
+def test_run_total_source_map_is_skipped_if_any_asset_skipped():
+    # A partial source-map recovery is never masked by a peer asset's clean value, whichever
+    # asset came last.
+    none, skipped = Coverage(), Coverage(source_map="skipped")
+    assert merge([none, none]).source_map == "none"
+    assert merge([none, skipped]).source_map == "skipped"
+    assert merge([skipped, none]).source_map == "skipped"
+    # No skip anywhere -> the newest asset's value stands.
+    assert merge([Coverage(source_map="capture"), none]).source_map == "none"
 
 
-def test_merge_coverage_payloads_skipped_dominates():
-    # A run-wide roll-up reports "skipped" if ANY asset's map was skipped, so a partial
-    # source-map recovery is never masked by a peer asset's clean value.
-    merged = queries._merge_coverage_payloads([{"source_map": "none"}, {"source_map": "skipped"}])
-    assert merged["source_map"] == "skipped"
-    # No skip anywhere -> the highest-id (first) event's value stands in.
-    merged_clean = queries._merge_coverage_payloads(
-        [{"source_map": "capture"}, {"source_map": "none"}]
-    )
-    assert merged_clean["source_map"] == "capture"
-
-
-def test_coverage_view_reads_source_map_skipped():
-    assert queries._coverage_view_from_payload({"source_map": "skipped"}).source_map == "skipped"
+def test_event_reads_source_map_skipped():
+    assert Coverage.from_payload({"source_map": "skipped"}).source_map == "skipped"
     # An event predating the field defaults to "none" (backward compat).
-    assert queries._coverage_view_from_payload({}).source_map == "none"
+    assert Coverage.from_payload({}).source_map == "none"

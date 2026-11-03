@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from recon.api.app import create_app
 from recon.findings import queries
+from recon.findings.coverage import Coverage
 
 
 @pytest.fixture()
@@ -128,15 +129,8 @@ def test_diff_router_passes_run_ids_to_query(client: TestClient) -> None:
 def test_coverage_reports_a_truncated_source_map_recovery(client: TestClient) -> None:
     # D37-L2: recovery that hit its write budget left recovered originals unscanned; the API
     # must carry that so the workspace can say so (REQ-C2) instead of dropping the flag.
-    coverage = queries.CoverageView(
-        attributed=1,
-        unattributed=0,
-        secrets=0,
-        secrets_engine="ok",
-        sources_recovered=3,
-        source_map="capture",
-        files=[],
-        recovered_partial=True,
+    coverage = Coverage(
+        attributed=1, sources_recovered=3, source_map="capture", recovered_partial=True
     )
     view = queries.FindingsView(run_id=_RUN, findings=[], coverage=coverage, total=0)
     with patch.object(queries, "list_findings", return_value=view):

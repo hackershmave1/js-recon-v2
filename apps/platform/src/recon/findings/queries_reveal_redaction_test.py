@@ -215,7 +215,7 @@ def test_multi_asset_coverage_sums_across_assets_not_last_only():
         secrets=2,
         secrets_engine="ok",
         sources_recovered=0,
-        source_map="none",
+        source_map="inline",  # the older asset
         files=[{"path": "input.js", "attributed": 5, "unattributed": 0}],
     )
     _record_coverage(
@@ -234,6 +234,7 @@ def test_multi_asset_coverage_sums_across_assets_not_last_only():
     assert result is not None and result.coverage is not None
     assert result.coverage.attributed == 8
     assert result.coverage.secrets == 2  # NOT 0 -- would be if only the last event won
+    assert result.coverage.source_map == "none"  # no skip anywhere -> the NEWEST asset's value
 
 
 def test_legacy_single_asset_coverage_still_latest_event_wins():

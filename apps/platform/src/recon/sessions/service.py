@@ -20,7 +20,7 @@ import datetime as dt
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from recon import storage
@@ -29,7 +29,8 @@ from recon.db.base import admin_session, tenant_session
 from recon.db.models import Engagement, EngagementSession, Run, RunAsset, Tenant
 from recon.domain import TOTAL_ENDPOINT_TYPES, FindingType
 from recon.fetch import egress
-from recon.findings.queries import _latest_coverage, files_collected, visible_type_counts
+from recon.findings.coverage import read_run_coverage
+from recon.findings.queries import files_collected, visible_type_counts
 from recon.observability import get_logger
 
 _logger = get_logger(__name__)
@@ -512,16 +513,12 @@ def _run_stats(db: Session, run: Run) -> tuple[int, int, int, int | None]:
     endpoints = sum(int(type_counts.get(t.value, 0)) for t in TOTAL_ENDPOINT_TYPES)
     secrets = int(type_counts.get(FindingType.SECRET.value, 0))
     # files: the shared "files collected" definition (queries.files_collected) so this
-    # list, the run header and the Overview card can never disagree. asset_count (every
-    # discovered asset, fetched or not) still decides the coverage merge mode below.
-    asset_count = (
-        db.scalar(select(func.count()).select_from(RunAsset).where(RunAsset.run_id == run_id)) or 0
-    )
+    # list, the run header and the Overview card can never disagree.
     files = files_collected(db, run)
     # coverage (§4 fold M2): attribution coverage = attributed / (attributed +
-    # unattributed), reusing the multi-asset-correct merge. None until analyze
+    # unattributed), the same run total the findings view reads. None until analyze
     # emits — the UI labels this "% attributed", never "% analyzed".
-    coverage = _latest_coverage(db, run_id, is_multi_asset=bool(asset_count))
+    coverage = read_run_coverage(db, run_id)
     coverage_pct: int | None = None
     if coverage is not None:
         denom = coverage.attributed + coverage.unattributed

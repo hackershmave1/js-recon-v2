@@ -36,6 +36,7 @@ from recon.db.models import (
 from recon.domain import TOTAL_ENDPOINT_TYPES, AssetStatus, FindingType
 from recon.findings import noise_hosts, priority
 from recon.findings.base_url import BaseUrlRule
+from recon.findings.coverage import Coverage, read_run_coverage
 from recon.findings.wrappers import WrapperRule
 from recon.spec.classify import Classification, SpecSummary, summarize
 
@@ -115,39 +116,10 @@ class FindingView:
 
 
 @dataclass(frozen=True)
-class FileCoverageView:
-    path: str
-    attributed: int
-    unattributed: int
-
-
-@dataclass(frozen=True)
-class CoverageView:
-    """The analyze stage's honesty counters (REQ-C2), surfaced next to the findings
-    they qualify. ``unattributed`` cannot be recomputed from stored findings (an
-    un-attributed call yields no finding row), so it is read from the durable event
-    log — the record of what analyze actually reported."""
-
-    attributed: int
-    unattributed: int
-    secrets: int
-    secrets_engine: str
-    sources_recovered: int
-    source_map: str
-    files: list[FileCoverageView]
-    # D31 honesty: True when the extract hit the AST node budget on any of the run's assets, so
-    # some of the surface was not examined — a partial extract, reported truthfully (REQ-C2).
-    curtailed: bool = False
-    # D37-L2 honesty: True when source-map recovery hit its cumulative-write budget on any asset, so
-    # some recovered originals were not scanned — a partial recovery, reported truthfully (REQ-C2).
-    recovered_partial: bool = False
-
-
-@dataclass(frozen=True)
 class FindingsView:
     run_id: str
     findings: list[FindingView]
-    coverage: CoverageView | None
+    coverage: Coverage | None
     # Design §6.4: run-scoped shadow-API bucket counts. `None` until a spec is
     # attached to the run's session at all (distinct from "attached but every
     # bucket is 0") -- mirrors `coverage`'s "null until analyze has run" shape.
@@ -539,7 +511,7 @@ def list_findings(
                 )
                 for finding in findings
             ],
-            coverage=_latest_coverage(session, run_id, is_multi_asset=bool(asset_refs)),
+            coverage=read_run_coverage(session, run_id),
             spec_summary=(
                 _run_spec_summary(findings_for_summary, spec_status_by_hash)
                 if has_session_spec
@@ -797,98 +769,6 @@ def files_collected(session: Session, run: Run) -> int:
         )
         or 0
     )
-
-
-def _latest_coverage(session: Session, run_id: str, *, is_multi_asset: bool) -> CoverageView | None:
-    """The run's analyze coverage counters (REQ-C2).
-
-    A multi-asset (crawl) run's assets each emit their OWN ``analyze.coverage``
-    event, exactly once — a redelivery skips an already analyze-terminal asset
-    rather than re-analyzing it, so no asset's event is ever re-emitted. The true
-    run-wide total is therefore the SUM of every one of the run's events, not just
-    the highest-id one: taking only the latest silently dropped every earlier
-    asset's counts (e.g. reporting ``secrets: 0`` even though an earlier asset's
-    own event had recorded some).
-
-    A legacy single-asset run instead has exactly one analyze stage, which a
-    retry re-runs IN PLACE and which re-emits its one event again — there,
-    summing would double-count a retry, so the highest-id event alone (latest
-    wins, the original behavior) is what's correct.
-
-    ``None`` until analyze has emitted at least one event for the run.
-    """
-    payloads = session.scalars(
-        select(RunEvent.payload)
-        .where(RunEvent.run_id == str(run_id), RunEvent.type == "analyze.coverage")
-        .order_by(RunEvent.id.desc())
-    ).all()
-    if not payloads:
-        return None
-    payload = _merge_coverage_payloads(payloads) if is_multi_asset else payloads[0]
-    return _coverage_view_from_payload(payload)
-
-
-def _coverage_view_from_payload(payload: dict[str, Any]) -> CoverageView:
-    return CoverageView(
-        attributed=int(payload.get("attributed", 0)),
-        unattributed=int(payload.get("unattributed", 0)),
-        secrets=int(payload.get("secrets", 0)),
-        secrets_engine=str(payload.get("secrets_engine", "ok")),
-        sources_recovered=int(payload.get("sources_recovered", 0)),
-        source_map=str(payload.get("source_map", "none")),
-        curtailed=bool(payload.get("curtailed", False)),
-        recovered_partial=bool(payload.get("recovered_partial", False)),
-        files=[
-            FileCoverageView(
-                path=str(entry.get("path", "")),
-                attributed=int(entry.get("attributed", 0)),
-                unattributed=int(entry.get("unattributed", 0)),
-            )
-            for entry in payload.get("files", [])
-        ],
-    )
-
-
-def _merge_coverage_payloads(payloads: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    """Sum every asset's own coverage payload into one run-wide payload (Slice Y).
-
-    Mirrors ``analyze._merge_coverage``'s semantics exactly: counts are additive;
-    ``secrets_engine`` is the LESS-healthy of all the events ("unavailable" wins
-    over "ok") so one asset's absent scanner is never masked by another asset's
-    clean scan (REQ-C2); ``files`` (per-source-path detail) is concatenated across
-    assets rather than merged path-by-path — it is per-file-per-asset detail, so
-    two assets sharing the same fallback path still get two distinct entries;
-    ``source_map`` is a single scalar; a D32 "skipped" (a referenced map we could not
-    retrieve) DOMINATES so the roll-up stays honest when ANY asset skipped, otherwise the
-    first (highest-id) event's value stands in.
-    """
-    files: list[dict[str, Any]] = []
-    for payload in payloads:
-        files.extend(payload.get("files", []))
-    return {
-        "attributed": sum(int(p.get("attributed", 0)) for p in payloads),
-        "unattributed": sum(int(p.get("unattributed", 0)) for p in payloads),
-        "secrets": sum(int(p.get("secrets", 0)) for p in payloads),
-        "secrets_engine": (
-            "unavailable"
-            if any(p.get("secrets_engine") == "unavailable" for p in payloads)
-            else "ok"
-        ),
-        "sources_recovered": sum(int(p.get("sources_recovered", 0)) for p in payloads),
-        # D32: "skipped" (a referenced map we couldn't retrieve) dominates so the run-wide
-        # roll-up is honest when ANY asset skipped its map; else the highest-id value stands in.
-        "source_map": (
-            "skipped"
-            if any(p.get("source_map") == "skipped" for p in payloads)
-            else payloads[0].get("source_map", "none")
-        ),
-        # D31: the run is curtailed if ANY asset's extract was (mirrors analyze._merge_coverage's
-        # OR); a payload predating the field has no key and reads as not-curtailed.
-        "curtailed": any(bool(p.get("curtailed")) for p in payloads),
-        # D37-L2: the run's recovery is partial if ANY asset's map recovery was truncated (same OR).
-        "recovered_partial": any(bool(p.get("recovered_partial")) for p in payloads),
-        "files": files,
-    }
 
 
 def _run_spec_summary(
