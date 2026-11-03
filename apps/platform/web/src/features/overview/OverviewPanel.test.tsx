@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { withExactLoc } from "../../api/testOccurrence";
 import { render, screen, within } from "@testing-library/react";
 import { createMemoryRouter } from "react-router";
 import { RouterProvider } from "react-router/dom";
@@ -15,7 +16,7 @@ function renderPanel(data: FindingsResponse) {
   render(<RouterProvider router={router} />);
 }
 
-const occ = (over: Partial<Occurrence> = {}): Occurrence => ({
+const occ = (over: Partial<Occurrence> = {}): Occurrence => withExactLoc({
   host: null, raw_url: null, source_path: null, line: null, col: null,
   offset_start: null, offset_end: null, evidence: null, engine: null,
   confidence: null, verified: null, asset_url: null, ...over,

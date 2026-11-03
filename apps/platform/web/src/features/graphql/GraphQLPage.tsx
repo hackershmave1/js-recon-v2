@@ -1,5 +1,5 @@
 import type { FindingsResponse, Finding, Occurrence, SourceJump } from "../../api/types";
-import { occLocation, occSource, primaryOccurrence } from "../../api/occurrenceSource";
+import { occJump, occLocation, occSource, primaryOccurrence } from "../../api/occurrenceSource";
 import "./graphql.css";
 
 // The run's GraphQL surface: operations/fragments the analyze stage promoted to
@@ -53,13 +53,15 @@ function SourceLink({ occurrence, onJumpToSource }: {
   const location = occLocation(occurrence);
   if (!location) return null;
   const where = occSource(occurrence).primary;
+  const at = occJump(occurrence);
+  if (!at) return <span className="gql-src muted">{location}</span>;
   return (
     <button
       type="button"
       className="gql-src"
       aria-label={`Open ${where} in Sources`}
       onClick={() =>
-        onJumpToSource({ sourcePath: occurrence.source_path, assetUrl: occurrence.asset_url, line: occurrence.line })
+        onJumpToSource(at)
       }
     >
       {location}

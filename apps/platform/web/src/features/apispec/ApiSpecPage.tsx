@@ -9,7 +9,7 @@ import { SpecUpload } from "../findings/SpecUpload";
 import { FindingDrawer } from "../findings/FindingDrawer";
 import { useResizableRail } from "../../shell/useResizableRail";
 import { Icon } from "../../shell/icons";
-import { occSource, primaryOccurrence } from "../../api/occurrenceSource";
+import { occJump, occSource, primaryOccurrence } from "../../api/occurrenceSource";
 import "./apispec.css";
 
 type SpecClass = SpecStatus["status"] | "unclassified";
@@ -52,7 +52,7 @@ function toOps(requests: ReconstructedRequest[], findings: Finding[]): OpView[] 
     let trace: OpView["trace"] = null;
     for (const f of linked) {
       const o = primaryOccurrence(f);
-      if (o && (o.source_path || o.asset_url)) { trace = { path: occSource(o).primary, line: o.line }; break; }
+      if (o && (o.source_path || o.asset_url)) { trace = { path: occSource(o).primary, line: occJump(o)?.line ?? null }; break; }
     }
     return { req, tag: pathTag(req.path), cls, linked, trace };
   });

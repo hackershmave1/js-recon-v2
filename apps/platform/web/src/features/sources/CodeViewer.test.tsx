@@ -47,3 +47,14 @@ describe("CodeViewer", () => {
     expect(document.querySelector(".sv-note.sv-warn")?.textContent).toMatch(/truncated/i);
   });
 });
+
+describe("CodeViewer exact ranges", () => {
+  it("highlights exactly the finding's token, and the jumped-to one as the focus", () => {
+    const text = 'const a = 1;\nfetch("/api/users", { method: "POST" });';
+    const loc = { line: 2, col: 6, end_line: 2, end_col: 18 };
+    render(<CodeViewer text={text} truncated={false} marks={null} ranges={[loc]} focusRange={loc} focusLine={2} />);
+    const hits = document.querySelectorAll("mark.sv-hit");
+    expect([...hits].map((h) => h.textContent)).toEqual(['"/api/users"']);
+    expect(hits[0].classList.contains("focus")).toBe(true);
+  });
+});

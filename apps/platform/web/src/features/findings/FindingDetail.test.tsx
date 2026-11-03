@@ -1,11 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
+import { withExactLoc } from "../../api/testOccurrence";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TenantProvider } from "../../tenant/TenantContext";
 import { FindingDetail } from "./FindingDetail";
 import type { Finding, Occurrence, SourceJump } from "../../api/types";
 
-const occ = (over: Partial<Occurrence> = {}): Occurrence => ({
+const occ = (over: Partial<Occurrence> = {}): Occurrence => withExactLoc({
   host: null, raw_url: null, source_path: "app.js", line: 10, col: 4,
   offset_start: null, offset_end: null, evidence: null, engine: "vespasian",
   confidence: "high", verified: true, asset_url: null, ...over,
@@ -72,14 +73,28 @@ describe("FindingDetail", () => {
     show(finding({ occurrences: [occ({ source_path: "input.js", line: 3,
       asset_url: "https://acme.io/app.bundle.js" })] }), onJump);
     await userEvent.click(screen.getByRole("button", { name: /open https:\/\/acme\.io\/app\.bundle\.js in sources/i }));
-    expect(onJump).toHaveBeenCalledWith({ sourcePath: "input.js", assetUrl: "https://acme.io/app.bundle.js", line: 3 });
+    expect(onJump).toHaveBeenCalledWith(expect.objectContaining({ sourcePath: "input.js", assetUrl: "https://acme.io/app.bundle.js", line: 3 }));
   });
 
   it("makes an occurrence with a source location a jump-to-source button", async () => {
     const onJump = vi.fn();
     show(finding({ occurrences: [occ({ source_path: "app.js", line: 10, asset_url: "https://acme.io/app.js" })] }), onJump);
     await userEvent.click(screen.getByRole("button", { name: /open app\.js in sources/i }));
-    expect(onJump).toHaveBeenCalledWith({ sourcePath: "app.js", assetUrl: "https://acme.io/app.js", line: 10 });
+    expect(onJump).toHaveBeenCalledWith(expect.objectContaining({ sourcePath: "app.js", assetUrl: "https://acme.io/app.js", line: 10 }));
+  });
+
+  it("offers no jump when there is no exact location — never a guessed spot", () => {
+    // e.g. a capture-body secret: it names a bundle but has no place in any served file.
+    show(finding({ occurrences: [occ({ source_path: "input.js", line: 1, loc: null,
+      asset_url: "https://acme.io/app.js" })] }), vi.fn());
+    expect(screen.queryByRole("button", { name: /in sources/i })).toBeNull();
+    expect(screen.getByText(/no exact location/)).toBeInTheDocument();
+  });
+
+  it("labels an old run's line as approximate", () => {
+    show(finding({ occurrences: [occ({ source_path: "app.js", loc: null, approximate_line: 10 })] }), vi.fn());
+    expect(screen.getByText(/app\.js:~10/)).toBeInTheDocument();
+    expect(screen.getByText(/approximate location/)).toBeInTheDocument();
   });
 
   it("renders 'unclassified' when spec_status is null", () => {
