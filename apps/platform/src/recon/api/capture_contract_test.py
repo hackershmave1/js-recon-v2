@@ -55,7 +55,7 @@ def test_save_files_response_envelope(capture_client):
         patch.object(capture_router, "_get_or_create_session", return_value="sess-1"),
         patch.object(capture_router, "_accumulating_run_id", return_value="run-1"),
         patch.object(capture_router.storage, "put_blob", return_value="blob-key"),
-        patch.object(capture_router, "_seed_fetched_assets", return_value=1),
+        patch.object(capture_router, "_seed_fetched_assets", return_value=(1, 0)),
         patch.object(
             capture_router, "emit", return_value=None
         ),  # slice-2 side-channel: keep hermetic
@@ -93,7 +93,7 @@ def test_save_files_survives_emit_failure(capture_client):
         patch.object(capture_router, "_get_or_create_session", return_value="sess-1"),
         patch.object(capture_router, "_accumulating_run_id", return_value="run-1"),
         patch.object(capture_router.storage, "put_blob", return_value="blob-key"),
-        patch.object(capture_router, "_seed_fetched_assets", return_value=1),
+        patch.object(capture_router, "_seed_fetched_assets", return_value=(1, 0)),
         patch.object(capture_router, "emit", side_effect=RuntimeError("event bus down")),
     ):
         res = capture_client.post(

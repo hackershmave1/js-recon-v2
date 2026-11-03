@@ -227,6 +227,10 @@ class Settings(BaseSettings):
     # cross-origin POSTs and JS cannot forge it). The extension sends
     # chrome-extension://<id> or no Origin. Kill-switch for non-browser ingest clients.
     capture_ingest_origin_lock: bool = True  # env: RECON_CAPTURE_INGEST_ORIGIN_LOCK
+    # A url re-captured with different bytes is kept as an extra `url#sha256=…` asset so every
+    # version is analyzed. Capped per url: a script whose bytes change on every load (a nonce
+    # or timestamp in config.js) would otherwise add an asset per page view.
+    capture_max_versions_per_url: int = 10  # env: RECON_CAPTURE_MAX_VERSIONS_PER_URL
 
     # ---- LLM provider config (threat-model generation) ----
     # Fernet key (URL-safe base64, 32 bytes) used to encrypt API keys stored in
