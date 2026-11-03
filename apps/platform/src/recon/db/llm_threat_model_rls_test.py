@@ -17,7 +17,12 @@ from recon.sessions import service as sessions_service
 
 pytestmark = pytest.mark.integration
 
-_TABLES = models.LLM_TABLES + models.THREAT_MODEL_TABLES + models.TENANT_LLM_TABLES
+_TABLES = (
+    models.LLM_TABLES
+    + models.THREAT_MODEL_TABLES
+    + models.TENANT_LLM_TABLES
+    + models.LLM_CALL_TABLES
+)
 
 
 @pytest.mark.parametrize("table", _TABLES)

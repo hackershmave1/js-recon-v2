@@ -150,7 +150,9 @@ async def test_team_llm_settings(principal: Principal = Depends(require_admin)) 
         raise HTTPException(status_code=400, detail="no team key saved")
     provider_name, model, api_key = credentials
     # Awaited on the request loop (see llm.service.ping_credentials).
-    error = await llm_service.ping_credentials(provider_name, model, api_key)
+    error = await llm_service.ping_credentials(
+        provider_name, model, api_key, tenant_id=principal.tenant_id, key_source="team"
+    )
     log.info(
         "llm.team_config.tested",
         tenant_id=principal.tenant_id,

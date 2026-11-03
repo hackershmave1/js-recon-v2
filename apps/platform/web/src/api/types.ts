@@ -249,6 +249,17 @@ export interface ThreatEntry {
   id: string; rank: number; title: string; owasp_category: string; severity: string;
   description: string; affected_endpoints: string[]; test_steps: TestStep[]; citations: string[];
 }
+// The recorded LLM call behind a threat model (recon.llm.calls.call_view). `unavailable`: a
+// call was made but its record couldn't be saved.
+export type LastCall =
+  | { unavailable: true }
+  | {
+      unavailable: false;
+      provider: string; model: string; key_source: string | null; status: "ok" | "error";
+      prompt_tokens: number | null; completion_tokens: number | null;
+      cost_usd: string | null; latency_ms: number; finish_reason: string | null;
+    };
+
 export interface ThreatModelResponse {
   status: "pending" | "running" | "done" | "failed";
   provider: string | null; model: string | null;
@@ -256,4 +267,6 @@ export interface ThreatModelResponse {
   analysis_summary: string | null; error: string | null;
   generated_at: string | null; updated_at: string | null;
   threats?: ThreatEntry[];
+  // null: no LLM call was made for this run; absent on runs from before calls were recorded.
+  last_call?: LastCall | null;
 }

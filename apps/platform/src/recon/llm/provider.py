@@ -37,6 +37,8 @@ class LLMUsage:
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    # False when the provider sent no usage: the zeros are placeholders, not a free call.
+    reported: bool = True
 
 
 @dataclass
@@ -45,9 +47,20 @@ class LLMResponse:
     usage: LLMUsage
     model: str
     provider: str
+    finish_reason: str | None = None
 
     def parse(self, schema: type[T]) -> T:
         return schema.model_validate(self.content)
+
+
+class LLMOutputError(ValueError):
+    """The provider answered but the answer is unusable (hit max_tokens, not JSON, no tool
+    call). Carries the usage so a failed run can still report what it consumed."""
+
+    def __init__(self, message: str, usage: LLMUsage, finish_reason: str | None) -> None:
+        super().__init__(message)
+        self.usage = usage
+        self.finish_reason = finish_reason
 
 
 class LLMProvider(ABC):
@@ -95,15 +108,29 @@ class AnthropicProvider(LLMProvider):
             tools=[tool],
             tool_choice={"type": "tool", "name": "structured_output"},
         )
-        # The tool_use block carries the parsed input dict.
-        tool_block = next(b for b in response.content if b.type == "tool_use")
-        content: dict[str, Any] = tool_block.input
         usage = LLMUsage(
             prompt_tokens=response.usage.input_tokens,
             completion_tokens=response.usage.output_tokens,
             total_tokens=response.usage.input_tokens + response.usage.output_tokens,
         )
-        return LLMResponse(content=content, usage=usage, model=self.model, provider="anthropic")
+        # The tool_use block carries the parsed input dict. It is missing when the model stopped
+        # early (e.g. stop_reason "max_tokens"); a bare next() would surface as a RuntimeError.
+        tool_block = next((b for b in response.content if b.type == "tool_use"), None)
+        if tool_block is None:
+            raise LLMOutputError(
+                f"Anthropic model {self.model!r} returned no structured output "
+                f"(stop_reason={response.stop_reason!r})",
+                usage,
+                response.stop_reason,
+            )
+        content: dict[str, Any] = tool_block.input
+        return LLMResponse(
+            content=content,
+            usage=usage,
+            model=self.model,
+            provider="anthropic",
+            finish_reason=response.stop_reason,
+        )
 
 
 class OpenRouterProvider(LLMProvider):
@@ -142,17 +169,28 @@ class OpenRouterProvider(LLMProvider):
             # ignores response_format and returns prose, which we can't parse.
             extra_body={"provider": {"require_parameters": True}},
         )
+        u = response.usage
+        usage = LLMUsage(
+            prompt_tokens=u.prompt_tokens if u else 0,
+            completion_tokens=u.completion_tokens if u else 0,
+            total_tokens=u.total_tokens if u else 0,
+            reported=u is not None,
+        )
         raw = (response.choices[0].message.content or "").strip()
-        if not raw:
-            raise ValueError(
-                f"OpenRouter returned empty content for model {self.model!r}; "
-                "check the model slug is valid and the key has access to it"
-            )
         finish_reason = response.choices[0].finish_reason
+        if not raw:
+            raise LLMOutputError(
+                f"OpenRouter returned empty content for model {self.model!r}; "
+                "check the model slug is valid and the key has access to it",
+                usage,
+                finish_reason,
+            )
         if finish_reason == "length":
-            raise ValueError(
+            raise LLMOutputError(
                 f"OpenRouter model {self.model!r} hit max_tokens before finishing; "
-                "increase max_tokens or reduce prompt length"
+                "increase max_tokens or reduce prompt length",
+                usage,
+                finish_reason,
             )
         # Some models wrap JSON in ```json ... ``` despite json_object mode — strip fences.
         if raw.startswith("```"):
@@ -160,17 +198,19 @@ class OpenRouterProvider(LLMProvider):
         try:
             content = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise ValueError(
+            raise LLMOutputError(
                 f"OpenRouter model {self.model!r} returned non-JSON content "
-                f"(finish_reason={finish_reason!r}): {raw[:500]!r}"
+                f"(finish_reason={finish_reason!r}): {raw[:500]!r}",
+                usage,
+                finish_reason,
             ) from exc
-        u = response.usage
-        usage = LLMUsage(
-            prompt_tokens=u.prompt_tokens if u else 0,
-            completion_tokens=u.completion_tokens if u else 0,
-            total_tokens=u.total_tokens if u else 0,
+        return LLMResponse(
+            content=content,
+            usage=usage,
+            model=self.model,
+            provider="openrouter",
+            finish_reason=finish_reason,
         )
-        return LLMResponse(content=content, usage=usage, model=self.model, provider="openrouter")
 
 
 class GeminiProvider(LLMProvider):
@@ -197,25 +237,49 @@ class GeminiProvider(LLMProvider):
                 max_output_tokens=max_tokens,
             ),
         )
-        content = output_schema.model_validate_json(response.text).model_dump()
         u = response.usage_metadata
-        prompt_tokens = u.prompt_token_count if u else 0
-        completion_tokens = u.candidates_token_count if u else 0
+        prompt_tokens = (u.prompt_token_count or 0) if u else 0
+        completion_tokens = (u.candidates_token_count or 0) if u else 0
         usage = LLMUsage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=(prompt_tokens + completion_tokens),
         )
-        return LLMResponse(content=content, usage=usage, model=self.model, provider="gemini")
+        candidates = response.candidates or []
+        reason = candidates[0].finish_reason if candidates else None
+        finish_reason = str(getattr(reason, "name", reason)) if reason is not None else None
+        try:
+            content = output_schema.model_validate_json(response.text or "").model_dump()
+        except ValueError as exc:  # pydantic ValidationError is a ValueError
+            raise LLMOutputError(
+                f"Gemini model {self.model!r} returned unusable output "
+                f"(finish_reason={finish_reason!r})",
+                usage,
+                finish_reason,
+            ) from exc
+        return LLMResponse(
+            content=content,
+            usage=usage,
+            model=self.model,
+            provider="gemini",
+            finish_reason=finish_reason,
+        )
+
+
+# The provider seam: tests swap an entry for FakeProvider (monkeypatch.setitem), so no test
+# ever reaches a real LLM API.
+ADAPTERS: dict[str, type[LLMProvider]] = {
+    "anthropic": AnthropicProvider,
+    "openrouter": OpenRouterProvider,
+    "gemini": GeminiProvider,
+}
 
 
 def build_provider(provider: str, api_key: str, model: str | None = None) -> LLMProvider:
     """Instantiate the right LLMProvider for the given provider name."""
-    resolved_model = model or DEFAULT_MODELS.get(provider, "")
-    if provider == "anthropic":
-        return AnthropicProvider(api_key=api_key, model=resolved_model)
-    if provider == "openrouter":
-        return OpenRouterProvider(api_key=api_key, model=resolved_model)
-    if provider == "gemini":
-        return GeminiProvider(api_key=api_key, model=resolved_model)
-    raise ValueError(f"unknown provider: {provider!r}. Must be one of {sorted(VALID_PROVIDERS)}")
+    adapter = ADAPTERS.get(provider)
+    if adapter is None:
+        raise ValueError(
+            f"unknown provider: {provider!r}. Must be one of {sorted(VALID_PROVIDERS)}"
+        )
+    return adapter(api_key=api_key, model=model or DEFAULT_MODELS.get(provider, ""))

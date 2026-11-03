@@ -129,6 +129,20 @@ def _snapshot() -> dict[str, Any]:
     }
 
 
+def cached_price(model_id: str) -> tuple[Decimal, Decimal] | None:
+    """(prompt, completion) USD per token from the ALREADY-fetched catalog, else None. Never
+    fetches: pricing must not add a network round-trip to the call being recorded. Routing
+    suffixes (``:floor``) bill as the base model, so they're stripped."""
+    models = _state["models"]
+    if models is None:
+        return None
+    base = model_id.split(":", 1)[0]
+    for m in models:
+        if m.id == base:
+            return m.prompt_price, m.completion_price
+    return None
+
+
 def cached_ids() -> frozenset[str] | None:
     models = _state["models"]
     return None if models is None else frozenset(m.id for m in models)

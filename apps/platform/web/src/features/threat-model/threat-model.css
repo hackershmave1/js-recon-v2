@@ -33,6 +33,9 @@
   font-size: 11.5px; color: var(--dim);
 }
 
+/* Facts about the LLM call behind the run. Long model ids must wrap, not bleed the frame. */
+.tm-run-details { font-size: 11.5px; color: var(--dim); margin: 0; overflow-wrap: anywhere; }
+
 .tm-threat-list { display: flex; flex-direction: column; gap: 6px; }
 
 .tm-card {

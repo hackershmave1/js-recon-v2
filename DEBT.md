@@ -163,6 +163,10 @@ so only direct API callers hit it.
 
 **Fix:** heartbeat `updated_at` during the LLM call, or raise the window.
 
+Since the LLM call records (D72 section), the same race is visible: the old task's `_store_results` can
+overwrite the re-triggered run's threats while the Threat Model tab shows the new run's call details. Also
+guard those writes with `WHERE llm_call_id = <this run's call>`.
+
 ### 2026-11-02 capture history fix + CaptureSession refactor — OPEN (D67–D70)
 
 Left on purpose when the past-sessions findings count was fixed (session-keyed cache + tenant-tagged rows).
@@ -554,3 +558,25 @@ the TopBar box is an inert `<div title="Search — coming soon">` (`apps/platfor
 **Fix (independent slices):** an MVP two-run diff (partial-aware per REQ-D5); a browser `Notification`
 on state→terminal; an admin-only invite endpoint reusing `seed-admin`; a client-side session search to
 start.
+
+### 2026-11-03 LLM call records — OPEN (D72)
+
+#### D72 · A session deleted mid-recording can orphan one LLM call's prompt/response blobs [S]  ·  storage
+
+`recon.llm.calls._record` inserts the `llm_call` row first and writes the prompt/response blobs only after
+it commits, so a session deleted before the insert leaves no blobs. A delete that lands between the insert
+and the blob writes still can: the row cascades away, the session purge has already swept the run's
+prefix, and the two blobs (~100 KB) stay as unreferenced storage. Same class as D47's accepted orphans.
+
+**Fix:** the deferred blob GC D47 mentions, or a post-write existence check that deletes the blobs if the
+row is gone.
+
+#### D73 · Backend files over the ~300-line cap keep growing [M]  ·  maintainability
+
+`CLAUDE.md` points here for files over the cap, but none were listed. Grown by the LLM-call work:
+`db/models.py` (868), `threat_model/service.py` (639), `sessions/service.py` (530). Each change kept its own
+additions minimal, but the files need splitting by responsibility (e.g. threat-model context assembly vs
+generation vs serialization; models per domain).
+
+**Fix:** split one file per PR, starting with `threat_model/service.py`.
+

@@ -6,16 +6,10 @@ from fastapi.testclient import TestClient
 from recon.api.app import create_app
 from recon.config import get_settings
 from recon.llm import service as llm_service
+from recon.llm.fake_provider import FakeProvider
 from recon.sessions import service as sessions_service
 
 pytestmark = pytest.mark.integration
-
-
-class _StubProvider:
-    model = "stub-model"
-
-    async def generate_structured(self, **_kwargs):
-        return None
 
 
 @pytest.fixture()
@@ -26,12 +20,7 @@ def client():
 def test_session_key_test_reaches_ping_and_stamps_tested_at(client, tenant, monkeypatch):
     # Regression: test_config used get_event_loop().run_until_complete inside
     # run_in_threadpool, which raises RuntimeError on Python 3.11 worker threads.
-    calls = []
-    monkeypatch.setattr(
-        llm_service,
-        "build_provider",
-        lambda provider, api_key, model=None: calls.append((provider, api_key)) or _StubProvider(),
-    )
+    fake = FakeProvider.install(monkeypatch, "anthropic", content={"ok": True})
     sv = sessions_service.create_session(
         tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
     )
@@ -41,7 +30,7 @@ def test_session_key_test_reaches_ping_and_stamps_tested_at(client, tenant, monk
 
     assert r.status_code == 200, r.text
     assert r.json() == {"ok": True, "provider": "anthropic", "model": "m"}
-    assert calls == [("anthropic", "k-test")]
+    assert [c["api_key"] for c in fake.calls] == ["k-test"]
     assert llm_service.get_config(tenant, sv.id)["tested_at"] is not None
 
 
@@ -55,13 +44,7 @@ def test_session_key_test_without_key_is_400(client, tenant):
 
 
 def test_session_key_test_provider_error_is_400_with_its_text(client, tenant, monkeypatch):
-    class _Failing:
-        async def generate_structured(self, **_kwargs):
-            raise RuntimeError("invalid x-api-key")
-
-    monkeypatch.setattr(
-        llm_service, "build_provider", lambda provider, api_key, model=None: _Failing()
-    )
+    FakeProvider.install(monkeypatch, "anthropic", error=RuntimeError("invalid x-api-key"))
     sv = sessions_service.create_session(
         tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
     )

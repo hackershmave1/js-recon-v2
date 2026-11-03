@@ -80,6 +80,39 @@ describe("ThreatModelPage", () => {
     expect(trigger).toHaveBeenCalledWith("t1", "s1", undefined);
   });
 
+  it("a finished run shows its own call's facts instead of the old token total", async () => {
+    vi.spyOn(api, "getThreatModel").mockResolvedValue({
+      ...failed(""), status: "done", error: null, provider: "openrouter", model: "anthropic/claude-sonnet-4.6",
+      prompt_tokens: 18203, completion_tokens: 3941, threats: [],
+      last_call: {
+        unavailable: false, provider: "openrouter", model: "anthropic/claude-sonnet-4.6", key_source: "team",
+        status: "ok", prompt_tokens: 18203, completion_tokens: 3941, cost_usd: "0.0729", latency_ms: 41200,
+        finish_reason: "stop",
+      },
+    });
+    render(<MemoryRouter><ThreatModelPage sessionId="s1" /></MemoryRouter>);
+    expect(await screen.findByText("anthropic/claude-sonnet-4.6 · team key · 18,203 → 3,941 tokens · $0.07 · 41 s")).toBeInTheDocument();
+    expect(screen.queryByText(/22,144 tokens/)).not.toBeInTheDocument();
+  });
+
+  it("a failed run shows what the failed call consumed; a run that never called the LLM shows nothing", async () => {
+    vi.spyOn(api, "getThreatModel").mockResolvedValueOnce({
+      ...failed("OpenRouter model 'x' hit max_tokens before finishing"),
+      last_call: {
+        unavailable: false, provider: "openrouter", model: "x", key_source: "team", status: "error",
+        prompt_tokens: 21480, completion_tokens: 12000, cost_usd: "0.41", latency_ms: 123000, finish_reason: "length",
+      },
+    });
+    const { unmount } = render(<MemoryRouter><ThreatModelPage sessionId="s1" /></MemoryRouter>);
+    expect(await screen.findByText("x · team key · 21,480 → 12,000 tokens · $0.41 · 2 min 3 s")).toBeInTheDocument();
+    unmount();
+
+    vi.spyOn(api, "getThreatModel").mockResolvedValueOnce({ ...failed("no LLM API key: save one"), last_call: null });
+    render(<MemoryRouter><ThreatModelPage sessionId="s1" /></MemoryRouter>);
+    await screen.findByText(/no LLM API key/);
+    expect(screen.queryByText(/tokens/)).not.toBeInTheDocument();
+  });
+
   it("the empty state points to Settings", async () => {
     vi.spyOn(api, "getThreatModel").mockRejectedValue(Object.assign(new Error("nf"), { status: 404 }));
     render(<MemoryRouter><ThreatModelPage sessionId="s1" /></MemoryRouter>);

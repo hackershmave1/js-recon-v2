@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
-from typing import Any
+from typing import Any, NamedTuple
 
 from pydantic import BaseModel
 from sqlalchemy import select, update
+from sqlalchemy.orm import object_session
 
 from recon.db.base import tenant_session
 from recon.db.models import (
@@ -33,9 +34,8 @@ from recon.db.models import (
     Threat,
 )
 from recon.domain import FindingType, RunState
-from recon.llm import run_choice
+from recon.llm import calls, run_choice
 from recon.llm.crypto import KeyDecryptError
-from recon.llm.provider import build_provider
 from recon.observability import get_logger
 from recon.sessions import service as sessions_service
 
@@ -115,7 +115,13 @@ def _resolve_session_id(tenant_id: str, session_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _assemble_context(tenant_id: str, session_id: str) -> tuple[str, frozenset[str]]:
+class _Context(NamedTuple):
+    markdown: str
+    valid_hashes: frozenset[str]
+    run_id: str  # the run the prompt describes; the LLM call's bodies are stored under it
+
+
+def _assemble_context(tenant_id: str, session_id: str) -> _Context:
     """Build the LLM prompt context from the session's latest completed run.
 
     Returns (context_markdown, valid_finding_hashes). Raises ValueError if no
@@ -250,7 +256,7 @@ def _assemble_context(tenant_id: str, session_id: str) -> tuple[str, frozenset[s
     else:
         lines += ["## OpenAPI Spec", "No spec uploaded for this session.", ""]
 
-    return "\n".join(lines), frozenset(valid_hashes)
+    return _Context("\n".join(lines), frozenset(valid_hashes), run_id)
 
 
 _SYSTEM_PROMPT = """\
@@ -333,6 +339,7 @@ def trigger_generation(tenant_id: str, session_id: str) -> dict[str, Any]:
             existing.error = None
             existing.analysis_summary = None
             existing.generated_at = None
+            existing.llm_call_id = None  # the UI must not show the previous run's numbers
             existing.updated_at = dt.datetime.now(dt.UTC)
             db.flush()
             db.refresh(existing)
@@ -395,7 +402,7 @@ async def run_generation(tenant_id: str, session_id: str, preset: str | None = N
         return
 
     try:
-        context_md, valid_hashes = _assemble_context(tenant_id, resolved)
+        context = _assemble_context(tenant_id, resolved)
     except ValueError as exc:
         _set_status(tenant_id, resolved, "failed", error=str(exc))
         log.warning("threat_model.context_failed", session_id=resolved, error=str(exc))
@@ -451,12 +458,18 @@ async def run_generation(tenant_id: str, session_id: str, preset: str | None = N
     )
 
     try:
-        provider = build_provider(choice.provider, api_key=choice.api_key, model=choice.model)
-        response = await provider.generate_structured(
+        call_id = _link_llm_call(tenant_id, resolved)
+        response = await calls.generate(
+            choice,
+            tenant_id=tenant_id,
+            purpose="threat_model",
             system_prompt=_SYSTEM_PROMPT,
-            user_prompt=context_md,
+            user_prompt=context.markdown,
             output_schema=ThreatModelOutput,
             max_tokens=12000,
+            session_id=resolved,
+            run_id=context.run_id,
+            call_id=call_id,
         )
         output = ThreatModelOutput.model_validate(response.content)
     except Exception as exc:
@@ -467,7 +480,7 @@ async def run_generation(tenant_id: str, session_id: str, preset: str | None = N
     # REQ-L4 citation verification: drop hashes that don't exist in the run.
     verified_threats = []
     for threat_item in output.threats:
-        valid_citations = [h for h in threat_item.citations if h in valid_hashes]
+        valid_citations = [h for h in threat_item.citations if h in context.valid_hashes]
         verified_threats.append(
             ThreatItem(
                 title=threat_item.title,
@@ -486,7 +499,7 @@ async def run_generation(tenant_id: str, session_id: str, preset: str | None = N
         output=output,
         verified_threats=verified_threats,
         provider=choice.provider,
-        model=provider.model,
+        model=response.model,
         usage=response.usage,
     )
     log.info(
@@ -501,6 +514,22 @@ async def run_generation(tenant_id: str, session_id: str, preset: str | None = N
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _link_llm_call(tenant_id: str, session_id: str) -> uuid.UUID:
+    """Point this run at the LLM call it is about to make, so the UI shows THIS call's numbers
+    (or "unavailable" if recording fails) — never a previous run's."""
+    call_id = uuid.uuid4()
+    with tenant_session(tenant_id) as db:
+        db.execute(
+            update(SessionThreatModel)
+            .where(
+                SessionThreatModel.session_id == uuid.UUID(session_id),
+                SessionThreatModel.tenant_id == uuid.UUID(tenant_id),
+            )
+            .values(llm_call_id=call_id)
+        )
+    return call_id
 
 
 def _set_status(
@@ -584,10 +613,16 @@ def _serialize(row: SessionThreatModel, *, include_threats: bool = False) -> dic
         "error": row.error,
         "generated_at": row.generated_at.isoformat() if row.generated_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "last_call": _last_call(row),
     }
     if include_threats:
         result["threats"] = [_serialize_threat(t) for t in (row.threats or [])]
     return result
+
+
+def _last_call(row: SessionThreatModel) -> dict[str, Any] | None:
+    db = object_session(row)
+    return calls.call_view(db, row.llm_call_id) if db is not None else None
 
 
 def _serialize_threat(t: Threat) -> dict[str, Any]:

@@ -14,8 +14,8 @@ from recon.config import get_settings
 from recon.db import models
 from recon.db.base import tenant_session
 from recon.llm import catalog, settings_router
-from recon.llm import service as llm_service
 from recon.llm.catalog_test import SAMPLE
+from recon.llm.fake_provider import FakeProvider
 from recon.sessions import service as sessions_service
 
 pytestmark = pytest.mark.integration
@@ -118,13 +118,7 @@ def test_delete_then_404(client, team):
 def test_test_endpoint_reaches_ping(client, team, monkeypatch):
     _, admin_h, _ = team
 
-    class _Stub:
-        async def generate_structured(self, **_kw):
-            return None
-
-    monkeypatch.setattr(
-        llm_service, "build_provider", lambda provider, api_key, model=None: _Stub()
-    )
+    FakeProvider.install(monkeypatch, "anthropic", content={"ok": True})
     logged = []
     monkeypatch.setattr(
         settings_router, "log", SimpleNamespace(info=lambda event, **kw: logged.append((event, kw)))

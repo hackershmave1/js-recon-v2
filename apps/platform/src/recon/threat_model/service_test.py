@@ -9,10 +9,16 @@ from recon.auth import service as auth_service
 from recon.llm import run_choice, tenant_config
 from recon.llm import service as llm_service
 from recon.llm.crypto import KeyDecryptError
+from recon.llm.fake_provider import FakeProvider
 from recon.sessions import service as sessions_service
 from recon.threat_model import service as tm_service
 
 pytestmark = pytest.mark.integration
+
+
+def _no_run_context(tenant_id, session_id):
+    # No run row: the call records metadata only (bodies need a run to be stored under).
+    return tm_service._Context("ctx", frozenset(), None)
 
 
 class _LogRecorder:
@@ -35,7 +41,7 @@ def _session(tenant: str) -> str:
 def test_undecryptable_key_marks_failed(tenant, monkeypatch):
     sid = _session(tenant)
     tm_service.trigger_generation(tenant, sid)
-    monkeypatch.setattr(tm_service, "_assemble_context", lambda t, s: ("ctx", frozenset()))
+    monkeypatch.setattr(tm_service, "_assemble_context", _no_run_context)
 
     def _boom(t, s, preset=None, *, with_key=False):
         raise KeyDecryptError("stored LLM key could not be decrypted")
@@ -55,7 +61,7 @@ def test_undecryptable_key_marks_failed(tenant, monkeypatch):
 def test_credential_load_crash_marks_failed_and_logs_traceback(tenant, monkeypatch):
     sid = _session(tenant)
     tm_service.trigger_generation(tenant, sid)
-    monkeypatch.setattr(tm_service, "_assemble_context", lambda t, s: ("ctx", frozenset()))
+    monkeypatch.setattr(tm_service, "_assemble_context", _no_run_context)
 
     def _boom(t, s, preset=None, *, with_key=False):
         raise RuntimeError("db went away")
@@ -75,7 +81,7 @@ def test_no_key_error_names_the_team_settings(tenant, monkeypatch):
         monkeypatch.delenv(env_var, raising=False)
     sid = _session(tenant)
     tm_service.trigger_generation(tenant, sid)
-    monkeypatch.setattr(tm_service, "_assemble_context", lambda t, s: ("ctx", frozenset()))
+    monkeypatch.setattr(tm_service, "_assemble_context", _no_run_context)
     asyncio.run(tm_service.run_generation(tenant, sid))
     error = tm_service.get_threat_model(tenant, sid)["error"]
     assert error.startswith("no LLM API key")  # the UI's Settings link matches this prefix
@@ -87,16 +93,32 @@ def _no_env_keys(monkeypatch):
         monkeypatch.delenv(env_var, raising=False)
 
 
+class _Seen:
+    """(provider, model) of every call the fakes received, read after the run."""
+
+    def __init__(self, fakes: dict):
+        self._fakes = fakes
+
+    def _items(self) -> list:
+        return [(p, c["model"]) for p, f in self._fakes.items() for c in f.calls]
+
+    def __eq__(self, other):
+        return self._items() == other
+
+    def __len__(self):
+        return len(self._items())
+
+    def __repr__(self):
+        return repr(self._items())
+
+
 def _capture_models(monkeypatch) -> list:
-    seen: list = []
-
-    def fake_build(provider_name, api_key, model=None):
-        seen.append((provider_name, model))
-        raise RuntimeError("stub: stop before the LLM call")
-
-    monkeypatch.setattr(tm_service, "build_provider", fake_build)
-    monkeypatch.setattr(tm_service, "_assemble_context", lambda t, s: ("ctx", frozenset()))
-    return seen
+    stop = RuntimeError("stub: stop before the LLM call")
+    fakes = {
+        p: FakeProvider.install(monkeypatch, p, error=stop) for p in ("anthropic", "openrouter")
+    }
+    monkeypatch.setattr(tm_service, "_assemble_context", _no_run_context)
+    return _Seen(fakes)
 
 
 def test_preset_resolves_for_the_session_keys_provider(tenant, monkeypatch):
