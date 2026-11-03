@@ -18,7 +18,8 @@ HANDOFF-*.md
 HANDOFF.md
 .superpowers/
 .agents/
-.claude/skills/
+.claude/skills/*
+!.claude/skills/ub-mode/
 skills-lock.json
 apps/platform/docker-compose.override.yml
 apps/platform/docs/*.pdf
