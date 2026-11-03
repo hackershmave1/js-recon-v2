@@ -373,6 +373,12 @@ class FindingOccurrence(Base):
     col: Mapped[int | None] = mapped_column(Integer)
     offset_start: Mapped[int | None] = mapped_column(Integer)
     offset_end: Mapped[int | None] = mapped_column(Integer)
+    # Exact display location in the SERVED (beautified) text — recon.findings.located. Not part
+    # of occurrence identity (line/col/offset_* above are); NULL = unknown or a pre-0032 run.
+    view_line: Mapped[int | None] = mapped_column(Integer)
+    view_col: Mapped[int | None] = mapped_column(Integer)
+    view_end_line: Mapped[int | None] = mapped_column(Integer)
+    view_end_col: Mapped[int | None] = mapped_column(Integer)
     evidence: Mapped[str | None] = mapped_column(Text)
     engine: Mapped[str | None] = mapped_column(String(32))
     confidence: Mapped[str | None] = mapped_column(String(16))

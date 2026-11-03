@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from recon.db import models
 from recon.findings import normalize
+from recon.findings.located import ViewLoc
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,9 @@ class Occurrence:
     # finding stays distinct per asset; run_asset_id is stored for reveal routing.
     run_asset_id: str | None = None
     asset_url: str | None = None
+    # Exact display location (recon.findings.located). NOT identity: line/col/offset_* keep the
+    # detector's own coordinates so a re-extract never duplicates an occurrence.
+    view: ViewLoc | None = None
 
     def _identity(self) -> dict[str, object]:
         # line/col are part of identity so two sightings stay distinct even when
@@ -187,6 +191,7 @@ def record_finding(
             )
 
     occurrence_hash = normalize.occurrence_hash(**occurrence._identity())
+    view = occurrence.view
     insert_occurrence = (
         pg_insert(models.FindingOccurrence)
         .values(
@@ -201,6 +206,10 @@ def record_finding(
             col=occurrence.col,
             offset_start=occurrence.offset_start,
             offset_end=occurrence.offset_end,
+            view_line=view.line if view else None,
+            view_col=view.col if view else None,
+            view_end_line=view.end_line if view else None,
+            view_end_col=view.end_col if view else None,
             evidence=occurrence.evidence,
             engine=occurrence.engine,
             confidence=occurrence.confidence,
