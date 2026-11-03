@@ -21,6 +21,7 @@ from recon.db.models import SessionLlmConfig
 from recon.llm import tenant_config
 from recon.llm.crypto import decrypt_api_key
 from recon.llm.presets import PRESETS, resolve_model
+from recon.llm.provider import DEFAULT_MODELS
 from recon.sessions.service import resolve_session_id
 
 KeySource = Literal["session", "team", "env"]
@@ -71,13 +72,22 @@ def resolve(
 
 
 def preset_menu(tenant_id: str, session_id: str) -> dict[str, Any]:
-    """What each preset would run for this session's credential — never key material."""
+    """What each preset would run for this session's credential — never key material.
+    ``default_model`` is what a run with no preset uses (the model chosen in Settings or on the
+    session, else the provider default), so the tab can name it instead of "Default model"."""
     base = _base(tenant_id, session_id)
     if base is None:
-        return {"credential_provider": None, "presets": None}
+        return {
+            "credential_provider": None,
+            "default_model": None,
+            "key_source": None,
+            "presets": None,
+        }
     team_provider, overrides = tenant_config.load_preset_context(tenant_id)
     return {
         "credential_provider": base.provider,
+        "default_model": base.fallback_model or DEFAULT_MODELS[base.provider],
+        "key_source": base.source,
         "presets": {
             p: resolve_model(p, base.provider, team_provider, overrides, base.fallback_model)
             for p in PRESETS

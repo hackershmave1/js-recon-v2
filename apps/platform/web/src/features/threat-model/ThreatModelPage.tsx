@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { getThreatModel, triggerThreatModel } from "../../api/apiClient";
 import { costLabel, getModelCatalog, PRESET_LABELS, PRESETS, type ModelCatalog, type Preset } from "../../api/llmCatalog";
 import { getRunPresets, type RunPresets } from "./threatModelApi";
+import { defaultOptionLabel, overrideNote } from "./presetLabels";
 import { RunDetails } from "./RunDetails";
 import { useTenant } from "../../tenant/TenantContext";
 import type { ThreatModelResponse, ThreatEntry } from "../../api/types";
@@ -146,6 +147,8 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
     setTriggering(true);
     try {
       const result = await triggerThreatModel(tenantId, sessionId, preset || undefined);
+      // Each run starts from the default again, so a preset is never reused silently.
+      setPreset("");
       setData(result);
       setFetchError(null);
     } catch (err: any) {
@@ -162,6 +165,8 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
     (a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)
   );
 
+  const note = overrideNote(runPresets, preset);
+
   return (
     <div className="card tm-root">
       <div className="tm-header">
@@ -171,7 +176,7 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
             {runPresets?.presets && (
               <select aria-label="Model preset" className="tm-preset" value={preset}
                 onChange={(e) => setPreset(e.target.value as Preset | "")}>
-                <option value="">Default model</option>
+                <option value="">{defaultOptionLabel(runPresets, catalog)}</option>
                 {PRESETS.map((p) => {
                   const model = runPresets.presets![p];
                   const cost = costLabel(catalog, model);
@@ -191,6 +196,7 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
         )}
       </div>
 
+      {note && <p className="tm-override">{note}</p>}
       {fetchError && <p className="tm-error">{fetchError}</p>}
 
       {!data && !fetchError && (

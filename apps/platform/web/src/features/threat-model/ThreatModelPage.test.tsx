@@ -113,6 +113,21 @@ describe("ThreatModelPage", () => {
     expect(screen.queryByText(/tokens/)).not.toBeInTheDocument();
   });
 
+  it("names the default model and warns when a preset replaces it, then resets after a run", async () => {
+    vi.spyOn(api, "getThreatModel").mockRejectedValue(new Error("404"));
+    vi.spyOn(tmApi, "getRunPresets").mockResolvedValue({ ...OR_PRESETS, default_model: "deepseek/deepseek-v4-flash-0731", key_source: "team" });
+    const trigger = vi.spyOn(api, "triggerThreatModel").mockResolvedValue({ ...failed(""), status: "pending", error: null });
+    render(<MemoryRouter><ThreatModelPage sessionId="s1" /></MemoryRouter>);
+    const select = await screen.findByLabelText("Model preset");
+    expect(await screen.findByRole("option", { name: /^Default · deepseek\/deepseek-v4-flash-0731 \(team key\)/ })).toBeInTheDocument();
+    expect(screen.queryByText(/instead of the default/)).not.toBeInTheDocument();
+    await userEvent.selectOptions(select, "balanced");
+    expect(screen.getByText("Uses anthropic/claude-sonnet-4.6 instead of the default (deepseek/deepseek-v4-flash-0731)")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Generate Threat Model/ }));
+    expect(trigger).toHaveBeenCalledWith("t1", "s1", "balanced");
+    expect(screen.queryByText(/instead of the default/)).not.toBeInTheDocument();
+  });
+
   it("the empty state points to Settings", async () => {
     vi.spyOn(api, "getThreatModel").mockRejectedValue(Object.assign(new Error("nf"), { status: 404 }));
     render(<MemoryRouter><ThreatModelPage sessionId="s1" /></MemoryRouter>);

@@ -5,6 +5,9 @@
 
 .tm-trigger { padding: 6px 14px; font-size: 12.5px; }
 
+/* A preset replaces the model chosen in Settings: say so next to the menu. */
+.tm-override { margin: 6px 0 0; font-size: 11.5px; color: var(--warn, #f59e0b); overflow-wrap: anywhere; }
+
 .tm-empty { padding: 24px 0; }
 .tm-empty p { margin: 0 0 8px; }
 
