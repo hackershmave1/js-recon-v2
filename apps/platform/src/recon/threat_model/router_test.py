@@ -42,6 +42,8 @@ def test_presets_endpoint_resolves_for_the_credential_provider(client, tenant):
     assert r.status_code == 200
     assert r.json() == {
         "credential_provider": "openrouter",
+        "default_model": "anthropic/claude-sonnet-4.6",
+        "key_source": "session",
         "presets": {
             "cheapest": "anthropic/claude-haiku-4.5:floor",
             "balanced": "anthropic/claude-sonnet-4.6",
@@ -53,7 +55,12 @@ def test_presets_endpoint_resolves_for_the_credential_provider(client, tenant):
 def test_presets_endpoint_without_any_key(client, tenant):
     sid = _session(tenant)
     r = client.get(f"/sessions/{sid}/threat-model/presets", headers={"X-Tenant-Id": tenant})
-    assert r.json() == {"credential_provider": None, "presets": None}
+    assert r.json() == {
+        "credential_provider": None,
+        "default_model": None,
+        "key_source": None,
+        "presets": None,
+    }
 
 
 @pytest.fixture()

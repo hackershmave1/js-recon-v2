@@ -14,6 +14,7 @@ from recon.llm import run_choice, tenant_config
 from recon.llm import service as llm_service
 from recon.llm.crypto import KeyDecryptError, encrypt_api_key
 from recon.llm.presets import PRESETS
+from recon.llm.provider import DEFAULT_MODELS
 from recon.sessions import service as sessions_service
 
 pytestmark = pytest.mark.integration
@@ -79,7 +80,12 @@ def test_saved_session_key_wins_over_env(session_ids, monkeypatch):
 
 def test_no_saved_key_and_no_env_key_is_none(session_ids):
     assert run_choice.resolve(*session_ids, with_key=True) is None
-    assert run_choice.preset_menu(*session_ids) == {"credential_provider": None, "presets": None}
+    assert run_choice.preset_menu(*session_ids) == {
+        "credential_provider": None,
+        "default_model": None,
+        "key_source": None,
+        "presets": None,
+    }
 
 
 def test_session_key_beats_team_key(session_ids):
@@ -183,6 +189,10 @@ def test_menu_names_the_model_a_real_run_uses(session_ids, monkeypatch, setup):
     tenant, session_id = session_ids
     setup(tenant, session_id, monkeypatch)
     menu = run_choice.preset_menu(tenant, session_id)
+    # "Default" in the menu names exactly what a preset-less run uses.
+    default_run = run_choice.resolve(tenant, session_id, None, with_key=True)
+    assert menu["default_model"] == (default_run.model or DEFAULT_MODELS[default_run.provider])
+    assert menu["key_source"] == default_run.source
     for preset in PRESETS:
         run = run_choice.resolve(tenant, session_id, preset, with_key=True)
         assert menu["credential_provider"] == run.provider
