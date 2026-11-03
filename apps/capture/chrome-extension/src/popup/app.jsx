@@ -467,7 +467,9 @@ export function App() {
       : 'no scope · capturing nothing';
 
   // Per-file analysis status (by URL) → the captures feed's lifecycle token.
-  const analysisByUrl = new Map((analysis.files || []).map((f) => [f.url, f.status]));
+  // The platform keeps a re-captured url's other versions as `url#sha256=…`; the popup lists
+  // only the newest copy per url, so key by the bare url (a later version's status wins).
+  const analysisByUrl = new Map((analysis.files || []).map((f) => [f.url.split('#sha256=')[0], f.status]));
   const LIFECYCLE = { queued: 'ingested', analyzing: 'analyzing', completed: 'analyzed', failed: 'analysis failed', cancelled: 'ingested' };
   const allCaptures = files.map((f, i) => {
     const cls = f.classification || 'app';
