@@ -65,6 +65,9 @@ export interface Coverage {
   // bounded to a prefix and some endpoints/hosts may be missing (REQ-C2 honesty). Optional so
   // events/responses predating the field read as not-curtailed.
   curtailed?: boolean;
+  // D37-L2: true when source-map recovery hit its cumulative-write budget, so some recovered
+  // original files were never scanned (REQ-C2 honesty). Optional for older responses.
+  recovered_partial?: boolean;
   files: { path: string; attributed: number; unattributed: number }[];
 }
 // Run-scoped shadow-API bucket summary (design §5.4/§6.4): null until a spec is
