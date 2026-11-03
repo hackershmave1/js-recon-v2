@@ -58,3 +58,14 @@ describe("CodeViewer exact ranges", () => {
     expect(hits[0].classList.contains("focus")).toBe(true);
   });
 });
+
+describe("CodeViewer huge rows", () => {
+  it("highlights a finding millions of columns into a raw one-line bundle", () => {
+    const col = 3_400_000;
+    const text = "a".repeat(col) + '"/api/deep"' + "b".repeat(1_000_000);
+    const loc = { line: 1, col, end_line: 1, end_col: col + 11 };
+    render(<CodeViewer text={text} truncated={false} marks={null} ranges={[loc]} focusRange={loc} focusLine={1} />);
+    expect(document.querySelector("mark.sv-hit.focus")?.textContent).toBe('"/api/deep"');
+    expect((document.querySelector(".sv-code-txt")?.textContent ?? "").length).toBeLessThanOrEqual(100_004);
+  });
+});

@@ -596,7 +596,8 @@ analytics filter.
 #### D75 · A bundle over the 1 MiB beautify cap has no exact location in Pretty-print mode [M]  ·  UX
 
 Such a bundle is analyzed and served RAW (`deobfuscate.beautify` returns None), so its view locations
-index the raw text. A jump opens it raw and highlights the exact token, but the client-side Pretty print
+index the raw text. A jump opens it raw and highlights the exact token (the viewer renders a window
+of the huge row around it), but the client-side Pretty print
 (a different formatter, in the Web Worker) drops every mark and highlight, because nothing maps raw
 positions onto its output.
 

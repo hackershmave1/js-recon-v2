@@ -8,10 +8,13 @@ strings). :class:`LocatedText` translates every one of those into a :class:`View
 served text, or ``None`` when it cannot do so exactly — a finding with no location is honest, a
 highlight on the wrong token is not.
 
-Raw -> served alignment: beautify only adds or removes ASCII layout whitespace, so the sequence
-of non-whitespace characters is identical in both texts (checked against every chunk of a real
-capture). A raw position maps to the served position of the same non-whitespace character. Only
-``[ \\t\\n\\r\\f\\v]`` counts as layout: NBSP, BOM and U+2028 are content beautify never touches.
+Raw -> served alignment: beautify only adds or removes layout whitespace, so the sequence of the
+remaining characters is identical in both texts (checked against every chunk of a real capture). A
+raw position maps to the served position of the same non-layout character. Layout is ASCII
+whitespace plus the two characters jsbeautifier 2.0.3 drops between tokens — a leading BOM
+(U+FEFF) and NBSP (U+00A0); both are counted as layout on BOTH sides, so one kept inside a string
+literal still aligns. (A U+2028 makes jsbeautifier rewrite string contents; that bundle then fails
+closed below.)
 Fail-closed twice: the whole texts must agree beyond layout, and each mapped token must too.
 
 Positions here are DISPLAY data only. The stored ``line``/``col``/``offset_*`` of an occurrence
@@ -28,7 +31,7 @@ from functools import cached_property
 
 from recon.findings import deobfuscate
 
-_LAYOUT_WS = re.compile(r"[ \t\n\r\f\v]+")
+_LAYOUT_WS = re.compile(r"[ \t\n\r\f\v\u00a0\ufeff]+")
 _NON_ASCII = re.compile(r"[^\x00-\x7f]")
 
 

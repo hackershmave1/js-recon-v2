@@ -91,10 +91,21 @@ def test_alignment_fails_closed_when_the_texts_differ_beyond_whitespace():
     assert located.from_raw_chars(4, 7) is None
 
 
-def test_non_ascii_whitespace_is_content_not_layout():
-    # NBSP / U+2028 are never inserted or dropped by beautify, so they must not be skipped.
-    raw = "a=1; b=2;"
-    served = "a = 1;\n b = 2;"
-    loc = LocatedText(served, raw=raw).from_raw_chars(5, 8)
+def test_a_bom_or_nbsp_beautify_drops_does_not_break_the_alignment():
+    raw = '﻿var a=1; fetch("/x");var s="a b";document.cookie="k"'
+    served = deobfuscate.beautify(raw)
+    assert served is not None and not served.startswith("﻿")  # beautify dropped it
+    start = raw.index('document.cookie="k"')
+    loc = LocatedText(served, raw=raw).from_raw_chars(start, start + len('document.cookie="k"'))
     assert loc is not None
-    assert _slice(served, loc) == "b = 2"
+    assert _slice(served, loc) == 'document.cookie = "k"'
+
+
+def test_when_beautify_rewrites_content_the_location_fails_closed():
+    # jsbeautifier treats U+2028 as a line break and inserts spaces INSIDE string literals, so the
+    # texts no longer agree beyond layout: no location rather than a highlight on the wrong token.
+    raw = 'var s="a b";x="y"'
+    served = deobfuscate.beautify(raw)
+    assert served is not None
+    start = raw.index('x="y"')
+    assert LocatedText(served, raw=raw).from_raw_chars(start, start + 5) is None

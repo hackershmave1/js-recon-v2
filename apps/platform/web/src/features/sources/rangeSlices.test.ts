@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { rangesByLine, splitByRanges } from "./rangeSlices";
+import { rangesByLine, renderWindowStart, splitByRanges } from "./rangeSlices";
 
 describe("rangeSlices", () => {
   it("indexes each range on every line it covers, with that line's column bounds", () => {
@@ -19,5 +19,14 @@ describe("rangeSlices", () => {
     expect(out.map((p) => [p.text, p.hit])).toEqual([
       ["fetch", null], ["(", null], ['"/api/a"', "focus"], [")", null],
     ]);
+  });
+});
+
+describe("rendering a window of a huge row", () => {
+  it("centres the window on the focused range and clamps it to the row", () => {
+    const hits = [{ start: 10, end: 12, focus: false }, { start: 3_400_010, end: 3_400_030, focus: true }];
+    expect(renderWindowStart(9_000_000, hits, 100_000)).toBe(3_350_010);
+    expect(renderWindowStart(3_400_100, hits, 100_000)).toBe(3_300_100); // clamped to the end
+    expect(renderWindowStart(50_000, hits, 100_000)).toBe(0);            // fits whole
   });
 });

@@ -344,6 +344,15 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   const jumpedRef = useRef(false);
   // Pretty-print: auto-on for a minified file the server served raw (see the content effect).
   const [pretty, setPretty] = useState(false);
+  // Open `path` for a jump, in the raw view. The ref is consumed by the content effect, so it is
+  // set only when the file actually changes (a jump within the open file loads no new content).
+  const selPathRef = useRef<string | null>(null);
+  selPathRef.current = selPath;
+  const openForJump = useCallback((path: string) => {
+    if (path !== selPathRef.current) jumpedRef.current = true;
+    setSelPath(path);
+    setPretty(false);
+  }, []);
   const toggleDir = useCallback((key: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -359,11 +368,9 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   const [searchResults, setSearchResults] = useState<SourceMatch[] | null>(null);
   const [searching, setSearching] = useState(false);
   const jumpToMatch = useCallback((m: SourceMatch) => {
-    setSelPath(m.path);
+    openForJump(m.path);
     setFocus({ line: m.line, loc: null, approximate: false });
-    jumpedRef.current = true;
-    setPretty(false);
-  }, []);
+  }, [openForJump]);
   // Draggable + collapsible file rail (task: expand the code view).
   const { width: railWidth, collapsed: railCollapsed, toggleCollapsed: toggleRail, resizerProps } = useResizableRail();
 
@@ -375,11 +382,9 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     const j = pendingJump.current;
     if (!j || !files) return;
     pendingJump.current = null;
-    setSelPath(resolveJumpPath(j, files));
+    openForJump(resolveJumpPath(j, files));
     setFocus(j.line != null ? { line: j.line, loc: j.loc ?? null, approximate: !!j.approximate } : null);
-    jumpedRef.current = true;
-    setPretty(false);
-  }, [jump, files]);
+  }, [jump, files, openForJump]);
 
   useEffect(() => {
     // Clear the previous run's tree/selection so a run switch never shows stale

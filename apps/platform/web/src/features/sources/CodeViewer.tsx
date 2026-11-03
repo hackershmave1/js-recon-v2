@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ViewLoc } from "../../api/types";
 import { highlightLine, loadPrism, type HighlightedSpan } from "./highlight";
-import { rangesByLine, splitByRanges } from "./rangeSlices";
+import { rangesByLine, renderWindowStart, shiftRanges, splitByRanges } from "./rangeSlices";
 
 // D35: the code body is VIRTUALIZED — a beautified multi-MB bundle can be hundreds of
 // thousands of lines, and committing one DOM node per line (the old approach) exploded
@@ -139,15 +139,24 @@ export function CodeViewer({ text, truncated, marks, focusLine, ranges, focusRan
     const focused = focusLine === n;
     const spans = spansByIndex.get(i);
     const hits = hitsByLine.get(n);
-    const pieces = hits ? splitByRanges(spans ?? [{ text: line, className: "" }], hits) : null;
+    // A huge raw row (a bundle over the server's beautify cap) is clipped to RENDER_MAX_LINE; with
+    // a finding on it, the clip is a window AROUND the finding (often millions of columns in), not
+    // the row's first 100k chars — otherwise the jump would highlight nothing.
+    const clipped = raw.length > RENDER_MAX_LINE;
+    const winStart = clipped && hits ? renderWindowStart(raw.length, hits, RENDER_MAX_LINE) : 0;
+    const before = winStart > 0 ? "… " : "";
+    const after = clipped && winStart + RENDER_MAX_LINE < raw.length ? " …" : "";
+    const pieces = !hits ? null : clipped
+      ? splitByRanges([{ text: raw.slice(winStart, winStart + RENDER_MAX_LINE), className: "" }], shiftRanges(hits, -winStart))
+      : splitByRanges(spans ?? [{ text: raw, className: "" }], hits);
     rows.push(
       <div key={n} className={"sv-line" + (mark ? " marked" : "") + (focused ? " focus" : "")}>
         <span className="sv-ln">{n}</span>
         <span className="sv-code-txt">
           {pieces
-            ? pieces.map((p, j) => p.hit
+            ? <>{before}{pieces.map((p, j) => p.hit
               ? <mark key={j} className={"sv-hit" + (p.hit === "focus" ? " focus" : "")}><span className={p.className}>{p.text}</span></mark>
-              : <span key={j} className={p.className}>{p.text}</span>)
+              : <span key={j} className={p.className}>{p.text}</span>)}{after}</>
             : spans ? spans.map((s, j) => <span key={j} className={s.className}>{s.text}</span>) : line}
         </span>
         {mark && <span className="sv-mark">{mark}</span>}

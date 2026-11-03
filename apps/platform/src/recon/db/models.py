@@ -374,7 +374,8 @@ class FindingOccurrence(Base):
     offset_start: Mapped[int | None] = mapped_column(Integer)
     offset_end: Mapped[int | None] = mapped_column(Integer)
     # Exact display location in the SERVED (beautified) text — recon.findings.located. Not part
-    # of occurrence identity (line/col/offset_* above are); NULL = unknown or a pre-0032 run.
+    # of occurrence identity (line/col/offset_* above are). view_line 0 = analyzed with no exact
+    # location; NULL = recorded before exact locations (pre-0032), whose old line is "approximate".
     view_line: Mapped[int | None] = mapped_column(Integer)
     view_col: Mapped[int | None] = mapped_column(Integer)
     view_end_line: Mapped[int | None] = mapped_column(Integer)

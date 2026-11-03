@@ -60,8 +60,8 @@ class OccurrenceView:
     asset_url: str | None = None
     # The exact range in the served source (recon.findings.located); None = no exact location.
     loc: ViewLoc | None = None
-    # A run analyzed before exact locations has only the detector's own line: offered as
-    # "approximate" so the UI never presents it as exact. None on every newer run.
+    # An occurrence recorded before exact locations has only the detector's own line: offered
+    # as "approximate" so the UI never presents it as exact. None on every newer occurrence.
     approximate_line: int | None = None
 
 
@@ -489,16 +489,6 @@ def list_findings(
             )
             is not None
         )
-        # Whole-run (not the filtered page): did analyze record exact locations at all?
-        exact_run = (
-            session.scalar(
-                select(FindingOccurrence.id)
-                .join(Finding, Finding.id == FindingOccurrence.finding_id)
-                .where(Finding.run_id == str(run_id), FindingOccurrence.view_line.is_not(None))
-                .limit(1)
-            )
-            is not None
-        )
         return FindingsView(
             run_id=str(run_id),
             hidden=hidden_counts,
@@ -516,7 +506,6 @@ def list_findings(
                             finding.finding_hash, SightingSummary(capture=0, platform=0)
                         )
                     ),
-                    exact_run=exact_run,
                 )
                 for finding in findings
             ],
@@ -815,8 +804,6 @@ def _finding_view(
     asset_refs: dict[str, _AssetRef] | None = None,
     spec_status_row: FindingSpecStatus | None = None,
     sightings: SightingSummary | None = None,
-    *,
-    exact_run: bool = True,
 ) -> FindingView:
     # REQ-S2: a secret's raw evidence is never served; the value comes only from the
     # audited reveal endpoint. Endpoint/param evidence (a code snippet) is kept.
@@ -840,7 +827,6 @@ def _finding_view(
             occurrence,
             redact_evidence=is_secret,
             asset_url=_asset_url_for(occurrence),
-            exact_run=exact_run,
         )
         for occurrence in sorted(
             finding.occurrences,
@@ -906,8 +892,6 @@ def _occurrence_view(
     occurrence: FindingOccurrence,
     redact_evidence: bool = False,
     asset_url: str | None = None,
-    *,
-    exact_run: bool = True,
 ) -> OccurrenceView:
     loc = (
         ViewLoc(
@@ -916,13 +900,18 @@ def _occurrence_view(
             occurrence.view_end_line,
             occurrence.view_end_col,
         )
-        if occurrence.view_line is not None
+        if occurrence.view_line  # 0 = analyzed with no exact location, NULL = pre-exact row
         and occurrence.view_col is not None
         and occurrence.view_end_line is not None
         and occurrence.view_end_col is not None
         else None
     )
-    legacy_line = occurrence.line if occurrence.line and occurrence.line > 0 else None
+    # Only a row recorded before exact locations existed (view_line NULL) offers its old line.
+    legacy_line = (
+        occurrence.line
+        if occurrence.view_line is None and occurrence.line and occurrence.line > 0
+        else None
+    )
     return OccurrenceView(
         host=occurrence.host,
         raw_url=occurrence.raw_url,
@@ -937,5 +926,5 @@ def _occurrence_view(
         verified=occurrence.verified,
         asset_url=asset_url,
         loc=loc,
-        approximate_line=None if exact_run else legacy_line,
+        approximate_line=legacy_line,
     )

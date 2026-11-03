@@ -7,7 +7,8 @@ Create Date: 2026-11-03
 Display-only columns: where the sighting sits in the text the Sources tab serves (1-based line,
 0-based UTF-16 column, end exclusive — ``recon.findings.located``). Deliberately NOT the existing
 ``line``/``col``/``offset_*``: those feed ``occurrence_hash``, so changing their meaning would
-duplicate every occurrence on a re-extract. Existing rows keep NULL ("approximate location").
+duplicate every occurrence on a re-extract. Existing rows keep NULL ("approximate location"); new
+rows with no exact location store ``view_line = 0``.
 """
 
 from __future__ import annotations

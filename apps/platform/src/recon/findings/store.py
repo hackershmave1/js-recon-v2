@@ -206,7 +206,9 @@ def record_finding(
             col=occurrence.col,
             offset_start=occurrence.offset_start,
             offset_end=occurrence.offset_end,
-            view_line=view.line if view else None,
+            # 0 = analyzed, but no exact location (a 1-based line is never 0); NULL is reserved
+            # for occurrences recorded before exact locations existed (shown "approximate").
+            view_line=view.line if view else 0,
             view_col=view.col if view else None,
             view_end_line=view.end_line if view else None,
             view_end_col=view.end_col if view else None,

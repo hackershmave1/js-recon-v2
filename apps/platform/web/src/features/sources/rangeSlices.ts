@@ -57,3 +57,14 @@ export function splitByRanges(spans: HighlightedSpan[], ranges: ColRange[]): Hit
   }
   return out;
 }
+
+// Where to start rendering a row too long to render whole: centred on the focused range (else the
+// first one), clamped so the window stays inside the row.
+export function renderWindowStart(rowLength: number, ranges: ColRange[], width: number): number {
+  if (rowLength <= width || ranges.length === 0) return 0;
+  const anchor = (ranges.find((r) => r.focus) ?? ranges[0]).start;
+  return Math.max(0, Math.min(anchor - Math.floor(width / 2), rowLength - width));
+}
+
+export const shiftRanges = (ranges: ColRange[], by: number): ColRange[] =>
+  ranges.map((r) => ({ ...r, start: r.start + by, end: r.end + by }));

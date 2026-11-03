@@ -137,7 +137,7 @@ def test_the_api_serves_the_exact_range_and_flags_old_runs_as_approximate(
     (occ,) = endpoint.occurrences
     assert occ.loc is not None and occ.approximate_line is None
 
-    # A run analyzed before exact locations: no view_* anywhere -> no loc, the old line is
+    # Occurrences recorded before exact locations (view_* NULL) -> no loc, the old line is
     # offered only as approximate.
     with tenant_session(tenant) as session:
         session.execute(
