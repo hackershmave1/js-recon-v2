@@ -69,3 +69,20 @@ def test_coverage_view_reads_curtailed():
     assert queries._coverage_view_from_payload({"curtailed": True}).curtailed is True
     # An event predating the field defaults to not-curtailed (backward compat).
     assert queries._coverage_view_from_payload({}).curtailed is False
+
+
+def test_merge_coverage_payloads_ors_recovered_partial():
+    # D37-L2: a run's map recovery is partial if ANY asset's was; a payload predating the field
+    # (no key) reads as complete.
+    merged = queries._merge_coverage_payloads(
+        [{"recovered_partial": False}, {"recovered_partial": True}]
+    )
+    assert merged["recovered_partial"] is True
+    assert queries._merge_coverage_payloads([{}, {}])["recovered_partial"] is False
+
+
+def test_coverage_view_reads_recovered_partial():
+    assert (
+        queries._coverage_view_from_payload({"recovered_partial": True}).recovered_partial is True
+    )
+    assert queries._coverage_view_from_payload({}).recovered_partial is False

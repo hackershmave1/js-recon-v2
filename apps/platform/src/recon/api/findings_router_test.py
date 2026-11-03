@@ -123,3 +123,22 @@ def test_diff_router_passes_run_ids_to_query(client: TestClient) -> None:
     args = mock_dr.call_args.args
     assert args[1] == _RUN
     assert args[2] == _BASE_RUN
+
+
+def test_coverage_reports_a_truncated_source_map_recovery(client: TestClient) -> None:
+    # D37-L2: recovery that hit its write budget left recovered originals unscanned; the API
+    # must carry that so the workspace can say so (REQ-C2) instead of dropping the flag.
+    coverage = queries.CoverageView(
+        attributed=1,
+        unattributed=0,
+        secrets=0,
+        secrets_engine="ok",
+        sources_recovered=3,
+        source_map="capture",
+        files=[],
+        recovered_partial=True,
+    )
+    view = queries.FindingsView(run_id=_RUN, findings=[], coverage=coverage, total=0)
+    with patch.object(queries, "list_findings", return_value=view):
+        body = client.get(f"/runs/{_RUN}/findings", headers=_HEADERS).json()
+    assert body["coverage"]["recovered_partial"] is True

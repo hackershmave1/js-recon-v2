@@ -281,6 +281,12 @@ describe("OverviewPanel", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("shows a partial banner when source-map recovery was cut short (D37-L2 honesty)", () => {
+    renderPanel({ run_id: "r", count: 0, spec: null, findings: [], coverage: coverage({ recovered_partial: true }) });
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(screen.getByText(/recovered original files weren't scanned/i)).toBeInTheDocument();
+  });
+
   it("coalesces curtailed + skipped into ONE Partial banner carrying both reasons", () => {
     renderPanel({
       run_id: "r", count: 0, spec: null, findings: [],

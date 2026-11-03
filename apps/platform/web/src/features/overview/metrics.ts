@@ -45,6 +45,11 @@ export function computePartialNotes(c: Coverage | null): string[] {
       "Extraction hit the analyzer's size budget on a very large bundle — some endpoints and hosts may be missing.",
     );
   }
+  if (c?.recovered_partial) {
+    notes.push(
+      "Source-map recovery hit its size budget — some recovered original files weren't scanned for endpoints or secrets.",
+    );
+  }
   if (c?.source_map === "skipped") {
     notes.push(
       "A referenced source map couldn't be fetched (too large or unavailable) — recovered original sources, and any secrets in them, may be incomplete.",

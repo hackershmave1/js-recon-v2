@@ -170,6 +170,11 @@ describe("RunHeader", () => {
     expect(screen.getByText(/tune extraction/)).toBeInTheDocument();
   });
 
+  it("shows nudge when source-map recovery was cut short (recovered_partial)", () => {
+    renderHeader({ findings: mkFindings({ coverage: cov({ recovered_partial: true, unattributed: 0 }) }) });
+    expect(screen.getByText(/tune extraction/)).toBeInTheDocument();
+  });
+
   it("calls onOpenTuning when nudge button is clicked", () => {
     const handler = vi.fn();
     renderHeader({ findings: mkFindings({ coverage: cov({ unattributed: 3 }) }) }, handler);
