@@ -580,3 +580,13 @@ generation vs serialization; models per domain).
 
 **Fix:** split one file per PR, starting with `threat_model/service.py`.
 
+### 2026-11-03 Hidden findings overlay — OPEN (D74)
+
+#### D74 · The ApiSpec page's endpoint classification ignores the hidden-findings overlay [S]  ·  correctness
+
+`findings/visibility.hidden_finding_ids` drives every list and count of a run's findings, but
+`spec/service.py` (the ApiSpec page's shadow-API buckets) reads `endpoint` findings directly, so an
+analytics-vendor endpoint the workspace hides can still be classified there. Pre-existing for the old
+analytics filter.
+
+**Fix:** filter the endpoint read in `spec/service` through `hidden_finding_ids`.

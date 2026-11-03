@@ -59,7 +59,8 @@ def correlate_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> 
     # interrupt rolls back the un-committed session below, so a re-run redoes cleanly.
     run_queries.raise_if_control_requested(tenant_id, run_id)
 
-    view = findings_queries.list_findings(tenant_id, run_id)
+    # Correlate WRITES: it must see every finding (hidden ones too) and never a truncated page.
+    view = findings_queries.list_findings(tenant_id, run_id, include_hidden=True, limit=None)
     resolved: dict[str, str] = {}
     by_hash: dict[str, findings_queries.FindingView] = {}
     if observed and view is not None:

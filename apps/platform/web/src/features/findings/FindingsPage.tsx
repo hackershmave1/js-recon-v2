@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FindingsResponse, Finding, SourceJump } from "../../api/types";
+import { hiddenSummary, hiddenTotal } from "./hiddenSummary";
 import { TRIAGE_STATUSES } from "../../api/types";
 import { typeLabel } from "../../api/findingLabels";
 import { getFindings, triageFinding } from "../../api/apiClient";
@@ -102,18 +103,24 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [limit, setLimit] = useState(300);
   const { width: railWidth, collapsed: railCollapsed, toggleCollapsed: toggleRail, resizerProps } = useResizableRail("findings");
-  // #3: analytics/telemetry/vendor hosts are hidden by default; this toggle re-fetches the run's
-  // findings WITH the noise (include_noise=true) so an operator can audit what was filtered out.
+  // Captured findings that make no sense to a human (analytics vendors, junk / off-scope page
+  // routes) are hidden by default; this toggle re-fetches WITH them (include_hidden=true) so an
+  // operator can audit what was held back.
   const { tenantId } = useTenant();
-  const [showAnalytics, setShowAnalytics] = useState(false);
-  const [withNoise, setWithNoise] = useState<FindingsResponse | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
+  const [withHidden, setWithHidden] = useState<FindingsResponse | null>(null);
+  const hiddenCount = hiddenTotal(data.hidden);
+  // Nothing hidden (or another run) -> the toggle disappears, so it must not stay switched on.
+  useEffect(() => { if (hiddenCount === 0) setShowHidden(false); }, [hiddenCount]);
+  useEffect(() => { setShowHidden(false); }, [runId]);
   useEffect(() => {
-    if (!showAnalytics || !tenantId) { setWithNoise(null); return; }
+    if (!showHidden || !tenantId) { setWithHidden(null); return; }
     let live = true;
-    getFindings(tenantId, runId, { includeNoise: true }).then((r) => { if (live) setWithNoise(r); }).catch(() => {});
+    getFindings(tenantId, runId, { includeHidden: true }).then((r) => { if (live) setWithHidden(r); }).catch(() => {});
     return () => { live = false; };
-  }, [showAnalytics, tenantId, runId]);
-  const view = showAnalytics && withNoise ? withNoise : data;
+    // `data` is a dep so a refresh (triage, polling) refreshes the full view too.
+  }, [showHidden, tenantId, runId, data]);
+  const view = showHidden && withHidden ? withHidden : data;
 
   // D50: apply local triage overrides (from bulk actions) so facets + rows reflect them without a
   // refetch. A no-op ({} overrides) returns the source array unchanged.
@@ -206,11 +213,14 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
               title="Collapse filters" aria-label="Collapse filters panel"><Icon name="panel" size={15} /></button>
           </div>
           <div className="fp-count"><b>{visible.length}</b> of {view.findings.length} shown</div>
-          <label className="fp-noise" title="Third-party analytics/telemetry/vendor hosts (amplitude, sentry, stripe, …) are hidden by default">
-            <input type="checkbox" checked={showAnalytics}
-              onChange={(e) => setShowAnalytics(e.target.checked)} />
-            <span>Show analytics hosts</span>
-          </label>
+          {hiddenCount > 0 && (
+            <label className="fp-noise"
+              title="Captured but not shown: analytics vendors, junk URLs (https://x, ${…}) and page routes off your scope. Kept for later analysis.">
+              <input type="checkbox" checked={showHidden}
+                onChange={(e) => setShowHidden(e.target.checked)} />
+              <span>Show {hiddenCount} hidden <span className="muted">({hiddenSummary(data.hidden)})</span></span>
+            </label>
+          )}
           {facets.map((facet) => (
             <div key={facet.key}>
               <div className="fp-facet-label">{facet.label}</div>

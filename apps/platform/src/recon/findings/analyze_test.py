@@ -210,7 +210,11 @@ def test_suspected_lane_splits_host_and_path_from_absolute_url(redis, authorized
     )
     assert _drive(redis, view.id, tenant) == RunState.DONE.value
 
-    by_value = {f.value: f for f in findings_queries.list_findings(tenant, view.id).findings}
+    # include_hidden: the off-scope page route below is captured but hidden by default.
+    by_value = {
+        f.value: f
+        for f in findings_queries.list_findings(tenant, view.id, include_hidden=True).findings
+    }
 
     suspected_abs = by_value["GET /stats/rest/en"]  # promoted: host SPLIT out of the value
     assert suspected_abs.type == "endpoint_suspected"

@@ -240,11 +240,15 @@ def _seed_run(tenant, session_id) -> str:
 def test_get_hosts_aggregates_and_classifies_scope(client, authorized_session):
     tenant, session_id = authorized_session
     run_id = _seed_run(tenant, session_id)
-    resp = client.get(f"/runs/{run_id}/hosts", headers=_headers(tenant))
+    # By default an off-scope page-route target is hidden (findings/visibility)...
+    default = client.get(f"/runs/{run_id}/hosts", headers=_headers(tenant)).json()
+    assert "cdn.mui.com" not in {h["host"] for h in default["hosts"]}
+    # ...and the opt-in view still lists every captured host.
+    resp = client.get(f"/runs/{run_id}/hosts?include_hidden=true", headers=_headers(tenant))
     assert resp.status_code == 200
     body = resp.json()
     assert body["run_id"] == run_id
-    assert body["count"] == 5  # + cdn.mui.com (page_route target, now listed)
+    assert body["count"] == 5  # + cdn.mui.com (page_route target, listed when hidden ones are)
     assert body["in_scope"] == 3  # guess.acme.io in; cdn.evil.com + cdn.mui.com out
     assert body["endpoints_unattributed"] == 1  # only h2; the host-less sink is suspected
     assert body["suspected_unattributed"] == 1  # u2 (host-less unresolved), NOT the host-less param

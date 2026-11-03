@@ -11,8 +11,10 @@ vi.mock("../../api/apiClient", async (importOriginal) => {
   return {
     ...actual,
     triageFinding: vi.fn().mockResolvedValue({ status: "dismissed", note: null, actor: "you", updated_at: "t" }),
+    getFindings: vi.fn(),
   };
 });
+import * as apiClient from "../../api/apiClient";
 
 const occ = (over: Partial<Occurrence> = {}): Occurrence => ({
   host: null, raw_url: null, source_path: "app.js", line: 1, col: 1,
@@ -212,5 +214,20 @@ describe("FindingsPage", () => {
     expect(click).toHaveBeenCalled();
     create.mockRestore();
     click.mockRestore();
+  });
+
+  it("says how many findings are captured but hidden, and shows them on request", async () => {
+    const hiddenRoute = f({ finding_hash: "h1", type: "page_route", value: "https://x" });
+    vi.mocked(apiClient.getFindings).mockResolvedValue({ ...data, findings: [...data.findings, hiddenRoute] });
+    render(<TenantProvider><FindingsPage data={{ ...data, hidden: { junk_or_dynamic: 1 } }} runId="r" onJumpToSource={() => {}} /></TenantProvider>);
+    const toggle = screen.getByRole("checkbox", { name: /Show 1 hidden \(junk 1\)/ });
+    await userEvent.click(toggle);
+    expect(apiClient.getFindings).toHaveBeenCalledWith(expect.any(String), "r", { includeHidden: true });
+    expect(await screen.findByText("https://x")).toBeInTheDocument();
+  });
+
+  it("offers no hidden toggle when nothing is hidden", () => {
+    view();
+    expect(screen.queryByRole("checkbox", { name: /hidden/ })).toBeNull();
   });
 });
