@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from recon.db import models
 from recon.db.base import tenant_session
+from recon.llm import run_choice
 from recon.llm import service as llm_service
 from recon.sessions import service as sessions_service
 
@@ -78,9 +79,10 @@ def test_llm_service_round_trips_through_rls(monkeypatch):
     saved = llm_service.save_config(tenant_a, sv.id, "anthropic", "m", "k-test")
     assert saved is not None and saved["has_key"]
     assert llm_service.get_config(tenant_a, sv.id)["model"] == "m"
-    assert llm_service.load_credentials(tenant_a, sv.id) == ("anthropic", "m", "k-test")
+    choice = run_choice.resolve(tenant_a, sv.id, with_key=True)
+    assert (choice.provider, choice.model, choice.api_key) == ("anthropic", "m", "k-test")
     assert llm_service.get_config(tenant_b, sv.id) is None
-    assert llm_service.load_credentials(tenant_b, sv.id) is None
+    assert run_choice.resolve(tenant_b, sv.id, with_key=True) is None
     assert llm_service.delete_config(tenant_a, sv.id) is True
     assert llm_service.get_config(tenant_a, sv.id) is None
 

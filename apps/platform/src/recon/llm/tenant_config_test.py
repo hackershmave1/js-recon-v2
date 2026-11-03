@@ -106,7 +106,7 @@ def test_provider_change_clears_overrides_unless_new_ones_are_sent():
     }
 
 
-def test_preset_context_and_key_provider_never_decrypt(monkeypatch):
+def test_preset_context_and_key_row_never_decrypt(monkeypatch):
     tenant, admin = _seed_user("admin")
     tenant_config.save_config(tenant, admin, "openrouter", "m", "k", {"cheapest": "vendor/c"})
     monkeypatch.setenv("RECON_LLM_ENCRYPTION_KEY", Fernet.generate_key().decode())
@@ -116,7 +116,8 @@ def test_preset_context_and_key_provider_never_decrypt(monkeypatch):
         with pytest.raises(KeyDecryptError):
             tenant_config.load_key(tenant)
         assert tenant_config.load_preset_context(tenant) == ("openrouter", {"cheapest": "vendor/c"})
-        assert tenant_config.team_key_provider(tenant) == "openrouter"
+        provider, model, _ = tenant_config.team_key_row(tenant)
+        assert (provider, model) == ("openrouter", "m")
     finally:
         get_settings.cache_clear()
 
@@ -124,7 +125,7 @@ def test_preset_context_and_key_provider_never_decrypt(monkeypatch):
 def test_preset_context_without_team_config():
     tenant, _ = _seed_user("admin")
     assert tenant_config.load_preset_context(tenant) == (None, {})
-    assert tenant_config.team_key_provider(tenant) is None
+    assert tenant_config.team_key_row(tenant) is None
 
 
 def test_preset_only_save_keeps_the_tested_stamp_and_audit_fields_until_the_model_changes():

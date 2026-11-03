@@ -11,7 +11,6 @@ to match the existing pattern for DB-touching service modules.
 from __future__ import annotations
 
 import datetime as dt
-import os
 import uuid
 from typing import Any
 
@@ -23,7 +22,7 @@ from recon.llm.provider import VALID_PROVIDERS, build_provider
 from recon.sessions import service as sessions_service
 
 
-def _resolve_session_id(tenant_id: str, session_id: str) -> str:
+def resolve_session_id(tenant_id: str, session_id: str) -> str:
     """Accept either a platform UUID or the extension's external_id (same fallback
     pattern as sessions_router). Returns the platform UUID, or raises ValueError."""
     try:
@@ -61,7 +60,7 @@ def save_config(
         raise ValueError(f"unsupported provider: {provider!r}")
 
     try:
-        resolved = _resolve_session_id(tenant_id, session_id)
+        resolved = resolve_session_id(tenant_id, session_id)
     except ValueError:
         return None
 
@@ -103,7 +102,7 @@ def get_config(tenant_id: str, session_id: str) -> dict[str, Any] | None:
     """Return the current LLM config for a session (key is NEVER returned).
     Returns None when no config exists yet (not a 404 — session may still exist)."""
     try:
-        resolved = _resolve_session_id(tenant_id, session_id)
+        resolved = resolve_session_id(tenant_id, session_id)
     except ValueError:
         return None
     with tenant_session(tenant_id) as db:
@@ -118,7 +117,7 @@ def get_config(tenant_id: str, session_id: str) -> dict[str, Any] | None:
 def delete_config(tenant_id: str, session_id: str) -> bool:
     """Remove the config. Returns False if nothing to delete."""
     try:
-        resolved = _resolve_session_id(tenant_id, session_id)
+        resolved = resolve_session_id(tenant_id, session_id)
     except ValueError:
         return False
     with tenant_session(tenant_id) as db:
@@ -137,7 +136,7 @@ def delete_config(tenant_id: str, session_id: str) -> bool:
 def get_test_target(tenant_id: str, session_id: str) -> tuple[str, str, str] | str:
     """``(provider, model, api_key)`` to test for a session, or an error message."""
     try:
-        resolved = _resolve_session_id(tenant_id, session_id)
+        resolved = resolve_session_id(tenant_id, session_id)
     except ValueError:
         return "session not found"
     with tenant_session(tenant_id) as db:
@@ -157,7 +156,7 @@ def get_test_target(tenant_id: str, session_id: str) -> tuple[str, str, str] | s
 
 
 def mark_tested(tenant_id: str, session_id: str) -> None:
-    resolved = _resolve_session_id(tenant_id, session_id)
+    resolved = resolve_session_id(tenant_id, session_id)
     with tenant_session(tenant_id) as db:
         row = (
             db.query(SessionLlmConfig)
@@ -194,65 +193,6 @@ async def _ping(provider) -> None:
         output_schema=_Pong,
         max_tokens=16,
     )
-
-
-# Operator-wide keys, tried in order when a session has no saved key. Each is bound to the
-# provider it belongs to: the key and the provider must come from the same lookup, or an
-# OpenRouter key ends up sent to Anthropic.
-_ENV_KEYS = (("openrouter", "OPENROUTER_API_KEY"), ("anthropic", "ANTHROPIC_API_KEY"))
-
-
-def load_credentials(tenant_id: str, session_id: str) -> tuple[str, str | None, str] | None:
-    """``(provider, model, api_key)`` for internal use (threat model generation), or None.
-
-    A key saved on the session wins, then the team key (Settings), then an operator-wide
-    env key, each with its own provider. Never exposed via the HTTP API."""
-    try:
-        resolved = _resolve_session_id(tenant_id, session_id)
-    except ValueError:
-        return None
-    with tenant_session(tenant_id) as db:
-        row = (
-            db.query(SessionLlmConfig)
-            .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
-            .first()
-        )
-        if row is not None and row.encrypted_api_key:
-            return row.provider, row.model, decrypt_api_key(row.encrypted_api_key)
-        saved_provider, saved_model = (row.provider, row.model) if row else (None, None)
-    # Team key next: it carries its own provider + model, never the session's.
-    team = tenant_config.load_key(tenant_id)
-    if team is not None:
-        return team
-    for provider, env_var in _ENV_KEYS:
-        if api_key := os.environ.get(env_var):
-            # Model ids are provider-specific, so a saved model only carries over to its own
-            # provider; otherwise build_provider falls back to that provider's default.
-            return provider, saved_model if saved_provider == provider else None, api_key
-    return None
-
-
-def peek_credential_provider(tenant_id: str, session_id: str) -> str | None:
-    """Which provider load_credentials would use, without decrypting anything (for the UI)."""
-    try:
-        resolved = _resolve_session_id(tenant_id, session_id)
-    except ValueError:
-        return None
-    with tenant_session(tenant_id) as db:
-        row = (
-            db.query(SessionLlmConfig)
-            .filter_by(session_id=uuid.UUID(resolved), tenant_id=uuid.UUID(tenant_id))
-            .first()
-        )
-        if row is not None and row.encrypted_api_key:
-            return row.provider
-    team = tenant_config.team_key_provider(tenant_id)
-    if team is not None:
-        return team
-    for provider, env_var in _ENV_KEYS:
-        if os.environ.get(env_var):
-            return provider
-    return None
 
 
 # ---------------------------------------------------------------------------

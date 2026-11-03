@@ -157,13 +157,23 @@ def delete_config(tenant_id: str, user_id: str) -> bool | None:
     return bool(deleted)
 
 
-def load_key(tenant_id: str) -> tuple[str, str, str] | None:
-    """``(provider, model, api_key)`` if the team has a key. Raises KeyDecryptError."""
+def team_key_row(tenant_id: str) -> tuple[str, str, str] | None:
+    """``(provider, model, encrypted_api_key)`` if the team has a key — no decrypt, so callers
+    that only need the provider (the preset menu) never fail on a bad key."""
     with tenant_session(tenant_id) as db:
         row = _row(db, tenant_id)
         if row is None or not row.encrypted_api_key:
             return None
-        return row.provider, row.model, decrypt_api_key(row.encrypted_api_key)
+        return row.provider, row.model, row.encrypted_api_key
+
+
+def load_key(tenant_id: str) -> tuple[str, str, str] | None:
+    """``(provider, model, api_key)`` if the team has a key. Raises KeyDecryptError."""
+    row = team_key_row(tenant_id)
+    if row is None:
+        return None
+    provider, model, encrypted = row
+    return provider, model, decrypt_api_key(encrypted)
 
 
 def load_preset_context(tenant_id: str) -> tuple[str | None, dict[str, str]]:
@@ -178,17 +188,6 @@ def load_preset_context(tenant_id: str) -> tuple[str | None, dict[str, str]]:
     if row is None:
         return None, {}
     return row.provider, dict(row.preset_models or {})
-
-
-def team_key_provider(tenant_id: str) -> str | None:
-    """Provider of the saved team key, if any — no decrypt."""
-    with tenant_session(tenant_id) as db:
-        return db.execute(
-            select(TenantLlmConfig.provider).where(
-                TenantLlmConfig.tenant_id == uuid.UUID(tenant_id),
-                TenantLlmConfig.encrypted_api_key.is_not(None),
-            )
-        ).scalar_one_or_none()
 
 
 def mark_tested(tenant_id: str) -> None:

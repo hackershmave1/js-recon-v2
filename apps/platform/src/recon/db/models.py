@@ -743,7 +743,7 @@ class TenantLlmConfig(Base):
     """Team-wide LLM provider + key: one row per tenant (threat-model generation).
 
     Same encryption contract as SessionLlmConfig. A session's own key overrides it
-    (recon.llm.service.load_credentials). ``configured_by`` is the admin who last
+    (recon.llm.run_choice). ``configured_by`` is the admin who last
     saved it; SET NULL on user delete, matching session.created_by."""
 
     __tablename__ = "tenant_llm_config"

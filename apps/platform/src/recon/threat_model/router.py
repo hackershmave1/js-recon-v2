@@ -12,7 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from pydantic import BaseModel
 
 from recon.api.deps import get_tenant_id
-from recon.llm import run_options
+from recon.llm import run_choice
 from recon.threat_model import service
 
 router = APIRouter(tags=["threat-model"])
@@ -64,7 +64,7 @@ async def get_threat_model_presets(
     tenant_id: str = Depends(get_tenant_id),
 ) -> dict:
     """The model each preset would run for this session's credential (no key material)."""
-    return await _run_in_thread(run_options.session_preset_options, tenant_id, session_id)
+    return await _run_in_thread(run_choice.preset_menu, tenant_id, session_id)
 
 
 # ---------------------------------------------------------------------------
