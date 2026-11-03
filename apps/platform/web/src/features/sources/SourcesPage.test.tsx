@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { withExactLoc } from "../../api/testOccurrence";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SourcesPage } from "./SourcesPage";
@@ -20,11 +21,11 @@ vi.mock("./beautifyClient", () => ({
 
 beforeEach(() => vi.restoreAllMocks());
 
-const occ = (o: Partial<Occurrence> = {}): Occurrence => ({
+const occ = (o: Partial<Occurrence> = {}): Occurrence => withExactLoc({
   host: null, raw_url: null, source_path: "input.js", line: 2, col: 0,
   offset_start: null, offset_end: null, evidence: null, engine: "vespasian",
   confidence: null, verified: null, asset_url: null, ...o,
-});
+}, "fetch('/x')".length); // highlight the whole fixture call, so the row text stays one node
 const f = (o: Partial<Finding>): Finding => ({
   finding_hash: "h", type: "endpoint", value: "/x", path: null, severity: null,
   attributes: {}, first_stage: "analyze", revealable: false, triage: null,
@@ -309,5 +310,44 @@ describe("SourcesPage", () => {
     // wait past the debounce; a 1-char query must not hit the server
     await new Promise((r) => setTimeout(r, 400));
     expect(search).not.toHaveBeenCalled();
+  });
+
+  // ---- exact locations (PR B) ----
+
+  it("never paints a recovered original's finding onto its bundle", async () => {
+    const asset: SourceFile = { path: "https://acme.io/app.js", kind: "asset", fetch_status: "ok", asset_url: null };
+    // Recovered from app.js's map: same asset_url, but its line 2 is in social.js, not app.js.
+    const data: FindingsResponse = {
+      run_id: "r", count: 1, coverage: null, spec: null,
+      findings: [f({ finding_hash: "e1", occurrences: [occ({ source_path: "webpack:/src/social.js", asset_url: asset.path })] })],
+    };
+    vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: 1, sources: [asset] });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: asset.path, content: CODE, truncated: false, formatted: true });
+    render(<SourcesPage data={data} tenantId="t" runId="r" jump={null} />);
+    expect(await screen.findByText("fetch('/x')")).toBeInTheDocument();
+    expect(screen.queryByText("endpoint")).not.toBeInTheDocument();
+    expect(document.querySelector("mark.sv-hit")).toBeNull();
+  });
+
+  it("highlights the jumped-to token exactly", async () => {
+    const loc = { line: 2, col: 6, end_line: 2, end_col: 10 };
+    mount([UPLOAD], findings, { sourcePath: "input.js", assetUrl: null, line: 2, loc, approximate: false });
+    await waitFor(() => expect(document.querySelector("mark.sv-hit.focus")?.textContent).toBe("'/x'"));
+    expect(screen.queryByText(/approximate location/i)).not.toBeInTheDocument();
+  });
+
+  it("says an old run's jump is approximate", async () => {
+    mount([UPLOAD], findings, { sourcePath: "input.js", assetUrl: null, line: 2, loc: null, approximate: true });
+    expect(await screen.findByText(/approximate location/i)).toBeInTheDocument();
+  });
+
+  it("opens a raw-served minified file raw on a jump, so the jumped-to line is the right one", async () => {
+    const MINIFIED = "var a=1;" + "x();".repeat(200); // one long line: client would auto-pretty it
+    vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: 1, sources: [UPLOAD] });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "input.js", content: MINIFIED, truncated: false, formatted: false });
+    render(<SourcesPage data={null} tenantId="t" runId="r" jump={{ sourcePath: "input.js", assetUrl: null, line: 1 }} />);
+    const toggle = await screen.findByRole("button", { name: /pretty print/i });
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "false"));
+    expect(document.querySelector(".sv-line.focus")).not.toBeNull();
   });
 });

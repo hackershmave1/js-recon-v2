@@ -127,7 +127,9 @@ def search_sources(
         if content is None:
             continue
         per_file = 0
-        for line_no, line in enumerate(content.content.splitlines(), start=1):
+        # split("\n"), not splitlines(): the viewer numbers rows on "\n" only, so a "\r" or
+        # U+2028 inside a line must not shift every later search hit off its row.
+        for line_no, line in enumerate(content.content.split("\n"), start=1):
             if needle in line.lower():
                 out.append(
                     SourceMatch(

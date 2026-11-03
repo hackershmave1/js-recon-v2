@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { withExactLoc } from "../../api/testOccurrence";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiSpecPage } from "./ApiSpecPage";
@@ -11,7 +12,7 @@ import type {
 const TENANT = "123e4567-e89b-12d3-a456-426614174000";
 beforeEach(() => { vi.restoreAllMocks(); localStorage.setItem("recon.tenantId", TENANT); });
 
-const occ = (over: Partial<Occurrence> = {}): Occurrence => ({
+const occ = (over: Partial<Occurrence> = {}): Occurrence => withExactLoc({
   host: "api.acme.io", raw_url: null, source_path: "app.js", line: 42, col: 1,
   offset_start: null, offset_end: null, evidence: null, engine: "vespasian",
   confidence: null, verified: null, asset_url: null, ...over,

@@ -1613,6 +1613,25 @@ def test_walk_limit_caps_node_count():
     assert sum(1 for _ in _walk(root, 0)) == 0  # <= 0 yields nothing
 
 
+@pytest.mark.parametrize(
+    ("source", "url_literal"),
+    [
+        ('fetch("/api/a", {method: "POST", body: x});', '"/api/a"'),
+        ('axios.get("/api/b", {params: {q: 1}});', '"/api/b"'),
+        ('axios({method: "put", url: "/api/c"});', '"/api/c"'),
+        ('x.open("GET", "/api/d");', '"/api/d"'),
+        ('$.ajax({url: "/api/e", type: "POST"});', '"/api/e"'),
+        ('new WebSocket("wss://h.example/ws");', '"wss://h.example/ws"'),
+    ],
+)
+def test_the_highlight_mark_is_the_url_argument_not_the_whole_call(source, url_literal):
+    # The whole call stays the occurrence's identity span; the Sources tab highlights the URL.
+    (endpoint,) = extract(source).endpoints
+    data = source.encode()
+    assert data[endpoint.mark_start_byte : endpoint.mark_end_byte] == url_literal.encode()
+    assert endpoint.end_byte - endpoint.start_byte > len(url_literal)
+
+
 # --- receiver evidence: what the bundle says a `.get()` receiver IS ----------------------- #
 
 

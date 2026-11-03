@@ -277,7 +277,7 @@ def _record_unresolved(
     skeleton row so the call is visible to the analyst instead of silently dropped."""
     result.unattributed += 1
     result.unresolved.append(
-        _endpoint(kind, method, _collapse_url(url_node), [], call, wrapper=wrapper)
+        _endpoint(kind, method, _collapse_url(url_node), [], call, wrapper=wrapper, mark=url_node)
     )
 
 
@@ -295,7 +295,9 @@ def _record_generic(call: Node, prop: str, result: Extraction) -> None:
     skeleton = _collapse_url(args[0] if args else None)
     if not _looks_like_api_path(skeleton):
         return
-    result.generic.append(_endpoint("generic", prop.upper(), skeleton, [], call))
+    result.generic.append(
+        _endpoint("generic", prop.upper(), skeleton, [], call, mark=args[0] if args else None)
+    )
 
 
 # --- page routes (Phase 2): href/src/action, nav sinks, off-sink URL literals ------------
@@ -379,7 +381,7 @@ def _record_route(
     if skeleton.lower().startswith(_ROUTE_SCHEME_REJECTS) or not _looks_like_route(skeleton):
         return
     result.routes.append(
-        _endpoint("route", "", skeleton, [], call or url_node, confidence=confidence)
+        _endpoint("route", "", skeleton, [], call or url_node, confidence=confidence, mark=url_node)
     )
 
 
@@ -666,7 +668,9 @@ def _fetch(call: Node, result: Extraction, env: BaseEnv, base: str = "") -> None
         method = (_string_value(options.get("method")) or "GET").upper()
         params += _body_params_from_value(options.get("body"))
         headers = _auth_headers(options.get("headers"))
-    result.endpoints.append(_endpoint("fetch", method, url, params, call, headers=headers))
+    result.endpoints.append(
+        _endpoint("fetch", method, url, params, call, headers=headers, mark=args[0])
+    )
 
 
 def _xhr_open(call: Node, result: Extraction, env: BaseEnv) -> None:
@@ -684,7 +688,7 @@ def _xhr_open(call: Node, result: Extraction, env: BaseEnv) -> None:
     if url is None:
         _record_unresolved(result, "xhr", method.upper(), args[1] if len(args) >= 2 else None, call)
         return
-    result.endpoints.append(_endpoint("xhr", method, url, _query_params(url), call))
+    result.endpoints.append(_endpoint("xhr", method, url, _query_params(url), call, mark=args[1]))
 
 
 def _axios_call(call: Node, result: Extraction, env: BaseEnv, base: str = "") -> None:
@@ -707,7 +711,7 @@ def _axios_call(call: Node, result: Extraction, env: BaseEnv, base: str = "") ->
             method = (_string_value(cfg.get("method")) or "GET").upper()
             headers = _auth_headers(cfg.get("headers"))
         result.endpoints.append(
-            _endpoint("axios", method, url, _query_params(url), call, headers=headers)
+            _endpoint("axios", method, url, _query_params(url), call, headers=headers, mark=args[0])
         )
 
 
@@ -746,7 +750,7 @@ def _axios_member(
         params += _config_query_params(config)
     headers = _auth_headers(_object_pairs(config).get("headers"))
     result.endpoints.append(
-        _endpoint("axios", prop, url, params, call, wrapper=wrapper, headers=headers)
+        _endpoint("axios", prop, url, params, call, wrapper=wrapper, headers=headers, mark=args[0])
     )
 
 
@@ -772,7 +776,16 @@ def _axios_from_config(
     )
     headers = _auth_headers(pairs.get("headers"))
     result.endpoints.append(
-        _endpoint("axios", method, url, params, call, wrapper=wrapper, headers=headers)
+        _endpoint(
+            "axios",
+            method,
+            url,
+            params,
+            call,
+            wrapper=wrapper,
+            headers=headers,
+            mark=pairs.get("url"),
+        )
     )
 
 
@@ -796,7 +809,9 @@ def _jquery(call: Node, prop: str, result: Extraction, env: BaseEnv) -> None:
         params = _query_params(url) + [
             RawParam(name, location) for name in _object_pairs(pairs.get("data"))
         ]
-        result.endpoints.append(_endpoint("jquery", method, url, params, call))
+        result.endpoints.append(
+            _endpoint("jquery", method, url, params, call, mark=pairs.get("url"))
+        )
     elif prop in _JQUERY_METHODS:
         url = _resolve_url(args[0], env, "") if args else None  # folds a local const (S1)
         if url is None:
@@ -808,7 +823,9 @@ def _jquery(call: Node, prop: str, result: Extraction, env: BaseEnv) -> None:
         if len(args) >= 2 and args[1].type == "object":
             location = "body" if prop == "post" else "query"  # $.get sends query
             params += [RawParam(name, location) for name in _object_pairs(args[1])]
-        result.endpoints.append(_endpoint("jquery", _JQUERY_METHODS[prop], url, params, call))
+        result.endpoints.append(
+            _endpoint("jquery", _JQUERY_METHODS[prop], url, params, call, mark=args[0])
+        )
 
 
 def _handle_new(new: Node, result: Extraction, env: BaseEnv) -> None:
@@ -825,4 +842,6 @@ def _handle_new(new: Node, result: Extraction, env: BaseEnv) -> None:
         _record_unresolved(result, "websocket", "WS", args[0] if args else None, new)
         return
     method = "WSS" if url.lower().startswith("wss") else "WS"
-    result.endpoints.append(_endpoint("websocket", method, url, _query_params(url), new))
+    result.endpoints.append(
+        _endpoint("websocket", method, url, _query_params(url), new, mark=args[0])
+    )

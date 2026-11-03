@@ -1,4 +1,4 @@
-import type { Finding, Occurrence } from "./types";
+import type { Finding, Occurrence, SourceJump } from "./types";
 
 // The bundle-wide placeholder the analyze stage assigns to a sighting in the raw (minified)
 // bundle (backend recon.findings.analyze._SOURCE_NAME). It is NOT a real file, so it must never
@@ -23,11 +23,25 @@ export function occSource(o: Occurrence): { primary: string; bundle: string | nu
   return { primary, bundle: recovered && o.asset_url ? o.asset_url : null };
 }
 
-// "primary[:line]" for a one-line location label, or null when the occurrence names no
-// source at all (only a host) — callers then omit the label rather than invent one.
+// Where the Sources tab can show this occurrence: its exact range; else, for a run analyzed
+// before exact locations, its old line flagged approximate; else nowhere (null). The
+// detector's own `line` is never used — on a minified bundle it is the raw line 1.
+export function occJump(o: Occurrence): SourceJump | null {
+  if (!o.source_path && !o.asset_url) return null;
+  const base = { sourcePath: o.source_path, assetUrl: o.asset_url };
+  if (o.loc) return { ...base, line: o.loc.line, loc: o.loc, approximate: false };
+  if (o.approximate_line != null) return { ...base, line: o.approximate_line, loc: null, approximate: true };
+  return null;
+}
+
+// "primary[:line]" ("primary:~line" when approximate) for a one-line location label, or null
+// when the occurrence names no source at all (only a host) — callers then omit the label
+// rather than invent one.
 export function occLocation(o: Occurrence): string | null {
   if (!o.source_path && !o.asset_url) return null;
-  return `${occSource(o).primary}${o.line != null ? `:${o.line}` : ""}`;
+  const jump = occJump(o);
+  const line = jump ? `:${jump.approximate ? "~" : ""}${jump.line}` : "";
+  return `${occSource(o).primary}${line}`;
 }
 
 // The single occurrence a one-line summary should point at. A secret sighted in both the

@@ -1,19 +1,22 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getSources, getSourceContent, searchSources, ApiError } from "../../api/apiClient";
-import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump, SourceMatch } from "../../api/types";
+import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump, SourceMatch, ViewLoc } from "../../api/types";
+import { occJump } from "../../api/occurrenceSource";
 import { CodeViewer } from "./CodeViewer";
 import { beautify } from "./beautifyClient";
 import { useResizableRail } from "../../shell/useResizableRail";
 import { measureSync } from "../../shell/observability";
 import "./sources.css";
 
-// A finding occurrence belongs to a file when: (crawl) its asset_url equals the
-// asset's URL; (source-map recovered) its source_path AND owning asset_url both
+// A finding occurrence belongs to a file when: (crawl) it was sighted in the asset's own
+// bundle — its asset_url equals the asset's URL AND its source_path is the "input.js" bundle
+// sentinel (an original recovered from that asset's map carries the same asset_url, but its
+// lines belong to the recovered file, never the bundle); (source-map recovered) its source_path AND owning asset_url both
 // match — a path recovered by two assets must not cross-match (design fix M4);
 // (legacy) its source_path is analyze's "input.js" and it has no asset. See
 // recon.probe.sources for why those are the join keys.
 function matchFile(o: Occurrence, file: SourceFile): boolean {
-  if (file.kind === "asset") return o.asset_url === file.path;
+  if (file.kind === "asset") return o.asset_url === file.path && o.source_path === "input.js";
   if (file.kind === "source") return o.source_path === file.path && (o.asset_url ?? null) === (file.asset_url ?? null);
   return o.source_path === "input.js" && o.asset_url == null;
 }
@@ -332,7 +335,24 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   const [content, setContent] = useState<SourceContent | null>(null);
   const [contentState, setContentState] = useState<"idle" | "loading" | "error">("idle");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [focusLine, setFocusLine] = useState<number | null>(null);
+  // The jumped-to place: a line (search hit, "Jump to finding") and, for a finding jump, its
+  // exact range (`loc`) or the flag that an old run's line is only approximate.
+  const [focus, setFocus] = useState<{ line: number; loc: ViewLoc | null; approximate: boolean } | null>(null);
+  const focusLine = focus?.line ?? null;
+  // Set by a finding jump so the file opens in the RAW view its positions index, instead of
+  // being auto-pretty-printed client-side (a different formatter, so the lines would not match).
+  const jumpedRef = useRef(false);
+  // Pretty-print: auto-on for a minified file the server served raw (see the content effect).
+  const [pretty, setPretty] = useState(false);
+  // Open `path` for a jump, in the raw view. The ref is consumed by the content effect, so it is
+  // set only when the file actually changes (a jump within the open file loads no new content).
+  const selPathRef = useRef<string | null>(null);
+  selPathRef.current = selPath;
+  const openForJump = useCallback((path: string) => {
+    if (path !== selPathRef.current) jumpedRef.current = true;
+    setSelPath(path);
+    setPretty(false);
+  }, []);
   const toggleDir = useCallback((key: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -341,13 +361,16 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     });
   }, []);
   // Manually picking a file cancels a jump's line highlight.
-  const selectFile = useCallback((path: string) => { setSelPath(path); setFocusLine(null); }, []);
+  const selectFile = useCallback((path: string) => { setSelPath(path); setFocus(null); }, []);
   // D52 full-text search across the run's sources (server grep). Debounced; while a query is
   // active the results replace the file tree, and clicking a hit opens the file at that line.
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SourceMatch[] | null>(null);
   const [searching, setSearching] = useState(false);
-  const jumpToMatch = useCallback((m: SourceMatch) => { setSelPath(m.path); setFocusLine(m.line); }, []);
+  const jumpToMatch = useCallback((m: SourceMatch) => {
+    openForJump(m.path);
+    setFocus({ line: m.line, loc: null, approximate: false });
+  }, [openForJump]);
   // Draggable + collapsible file rail (task: expand the code view).
   const { width: railWidth, collapsed: railCollapsed, toggleCollapsed: toggleRail, resizerProps } = useResizableRail();
 
@@ -359,9 +382,9 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     const j = pendingJump.current;
     if (!j || !files) return;
     pendingJump.current = null;
-    setSelPath(resolveJumpPath(j, files));
-    setFocusLine(j.line);
-  }, [jump, files]);
+    openForJump(resolveJumpPath(j, files));
+    setFocus(j.line != null ? { line: j.line, loc: j.loc ?? null, approximate: !!j.approximate } : null);
+  }, [jump, files, openForJump]);
 
   useEffect(() => {
     // Clear the previous run's tree/selection so a run switch never shows stale
@@ -374,7 +397,7 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     setSelPath(null);
     setListError(null);
     setCollapsed(new Set());
-    setFocusLine(null);
+    setFocus(null);
     setSearchQuery("");
     setSearchResults(null);
     let live = true;
@@ -425,13 +448,20 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   // O(files x findings) scan that ran on every large run's mount.
   const fileCounts = useMemo(() => fileFindingCounts(files ?? [], data), [files, data]);
 
-  const marks = useMemo(() => {
+  // Finding lines (marks) and exact ranges in this file — only where analyze knows the place
+  // (`occJump`): the detector's own line is never painted (on a minified bundle it is line 1).
+  const { marks, ranges } = useMemo(() => {
     const m = new Map<number, string>();
-    if (!selected || !data) return m;
+    const r: ViewLoc[] = [];
+    if (!selected || !data) return { marks: m, ranges: r };
     for (const f of data.findings) for (const o of f.occurrences) {
-      if (matchFile(o, selected) && o.line != null && !m.has(o.line)) m.set(o.line, f.type);
+      if (!matchFile(o, selected)) continue;
+      const at = occJump(o);
+      if (!at || at.line == null) continue;
+      if (!m.has(at.line)) m.set(at.line, f.type);
+      if (at.loc) r.push(at.loc);
     }
-    return m;
+    return { marks: m, ranges: r };
   }, [selected, data]);
 
   // Jump-to-findings: the sorted finding lines in the current file. Clicking the
@@ -440,8 +470,12 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   const jumpLines = useMemo(() => [...marks.keys()].sort((a, b) => a - b), [marks]);
   const jumpToNextFinding = useCallback(() => {
     if (jumpLines.length === 0) return;
-    setFocusLine((cur) => jumpLines.find((l) => l > (cur ?? -1)) ?? jumpLines[0]);
-  }, [jumpLines]);
+    setFocus((cur) => {
+      const line = jumpLines.find((l) => l > (cur?.line ?? -1)) ?? jumpLines[0];
+      const loc = ranges.find((r) => r.line === line) ?? null;
+      return { line, loc, approximate: loc == null };
+    });
+  }, [jumpLines, ranges]);
 
   // Rebuild + annotate the tree once per file/count change, then flatten it to a
   // windowable row list. Memoized (and the tree component is memoized) so a
@@ -455,7 +489,6 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
 
   // Pretty-print: auto-on for minified content, off for already-readable source.
   // Resets per file; the beautified text is computed lazily (js-beautify) once.
-  const [pretty, setPretty] = useState(false);
   const [prettyText, setPrettyText] = useState<string | null>(null);
   useEffect(() => {
     setPrettyText(null);
@@ -465,7 +498,9 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     // its ALIGNED marks survive — even one with a long banner/data-URI line that would trip
     // `isMinified` (why `formatted` is an authoritative server flag, not a client guess).
     // Beautify runs OFF the main thread (D35), so there is no size gate.
-    setPretty(content != null && !content.formatted && isMinified(content.content));
+    // A jump opens the raw view: its line/range index the text as served, not a client reformat.
+    setPretty(content != null && !content.formatted && isMinified(content.content) && !jumpedRef.current);
+    jumpedRef.current = false;
   }, [content]);
   useEffect(() => {
     if (!pretty || content == null || prettyText != null) return;
@@ -529,6 +564,11 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
             )}
             <span className="sv-file-path">{selected.path}</span>
             <span className="sv-spacer" />
+            {focus?.approximate && !pretty && (
+              <span className="sv-approx" title="This run was analyzed before exact locations were recorded">
+                Approximate location — re-run the scan for the exact spot
+              </span>
+            )}
             {findingCount > 0 && <span className="sv-file-count">{findingCount} finding{findingCount === 1 ? "" : "s"} in this file</span>}
             {!pretty && jumpLines.length > 0 && (
               <button type="button" className="sv-jump" onClick={jumpToNextFinding}
@@ -561,7 +601,10 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
               text={pretty ? prettyText! : content.content}
               truncated={content.truncated}
               marks={pretty ? null : marks}
-              focusLine={focusLine}
+              // Server positions index the text AS SERVED; a client pretty-print moves every line.
+              focusLine={pretty ? null : focusLine}
+              ranges={pretty ? null : ranges}
+              focusRange={pretty ? null : focus?.loc ?? null}
             />
           )
         ) : null}
