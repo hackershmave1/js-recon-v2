@@ -367,7 +367,11 @@ def test_two_batches_accumulate_into_one_run(make_capture_client):
     assert {row.url for row in rows} == {"https://acme.io/a.js", "https://acme.io/b.js"}
 
 
-def test_duplicate_url_in_batch_first_wins(make_capture_client):
+def _sha(content: str) -> str:
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
+def test_same_url_new_content_in_batch_keeps_both_versions(make_capture_client):
     client = make_capture_client()
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     first, second = "first();", "second();"
@@ -377,12 +381,64 @@ def test_duplicate_url_in_batch_first_wins(make_capture_client):
         [
             _file("https://acme.io/x.js", first, sid),
             _file("https://acme.io/x.js", second, sid),  # same url, different content
+            _file("https://acme.io/x.js", first, sid),  # an exact repeat adds nothing
         ],
     )
     tid = _tenant_id(client.capture_tenant_name)
-    rows = run_assets.list_for_run(tid, body["runId"])
-    assert len(rows) == 1  # coalesced to a single (run_id, url) asset
-    assert rows[0].input_ref.endswith(hashlib.sha256(first.encode()).hexdigest())  # first wins
+    refs = {r.url: r.input_ref for r in run_assets.list_for_run(tid, body["runId"])}
+    assert refs.keys() == {"https://acme.io/x.js", f"https://acme.io/x.js#sha256={_sha(second)}"}
+    assert refs["https://acme.io/x.js"].endswith(_sha(first))
+    assert [f["stored"] for f in body["files"]] == [True, True, False]
+    assert {r.fetch_status for r in run_assets.list_for_run(tid, body["runId"])} == {"ok"}
+
+
+def test_same_url_new_content_in_later_batch_keeps_both_versions(make_capture_client):
+    # The extension re-uploads a url whose content changed (a deploy, a per-request config
+    # script). Both versions are analyzed — the same rule browser capture uses
+    # (capture/stage._asset_rows) — instead of silently keeping only the first.
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    first, second = "first();", "second();"
+    b1 = _save(client, sid, [_file("https://acme.io/x.js", first, sid)])
+    b2 = _save(client, sid, [_file("https://acme.io/x.js", second, sid)])
+    _save(client, sid, [_file("https://acme.io/x.js", second, sid)])  # retry: no third row
+    tid = _tenant_id(client.capture_tenant_name)
+    rows = {r.url: r for r in run_assets.list_for_run(tid, b1["runId"])}
+    versioned = f"https://acme.io/x.js#sha256={_sha(second)}"
+    assert rows.keys() == {"https://acme.io/x.js", versioned}
+    assert rows["https://acme.io/x.js"].input_ref.endswith(_sha(first))
+    assert rows[versioned].input_ref.endswith(_sha(second))
+    assert {r.fetch_status for r in rows.values()} == {"ok"}
+    assert b2["files"][0]["stored"] is True
+
+
+def test_a_version_already_stored_is_not_added_again(make_capture_client):
+    # Batch 2 sends the new version first, then the original again: only the new one is added.
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    first, second = "first();", "second();"
+    b1 = _save(client, sid, [_file("https://acme.io/x.js", first, sid)])
+    _save(
+        client,
+        sid,
+        [_file("https://acme.io/x.js", second, sid), _file("https://acme.io/x.js", first, sid)],
+    )
+    tid = _tenant_id(client.capture_tenant_name)
+    urls = {r.url for r in run_assets.list_for_run(tid, b1["runId"])}
+    assert urls == {"https://acme.io/x.js", f"https://acme.io/x.js#sha256={_sha(second)}"}
+
+
+def test_versions_per_url_are_capped(make_capture_client):
+    # A script whose bytes change on every load must not add an asset per page view.
+    client = make_capture_client(RECON_CAPTURE_MAX_VERSIONS_PER_URL=1)
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    b1 = _save(client, sid, [_file("https://acme.io/c.js", "v1();", sid)])
+    _save(client, sid, [_file("https://acme.io/c.js", "v2();", sid)])
+    b3 = _save(client, sid, [_file("https://acme.io/c.js", "v3();", sid)])
+    tid = _tenant_id(client.capture_tenant_name)
+    assert len(run_assets.list_for_run(tid, b1["runId"])) == 2  # the first + one version
+    assert b3["stored"] == 0
+    assert b3["files"][0]["error"] == "too many versions of this url"
 
 
 def test_oversize_file_is_a_per_file_failure_not_a_batch_drop(make_capture_client):
@@ -810,8 +866,8 @@ def test_save_files_without_map_leaves_ref_none(make_capture_client):
 
 
 def test_save_files_source_map_retry_is_first_wins(make_capture_client):
-    # A later same-url batch with a DIFFERENT map must not clobber the first (mirrors
-    # the input_ref first-wins rule) — the original recovery stays stable.
+    # A later same-url batch (same bytes) with a DIFFERENT map must not clobber the first —
+    # the original recovery stays stable.
     client = make_capture_client()
     sid = f"sess-{uuid.uuid4().hex[:8]}"
     b1 = _save(
@@ -822,6 +878,39 @@ def test_save_files_source_map_retry_is_first_wins(make_capture_client):
     other = {"version": 3, "sources": ["other.js"], "mappings": "BBBB"}
     _save(client, sid, [{**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": other}])
     assert _asset(tid, b1["runId"], "https://acme.io/a.js").source_map_ref == ref1  # unchanged
+
+
+def test_each_version_keeps_its_own_source_map(make_capture_client):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    other = {"version": 3, "sources": ["app/src/b.js"], "mappings": "BBBB"}
+    b1 = _save(
+        client, sid, [{**_file("https://acme.io/a.js", "a();", sid), "sourceMapContent": _MAP}]
+    )
+    _save(client, sid, [{**_file("https://acme.io/a.js", "b();", sid), "sourceMapContent": other}])
+    tid = _tenant_id(client.capture_tenant_name)
+    first = _asset(tid, b1["runId"], "https://acme.io/a.js")
+    version = _asset(tid, b1["runId"], f"https://acme.io/a.js#sha256={_sha('b();')}")
+    assert json.loads(storage.get_blob(first.source_map_ref)) == _MAP
+    assert json.loads(storage.get_blob(version.source_map_ref)) == other
+
+
+def test_a_version_with_an_oversized_map_is_flagged_skipped(make_capture_client):
+    client = make_capture_client(RECON_MAX_SOURCE_MAP_BYTES=64)
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    big = {"version": 3, "sources": ["x" * 200], "mappings": "AAAA"}
+    body = _save(
+        client,
+        sid,
+        [
+            _file("https://acme.io/a.js", "a();", sid),
+            {**_file("https://acme.io/a.js", "b();", sid), "sourceMapContent": big},
+        ],
+    )
+    tid = _tenant_id(client.capture_tenant_name)
+    first = _asset(tid, body["runId"], "https://acme.io/a.js")
+    version = _asset(tid, body["runId"], f"https://acme.io/a.js#sha256={_sha('b();')}")
+    assert (first.source_map_skipped, version.source_map_skipped) == (False, True)
 
 
 def test_save_files_oversized_map_skipped_file_still_stored(make_capture_client):
@@ -1021,3 +1110,42 @@ def test_concurrent_analyze_start_enqueues_one_walk(make_capture_client, monkeyp
             .where(Job.run_id == run_id, Job.stage == "discovering")
         )
     assert n_jobs == 1  # exactly one walk enqueued, not two
+
+
+# --------------------------------------------------------------------------- #
+# Concurrent same-session batches that carry two versions of one url: whichever commits
+# first owns the bare url, and each version is stored exactly once (never a second row
+# holding the same bytes). Both writers are barrier-synced right before seeding.
+# --------------------------------------------------------------------------- #
+
+
+def test_concurrent_batches_store_each_version_once(make_capture_client, monkeypatch):
+    client = make_capture_client()
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    run_id = _save(client, sid, [_file("https://acme.io/seed.js", "s();", sid)])["runId"]
+    tid = _tenant_id(client.capture_tenant_name)
+    url = "https://acme.io/x.js"
+    key_a = storage.put_blob(tid, run_id, "input", b"a();")
+    key_b = storage.put_blob(tid, run_id, "input", b"b();")
+
+    barrier = threading.Barrier(2, timeout=30)
+    met = threading.local()
+    real_seed = run_assets.seed_pending
+
+    def rendezvous_seed(session, **kwargs):
+        if not getattr(met, "done", False):
+            met.done = True
+            barrier.wait()
+        return real_seed(session, **kwargs)
+
+    monkeypatch.setattr(run_assets, "seed_pending", rendezvous_seed)
+
+    def upload(key: str) -> capture_router._Upload:
+        return capture_router._Upload(url=url, key=key, result={})
+
+    batches = iter([[upload(key_b)], [upload(key_a), upload(key_b)]])
+    _run_two_writers(lambda: capture_router._seed_fetched_assets(tid, run_id, next(batches), 10))
+
+    rows = [r for r in run_assets.list_for_run(tid, run_id) if r.url.startswith(url)]
+    assert sorted(r.input_ref for r in rows) == sorted([key_a, key_b])  # each version once
+    assert {r.fetch_status for r in rows} == {"ok"}

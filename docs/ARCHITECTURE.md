@@ -226,7 +226,10 @@ to the right tenant.
 | `GET /api/health` | capture-ingest liveness (distinct from the platform's own `/healthz`). |
 
 The path is idempotent by construction — content-addressed blobs + `(run_id, url)` conflict-skip —
-so the extension's whole-batch retries never duplicate a run or an asset. Per-file source maps the
+so the extension's whole-batch retries never duplicate a run or an asset. A url re-captured with
+DIFFERENT bytes (a deploy, a per-request config script) is kept as an extra `url#sha256=<hash>`
+asset — the form browser capture uses for same-url scripts — so every version is analyzed; the bare
+url is the first version captured, and versions per url are capped (`capture_max_versions_per_url`). Per-file source maps the
 extension sends are stored per asset (`run_asset.source_map_ref`, migration `0010`) and recovered
 with the tolerant `source_map_origin="capture"`, so a malformed map falls back to bundle analysis
 instead of dropping the asset's findings.

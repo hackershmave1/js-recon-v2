@@ -29,9 +29,11 @@ session-create hot path:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -391,54 +393,95 @@ def _valid_source_map(f: dict, max_bytes: int) -> tuple[bytes | None, bool]:
     return data, False
 
 
+@dataclass
+class _Upload:
+    """One stored file of a batch, on its way to a ``run_asset`` row."""
+
+    url: str
+    key: str  # the content-addressed input blob key (ends with the content's SHA-256)
+    result: dict  # this file's entry in the response, corrected if the file is turned away
+    map_key: str | None = None
+    map_skipped: bool = False  # D32-A2: a map was sent but exceeded max_source_map_bytes
+
+
 def _seed_fetched_assets(
-    tenant_id: str,
-    run_id: str,
-    keys_by_url: dict[str, str],
-    map_keys_by_url: dict[str, str] | None = None,
-    skipped_map_urls: set[str] | None = None,
-) -> int:
-    """Seed this batch's urls as ``run_asset`` rows and mark each ``fetch_ok`` with
-    its uploaded blob key — in ONE transaction, so a row is never left committed as
+    tenant_id: str, run_id: str, uploads: list[_Upload], max_versions: int
+) -> tuple[int, int]:
+    """Seed this batch's files as ``run_asset`` rows and mark each ``fetch_ok`` with its
+    uploaded blob key — in ONE transaction, so a row is never left committed as
     PENDING-without-``input_ref`` (which the FETCHING stage would try to egress).
-    Idempotent: ``seed_pending`` skips an existing ``(run_id, url)``; a url already
-    ``fetch_ok`` is left as-is (first-wins — a retry or a later same-url batch never
-    clobbers the original blob). A captured source map is linked in the SAME
-    first-wins branch, so it is likewise set once and never clobbered.
 
-    ``skipped_map_urls`` (D32-A2) carries URLs whose uploaded map exceeded
-    ``max_source_map_bytes``. For those assets ``set_source_map_skipped`` is called in
-    the same transaction so analyze reports coverage ``"skipped"`` rather than ``"none"``.
+    One rule per file, in upload order: claim the url's row if it is free; do nothing if it
+    already holds these bytes (a retry — idempotent); otherwise the url was re-captured with
+    DIFFERENT bytes (a deploy, a per-request config script) and the bytes go to the version row
+    ``url#sha256=<content hash>``, under the same three cases. So every version is analyzed and
+    none is clobbered. Unlike browser capture (capture/stage._asset_rows), which suffixes every
+    copy, the bare url here is the FIRST version captured — it was committed before the second
+    arrived. At most ``max_versions`` version rows per url: a script whose bytes change on every
+    load must not grow the run without bound. A source map (or the D32-A2
+    ``source_map_skipped`` flag, so analyze reports coverage ``"skipped"`` not ``"none"``) is
+    linked in the same step that marks the row ``fetch_ok``, so it is set once per version.
 
-    Returns the run's cumulative distinct-asset count after this batch (``len(by_url)``),
-    reusing the rows already materialized here (no extra query) — the ABSOLUTE value the
-    slice-2 ``capture.received`` indicator reports (eventually-consistent under concurrent
-    same-session batches; the UI reducer keeps the max)."""
-    map_keys_by_url = map_keys_by_url or {}
-    skipped_map_urls = skipped_map_urls or set()
+    Returns ``(the run's cumulative asset count, version rows added)``. The count is the
+    ABSOLUTE value the slice-2 ``capture.received`` indicator reports (eventually-consistent
+    under concurrent same-session batches; the UI reducer keeps the max)."""
+    added_versions = 0
+    claimed: dict[str, str] = {}  # url -> key claimed in this transaction (rows read are stale)
     with tenant_session(tenant_id) as session:
-        assets.seed_pending(session, tenant_id=tenant_id, run_id=run_id, urls=list(keys_by_url))
-        session.flush()  # make the seeded rows visible to the query below, same tx
-        by_url = {
-            row.url: row
-            for row in session.scalars(select(RunAsset).where(RunAsset.run_id == str(run_id)))
-        }
-        for url, key in keys_by_url.items():
-            row = by_url.get(url)
-            if (
-                row is not None
-                and row.fetch_status == AssetStatus.PENDING.value
-                and not row.input_ref
-            ):
-                assets.set_fetch_ok(session, str(row.id), key)
-                map_key = map_keys_by_url.get(url)
-                if map_key:
-                    assets.set_source_map_ref(session, str(row.id), map_key)
-                elif url in skipped_map_urls:
-                    # D32-A2: map was present but over max_source_map_bytes — flag so
-                    # analyze reports coverage:"skipped", not the silent "none".
-                    assets.set_source_map_skipped(session, str(row.id))
-        return len(by_url)
+        by_url = _seed_rows(session, tenant_id, run_id, list(dict.fromkeys(u.url for u in uploads)))
+
+        def held(url: str) -> str | None:
+            return claimed.get(url) or by_url[url].input_ref
+
+        for upload in uploads:
+            url = upload.url
+            if held(url) not in (None, upload.key):
+                url = _version_url(upload.url, upload.key)
+                if url not in by_url:
+                    if _version_count(by_url, upload.url) >= max_versions:
+                        upload.result.update(stored=False, error="too many versions of this url")
+                        log.warning("capture.asset_version_capped", run_id=run_id, url=upload.url)
+                        continue
+                    by_url = _seed_rows(session, tenant_id, run_id, [url])
+                    added_versions += 1
+                    log.info("capture.asset_version_added", run_id=run_id, url=url)
+            if held(url) is None:
+                _claim(session, str(by_url[url].id), upload)
+                claimed[url] = upload.key
+        return len(by_url), added_versions
+
+
+def _claim(session, asset_id: str, upload: _Upload) -> None:
+    assets.set_fetch_ok(session, asset_id, upload.key)
+    if upload.map_key:
+        assets.set_source_map_ref(session, asset_id, upload.map_key)
+    elif upload.map_skipped:
+        assets.set_source_map_skipped(session, asset_id)
+
+
+def _seed_rows(session, tenant_id: str, run_id: str, urls: list[str]) -> dict[str, RunAsset]:
+    """Seed ``urls`` as pending rows (existing ones are kept) and return every row of the run
+    by url, read in the same transaction."""
+    assets.seed_pending(session, tenant_id=tenant_id, run_id=run_id, urls=urls)
+    session.flush()  # make the seeded rows visible to the query below, same tx
+    return {
+        row.url: row
+        for row in session.scalars(select(RunAsset).where(RunAsset.run_id == str(run_id)))
+    }
+
+
+_VERSION_MARK = "#sha256="
+
+
+def _version_url(url: str, blob_key: str) -> str:
+    """The asset url for another version of ``url``: the same ``#sha256=<content hash>``
+    form browser capture gives same-url scripts (capture/stage._asset_rows). Stable across
+    retries, since the blob key ends with the content's SHA-256."""
+    return f"{url}{_VERSION_MARK}{blob_key.rsplit('/', 1)[-1]}"
+
+
+def _version_count(by_url: dict[str, RunAsset], url: str) -> int:
+    return sum(1 for u in by_url if u.startswith(url + _VERSION_MARK))
 
 
 @router.post("/save-files")
@@ -481,10 +524,9 @@ def save_files(
     run_id = _accumulating_run_id(tenant_id, session_id, ext_session_id, redis)
 
     file_results: list[dict] = []
-    keys_by_url: dict[str, str] = {}
-    map_keys_by_url: dict[str, str] = {}
-    skipped_map_urls: set[str] = set()
-    stored = failed = 0
+    uploads: list[_Upload] = []
+    seen: set[tuple[str, str]] = set()  # (url, content sha) already in this batch
+    failed = 0
     total_bytes = 0
     # Timing observability (§5): the batch is stored synchronously and the response
     # ack (200) is durable-before-return — so this bounds how close a batch runs to
@@ -507,21 +549,23 @@ def save_files(
             )
             continue
         url, data = parsed
-        if url in keys_by_url:
-            # A repeat url within one batch: keep the first (first-wins). Don't
-            # store an orphan blob or double-count — the asset already maps to the
-            # first file's content.
+        digest = hashlib.sha256(data).hexdigest()
+        if (url, digest) in seen:
+            # The same file twice in one batch adds nothing (no double count). The same url
+            # with different bytes is another version, kept by _seed_fetched_assets.
             file_results.append(
                 {
                     "url": url,
                     "contentHash": content_hash,
                     "stored": False,
-                    "error": "duplicate url in batch",
+                    "error": "duplicate file in batch",
                 }
             )
             continue
+        seen.add((url, digest))
+        upload = _Upload(url=url, key="", result={"url": url, "contentHash": content_hash})
         try:
-            key = storage.put_blob(tenant_id, run_id, "input", data)
+            upload.key = storage.put_blob(tenant_id, run_id, "input", data)
             # Store the captured source map alongside the JS. A storage infra failure
             # here is STILL a 503 so the whole idempotent batch retries (a retry
             # re-stores the same content-addressed blobs). A missing/malformed map is
@@ -531,13 +575,13 @@ def save_files(
             # map is recorded as skipped (honest coverage), not silently dropped.
             map_bytes, map_skipped = _valid_source_map(f, settings.max_source_map_bytes)
             if map_bytes is not None:
-                map_keys_by_url[url] = storage.put_blob(tenant_id, run_id, "source_map", map_bytes)
+                upload.map_key = storage.put_blob(tenant_id, run_id, "source_map", map_bytes)
                 total_bytes += len(map_bytes)
             elif map_skipped:
                 # D32-A2 honesty: a present-but-oversized map is a real coverage gap
                 # (analyze -> source_map:"skipped"), not "no map". Flagged in
                 # _seed_fetched_assets below (same tx as the fetch_ok seed).
-                skipped_map_urls.add(url)
+                upload.map_skipped = True
                 log.info(
                     "capture.source_map_skipped",
                     run_id=run_id,
@@ -547,22 +591,17 @@ def save_files(
         except Exception as exc:  # infra: 5xx so the extension RETRIES the whole (idempotent) batch
             log.error("capture.save_files.blob_failed", url=url, error=str(exc))
             raise HTTPException(status_code=503, detail="blob storage unavailable") from exc
-        keys_by_url[url] = key
         total_bytes += len(data)
-        stored += 1
-        file_results.append(
-            {
-                "url": url,
-                "contentHash": content_hash,
-                "runId": run_id,
-                "stored": True,
-            }
-        )
+        upload.result.update(runId=run_id, stored=True)
+        file_results.append(upload.result)
+        uploads.append(upload)
 
-    if keys_by_url:
-        total = _seed_fetched_assets(
-            tenant_id, run_id, keys_by_url, map_keys_by_url, skipped_map_urls
+    stored = added_versions = 0
+    if uploads:
+        total, added_versions = _seed_fetched_assets(
+            tenant_id, run_id, uploads, settings.capture_max_versions_per_url
         )
+        stored = sum(1 for upload in uploads if upload.result["stored"])
         # Slice 2 — tell the run workspace captures are arriving, LIVE. The batch is
         # already durably stored+committed above, so this capture.received event is a
         # BEST-EFFORT side-channel: an event-bus hiccup (or a malformed url below) must
@@ -578,7 +617,7 @@ def save_files(
         try:
             # urlsplit(...).hostname raises on a malformed url (e.g. an unterminated IPv6
             # bracket); keep it INSIDE the guard so a durably-stored batch never 5xxs.
-            last_host = urlsplit(next(reversed(keys_by_url))).hostname
+            last_host = urlsplit(uploads[-1].url).hostname
             emit(
                 redis,
                 tenant_id=tenant_id,
@@ -599,6 +638,7 @@ def save_files(
         session=ext_session_id,
         run_id=run_id,
         stored=stored,
+        versions=added_versions,
         failed=failed,
         bytes=total_bytes,
         duration_ms=round((time.monotonic() - store_started) * 1000),
