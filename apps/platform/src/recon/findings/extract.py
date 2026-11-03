@@ -37,6 +37,7 @@ from dataclasses import replace
 
 from tree_sitter import Node
 
+from recon.findings import _receivers
 from recon.findings._base_env import _resolve_url, collect_base_env
 from recon.findings._jsast import (
     _GENERIC_METHODS,
@@ -625,11 +626,17 @@ def _dispatch_member(
         _axios_member(call, prop, result, env, base=base or "")
     elif obj in callees:  # taught wrapper — MUST be last so native/instance collisions win
         _axios_member(call, prop, result, env, base="", wrapper=obj)
-    elif prop in _GENERIC_METHODS and obj.startswith("this.") and _is_http_client_name(obj):
-        # Angular-style injected HTTP client: `this.http.get(…)` / `this.apiService.post(…)`.
-        # A `this.`-prefixed receiver is a class field (injected dependency), giving enough
-        # confidence to promote from suspected (Tier 5 generic) to a confirmed sink — so URL
-        # resolution runs and the full endpoint is attributed. MUST precede the Tier-5 branch.
+    elif (
+        prop in _GENERIC_METHODS and _receivers.kind_of(env.receivers, obj) == _receivers.COLLECTION
+    ):
+        # The bundle shows this receiver is a Map/Set/... (created as one, or used with .has/.set/
+        # .add...): `this.idNodeMap.get(e)` is a lookup, not a request — no endpoint, no counter.
+        return
+    elif prop in _GENERIC_METHODS and _receivers.kind_of(env.receivers, obj) == _receivers.HTTP:
+        # Proven client: injected through a constructor (`constructor(e){this.http=e}` — Angular /
+        # TS DI), created by axios.create, or used via .interceptors/.defaults/.request. Confirmed
+        # sink, so URL resolution runs and an unresolvable URL is a real, counted gap. A receiver
+        # the bundle says nothing about falls through to the SUSPECTED Tier-5 branch below.
         _axios_member(call, prop, result, env, base="")
     elif prop in _GENERIC_METHODS and _is_http_client_name(obj):
         # Tier 5 (generic-call): unrecognised receiver + verb method + path-shaped arg = a

@@ -617,9 +617,11 @@ def test_generic_call_reads_verb_as_method():
 
 
 def test_generic_call_this_http_angular_pattern():
-    # `this.http.get("/x")` — `this.`-prefixed HTTP client is promoted from Tier 5
-    # generic (suspected) to a confirmed endpoint so URL resolution runs.
-    r = extract('this.http.get("/api/orders")')
+    # An INJECTED `this.http` (assigned from a constructor parameter — Angular/TS DI) is proven
+    # to be a client, so its call is a confirmed endpoint and URL resolution runs.
+    r = extract(
+        'class S{constructor(http){this.http=http} g(){return this.http.get("/api/orders")}}'
+    )
     assert r.generic == []
     assert len(r.endpoints) == 1 and r.endpoints[0].url == "/api/orders"
 
@@ -687,9 +689,10 @@ def test_generic_call_skips_dotted_non_http_receiver():
     # confirmed endpoint (not generic), so all three produce no generic entries.
     assert extract('this.store.get("/api/x")').generic == []
     assert extract('this.cache.get("/api/x")').generic == []
+    # With no evidence of what `this.http` is, it stays a SUSPECTED call (never confirmed).
     r = extract('this.http.get("/api/x")')
-    assert r.generic == []
-    assert len(r.endpoints) == 1 and r.endpoints[0].url == "/api/x"
+    assert r.endpoints == []
+    assert len(r.generic) == 1 and r.generic[0].url == "/api/x"
 
 
 # --- enrichment B: auth header capture --------------------------------------- #
@@ -1608,3 +1611,65 @@ def test_walk_limit_caps_node_count():
     assert sum(1 for _ in _walk(root, None)) == total  # None -> unbounded
     assert sum(1 for _ in _walk(root, 3)) == 3  # caps at exactly `limit`
     assert sum(1 for _ in _walk(root, 0)) == 0  # <= 0 yields nothing
+
+
+# --- receiver evidence: what the bundle says a `.get()` receiver IS ----------------------- #
+
+
+def _calls(r):
+    """Every call the extractor surfaced in any lane, and the honesty counter."""
+    return [*r.endpoints, *r.unresolved, *r.generic], r.unattributed
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # Created as a collection (the real rrweb shape: `this.idNodeMap.get(e) || null`).
+        "class M{constructor(){this.idNodeMap=new Map} n(e){return this.idNodeMap.get(e)||null}}",
+        "class M{constructor(){this.styles=new WeakMap()} n(e){return this.styles.get(e)}}",
+        "class M{dismissed=new Set(); n(e){return this.dismissed.delete(e)}}",  # class field
+        # Created elsewhere, but USED as a collection (.set/.has/.add/.clear/.forEach/...).
+        "class M{n(e,v){this.queues.set(e,v)} o(e){return this.queues.get(e)}}",
+        "class M{n(e){this.flags.has(e)&&this.flags.delete(e)}}",
+        # Local collections, even with a path-like key, are never endpoints.
+        'const routes=new Map(); routes.get("/users");',
+        'const seen=new Set(); seen.add(x); seen.delete("/api/x");',
+    ],
+)
+def test_a_proven_collection_is_never_an_http_call(src):
+    assert _calls(extract(src)) == ([], 0)
+
+
+def test_an_injected_client_with_an_unresolved_url_is_still_a_real_gap():
+    r = extract(
+        "class S{constructor(e,t){this.http=e,this.store=t} g(id){return this.http.get(id)}}"
+    )
+    assert r.unattributed == 1 and len(r.unresolved) == 1
+
+
+def test_a_client_created_by_axios_create_is_confirmed():
+    r = extract(
+        'class S{constructor(){this.api=axios.create({baseURL:"/v1"})} g(){return this.api.get("/u")}}'
+    )
+    assert [e.url for e in r.endpoints] == ["/u"]
+
+
+def test_a_receiver_with_no_evidence_is_only_suspected():
+    # Nothing in the bundle says what `this.backend` is: a path-shaped call is SUSPECTED, a
+    # key-shaped one is nothing — and neither moves the "unattributed calls" counter.
+    assert _calls(extract("class S{g(id){return this.backend.get(id)}}")) == ([], 0)
+    r = extract('class S{g(){return this.backend.get("/users")}}')
+    assert r.endpoints == [] and r.unattributed == 0 and [g.url for g in r.generic] == ["/users"]
+
+
+def test_what_a_receiver_is_used_for_outranks_where_it_came_from():
+    # An injected cache that is used as a collection is a collection...
+    cache = "class S{constructor(c){this.cache=c} a(k,v){this.cache.set(k,v)} b(k){return this.cache.get(k)}}"
+    assert _calls(extract(cache)) == ([], 0)
+    # ...but a client proven by its own API (interceptors) is never dropped, even if one field
+    # name is reused as a Map in another class of the same bundle.
+    src = (
+        "class A{constructor(){this.client=new Map} a(k){return this.client.get(k)}}"
+        "class B{constructor(c){this.client=c;this.client.interceptors.use(f)} b(u){return this.client.get(u)}}"
+    )
+    assert extract(src).unattributed == 2
