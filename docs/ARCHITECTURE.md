@@ -113,7 +113,16 @@ operator UI over that surface. Status streams back over SSE with an `ETag`/`304`
 Its **Sources** page browses both the fetched JS chunks and the source-map-recovered originals —
 the recovered list is derived from persisted `occurrence.source_path` (no subprocess fan-out; the
 Sourcemapper binary reruns on demand only for the one file being viewed) — with lazy syntax
-highlighting, and a finding occurrence links straight to its line in the recovered original. Its
+highlighting, and a finding occurrence links straight to its exact token. Every occurrence stores
+an exact **view location** (`view_line/col/end_line/end_col`: 1-based line, UTF-16 columns, end
+exclusive) in the text Sources serves — the beautified bundle or the recovered original — computed by
+`findings/located.py` from whatever space its detector reported in (tree-sitter bytes; the sink, IP
+and secret scanners' raw-bundle offsets, mapped onto the beautified text by aligning the identical
+non-whitespace characters, fail-closed). These columns are display-only and NOT part of
+`occurrence_hash`; an occurrence with no exact location (a capture-body secret, a declared const) is
+shown as "no exact location", never jumped to a guess. Runs analyzed before them show their old line
+as "approximate". `jsbeautifier` is pinned exactly with a golden-output test, because stored view
+locations index its output. Its
 **Hosts** page enumerates every host a run discovered — from assets, resolved-host endpoints,
 suspected-backend calls (the generic/unresolved lanes), tech detection, and declared base-URL rules —
 each badged in/out of the session's declared scope by the same egress guard the crawl enforces (`GET

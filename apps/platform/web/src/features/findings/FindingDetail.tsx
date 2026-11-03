@@ -2,7 +2,7 @@ import type { Finding, SourceJump } from "../../api/types";
 import { typeLabel } from "../../api/findingLabels";
 import { TriageControls } from "./TriageControls";
 import { RevealButton } from "./RevealButton";
-import { occSource } from "../../api/occurrenceSource";
+import { occJump, occSource } from "../../api/occurrenceSource";
 
 // `onJumpToSource` is optional (the shared ApiSpec drawer omits it): when present,
 // an occurrence with a source location becomes a button that reveals it in Sources.
@@ -37,9 +37,11 @@ export function FindingDetail({ finding, runId, onJumpToSource }: {
       <ul>
         {finding.occurrences.map((o, i) => {
           const { primary, bundle } = occSource(o);
+          // Where Sources can show it: exact, an old run's approximate line, or nowhere.
+          const at = occJump(o);
           // Same rendered text whether or not it's clickable — kept in one place.
           const text = <>
-            {primary}{o.line != null ? `:${o.line}` : ""}
+            {primary}{at ? `:${at.approximate ? "~" : ""}${at.line}` : ""}
             {/* Owning bundle, shown only alongside a distinct recovered path. */}
             {bundle ? ` · ${bundle}` : ""}
             {/* evidence is server-redacted for secrets; render only when present.
@@ -49,16 +51,18 @@ export function FindingDetail({ finding, runId, onJumpToSource }: {
               ? ` — ${o.evidence.length > 200 ? o.evidence.slice(0, 200) + "…" : o.evidence}`
               : ""}
             {o.engine ? ` [${o.engine}]` : ""}
+            {at?.approximate ? " · approximate location — re-run for the exact spot" : ""}
+            {!at && (o.source_path || o.asset_url) ? " · no exact location" : ""}
           </>;
-          // Clickable only when wired AND the occurrence has a source location to
-          // open; otherwise it stays plain, non-interactive text.
-          const jumpable = onJumpToSource && (o.source_path || o.asset_url);
+          // Clickable only when wired AND Sources can show the place — never a jump to a
+          // guessed spot (a capture-body secret, a declared const, an unmappable sighting).
+          const jumpable = onJumpToSource && at;
           return (
             <li key={i} className="muted">
               {jumpable ? (
                 <button type="button" className="fd-occ"
                   aria-label={`Open ${primary} in Sources`}
-                  onClick={() => onJumpToSource({ sourcePath: o.source_path, assetUrl: o.asset_url, line: o.line })}>
+                  onClick={() => onJumpToSource(at)}>
                   {text}
                 </button>
               ) : text}

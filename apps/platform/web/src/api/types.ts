@@ -29,7 +29,16 @@ export interface Occurrence {
   // Slice Y: which discovered asset this sighting came from; null for legacy
   // (pre-crawl, single-asset) occurrences.
   asset_url: string | null;
+  // The exact range in the served source (backend recon.findings.located); null = no exact
+  // location. `line`/`col` above are the detector's own coordinates (often the raw minified
+  // line 1) and must never drive a jump.
+  loc?: ViewLoc | null;
+  // A run analyzed before exact locations: its old line, shown only as "approximate".
+  approximate_line?: number | null;
 }
+// 1-based line counting newlines only; 0-based columns in UTF-16 code units (JS string indices);
+// end exclusive.
+export interface ViewLoc { line: number; col: number; end_line: number; end_col: number; }
 export interface Triage { status: string; note: string | null; actor: string | null; updated_at: string; }
 // Shadow-API classification verdict (design §6.4) for one endpoint finding.
 // Absent (Finding.spec_status === null) means "never classified" -- no spec
@@ -151,7 +160,12 @@ export interface SourceSearchResponse { run_id: string; count: number; matches: 
 // A finding occurrence's "jump to its source" request (Findings drawer -> Sources).
 // Any field may be null: an occurrence without a source_path/asset_url can still
 // carry a line, and a legacy occurrence resolves to the "input.js" bundle.
-export interface SourceJump { sourcePath: string | null; assetUrl: string | null; line: number | null; }
+// `loc` = the exact range to highlight (a finding jump); `approximate` = an old run's line.
+// A search-hit jump carries only `line`.
+export interface SourceJump {
+  sourcePath: string | null; assetUrl: string | null; line: number | null;
+  loc?: ViewLoc | null; approximate?: boolean;
+}
 // One source file's decoded text (GET /runs/{id}/sources/content?path=).
 // `truncated` is true when the raw blob exceeded the server's response cap. `formatted`
 // (D35) is true when the SERVER already beautified this text (so its finding marks are

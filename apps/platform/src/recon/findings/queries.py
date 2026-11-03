@@ -37,6 +37,7 @@ from recon.domain import TOTAL_ENDPOINT_TYPES, AssetStatus, FindingType
 from recon.findings import priority, visibility
 from recon.findings.base_url import BaseUrlRule
 from recon.findings.coverage import Coverage, read_run_coverage
+from recon.findings.located import ViewLoc
 from recon.findings.wrappers import WrapperRule
 from recon.spec.classify import Classification, SpecSummary, summarize
 
@@ -57,6 +58,11 @@ class OccurrenceView:
     # Slice Y: which discovered asset this sighting came from, resolved from
     # run_asset_id -> run_asset.url. None for legacy (pre-crawl) occurrences.
     asset_url: str | None = None
+    # The exact range in the served source (recon.findings.located); None = no exact location.
+    loc: ViewLoc | None = None
+    # An occurrence recorded before exact locations has only the detector's own line: offered
+    # as "approximate" so the UI never presents it as exact. None on every newer occurrence.
+    approximate_line: int | None = None
 
 
 @dataclass(frozen=True)
@@ -818,7 +824,9 @@ def _finding_view(
 
     occurrences = [
         _occurrence_view(
-            occurrence, redact_evidence=is_secret, asset_url=_asset_url_for(occurrence)
+            occurrence,
+            redact_evidence=is_secret,
+            asset_url=_asset_url_for(occurrence),
         )
         for occurrence in sorted(
             finding.occurrences,
@@ -885,6 +893,25 @@ def _occurrence_view(
     redact_evidence: bool = False,
     asset_url: str | None = None,
 ) -> OccurrenceView:
+    loc = (
+        ViewLoc(
+            occurrence.view_line,
+            occurrence.view_col,
+            occurrence.view_end_line,
+            occurrence.view_end_col,
+        )
+        if occurrence.view_line  # 0 = analyzed with no exact location, NULL = pre-exact row
+        and occurrence.view_col is not None
+        and occurrence.view_end_line is not None
+        and occurrence.view_end_col is not None
+        else None
+    )
+    # Only a row recorded before exact locations existed (view_line NULL) offers its old line.
+    legacy_line = (
+        occurrence.line
+        if occurrence.view_line is None and occurrence.line and occurrence.line > 0
+        else None
+    )
     return OccurrenceView(
         host=occurrence.host,
         raw_url=occurrence.raw_url,
@@ -898,4 +925,6 @@ def _occurrence_view(
         confidence=occurrence.confidence,
         verified=occurrence.verified,
         asset_url=asset_url,
+        loc=loc,
+        approximate_line=legacy_line,
     )

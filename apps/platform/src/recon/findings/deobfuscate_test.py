@@ -75,3 +75,34 @@ def test_beautify_if_minified_soft_fails_to_raw_over_cap():
     assert len(oversized) > deobfuscate._MAX_BEAUTIFY_BYTES and deobfuscate._is_minified(oversized)
 
     assert deobfuscate.beautify_if_minified(oversized) == oversized
+
+
+def test_beautify_output_is_byte_for_byte_the_pinned_golden():
+    # Stored finding view locations (recon.findings.located) index this exact output, and the
+    # Sources tab re-derives it on demand. A jsbeautifier upgrade that changes ANY byte here
+    # silently moves every stored highlight — bump the pin only alongside this golden.
+    src = (
+        'var a=1,b={x:[1,2],"k":`t${a}`};function f(e){if(e){return fetch("/api/u?q="+e,'
+        '{method:"POST"})}else{return null}}window.addEventListener("message",e=>'
+        '{document.cookie="s="+e.data});'
+    )
+    assert deobfuscate.beautify(src) == (
+        "var a = 1,\n"
+        "  b = {\n"
+        "    x: [1, 2],\n"
+        '    "k": `t${a}`\n'
+        "  };\n"
+        "\n"
+        "function f(e) {\n"
+        "  if (e) {\n"
+        '    return fetch("/api/u?q=" + e, {\n'
+        '      method: "POST"\n'
+        "    })\n"
+        "  } else {\n"
+        "    return null\n"
+        "  }\n"
+        "}\n"
+        'window.addEventListener("message", e => {\n'
+        '  document.cookie = "s=" + e.data\n'
+        "});"
+    )

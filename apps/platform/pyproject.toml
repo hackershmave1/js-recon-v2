@@ -25,7 +25,9 @@ dependencies = [
     "tree-sitter-javascript>=0.23",
     # Pure-Python JS beautifier for the no-map deobfuscator baseline (recon.findings.deobfuscate):
     # reformats a minified bundle with no source map so endpoint findings get distinct line numbers.
-    "jsbeautifier>=1.15",
+    # Pinned exactly: stored finding view locations index its output (recon.findings.located),
+    # so a formatting change would silently shift every highlight. Bump only with the golden test.
+    "jsbeautifier==2.0.3",
     # Out-of-process secret scanner (MongoDB Kingfisher). The wheel bundles the
     # platform binary and exposes a `kingfisher` console script; pinned so the
     # rule-id -> provider map (recon.findings.normalize) stays stable.

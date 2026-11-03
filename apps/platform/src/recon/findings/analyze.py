@@ -55,6 +55,7 @@ from recon.findings._jsast import _MAX_AST_NODES
 from recon.findings.coverage import Coverage, FileCoverage
 from recon.findings.extract import RawEndpoint, extract
 from recon.findings.kingfisher import RawSecret
+from recon.findings.located import LocatedText, ViewLoc
 from recon.findings.wrappers import WrapperRule
 from recon.observability import get_logger
 from recon.progress import heartbeat as progress
@@ -490,7 +491,8 @@ def _extract_endpoints(
     for source_name in units.names:
         if heartbeat is not None:
             heartbeat()  # lease renew + REQ-A4 control-check, before each unit's extract (S4)
-        unit_text = units.read_text(source_name)
+        located = units.located(source_name)
+        unit_text = located.served
         importer_key = (
             _modulegraph.url_module_key(asset_url)
             if is_bundle and asset_url is not None
@@ -528,6 +530,7 @@ def _extract_endpoints(
                 endpoint,
                 run_asset_id=run_asset_id,
                 asset_url=asset_url,
+                view=_endpoint_view(located, endpoint),
             )
         # Promotion gate (endpoint-model): an unresolved sink (Tier 4) OR a generic-client call
         # (Tier 5) whose collapsed URL still carries a real path (>=1 static segment) is a valid,
@@ -550,6 +553,7 @@ def _extract_endpoints(
                     normalized_suspect,
                     run_asset_id=run_asset_id,
                     asset_url=asset_url,
+                    view=_endpoint_view(located, suspect),
                 )
             else:
                 written += _record_unresolved_endpoint(
@@ -561,6 +565,7 @@ def _extract_endpoints(
                     suspect,
                     run_asset_id=run_asset_id,
                     asset_url=asset_url,
+                    view=_endpoint_view(located, suspect),
                 )
         # Page routes (Phase 2): client-side navigation targets. A DISTINCT PAGE_ROUTE type
         # (auto-excluded from every type=='endpoint' read model) and, like the generic lane,
@@ -577,6 +582,7 @@ def _extract_endpoints(
                 run_asset_id=run_asset_id,
                 asset_url=asset_url,
                 finding_type=FindingType.PAGE_ROUTE,
+                view=_endpoint_view(located, route),
             )
     files = tuple(
         FileCoverage(path=path, attributed=counts[0], unattributed=counts[1])
@@ -591,6 +597,14 @@ def _extract_endpoints(
         files=files,
         curtailed=curtailed,
     )
+
+
+def _endpoint_view(located: LocatedText, ep: RawEndpoint) -> ViewLoc | None:
+    """The URL argument's exact place in the served text (the whole call when the handler had no
+    separate URL node). A declared const has no position (0..0) -> None."""
+    if ep.mark_start_byte is not None and ep.mark_end_byte is not None:
+        return located.from_bytes(ep.mark_start_byte, ep.mark_end_byte)
+    return located.from_bytes(ep.start_byte, ep.end_byte)
 
 
 def _analyze_blob(
@@ -639,8 +653,16 @@ def _analyze_blob(
     # between recovered files so a big map's per-file work stays lease-safe (S4). The recovered passes
     # run FIRST (then the raw-bundle passes below); order is immaterial — each records into a distinct
     # source_path/byte-space and the transactional-outbox upserts are idempotent.
+    # The bundle as the Sources tab serves it (beautified ONCE per blob): the bundle endpoint unit,
+    # GraphQL, and the exact view location of every raw-lane sighting below all share it.
+    bundle = LocatedText.for_bundle(source)
     with _analysis_units(
-        source_map_ref, source, source_map_origin, source_map_skipped, heartbeat=heartbeat
+        source_map_ref,
+        source,
+        source_map_origin,
+        source_map_skipped,
+        heartbeat=heartbeat,
+        bundle=bundle,
     ) as units:
         endpoints = _extract_endpoints(
             session,
@@ -714,6 +736,7 @@ def _analyze_blob(
             finding_type=finding_type,
             run_asset_id=run_asset_id,
             asset_url=asset_url,
+            located=bundle,
         )
         if finding_type is FindingType.SECRET_SUSPECTED:
             suspected_sighted += 1
@@ -732,6 +755,7 @@ def _analyze_blob(
             secret_path,
             _SOURCE_NAME,
             sighting,
+            bundle,
             run_asset_id=run_asset_id,
             asset_url=asset_url,
         )
@@ -748,6 +772,7 @@ def _analyze_blob(
             secret_path,
             _SOURCE_NAME,
             sink,
+            bundle,
             run_asset_id=run_asset_id,
             asset_url=asset_url,
         )
@@ -758,7 +783,7 @@ def _analyze_blob(
         session,
         tenant_id=tenant_id,
         run_id=run_id,
-        source=source,
+        bundle=bundle,
         run_asset_id=run_asset_id,
         asset_url=asset_url,
     )
@@ -803,7 +828,7 @@ class AnalysisUnits:
         sources_recovered: int,
         names: list[str],
         tree_root: str | None,
-        bundle_text: str | None,
+        bundle: LocatedText | None,
         tree_bytes: int = 0,
         partial: bool = False,
         tmp: tempfile.TemporaryDirectory[str] | None = None,
@@ -814,7 +839,7 @@ class AnalysisUnits:
         self.tree_root = tree_root
         self.tree_bytes = tree_bytes
         self.partial = partial
-        self._bundle_text = bundle_text
+        self._bundle = bundle
         self._tmp = tmp
 
     @property
@@ -829,9 +854,16 @@ class AnalysisUnits:
         so this reproduces the exact text ``recon.probe.sources.recover_file_text`` beautifies at
         reveal — the byte-exact both-sides invariant, D37-L2 M2)."""
         if self.tree_root is None:
-            return self._bundle_text or ""
+            return self._bundle.served if self._bundle is not None else ""
         with open(os.path.join(self.tree_root, *name.split("/")), "rb") as handle:
             return handle.read().decode("utf-8")
+
+    def located(self, name: str) -> LocatedText:
+        """``read_text(name)`` with its exact-location index: the shared bundle (built once per
+        blob), or one recovered original, whose detectors scan the served text itself."""
+        if self.tree_root is None and self._bundle is not None:
+            return self._bundle
+        return LocatedText(self.read_text(name))
 
     def __enter__(self) -> AnalysisUnits:
         return self
@@ -901,6 +933,7 @@ def _analysis_units(
     source_map_skipped: bool = False,
     *,
     heartbeat: Callable[[], None] | None = None,
+    bundle: LocatedText | None = None,
 ) -> AnalysisUnits:
     """Decide what to analyze: source-map-recovered originals (real paths) if a map recovers any,
     else the whole bundle under ``input.js``. Returns an :class:`AnalysisUnits` — a CONTEXT MANAGER
@@ -909,20 +942,22 @@ def _analysis_units(
     D37-L2 slice 3: the recovered originals are STREAMED (``sourcemapper.iter_recovered_files``),
     beautified byte-exact, and written to an on-disk tree read one file at a time — so a 96 MiB map
     is recovered whole (endpoints) without ever holding the tree in RAM (the old 32 MiB in-RAM cap).
-    The map itself is streamed to a temp file (never ``get_blob`` whole)."""
+    The map itself is streamed to a temp file (never ``get_blob`` whole).
+
+    ``bundle`` is the blob's one :meth:`LocatedText.for_bundle` (``_analyze_blob`` shares it with
+    the raw-lane passes and GraphQL so the bundle is beautified once); built here when absent."""
 
     def _bundle(status: str) -> AnalysisUnits:
         # The whole bundle as one endpoint unit under input.js, beautified (deterministic,
         # cap-guarded) so findings get distinct line numbers and recon.probe.sources serves the
         # same beautify; raw when beautify is over-cap/unavailable. Secrets scan the raw bytes in
         # _analyze_blob (recon.probe.reveal slices raw offsets), unaffected.
-        beautified = deobfuscate.beautify(source)
         return AnalysisUnits(
             source_map_status=status,
             sources_recovered=0,
             names=[_SOURCE_NAME],
             tree_root=None,
-            bundle_text=beautified if beautified is not None else source,
+            bundle=bundle if bundle is not None else LocatedText.for_bundle(source),
         )
 
     if source_map_ref:
@@ -963,7 +998,7 @@ def _analysis_units(
             sources_recovered=len(names),
             names=names,
             tree_root=tmp.name,
-            bundle_text=None,
+            bundle=None,
             tree_bytes=tree_bytes,
             partial=partial,
             tmp=tmp,
@@ -1131,6 +1166,7 @@ def _record_endpoint(
     *,
     run_asset_id: str | None = None,
     asset_url: str | None = None,
+    view: ViewLoc | None = None,
 ) -> int:
     normalized = normalize.normalize_endpoint(ep.method, ep.url)
     endpoint_attributes: dict[str, Any] = {"kind": ep.kind, "method": ep.method}
@@ -1159,6 +1195,7 @@ def _record_endpoint(
             engine="vespasian",
             run_asset_id=run_asset_id,
             asset_url=asset_url,
+            view=view,
         ),
         attributes=endpoint_attributes,
         resolution=ep.resolution,
@@ -1192,6 +1229,7 @@ def _record_endpoint(
                 engine="vespasian",
                 run_asset_id=run_asset_id,
                 asset_url=asset_url,
+                view=view,
             ),
             attributes=param_attributes,
         )
@@ -1209,6 +1247,7 @@ def _record_unresolved_endpoint(
     run_asset_id: str | None = None,
     asset_url: str | None = None,
     finding_type: FindingType = FindingType.ENDPOINT_UNRESOLVED,
+    view: ViewLoc | None = None,
 ) -> int:
     """Write a non-confirmed finding under the given ``finding_type`` from a best-effort
     ``_collapse_url`` skeleton: a Tier-4 ``ENDPOINT_UNRESOLVED`` sink we detected but couldn't
@@ -1253,6 +1292,7 @@ def _record_unresolved_endpoint(
             engine="vespasian",
             run_asset_id=run_asset_id,
             asset_url=asset_url,
+            view=view,
         ),
         attributes=attributes,
     )
@@ -1269,6 +1309,7 @@ def _record_suspected_endpoint(
     *,
     run_asset_id: str | None = None,
     asset_url: str | None = None,
+    view: ViewLoc | None = None,
 ) -> int:
     """Write a promoted SUSPECTED endpoint (a generic/unresolved sink whose collapsed URL has
     >=1 static path segment) as ``FindingType.ENDPOINT_SUSPECTED``: a normalized ``value`` +
@@ -1298,6 +1339,7 @@ def _record_suspected_endpoint(
             engine="vespasian",
             run_asset_id=run_asset_id,
             asset_url=asset_url,
+            view=view,
         ),
         attributes=attributes,
     )
@@ -1316,6 +1358,7 @@ def _record_secret(
     source_path: str = _SOURCE_NAME,
     run_asset_id: str | None = None,
     asset_url: str | None = None,
+    located: LocatedText | None = None,
 ) -> int:
     # value = provider:sha256(token) — the raw token is never hashed in cleartext.
     # D33-B: ``finding_type`` is SECRET (precision lane) or SECRET_SUSPECTED (opt-in
@@ -1334,12 +1377,16 @@ def _record_secret(
     # round-trips. A snippet not present verbatim (rare) stores offset-less ->
     # reveal 422, never wrong bytes. line/col stay the engine's (display only).
     key = (secret.rule_id, secret.snippet)
-    located = kingfisher.locate_snippet(source, secret.snippet, search_from=cursors.get(key, 0))
+    span = kingfisher.locate_snippet(source, secret.snippet, search_from=cursors.get(key, 0))
     offset_start: int | None
     offset_end: int | None
-    if located is not None:
-        offset_start, offset_end = located
+    view: ViewLoc | None = None
+    if span is not None:
+        offset_start, offset_end = span
         cursors[key] = offset_end  # next identical sighting searches past this one
+        # `source` is the text Kingfisher scanned (the raw bundle, or a recovered original);
+        # `located` maps those bytes onto the served view.
+        view = (located or LocatedText(source)).from_raw_bytes(offset_start, offset_end)
     else:
         offset_start = offset_end = None
     return _write(
@@ -1365,6 +1412,7 @@ def _record_secret(
             verified=True if secret.validation_status == "Active" else None,
             run_asset_id=run_asset_id,
             asset_url=asset_url,
+            view=view,
         ),
         attributes={"rule": secret.rule_id, "name": secret.rule_name},
     )
@@ -1377,6 +1425,7 @@ def _record_internal_ip(
     path: str,
     source_path: str,
     sighting: internal_ip.InternalIpSighting,
+    located: LocatedText,
     *,
     run_asset_id: str | None = None,
     asset_url: str | None = None,
@@ -1407,6 +1456,7 @@ def _record_internal_ip(
             confidence=None,
             run_asset_id=run_asset_id,
             asset_url=asset_url,
+            view=located.from_raw_chars(sighting.offset_start, sighting.offset_end),
         ),
         attributes={"category": sighting.category},
     )
@@ -1419,6 +1469,7 @@ def _record_data_sink(
     path: str,
     source_path: str,
     sighting: data_sinks.DataSinkSighting,
+    located: LocatedText,
     *,
     run_asset_id: str | None = None,
     asset_url: str | None = None,
@@ -1450,6 +1501,7 @@ def _record_data_sink(
             confidence=None,
             run_asset_id=run_asset_id,
             asset_url=asset_url,
+            view=located.from_raw_chars(sighting.offset_start, sighting.offset_end),
         ),
         attributes={"confidence": confidence},
     )
@@ -1497,7 +1549,7 @@ def _record_recovered_secrets(
     sighted = 0
     suspected = 0
     for source_path, secrets in by_path.items():
-        unit_text = units.read_text(source_path)  # ONE beautified file, for content-located offsets
+        unit = units.located(source_path)  # ONE beautified file, for content-located offsets
         finding_path = normalize.normalize_source_path(source_path)
         # Fresh cursor per unit: offsets are located within THIS unit's own byte space,
         # so N identical sightings in one file still map to N distinct offsets (REQ-C2).
@@ -1509,13 +1561,14 @@ def _record_recovered_secrets(
                 tenant_id,
                 run_id,
                 finding_path,
-                unit_text,
+                unit.served,
                 secret,
                 cursors,
                 finding_type=finding_type,
                 source_path=source_path,
                 run_asset_id=run_asset_id,
                 asset_url=asset_url,
+                located=unit,
             )
             if finding_type is FindingType.SECRET_SUSPECTED:
                 suspected += 1
@@ -1545,9 +1598,9 @@ def _record_recovered_internal_ips(
     for source_path in units.names:
         if heartbeat is not None:
             heartbeat()  # lease renew + REQ-A4, before each recovered file's IP scan (S4)
-        unit_text = units.read_text(source_path)
+        unit = units.located(source_path)
         finding_path = normalize.normalize_source_path(source_path)
-        for sighting in internal_ip.find_internal_ips(unit_text):
+        for sighting in internal_ip.find_internal_ips(unit.served):
             written += _record_internal_ip(
                 session,
                 tenant_id,
@@ -1555,6 +1608,7 @@ def _record_recovered_internal_ips(
                 finding_path,
                 source_path,
                 sighting,
+                unit,
                 run_asset_id=run_asset_id,
                 asset_url=asset_url,
             )
@@ -1575,7 +1629,7 @@ def _record_graphql(
     *,
     tenant_id: str,
     run_id: str,
-    source: str,
+    bundle: LocatedText,
     run_asset_id: str | None,
     asset_url: str | None,
 ) -> int:
@@ -1591,14 +1645,10 @@ def _record_graphql(
     the REQ-C2 coverage counters automatically — no coverage counter is touched here. Empty → no
     findings, no blob, no event.
     """
-    # Locate GraphQL documents against the SAME beautified text the endpoint lane extracts from
-    # and recon.probe.sources serves as `input.js` (both use `deobfuscate.beautify`). Reading the
-    # RAW bundle instead gives every definition the minified bundle's line/offset — line 1 on a
-    # one-physical-line bundle — so the Sources "jump to finding" lands on line 1 while the
-    # endpoint findings map correctly. Fall back to raw when beautify is unavailable/over-cap,
-    # matching `_bundle`'s bundle_text choice so the located text stays what the viewer shows.
-    beautified = deobfuscate.beautify(source)
-    definitions = graphql_ops.collect_definitions(beautified if beautified is not None else source)
+    # Locate GraphQL documents against the SAME served text the endpoint lane extracts from and
+    # recon.probe.sources serves as `input.js` (the blob's one beautify, raw over the cap), so the
+    # Sources "jump to finding" lands on the document, not the minified line 1.
+    definitions = graphql_ops.collect_definitions(bundle.served)
     if not definitions:
         return 0
     finding_path = normalize.normalize_source_path(asset_url or _SOURCE_NAME)
@@ -1621,7 +1671,10 @@ def _record_graphql(
             ),
             finding_path,
             occurrence=store.Occurrence(
-                source_path=finding_path,
+                # The bundle sentinel, like every other bundle-lane producer: the Sources tab shows
+                # this asset's bundle for (`input.js`, asset_url). As a source_path the asset-URL
+                # path named a recovered file that never existed; it stays the finding's `path`.
+                source_path=_SOURCE_NAME,
                 line=definition.line,
                 col=definition.col,
                 offset_start=definition.offset_start,
@@ -1629,6 +1682,7 @@ def _record_graphql(
                 engine="vespasian",
                 run_asset_id=run_asset_id,
                 asset_url=asset_url,
+                view=bundle.from_bytes(definition.offset_start, definition.offset_end),
             ),
             attributes=attributes,
         )

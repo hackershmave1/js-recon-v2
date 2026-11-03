@@ -59,6 +59,7 @@ button.sv-node.sel { background: var(--accent-soft); color: var(--accent); }
 .sv-warn { color: var(--warn); }
 .sv-code-wrap { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
 .sv-code { flex: 1; overflow: auto; background: var(--field); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; }
+.sv-code-inner { width: max-content; min-width: 100%; }
 /* Floating jump-to-top, anchored to the non-scrolling wrapper (not the scroller). */
 .sv-top { position: absolute; right: 18px; bottom: 16px; width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--r-pill); background: var(--raised); border: 1px solid var(--border-strong); color: var(--text-2); box-shadow: 0 2px 12px rgba(0,0,0,0.4); }
 .sv-top:hover { background: #2b3446; border-color: var(--faint); color: var(--text); }
@@ -116,3 +117,8 @@ button.sv-node.sel { background: var(--accent-soft); color: var(--accent); }
 .sv-search-hit:hover { background: var(--surface); }
 .sv-search-hit-loc { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
 .sv-search-hit-snip { font-family: var(--font-mono); font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Exact finding ranges (PR B): every finding's own token, and the jumped-to one. */
+.sv-hit { background: rgba(205, 235, 69, 0.16); color: inherit; border-radius: 2px; padding: 0; }
+.sv-hit.focus { background: rgba(205, 235, 69, 0.42); box-shadow: inset 0 -2px 0 var(--accent); }
+.sv-approx { color: var(--warn, #f5a524); font-size: 12px; }

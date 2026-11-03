@@ -47,3 +47,25 @@ describe("CodeViewer", () => {
     expect(document.querySelector(".sv-note.sv-warn")?.textContent).toMatch(/truncated/i);
   });
 });
+
+describe("CodeViewer exact ranges", () => {
+  it("highlights exactly the finding's token, and the jumped-to one as the focus", () => {
+    const text = 'const a = 1;\nfetch("/api/users", { method: "POST" });';
+    const loc = { line: 2, col: 6, end_line: 2, end_col: 18 };
+    render(<CodeViewer text={text} truncated={false} marks={null} ranges={[loc]} focusRange={loc} focusLine={2} />);
+    const hits = document.querySelectorAll("mark.sv-hit");
+    expect([...hits].map((h) => h.textContent)).toEqual(['"/api/users"']);
+    expect(hits[0].classList.contains("focus")).toBe(true);
+  });
+});
+
+describe("CodeViewer huge rows", () => {
+  it("highlights a finding millions of columns into a raw one-line bundle", () => {
+    const col = 3_400_000;
+    const text = "a".repeat(col) + '"/api/deep"' + "b".repeat(1_000_000);
+    const loc = { line: 1, col, end_line: 1, end_col: col + 11 };
+    render(<CodeViewer text={text} truncated={false} marks={null} ranges={[loc]} focusRange={loc} focusLine={1} />);
+    expect(document.querySelector("mark.sv-hit.focus")?.textContent).toBe('"/api/deep"');
+    expect((document.querySelector(".sv-code-txt")?.textContent ?? "").length).toBeLessThanOrEqual(100_004);
+  });
+});

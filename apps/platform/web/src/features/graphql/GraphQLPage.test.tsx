@@ -1,10 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
+import { withExactLoc } from "../../api/testOccurrence";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GraphQLPage } from "./GraphQLPage";
 import type { FindingsResponse, Finding, Occurrence } from "../../api/types";
 
-const occ = (over: Partial<Occurrence> = {}): Occurrence => ({
+const occ = (over: Partial<Occurrence> = {}): Occurrence => withExactLoc({
   host: null, raw_url: null, source_path: null, line: null, col: null,
   offset_start: null, offset_end: null, evidence: null, engine: null,
   confidence: null, verified: null, asset_url: null, ...over,
@@ -89,7 +90,7 @@ describe("GraphQLPage", () => {
     const jump = screen.getByRole("button", { name: /open app\.js in sources/i });
     expect(jump).toHaveTextContent("app.js:42");
     await userEvent.click(jump);
-    expect(onJump).toHaveBeenCalledWith({ sourcePath: "app.js", assetUrl: "https://acme.io/app.js", line: 42 });
+    expect(onJump).toHaveBeenCalledWith(expect.objectContaining({ sourcePath: "app.js", assetUrl: "https://acme.io/app.js", line: 42 }));
   });
 
   it("renders a clean empty state (never fake rows) when no graphql findings exist", () => {

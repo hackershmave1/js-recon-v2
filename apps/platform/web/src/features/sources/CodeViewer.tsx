@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ViewLoc } from "../../api/types";
 import { highlightLine, loadPrism, type HighlightedSpan } from "./highlight";
+import { rangesByLine, renderWindowStart, shiftRanges, splitByRanges } from "./rangeSlices";
 
 // D35: the code body is VIRTUALIZED — a beautified multi-MB bundle can be hundreds of
 // thousands of lines, and committing one DOM node per line (the old approach) exploded
@@ -30,11 +32,14 @@ const UpIcon = () => (
 // Presentational: renders `text` line-by-line, windowed to the viewport. `marks` (line ->
 // finding type) is null when the view is pretty-printed (original line numbers no longer
 // map after reformatting). `focusLine` is the jumped-to line (highlighted + scrolled to
-// the middle); it still applies to pretty-printed text even though marks don't.
-export function CodeViewer({ text, truncated, marks, focusLine }: {
+// the middle). `ranges` are the exact finding ranges in THIS text (null when pretty-printed,
+// like marks) and `focusRange` the jumped-to one: each is painted on exactly its token.
+export function CodeViewer({ text, truncated, marks, focusLine, ranges, focusRange }: {
   text: string; truncated: boolean; marks: Map<number, string> | null; focusLine?: number | null;
+  ranges?: ViewLoc[] | null; focusRange?: ViewLoc | null;
 }) {
   const lines = useMemo(() => text.split("\n"), [text]);
+  const hitsByLine = useMemo(() => rangesByLine(ranges ?? [], focusRange ?? null), [ranges, focusRange]);
   const total = lines.length;
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -108,6 +113,17 @@ export function CodeViewer({ text, truncated, marks, focusLine }: {
     if (el) { try { el.scrollTo({ top }); } catch { el.scrollTop = top; } }
   }, [focusLine, total]);
 
+  // Bring the focused token into view horizontally once its row is mounted (a long
+  // beautified line can put it far right of the viewport).
+  useEffect(() => {
+    if (!focusRange) return;
+    const frame = requestAnimationFrame(() => {
+      const hit = scrollRef.current?.querySelector("mark.sv-hit.focus");
+      hit?.scrollIntoView?.({ block: "nearest", inline: "center" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusRange, start]);
+
   const scrollToTop = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -122,11 +138,26 @@ export function CodeViewer({ text, truncated, marks, focusLine }: {
     const mark = marks?.get(n);
     const focused = focusLine === n;
     const spans = spansByIndex.get(i);
+    const hits = hitsByLine.get(n);
+    // A huge raw row (a bundle over the server's beautify cap) is clipped to RENDER_MAX_LINE; with
+    // a finding on it, the clip is a window AROUND the finding (often millions of columns in), not
+    // the row's first 100k chars — otherwise the jump would highlight nothing.
+    const clipped = raw.length > RENDER_MAX_LINE;
+    const winStart = clipped && hits ? renderWindowStart(raw.length, hits, RENDER_MAX_LINE) : 0;
+    const before = winStart > 0 ? "… " : "";
+    const after = clipped && winStart + RENDER_MAX_LINE < raw.length ? " …" : "";
+    const pieces = !hits ? null : clipped
+      ? splitByRanges([{ text: raw.slice(winStart, winStart + RENDER_MAX_LINE), className: "" }], shiftRanges(hits, -winStart))
+      : splitByRanges(spans ?? [{ text: raw, className: "" }], hits);
     rows.push(
       <div key={n} className={"sv-line" + (mark ? " marked" : "") + (focused ? " focus" : "")}>
         <span className="sv-ln">{n}</span>
         <span className="sv-code-txt">
-          {spans ? spans.map((s, j) => <span key={j} className={s.className}>{s.text}</span>) : line}
+          {pieces
+            ? <>{before}{pieces.map((p, j) => p.hit
+              ? <mark key={j} className={"sv-hit" + (p.hit === "focus" ? " focus" : "")}><span className={p.className}>{p.text}</span></mark>
+              : <span key={j} className={p.className}>{p.text}</span>)}{after}</>
+            : spans ? spans.map((s, j) => <span key={j} className={s.className}>{s.text}</span>) : line}
         </span>
         {mark && <span className="sv-mark">{mark}</span>}
       </div>,
@@ -139,9 +170,13 @@ export function CodeViewer({ text, truncated, marks, focusLine }: {
         <div className="sv-note sv-warn">File truncated — showing a capped preview. Download to view the full file.</div>
       )}
       <div className="sv-code" ref={scrollRef} onScroll={onScroll}>
-        <div style={{ height: start * CODE_ROW_HEIGHT }} />
-        {rows}
-        <div style={{ height: (total - end) * CODE_ROW_HEIGHT }} />
+        {/* As wide as the widest mounted row, so every row (and its sticky line number) spans the
+            full scroll width — otherwise a horizontal scroll carries short rows' numbers away. */}
+        <div className="sv-code-inner">
+          <div style={{ height: start * CODE_ROW_HEIGHT }} />
+          {rows}
+          <div style={{ height: (total - end) * CODE_ROW_HEIGHT }} />
+        </div>
       </div>
       {scrolled && (
         <button type="button" className="sv-top" onClick={scrollToTop}

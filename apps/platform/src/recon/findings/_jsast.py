@@ -156,6 +156,10 @@ class RawEndpoint:
     # True when the URL was the argument of a confirmed or suspected network/nav sink;
     # False only for off-sink harvested string literals (confidence=="low" routes).
     at_sink: bool = True
+    # Byte span of the URL argument itself — what the Sources tab highlights. start/end_byte
+    # above stay the whole call (occurrence identity + the evidence snippet). None = use those.
+    mark_start_byte: int | None = None
+    mark_end_byte: int | None = None
 
 
 @dataclass
@@ -706,6 +710,7 @@ def _endpoint(
     wrapper: str | None = None,
     headers: list[HeaderRef] | None = None,
     confidence: str = "high",
+    mark: Node | None = None,
 ) -> RawEndpoint:
     row, col = call.start_point
     deduped = list(dict.fromkeys(params))  # preserve order, drop repeats
@@ -727,4 +732,6 @@ def _endpoint(
         confidence=confidence,
         resolution=_url_resolution(url),
         at_sink=confidence != "low",
+        mark_start_byte=mark.start_byte if mark is not None else None,
+        mark_end_byte=mark.end_byte if mark is not None else None,
     )

@@ -7,6 +7,8 @@ deliberately distinct from a run with zero findings (200 + empty list).
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from recon.api.deps import get_tenant_id
@@ -122,6 +124,9 @@ def get_run_findings(
                         "confidence": occurrence.confidence,
                         "verified": occurrence.verified,
                         "asset_url": occurrence.asset_url,
+                        # Exact range in the served source; null = no exact location.
+                        "loc": asdict(occurrence.loc) if occurrence.loc else None,
+                        "approximate_line": occurrence.approximate_line,
                     }
                     for occurrence in finding.occurrences
                 ],

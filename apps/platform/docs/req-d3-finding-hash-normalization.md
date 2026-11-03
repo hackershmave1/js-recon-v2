@@ -152,6 +152,11 @@ occurrence_hash = sha256 over the occurrence's identifying volatile fields
                   (raw_url/value, host, source_path, offset_start, offset_end, line, col, asset_url)
 ```
 
+`line`/`col`/`offset_*` are the DETECTOR's own coordinates and keep their meaning forever (changing it
+would re-hash every sighting on a re-extract). The exact place a finding is SHOWN lives in the separate
+display-only `view_line/view_col/view_end_line/view_end_col` columns (migration 0032,
+`recon.findings.located`), which are deliberately outside this hash.
+
 - `value` is Unicode **NFC-normalized** before serialization, so two builds differing only in composition form don't churn the D5 diff (review LOW-5).
 - `v` (`FINDING_HASH_VERSION`) ⇒ a future identity change bumps it, giving a disjoint hash space and a clean new-runs-only rollout (no false "all removed + all added" against older runs).
 - Canonical JSON (sorted keys, no whitespace, UTF-8) ⇒ deterministic bytes.
