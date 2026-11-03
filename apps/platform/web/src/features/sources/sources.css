@@ -119,5 +119,5 @@ button.sv-node.sel { background: var(--accent-soft); color: var(--accent); }
 
 /* Exact finding ranges (PR B): every finding's own token, and the jumped-to one. */
 .sv-hit { background: rgba(205, 235, 69, 0.16); color: inherit; border-radius: 2px; padding: 0; }
-.sv-hit.focus { background: rgba(205, 235, 69, 0.42); outline: 1px solid var(--accent); }
+.sv-hit.focus { background: rgba(205, 235, 69, 0.42); box-shadow: inset 0 -2px 0 var(--accent); }
 .sv-approx { color: var(--warn, #f5a524); font-size: 12px; }
