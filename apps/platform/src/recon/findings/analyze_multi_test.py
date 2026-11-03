@@ -10,6 +10,7 @@ from recon import storage
 from recon.db import models
 from recon.db.base import tenant_session
 from recon.findings import analyze
+from recon.findings.coverage import Coverage, merge
 from recon.queue import retry
 from recon.runs import assets, service
 
@@ -172,16 +173,13 @@ def test_analyze_loop_does_not_overwrite_ok_when_publish_fails_post_commit(
     assert assets.list_for_run(tenant, run_id)[0].analyze_status == "ok"
 
 
-def test_merge_coverage_reports_less_healthy_secrets_engine():
-    # Aggregating across assets must not let a LATER successful scan mask an
-    # EARLIER asset going unscanned -- REQ-C2 honesty (see the docstring on
-    # Coverage.secrets_engine: an absent scanner must not read as "no secrets").
-    ok = analyze.Coverage(1, 0, 1, secrets=0, secrets_engine="ok")
-    unavailable = analyze.Coverage(1, 0, 1, secrets=0, secrets_engine="unavailable")
-
-    assert analyze._merge_coverage(unavailable, ok).secrets_engine == "unavailable"
-    assert analyze._merge_coverage(ok, unavailable).secrets_engine == "unavailable"
-    assert analyze._merge_coverage(ok, ok).secrets_engine == "ok"
+def test_run_total_reports_less_healthy_secrets_engine():
+    # Aggregating across assets must not let a LATER successful scan mask an EARLIER asset
+    # going unscanned -- REQ-C2 honesty (an absent scanner must not read as "no secrets").
+    ok, unavailable = Coverage(), Coverage(secrets_engine="unavailable")
+    assert merge([unavailable, ok]).secrets_engine == "unavailable"
+    assert merge([ok, unavailable]).secrets_engine == "unavailable"
+    assert merge([ok, ok]).secrets_engine == "ok"
 
 
 def test_analyze_loop_is_idempotent_on_redelivery(redis, authorized_session, monkeypatch):

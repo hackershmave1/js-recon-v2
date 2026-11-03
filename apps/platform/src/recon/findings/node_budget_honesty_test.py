@@ -12,9 +12,8 @@ wall-clock) is covered by ``extract_test.py::test_node_budget_curtails_pathologi
 
 from __future__ import annotations
 
-from recon.findings import analyze, queries
 from recon.findings import extract as extract_mod
-from recon.findings.analyze import Coverage
+from recon.findings.coverage import Coverage, merge
 from recon.findings.extract import extract
 
 
@@ -48,41 +47,22 @@ def test_extract_sets_curtailed_over_budget(monkeypatch):
 # --- Coverage / merge propagation (REQ-C2 must survive the multi-asset roll-up) --- #
 
 
-def test_merge_coverage_ors_curtailed():
-    complete = Coverage(1, 0, 1)  # curtailed defaults False
-    curtailed = Coverage(1, 0, 1, curtailed=True)
-    assert analyze._merge_coverage(complete, complete).curtailed is False
-    assert analyze._merge_coverage(complete, curtailed).curtailed is True
-    assert analyze._merge_coverage(curtailed, complete).curtailed is True
+def test_run_total_is_curtailed_if_any_asset_was():
+    complete, curtailed = Coverage(), Coverage(curtailed=True)
+    assert merge([complete, complete]).curtailed is False
+    assert merge([complete, curtailed]).curtailed is True
+    assert merge([curtailed, complete]).curtailed is True
 
 
-def test_merge_coverage_payloads_ors_curtailed():
-    # A run-wide merge is curtailed if ANY asset's coverage payload was; a payload predating
-    # the field (no key) reads as not-curtailed, so old events stay honest by default.
-    merged_true = queries._merge_coverage_payloads([{"curtailed": False}, {"curtailed": True}])
-    assert merged_true["curtailed"] is True
-    merged_false = queries._merge_coverage_payloads([{}, {"curtailed": False}])
-    assert merged_false["curtailed"] is False
+def test_old_events_read_as_not_curtailed_or_partial():
+    assert Coverage.from_payload({"curtailed": True}).curtailed is True
+    assert Coverage.from_payload({"recovered_partial": True}).recovered_partial is True
+    # Events predating the fields default to complete (backward compat).
+    assert Coverage.from_payload({}).curtailed is False
+    assert Coverage.from_payload({}).recovered_partial is False
 
 
-def test_coverage_view_reads_curtailed():
-    assert queries._coverage_view_from_payload({"curtailed": True}).curtailed is True
-    # An event predating the field defaults to not-curtailed (backward compat).
-    assert queries._coverage_view_from_payload({}).curtailed is False
-
-
-def test_merge_coverage_payloads_ors_recovered_partial():
-    # D37-L2: a run's map recovery is partial if ANY asset's was; a payload predating the field
-    # (no key) reads as complete.
-    merged = queries._merge_coverage_payloads(
-        [{"recovered_partial": False}, {"recovered_partial": True}]
-    )
-    assert merged["recovered_partial"] is True
-    assert queries._merge_coverage_payloads([{}, {}])["recovered_partial"] is False
-
-
-def test_coverage_view_reads_recovered_partial():
-    assert (
-        queries._coverage_view_from_payload({"recovered_partial": True}).recovered_partial is True
-    )
-    assert queries._coverage_view_from_payload({}).recovered_partial is False
+def test_run_total_recovery_is_partial_if_any_asset_was():
+    # D37-L2: a run's map recovery is partial if ANY asset's was.
+    assert merge([Coverage(), Coverage(recovered_partial=True)]).recovered_partial is True
+    assert merge([Coverage(), Coverage()]).recovered_partial is False

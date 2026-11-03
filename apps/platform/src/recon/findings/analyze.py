@@ -50,7 +50,9 @@ from recon.findings import (
     store,
     techdetect_pass,
 )
+from recon.findings import coverage as coverage_record
 from recon.findings._jsast import _MAX_AST_NODES
+from recon.findings.coverage import Coverage, FileCoverage
 from recon.findings.extract import RawEndpoint, extract
 from recon.findings.kingfisher import RawSecret
 from recon.findings.wrappers import WrapperRule
@@ -85,54 +87,6 @@ class CrossModuleIndex:
 
     def __bool__(self) -> bool:
         return bool(self.exports or self.webpack)
-
-
-@dataclass(frozen=True)
-class FileCoverage:
-    """Per-file honesty counter (REQ-C2): how many calls in one source file were
-    attributed to an endpoint vs. left un-attributed. Keyed by the same normalized
-    path the finding carries, so a reader can see *which* file has unmapped calls
-    (the input the wrapper-teaching SHOULD acts on)."""
-
-    path: str
-    attributed: int
-    unattributed: int
-
-
-@dataclass(frozen=True)
-class Coverage:
-    attributed: int
-    unattributed: int
-    findings_written: int
-    secrets: int = 0
-    # D33-B: opt-in low-confidence "suspected secret" sightings, counted SEPARATELY so
-    # the precision-first `secrets` count above is never inflated by the ~50%-FP recall
-    # lane. 0 unless the run opted into the `--confidence low` sweep.
-    secrets_suspected: int = 0
-    # Cleartext info-disclosure sightings (internal-IP literals) — counted SEPARATELY, a
-    # NON-secret family, so they never inflate the `secrets` count above.
-    internal_ips: int = 0
-    # Honest engine status (REQ-C2/§5): a scanner that was absent must not be
-    # reported as "no secrets". Reachable values are "ok" and "unavailable" — a
-    # genuine engine error/timeout raises before a Coverage is ever returned.
-    secrets_engine: str = "ok"
-    # Source-map honesty: how many original files were recovered, and how the map
-    # was handled (none | uploaded | inline | capture | unavailable | inline-error |
-    # capture-error). REQ-D5 must NOT treat map-scoped endpoint coverage as
-    # full-bundle coverage.
-    sources_recovered: int = 0
-    source_map: str = "none"
-    # Per-file breakdown of the attributed/unattributed totals (REQ-C2 is a
-    # per-file counter — a bundle-wide sum hides which file needs attention).
-    files: tuple[FileCoverage, ...] = ()
-    # D31 honesty: True when any of this blob's units hit the AST node budget, so the extract
-    # bounded its walk to a prefix and the tail was not examined. Surfaced so a partial extract
-    # is never silent (REQ-C2); ORed across assets in `_merge_coverage`.
-    curtailed: bool = False
-    # D37-L2 honesty: True when the source-map recovery hit the cumulative-write budget and stopped
-    # short of the whole map (a big-map coverage gap — some recovered originals were NOT scanned).
-    # Surfaced so this truncation is never silent (REQ-C2), like `curtailed`; ORed across assets.
-    recovered_partial: bool = False
 
 
 def analyze_run(
@@ -211,7 +165,7 @@ def _analyze_legacy(
         input_ref = run.input_ref if run is not None else None
         source_map_ref = run.source_map_ref if run is not None else None
     if not input_ref:
-        return Coverage(0, 0, 0)
+        return Coverage()
 
     # Cross-chunk pre-pass: a monolithic bundle's map can recover several original
     # modules that import one another (or a webpack bundle registers several modules
@@ -226,7 +180,7 @@ def _analyze_legacy(
         log.warning("analyze.export_index_legacy_failed", run_id=run_id, error=str(exc))
 
     with tenant_session(tenant_id) as session:  # one REQ-A3 staging transaction
-        coverage, coverage_event = _analyze_blob(
+        coverage, written, coverage_event = _analyze_blob(
             session,
             tenant_id=tenant_id,
             run_id=run_id,
@@ -248,7 +202,7 @@ def _analyze_legacy(
         secrets_engine=coverage.secrets_engine,
         sources_recovered=coverage.sources_recovered,
         source_map=coverage.source_map,
-        findings=coverage.findings_written,
+        findings=written,
     )
     return coverage
 
@@ -308,7 +262,7 @@ def _analyze_assets(
     thing recorded as ``analyze_failed``, best-effort, so it does not abort the
     rest of the loop.
 
-    ``publish``/logging/``_merge_coverage`` run in the paired ``else`` (reached
+    ``publish``/logging/collecting the asset's coverage run in the paired ``else`` (reached
     only after a clean commit), NOT in the ``try``: if they were in the ``try``
     and ``publish`` raised (Redis reset, pool exhaustion — the DB itself
     perfectly healthy), the ``except`` would open a fresh transaction and
@@ -330,7 +284,7 @@ def _analyze_assets(
     total = sum(1 for a in rows if a.fetch_status == AssetStatus.OK.value)
     terminal = (AssetStatus.OK.value, AssetStatus.FAILED.value)
     done = 0
-    agg = Coverage(0, 0, 0)
+    parts: list[Coverage] = []  # each analyzed asset's coverage, oldest first
 
     # Phase A (cross-chunk pre-pass): a run-level index of every module's exported
     # string consts so the per-asset loop below can resolve a `fetch(API_BASE +
@@ -385,7 +339,7 @@ def _analyze_assets(
                 # input_ref + fetch_status=OK atomically, and the loop above only reaches OK
                 # assets — so None is unreachable here by invariant (assert, not guard).
                 assert asset.input_ref is not None
-                coverage, coverage_event = _analyze_blob(
+                coverage, written, coverage_event = _analyze_blob(
                     session,
                     tenant_id=tenant_id,
                     run_id=run_id,
@@ -438,10 +392,10 @@ def _analyze_assets(
                 "analyze.asset_done",
                 run_id=run_id,
                 url=asset.url,
-                findings=coverage.findings_written,
+                findings=written,
             )
-            agg = _merge_coverage(agg, coverage)
-    return agg
+            parts.append(coverage)
+    return coverage_record.merge(parts)
 
 
 @dataclass(frozen=True)
@@ -654,7 +608,7 @@ def _analyze_blob(
     cross_index: CrossModuleIndex | None = None,
     scan_suspected: bool = False,
     heartbeat: Callable[[], None] | None = None,
-) -> tuple[Coverage, RecordedEvent]:
+) -> tuple[Coverage, int, RecordedEvent]:
     """Analyze one blob — the legacy single input OR one crawled asset — and
     persist its findings inside the caller's OPEN ``session``.
 
@@ -808,32 +762,9 @@ def _analyze_blob(
         run_asset_id=run_asset_id,
         asset_url=asset_url,
     )
-    coverage_event = record_event(
-        session,
-        tenant_id=tenant_id,
-        run_id=run_id,
-        event_type="analyze.coverage",
-        payload={
-            "attributed": endpoints.attributed,
-            "unattributed": endpoints.unattributed,
-            "secrets": secrets_sighted,
-            "secrets_suspected": suspected_sighted,
-            "internal_ips": internal_ips_sighted,
-            "secrets_engine": scan.status,
-            "sources_recovered": endpoints.sources_recovered,
-            "source_map": endpoints.source_map,
-            "curtailed": endpoints.curtailed,
-            "recovered_partial": recovered_partial,
-            "files": [
-                {"path": f.path, "attributed": f.attributed, "unattributed": f.unattributed}
-                for f in endpoints.files
-            ],
-        },
-    )
     coverage = Coverage(
-        endpoints.attributed,
-        endpoints.unattributed,
-        written,
+        attributed=endpoints.attributed,
+        unattributed=endpoints.unattributed,
         secrets=secrets_sighted,
         secrets_suspected=suspected_sighted,
         internal_ips=internal_ips_sighted,
@@ -844,49 +775,14 @@ def _analyze_blob(
         curtailed=endpoints.curtailed,
         recovered_partial=recovered_partial,
     )
-    return coverage, coverage_event
-
-
-def _merge_coverage(a: Coverage, b: Coverage) -> Coverage:
-    """Sum one more asset's Coverage into the loop's running aggregate (Slice Y).
-
-    Only the counts are additive across assets. ``secrets_engine`` reports the
-    LESS-healthy of the two statuses ("unavailable" wins over "ok"): taking
-    whichever asset merely ran LAST would let a later successful scan mask an
-    earlier asset going unscanned, which is exactly the silent-under-reporting
-    REQ-C2 exists to prevent (see ``Coverage.secrets_engine``'s own docstring —
-    a scanner that was absent must not be reported as "no secrets").
-    ``source_map`` is not a health signal the same way (a crawl asset passes
-    ``source_map_ref=None`` so it is "none" unless its JS carries an inline map; a
-    capture asset may carry its own uploaded map → "capture"/"capture-error") — the
-    latest asset's value is kept EXCEPT a D32 "skipped" (a referenced map we could not retrieve)
-    dominates, so an honest coverage gap survives the merge. ``files`` (per-source-path detail) is already
-    durably recorded on each asset's own ``analyze.coverage`` event, which is
-    what REQ-C2 reads back (the highest-id event wins — see
-    ``findings/queries.py``'s ``_latest_coverage``); this run-level aggregate is
-    never persisted, so it stays empty rather than inventing a merge across
-    assets' distinct-but-identically-named fallback paths.
-    """
-    unavailable = "unavailable"
-    return Coverage(
-        attributed=a.attributed + b.attributed,
-        unattributed=a.unattributed + b.unattributed,
-        findings_written=a.findings_written + b.findings_written,
-        secrets=a.secrets + b.secrets,
-        secrets_suspected=a.secrets_suspected + b.secrets_suspected,  # D33-B: additive like secrets
-        internal_ips=a.internal_ips + b.internal_ips,  # cleartext info-disclosure: additive too
-        secrets_engine=(
-            unavailable if unavailable in (a.secrets_engine, b.secrets_engine) else "ok"
-        ),
-        sources_recovered=a.sources_recovered + b.sources_recovered,
-        # D32: a "skipped" (referenced map we couldn't retrieve) DOMINATES so a non-last
-        # skipped asset is never masked by the latest asset's value (mirrors curtailed's OR
-        # and the payload-merge below); otherwise the latest asset's value is kept.
-        source_map=("skipped" if "skipped" in (a.source_map, b.source_map) else b.source_map),
-        curtailed=a.curtailed or b.curtailed,
-        recovered_partial=a.recovered_partial
-        or b.recovered_partial,  # any truncated recovery survives
+    coverage_event = record_event(
+        session,
+        tenant_id=tenant_id,
+        run_id=run_id,
+        event_type=coverage_record.EVENT_TYPE,
+        payload=coverage.to_payload(),
     )
+    return coverage, written, coverage_event
 
 
 class AnalysisUnits:
