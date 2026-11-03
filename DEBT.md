@@ -590,3 +590,25 @@ analytics-vendor endpoint the workspace hides can still be classified there. Pre
 analytics filter.
 
 **Fix:** filter the endpoint read in `spec/service` through `hidden_finding_ids`.
+
+### 2026-11-03 Exact source locations — OPEN (D75, D76)
+
+#### D75 · A bundle over the 1 MiB beautify cap has no exact location in Pretty-print mode [M]  ·  UX
+
+Such a bundle is analyzed and served RAW (`deobfuscate.beautify` returns None), so its view locations
+index the raw text. A jump opens it raw and highlights the exact token, but the client-side Pretty print
+(a different formatter, in the Web Worker) drops every mark and highlight, because nothing maps raw
+positions onto its output.
+
+**Fix:** run the same whitespace-skipping alignment `recon.findings.located` uses (raw -> formatted,
+O(n), fail-closed) inside `beautify.worker.ts` and return the mapped ranges with the formatted text.
+
+#### D76 · Declared base-URL consts have no source location [S]  ·  UX
+
+The declared-const endpoints `extract._emit_declared_consts` emits (`kind="declared"`) carry a 0..0
+span, so they are stored with no view location and show "no exact location": the `BaseEnv` consts it
+reads keep only the resolved value, not the declarator node.
+
+**Fix:** carry the declarator's byte span on the declared `RawEndpoint` (as `mark_start_byte` /
+`mark_end_byte`), so `analyze._endpoint_view` locates it like any other endpoint.
+
