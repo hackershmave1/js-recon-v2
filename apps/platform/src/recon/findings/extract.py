@@ -632,11 +632,16 @@ def _dispatch_member(
         # The bundle shows this receiver is a Map/Set/... (created as one, or used with .has/.set/
         # .add...): `this.idNodeMap.get(e)` is a lookup, not a request — no endpoint, no counter.
         return
-    elif prop in _GENERIC_METHODS and _receivers.kind_of(env.receivers, obj) == _receivers.HTTP:
-        # Proven client: injected through a constructor (`constructor(e){this.http=e}` — Angular /
-        # TS DI), created by axios.create, or used via .interceptors/.defaults/.request. Confirmed
-        # sink, so URL resolution runs and an unresolvable URL is a real, counted gap. A receiver
-        # the bundle says nothing about falls through to the SUSPECTED Tier-5 branch below.
+    elif (
+        prop in _GENERIC_METHODS
+        and obj.startswith("this.")
+        and _receivers.kind_of(env.receivers, obj) == _receivers.HTTP
+    ):
+        # A class field the bundle proves is a client: injected (`constructor(e){this.http=e}`,
+        # `inject(HttpClient)`, a `ky.create(...)` factory) or created by axios.create / used via
+        # .interceptors. Confirmed sink, so URL resolution runs and an unresolvable URL is a real,
+        # counted gap. Only `this.X`: a local axios instance is already `env.instances`, and a
+        # minified local name proves nothing. Anything else falls to the SUSPECTED branch below.
         _axios_member(call, prop, result, env, base="")
     elif prop in _GENERIC_METHODS and _is_http_client_name(obj):
         # Tier 5 (generic-call): unrecognised receiver + verb method + path-shaped arg = a

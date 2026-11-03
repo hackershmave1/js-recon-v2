@@ -1662,14 +1662,86 @@ def test_a_receiver_with_no_evidence_is_only_suspected():
     assert r.endpoints == [] and r.unattributed == 0 and [g.url for g in r.generic] == ["/users"]
 
 
-def test_what_a_receiver_is_used_for_outranks_where_it_came_from():
-    # An injected cache that is used as a collection is a collection...
+def test_an_injected_field_also_used_as_a_collection_is_only_suspected():
+    # Contradictory evidence (an injected cache, or two classes reusing `this.http`): never
+    # confirmed, never silently dropped — a path-shaped call stays visible as SUSPECTED.
     cache = "class S{constructor(c){this.cache=c} a(k,v){this.cache.set(k,v)} b(k){return this.cache.get(k)}}"
     assert _calls(extract(cache)) == ([], 0)
-    # ...but a client proven by its own API (interceptors) is never dropped, even if one field
-    # name is reused as a Map in another class of the same bundle.
-    src = (
-        "class A{constructor(){this.client=new Map} a(k){return this.client.get(k)}}"
-        "class B{constructor(c){this.client=c;this.client.interceptors.use(f)} b(u){return this.client.get(u)}}"
+    collision = (
+        'class A{constructor(e){this.http=e} g(){return this.http.get("/api/u")}}'
+        'class B{x(){this.http.set("k",1)}}'
     )
-    assert extract(src).unattributed == 2
+    r = extract(collision)
+    assert r.endpoints == [] and r.unattributed == 0 and [g.url for g in r.generic] == ["/api/u"]
+
+
+def test_a_client_proven_by_its_own_api_is_confirmed():
+    r = extract(
+        "class S{constructor(){this.client.interceptors.request.use(f)} g(u){return this.client.get(u)}}"
+    )
+    assert r.unattributed == 1
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A class's own `this.get(k)` (an LRU / Backbone model), next to bundled axios internals.
+        "n.interceptors.request.use(f); class LRU{peek(k){return this.get(k)}}",
+        'n.interceptors.request.use(f); class M{full(){return this.get("first")+this.get("last")}}',
+        # `e.request` is an AxiosError / FetchEvent field, not evidence about `e`.
+        "function h(e){if(e.response){}else if(e.request){}} function f(e,t){return e.get(t)||null}",
+        'self.addEventListener("fetch",e=>e.respondWith(e.request)); function f(e,t){return e.get(t)}',
+    ],
+)
+def test_library_internals_never_promote_an_unrelated_receiver(src):
+    r = extract(src)
+    assert r.endpoints == [] and r.unattributed == 0
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        'class S{http=inject(HttpClient); g(){return this.http.get(this.base+"/users")}}',  # Angular 14+
+        'class S{constructor(){this.http=i0.ɵɵinject(H)} g(){return this.http.get(this.base+"/u")}}',
+        'function S(e){this.http=e} S.prototype.g=function(){return this.http.get(this.url+"/users")};',  # ES5
+        'class S{constructor(){this.client=n.a.create({})} g(){return this.client.get(this.u+"/x")}}',
+        'class S{constructor(){this.api=ky.create({})} g(){return this.api.get(this.u+"/x")}}',
+        'class S{constructor(e=null){this.http=e} g(){return this.http.get(this.u+"/x")}}',  # default param
+    ],
+)
+def test_injected_clients_in_every_common_shape_stay_real_gaps(src):
+    assert extract(src).unattributed == 1, src
+
+
+def test_object_create_is_a_plain_object_not_a_client():
+    src = "class S{constructor(){this.byId=Object.create(null)} g(k){return this.byId.get(k)}}"
+    assert extract(src).unattributed == 0
+
+
+def test_receiver_evidence_decodes_linearly_on_nested_computed_keys():
+    # DoS guard (adversarial review): a computed class-field key / method name can span the rest
+    # of the bundle; decoding it once per nesting level would be depth x span. Count the bytes
+    # the evidence pass decodes instead of timing it, so the guard is deterministic.
+    from recon.findings import _base_env, _receivers
+
+    core = '"' + "x" * 200_000 + '"'
+    src = "class A{[" * 300 + core + "]=1}" * 300
+    decoded = 0
+    real_text, real_short = _receivers._text, _receivers._text_if_short
+
+    def counting(fn):
+        def wrapper(node):
+            nonlocal decoded
+            out = fn(node)
+            decoded += len(out)
+            return out
+
+        return wrapper
+
+    _receivers._text, _receivers._text_if_short = counting(real_text), counting(real_short)
+    try:
+        data = src.encode()
+        _base_env.collect_base_env(_PARSER.parse(data).root_node, data)
+    finally:
+        _receivers._text, _receivers._text_if_short = real_text, real_short
+    assert decoded < len(src)  # linear; the uncapped version decoded ~depth x 200 KB
