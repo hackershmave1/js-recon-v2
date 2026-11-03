@@ -234,7 +234,7 @@ def build_requests(
 def reconstruct_run(tenant_id: str, run_id: str) -> list[ReconstructedRequest] | None:
     """Reconstruct every probeable request for a run, or ``None`` if the run is
     invisible to the tenant. Reuses the findings read model (no new query)."""
-    view = queries.list_findings(tenant_id, run_id)
+    view = queries.list_findings(tenant_id, run_id, limit=None)  # every shown finding, unpaged
     if view is None:
         return None
     rules = queries.list_base_url_rules(tenant_id, run_id)

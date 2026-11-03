@@ -217,7 +217,7 @@ def test_out_of_scope_lookalike_is_not_in_scope():
 
 
 # ---------------------------------------------------------------------------
-# Apex-domain expansion (_expand_scope_for_display)
+# Apex-domain expansion (expand_scope_for_display)
 # ---------------------------------------------------------------------------
 
 

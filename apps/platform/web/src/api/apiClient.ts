@@ -201,7 +201,7 @@ export function getSourceContent(
 }
 
 export interface FindingsParams {
-  includeNoise?: boolean;
+  includeHidden?: boolean;
   // D50: server-side filter + pagination params. All optional; absent = server default.
   types?: string[];
   triageStatuses?: string[];
@@ -217,7 +217,7 @@ export function getFindings(
   params: FindingsParams = {},
 ): Promise<FindingsResponse> {
   const qs = new URLSearchParams();
-  if (params.includeNoise) qs.set("include_noise", "true");
+  if (params.includeHidden) qs.set("include_hidden", "true");
   for (const t of params.types ?? []) qs.append("types", t);
   for (const s of params.triageStatuses ?? []) qs.append("triage_statuses", s);
   if (params.q) qs.set("q", params.q);

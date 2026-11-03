@@ -27,6 +27,7 @@ _ANALYTICS = {
     "googletagmanager.com",
     "amplitude.com",
     "mixpanel.com",
+    "mxpnl.com",  # Mixpanel's CDN (cdn.mxpnl.com)
     "segment.com",
     "segment.io",
     "heapanalytics.com",

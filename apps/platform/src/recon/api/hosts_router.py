@@ -20,10 +20,12 @@ router = APIRouter(tags=["hosts"])
 def get_run_hosts(
     run_id: str,
     tenant_id: str = Depends(get_tenant_id),
-    # #3: analytics/telemetry/vendor hosts hidden by default; ?include_noise=true brings them back.
+    # Hosts of hidden findings (analytics noise, junk / off-scope page routes) are hidden by
+    # default; ?include_hidden=true (or the older ?include_noise=true) brings them back.
+    include_hidden: bool = False,
     include_noise: bool = False,
 ) -> dict:
-    result = hosts.list_hosts(tenant_id, run_id, include_noise=include_noise)
+    result = hosts.list_hosts(tenant_id, run_id, include_noise=include_hidden or include_noise)
     if result is None:
         raise HTTPException(status_code=404, detail="run not found")
     return {

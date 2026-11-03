@@ -19,9 +19,11 @@ router = APIRouter(tags=["findings"])
 def get_run_findings(
     run_id: str,
     tenant_id: str = Depends(get_tenant_id),
-    # #3: third-party analytics/telemetry/vendor hosts are hidden by DEFAULT; the Findings
-    # view's "show analytics" toggle passes ?include_noise=true to bring them back. A reversible
-    # read overlay — the findings are stored either way, never deleted.
+    # Captured-but-not-shown findings (analytics noise, junk / off-scope page routes — see
+    # findings/visibility) are hidden by DEFAULT; the Findings view toggle passes
+    # ?include_hidden=true to bring them back. `include_noise` is the older name, kept as an
+    # alias. A reversible read overlay — the findings are stored either way, never deleted.
+    include_hidden: bool = False,
     include_noise: bool = False,
     # D50: server-side filter + pagination params. All are optional; omitting them
     # preserves the existing behaviour (full unfiltered result, limit=2000).
@@ -35,7 +37,7 @@ def get_run_findings(
     result = queries.list_findings(
         tenant_id,
         run_id,
-        include_noise=include_noise,
+        include_hidden=include_hidden or include_noise,
         types=types,
         triage_statuses=triage_statuses,
         q=q,
@@ -51,6 +53,7 @@ def get_run_findings(
         # D50: total before pagination so the FE can show "N of M" and decide whether
         # a "load more" fetch would return more results.
         "total": result.total,
+        "hidden": result.hidden,
         "offset": offset,
         "limit": limit,
         # REQ-C2: coverage is reported honestly alongside the findings it qualifies;

@@ -10,8 +10,8 @@ deliberately distinct from a run that exists with zero findings (empty list).
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import and_, case, func, select
@@ -34,7 +34,7 @@ from recon.db.models import (
     SessionWrapper,
 )
 from recon.domain import TOTAL_ENDPOINT_TYPES, AssetStatus, FindingType
-from recon.findings import noise_hosts, priority
+from recon.findings import priority, visibility
 from recon.findings.base_url import BaseUrlRule
 from recon.findings.coverage import Coverage, read_run_coverage
 from recon.findings.wrappers import WrapperRule
@@ -129,6 +129,9 @@ class FindingsView:
     # The run's "Files" metric (see files_collected) — one definition shared with the
     # Sessions summary so every surface shows the same number.
     files: int = 0
+    # Findings captured but not shown by default, per reason (visibility) — after the type
+    # filter, so the count matches the list the caller asked for.
+    hidden: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -235,30 +238,14 @@ _SECRET_TYPES: frozenset[str] = frozenset({FindingType.SECRET.value})
 _TERMINAL_RUN_STATES: frozenset[str] = frozenset({"done", "partial", "failed"})
 
 
-def noise_finding_ids(session: Session, run_id: str) -> set[str]:
-    """Ids of the run's findings the workspace hides by default as third-party noise — the
-    exact rule ``list_findings`` applies (``noise_hosts.is_all_noise`` over the finding's raw
-    occurrence hosts). Shared so every count of "the run's findings" (Sessions card, extension
-    popup) hides the same findings the workspace does (QA: the card said 18 API endpoints where
-    the workspace showed 15 — the difference was Google Analytics, Sentry and Stripe calls)."""
-    hosts_by_finding: dict[str, set[str | None]] = {}
-    for finding_id, host in session.execute(
-        select(FindingOccurrence.finding_id, FindingOccurrence.host)
-        .join(Finding, Finding.id == FindingOccurrence.finding_id)
-        .where(Finding.run_id == str(run_id), FindingOccurrence.host.is_not(None))
-    ).all():
-        hosts_by_finding.setdefault(str(finding_id), set()).add(host)
-    return {fid for fid, hosts in hosts_by_finding.items() if noise_hosts.is_all_noise(hosts)}
-
-
 def visible_type_counts(
-    session: Session, run_id: str, *, hidden: set[str] | None = None
+    session: Session, run_id: str, *, hidden: Mapping[str, str] | None = None
 ) -> dict[str, int]:
-    """Per-type counts of the run's findings with the default noise filter applied — the
-    counts behind the workspace's own headline numbers. ``hidden`` reuses an already
-    computed ``noise_finding_ids`` result."""
+    """Per-type counts of the run's SHOWN findings (``visibility``) — the counts behind the
+    workspace's own headline numbers. ``hidden`` reuses an already computed
+    ``visibility.hidden_finding_ids`` result."""
     if hidden is None:
-        hidden = noise_finding_ids(session, run_id)
+        hidden = visibility.hidden_finding_ids(session, run_id)
     counts: dict[str, int] = {}
     for finding_id, finding_type in session.execute(
         select(Finding.id, Finding.type).where(Finding.run_id == str(run_id))
@@ -296,8 +283,8 @@ def get_session_findings_summary(tenant_id: str, session_id: str) -> SessionFind
             return None
         run_id = str(run_row[0])
 
-        # Count by type over the findings the workspace shows by default (noise hidden).
-        hidden = noise_finding_ids(session, run_id)
+        # Count by type over the findings the workspace shows by default.
+        hidden = visibility.hidden_finding_ids(session, run_id)
         type_counts = visible_type_counts(session, run_id, hidden=hidden)
 
         total = sum(type_counts.values())
@@ -319,7 +306,7 @@ def get_session_findings_summary(tenant_id: str, session_id: str) -> SessionFind
         top: list[TopFinding] = []
         for fid, ftype, fvalue, fattributes in finding_rows:
             if str(fid) in hidden:
-                continue  # a hidden vendor call is never the popup's "top" finding
+                continue  # a hidden finding is never the popup's "top" finding
             score, _ = priority.derive_priority(ftype, fattributes or {})
             is_secret = ftype in (FindingType.SECRET.value, FindingType.SECRET_SUSPECTED.value)
             top.append(
@@ -352,12 +339,12 @@ def list_findings(
     tenant_id: str,
     run_id: str,
     *,
-    include_noise: bool = False,
+    include_hidden: bool = False,
     types: Sequence[str] = (),
     triage_statuses: Sequence[str] = (),
     q: str | None = None,
     risk_tags: Sequence[str] = (),
-    limit: int = 2000,
+    limit: int | None = 2000,
     offset: int = 0,
 ) -> FindingsView | None:
     """Every finding for a run with its occurrences and the analyze coverage
@@ -417,15 +404,19 @@ def list_findings(
         if types:
             findings_query = findings_query.where(Finding.type.in_(list(types)))
         findings = session.scalars(findings_query).all()
-        # #3: hide third-party analytics/telemetry/vendor noise (amplitude, google-analytics,
-        # sentry, stripe, ...) by DEFAULT — a READ-TIME, reversible overlay (nothing is deleted).
-        # A finding is dropped only when it HAS an attributed host and EVERY one is a known noise
-        # host; a relative/in-scope finding is always kept. `include_noise` brings the hidden ones
-        # back (the Findings view toggle) with no re-analysis.
-        if not include_noise:
-            findings = [
-                f for f in findings if not noise_hosts.is_all_noise({o.host for o in f.occurrences})
-            ]
+        # Captured but not shown (visibility): analytics noise, junk / off-scope page routes.
+        # A READ-TIME, reversible overlay — nothing is deleted; `include_hidden` brings them back
+        # (the Findings view toggle) with no re-analysis. The per-reason counts let the view say
+        # how many it is not showing.
+        # Not computed for an include_hidden read (correlate) — nothing would use it.
+        hidden_ids = {} if include_hidden else visibility.hidden_finding_ids(session, run_id)
+        hidden_counts: dict[str, int] = {}
+        for f in findings:
+            reason = hidden_ids.get(str(f.id))
+            if reason:
+                hidden_counts[reason] = hidden_counts.get(reason, 0) + 1
+        if not include_hidden:
+            findings = [f for f in findings if str(f.id) not in hidden_ids]
         # D50: additional server-side filters applied in Python (after noise filter, before pagination).
         if triage_statuses:
             triage_set = frozenset(triage_statuses)
@@ -471,7 +462,7 @@ def list_findings(
         # (all findings in scope of the session's spec classification, not just the shown page)
         # so we compute it before slicing, then slice only the findigs list for FindingView.
         findings_for_summary = list(findings)
-        findings = findings[offset : offset + limit]
+        findings = findings[offset:] if limit is None else findings[offset : offset + limit]
 
         # Slice Y: a crawl run's bytes live per-asset (run.input_ref is NULL for
         # those runs), so `revealable` must be computed from each occurrence's own
@@ -494,6 +485,7 @@ def list_findings(
         )
         return FindingsView(
             run_id=str(run_id),
+            hidden=hidden_counts,
             findings=[
                 _finding_view(
                     finding,
@@ -545,8 +537,10 @@ def diff_runs(tenant_id: str, run_id: str, base_run_id: str) -> DiffView | None:
             return None
 
         def _load(rid: str) -> dict[str, DiffEntry]:
+            hidden = visibility.hidden_finding_ids(session, rid)
             rows = session.execute(
                 select(
+                    Finding.id,
                     Finding.finding_hash,
                     Finding.type,
                     Finding.value,
@@ -555,7 +549,9 @@ def diff_runs(tenant_id: str, run_id: str, base_run_id: str) -> DiffView | None:
                 ).where(Finding.run_id == rid)
             ).all()
             out: dict[str, DiffEntry] = {}
-            for fhash, ftype, fvalue, fpath, fattrs in rows:
+            for fid, fhash, ftype, fvalue, fpath, fattrs in rows:
+                if str(fid) in hidden:
+                    continue  # each run's hidden findings drop out, as in the workspace
                 score, label = priority.derive_priority(ftype, fattrs or {})
                 out[fhash] = DiffEntry(
                     finding_hash=fhash,

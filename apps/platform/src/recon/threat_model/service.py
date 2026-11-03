@@ -34,6 +34,7 @@ from recon.db.models import (
     Threat,
 )
 from recon.domain import FindingType, RunState
+from recon.findings import visibility
 from recon.llm import calls, run_choice
 from recon.llm.crypto import KeyDecryptError
 from recon.observability import get_logger
@@ -147,12 +148,24 @@ def _assemble_context(tenant_id: str, session_id: str) -> _Context:
             raise ValueError("no completed run for this session")
         run_id = str(run_row[0])
 
-        # All findings for the run — grouped by type.
-        finding_rows = db.execute(
-            select(Finding.type, Finding.value, Finding.finding_hash, Finding.attributes)
-            .where(Finding.run_id == run_id)
-            .order_by(Finding.type, Finding.value)
-        ).all()
+        # The run's SHOWN findings — grouped by type. Hidden ones (analytics noise, junk /
+        # off-scope page routes — findings/visibility) are not the target's surface.
+        hidden = visibility.hidden_finding_ids(db, run_id)
+        finding_rows = [
+            (ftype, fvalue, fhash, fattrs)
+            for fid, ftype, fvalue, fhash, fattrs in db.execute(
+                select(
+                    Finding.id,
+                    Finding.type,
+                    Finding.value,
+                    Finding.finding_hash,
+                    Finding.attributes,
+                )
+                .where(Finding.run_id == run_id)
+                .order_by(Finding.type, Finding.value)
+            ).all()
+            if str(fid) not in hidden
+        ]
 
         endpoints: list[str] = []
         secret_type_counts: dict[str, int] = {}
