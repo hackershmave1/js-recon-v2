@@ -13,6 +13,20 @@ Effort: S (hours) · M (a day-ish) · L (multi-day).
 
 ## Open debt
 
+### 2026-11-03 extension end-to-end walkthrough — OPEN (D71)
+
+Found while driving the unpacked extension against the live stack (the findings-summary 404 found in the
+same walkthrough was fixed with it).
+
+#### D71 · An IP-literal capture scope makes `/api/save-files` return 500, and the extension retries forever [S]  ·  correctness
+
+`sessions/service.py:_resolve_scope_hosts` rejects an IP-literal scope host (e.g. `127.0.0.1`) by design, but
+the `SessionInvalid` it raises escapes `capture_router.save_files` → `_get_or_create_session` as an HTTP 500.
+The extension treats 500 as retryable, so the popup shows "1 pending" indefinitely with no reason given.
+
+**Fix:** map `SessionInvalid` to a 4xx in the capture ingest, and have the extension surface a non-retryable
+scope error (or reject IP-literal scopes in the popup's scope field up front).
+
 ### 2026-09-06 extension swarm review — OPEN (D55–D63)
 
 Uncovered by a 5-agent Google-engineer-style review of the chrome-extension against MV3 best-practices
