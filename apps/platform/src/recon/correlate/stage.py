@@ -23,7 +23,7 @@ from redis import Redis
 from recon import storage
 from recon.correlate import bodies, match
 from recon.db.base import tenant_session
-from recon.discover import queries as discover_queries
+from recon.discover import manifest as discovery
 from recon.domain import TOTAL_ENDPOINT_TYPE_VALUES
 from recon.events.log import publish, record_event
 from recon.findings import normalize, store
@@ -49,8 +49,8 @@ def _method_path(value: str) -> tuple[str, str] | None:
 def correlate_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> None:
     """Resolve endpoint hosts from the capture stage's observed request URLs. Called from
     the worker for ``RunStage.CORRELATING``; a clean no-op for a non-capture run."""
-    payload = discover_queries.latest_assets_event(tenant_id, run_id)
-    requests_ref = payload.get("requests_ref") if payload else None
+    found = discovery.read_latest(tenant_id, run_id)
+    requests_ref = found.requests_ref if found else None
     if not requests_ref:
         return  # non-capture run (no observed requests) — nothing to correlate
 

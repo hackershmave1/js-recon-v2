@@ -32,6 +32,16 @@ class RunStage(StrEnum):
     CORRELATING = "correlating"
 
 
+class DiscoveryStatus(StrEnum):
+    """How a run's asset discovery ended (the ``discover.assets`` event's ``status``). Only
+    ``OK`` is complete; anything else finalizes the run PARTIAL (REQ-D5)."""
+
+    OK = "ok"
+    TIMEOUT = "timeout"  # the crawl hit its duration budget
+    CAPPED = "capped"  # more in-scope assets than crawl_max_assets
+    BLOCKED = "blocked"  # browser capture's initial navigation failed (bot wall, TLS, ERR_*)
+
+
 class RunState(StrEnum):
     """Persisted run state machine (REQ-A2), plus the control/terminal states.
 

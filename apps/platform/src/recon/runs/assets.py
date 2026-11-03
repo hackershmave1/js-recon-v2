@@ -1,5 +1,6 @@
-"""Per-asset run state (Slice Y). One row per discovered asset; created by discover,
-mutated by fetch/analyze, aggregated by the coordinator for REQ-D5 completeness.
+"""Per-asset run state (Slice Y). One row per discovered asset; created by discover, browser
+capture, fetch's chunk enumeration and extension ingest (runs/captured_versions), mutated by
+fetch/analyze, aggregated by the coordinator for REQ-D5 completeness.
 
 Status setters take the caller's ``session`` so a stage can commit an asset's status
 together with its side effects in that asset's own transaction (best-effort survives an
@@ -52,7 +53,7 @@ def seed_pending(session: Session, *, tenant_id: str, run_id: str, urls: list[st
     )
 
 
-def seed_captured(session: Session, *, tenant_id: str, run_id: str, rows: list[dict]) -> None:
+def seed_captured(session: Session, *, tenant_id: str, run_id: str, rows: list[dict]) -> set[str]:
     """Seed already-fetched (captured) assets in ONE statement — ``url`` + ``input_ref``
     + optional ``source_map_ref`` + ``fetch_status=ok`` — for the runtime-capture stage,
     which holds every byte in hand (unlike the static crawl, whose fetch stage fills
@@ -66,10 +67,13 @@ def seed_captured(session: Session, *, tenant_id: str, run_id: str, rows: list[d
     skip. Skips any row whose ``(run_id, url)`` already exists
     (``on_conflict_do_nothing``), so a redelivery that re-runs capture never duplicates —
     the caller commits these together with the ``discover.assets`` event in one
-    transaction (atomic manifest)."""
+    transaction (atomic manifest).
+
+    Returns the urls actually inserted. Rows go in url order so concurrent callers take the
+    unique-index locks in one consistent order (no deadlock between overlapping batches)."""
     if not rows:
-        return
-    session.execute(
+        return set()
+    inserted = session.scalars(
         pg_insert(models.RunAsset)
         .values(
             [
@@ -82,11 +86,13 @@ def seed_captured(session: Session, *, tenant_id: str, run_id: str, rows: list[d
                     "source_map_skipped": r.get("source_map_skipped", False),
                     "fetch_status": AssetStatus.OK.value,
                 }
-                for r in rows
+                for r in sorted(rows, key=lambda r: r["url"])
             ]
         )
         .on_conflict_do_nothing(index_elements=["run_id", "url"])
+        .returning(models.RunAsset.url)
     )
+    return set(inserted)
 
 
 def list_for_run(tenant_id: str, run_id: str) -> list[AssetRow]:
@@ -126,8 +132,8 @@ def set_fetch_ok(session: Session, asset_id: str, input_ref: str) -> None:
 
 def set_source_map_ref(session: Session, asset_id: str, source_map_ref: str) -> None:
     """Link a stored source map blob to an asset. Set once, in the same tx that
-    marks the asset fetch_ok (capture ingest) — first-wins, so a retry or a later
-    same-url batch never clobbers the original map. Also clears any prior
+    marks the asset fetch_ok (the static fetch stage) — first-wins, so a retry never
+    clobbers the original map. Also clears any prior
     ``source_map_skipped`` (recovered wins over skipped): a recovered map and a skip
     are mutually exclusive per fetch attempt, but this keeps the two flags consistent
     even if a future refactor reordered them (D32)."""

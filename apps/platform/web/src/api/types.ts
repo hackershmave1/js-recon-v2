@@ -93,7 +93,8 @@ export interface FindingsResponse {
 export type AssetStatus = "pending" | "ok" | "failed";
 export interface AssetsManifest {
   domain: string | null;
-  status: "pending" | "ok" | "capped" | "timeout";
+  // "blocked": browser capture's first navigation failed (bot wall, TLS). Mirrors DiscoveryStatus.
+  status: "pending" | "ok" | "capped" | "timeout" | "blocked";
   assets: { url: string; source: string; fetch_status: AssetStatus; analyze_status: AssetStatus; fetch_error?: string | null; analyze_error?: string | null }[];
 }
 // Cross-file base-URL rule (design REQ-C2): an analyst-supplied prefix or

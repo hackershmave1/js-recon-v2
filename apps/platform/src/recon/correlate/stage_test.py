@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from recon.correlate import stage
+from recon.discover import manifest
+from recon.domain import DiscoveryStatus
 
 
 def _finding(finding_hash, value, occurrences=(), path="input.js"):
@@ -20,7 +22,13 @@ def _occ(host=None, raw_url=None, engine="vespasian"):
 
 
 def _run_correlate(*, observed, findings, requests_ref="blob/req"):
-    payload = {"requests_ref": requests_ref} if requests_ref else {}
+    found = (
+        manifest.Discovery(
+            status=DiscoveryStatus.OK, count=1, assets_ref="a", requests_ref=requests_ref
+        )
+        if requests_ref
+        else None
+    )
     recorded: list[dict] = []
     events: list[dict] = []
 
@@ -30,8 +38,8 @@ def _run_correlate(*, observed, findings, requests_ref="blob/req"):
 
     with (
         patch(
-            "recon.correlate.stage.discover_queries.latest_assets_event",
-            return_value=payload or None,
+            "recon.correlate.stage.discovery.read_latest",
+            return_value=found,
         ),
         patch("recon.correlate.stage.storage.get_blob", return_value=json.dumps(observed).encode()),
         patch(

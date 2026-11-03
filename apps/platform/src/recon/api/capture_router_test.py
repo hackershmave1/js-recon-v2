@@ -27,7 +27,7 @@ from recon.auth import token as auth_token
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
 from recon.db.models import EngagementSession, Job, Run, Tenant
-from recon.discover import queries as discover_queries
+from recon.discover import manifest as discovery
 from recon.domain import RunState
 from recon.events import stream
 from recon.fetch import egress, fetch
@@ -35,6 +35,7 @@ from recon.findings import analyze as analyze_mod
 from recon.findings import queries as findings_queries
 from recon.queue import retry
 from recon.runs import assets as run_assets
+from recon.runs import captured_versions
 from recon.runs import queries as run_queries
 from recon.runs import state_machine as sm
 from recon.sessions import service as sessions_service
@@ -524,8 +525,8 @@ def test_analyze_start_emits_event_and_enqueues_one_walk(make_capture_client):
     assert body["started"] is True and body["job"]
     run_id, tid = body["runId"], _tenant_id(client.capture_tenant_name)
 
-    event = discover_queries.latest_assets_event(tid, run_id)
-    assert event and event["status"] == "ok" and event["count"] == 2
+    found = discovery.read_latest(tid, run_id)
+    assert found and found.is_complete and found.count == 2
     with tenant_session(tid) as s:
         n_jobs = s.scalar(
             select(func.count())
@@ -1130,7 +1131,7 @@ def test_concurrent_batches_store_each_version_once(make_capture_client, monkeyp
 
     barrier = threading.Barrier(2, timeout=30)
     met = threading.local()
-    real_seed = run_assets.seed_pending
+    real_seed = run_assets.seed_captured
 
     def rendezvous_seed(session, **kwargs):
         if not getattr(met, "done", False):
@@ -1138,10 +1139,10 @@ def test_concurrent_batches_store_each_version_once(make_capture_client, monkeyp
             barrier.wait()
         return real_seed(session, **kwargs)
 
-    monkeypatch.setattr(run_assets, "seed_pending", rendezvous_seed)
+    monkeypatch.setattr(run_assets, "seed_captured", rendezvous_seed)
 
-    def upload(key: str) -> capture_router._Upload:
-        return capture_router._Upload(url=url, key=key, result={})
+    def upload(key: str) -> tuple[captured_versions.CapturedAsset, dict]:
+        return captured_versions.CapturedAsset(url=url, input_ref=key), {}
 
     batches = iter([[upload(key_b)], [upload(key_a), upload(key_b)]])
     _run_two_writers(lambda: capture_router._seed_fetched_assets(tid, run_id, next(batches), 10))
