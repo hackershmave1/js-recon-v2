@@ -59,17 +59,13 @@ function test_history_shows_only_the_current_tenant() {
   assert.deepEqual(historyForTenant(null, 'tenant-a'), []);
 }
 
-// Wiring that only the source can show: background.js routes the cache, the save and the read
-// through this module and clears the cache on every reset path.
+// Wiring that only the source can show: background.js routes the summary cache and the history
+// read through CaptureSession (whose save/clear behaviour is tested in test_capture_session.mjs).
 function test_background_uses_the_module() {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const bg = fs.readFileSync(path.resolve(__dirname, '../background.js'), 'utf8');
-  assert.ok(bg.includes("from './modules/capture-history.js'"), 'imports capture-history');
-  assert.ok(/summaryToCache\(req\.sessionId,\s*result\)/.test(bg), 'handler caches via summaryToCache keyed by the requested session');
-  assert.ok(/summaryForSession\(this\._lastFindingsSummary,\s*this\.sessionId\)/.test(bg), 'save attaches only this session\'s summary');
-  assert.ok(/historyForTenant\(/.test(bg), 'getHistory filters by tenant');
-  const resets = (bg.match(/this\._lastFindingsSummary = null;/g) || []).length;
-  assert.ok(resets >= 4, `cache cleared in constructor + newSession + resetCaptureSession + clearFiles (found ${resets})`);
+  assert.ok(/this\.session\.noteFindingsSummary\(req\.sessionId,\s*result\)/.test(bg), 'handler caches keyed by the requested session');
+  assert.ok(/this\.session\.history\(this\.settings\?\.authTenantId\)/.test(bg), 'getHistory reads only the signed-in tenant');
 }
 
 test_caches_the_client_response_shape();

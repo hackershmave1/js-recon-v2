@@ -12,36 +12,15 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const bg = fs.readFileSync(path.resolve(__dirname, '../background.js'), 'utf8');
 
-// A dedicated storage key + debounced writer + rehydrate/clear helpers exist.
-assert.ok(/capturedMetaKey\s*=\s*'capturedFilesMeta'/.test(bg), 'declares the capturedFilesMeta storage key');
-assert.ok(bg.includes('schedulePersistCapturedMeta'), 'has a debounced persist method');
-assert.ok(bg.includes('rehydrateCapturedFilesMeta'), 'has a rehydrate method');
-assert.ok(bg.includes('_projectCapturedFile'), 'projects a lean per-file shape');
-
-// The projection must be CONTENT-FREE: never persist raw file content or the sourcemap blob to
-// chrome.storage.local (that is the uploader/outbox's job; storage has a quota).
-const projMatch = bg.match(/_projectCapturedFile\(f\)\s*{[\s\S]*?return\s*{([\s\S]*?)};/);
-assert.ok(projMatch, 'projection returns an object literal');
-const projBody = projMatch[1];
-assert.ok(!/\bcontent\b\s*:/.test(projBody), 'projection does not persist raw content');
-assert.ok(!/sourceMapContent/.test(projBody), 'projection does not persist the sourcemap blob');
-assert.ok(/contentHash/.test(projBody) && /secretCount/.test(projBody), 'projection keeps the counter fields');
-
-// Cold start rehydrates AFTER the dedup set (both restore session-scoped state, dedup first so a
-// rehydrated file is never re-fetched).
-assert.ok(/rehydrateDedup\(\);[\s\S]{0,200}rehydrateCapturedFilesMeta\(\)/.test(bg),
-  'initialize() rehydrates the counter after the dedup set');
+// The persisted projection itself (content-free, rehydrate fills only missing urls, cleared on
+// every session transition) lives in CaptureSession and is tested at runtime in
+// test_capture_session.mjs. What stays here is the capture pipeline's side of the wiring.
 
 // A capture schedules a persist; a session reset clears the persisted projection. (Window widened
 // for the D43d reorder, which added the outbox-before-dedup enqueue + explanatory comments between
 // recording the file and scheduling the persist; still bounded so the two stay in the same region.)
-assert.ok(/capturedFiles\.set\(url, fileObject\);[\s\S]{0,1400}schedulePersistCapturedMeta\(\)/.test(bg),
+assert.ok(/capturedFiles\.set\(url, fileObject\);[\s\S]{0,1400}this\.session\.schedulePersistCapturedMeta\(\)/.test(bg),
   'processFile schedules a persist after recording a file');
-assert.ok((bg.match(/this\.clearCapturedFilesMeta\(\)/g) || []).length >= 2,
-  'clearFiles and newSession both clear the persisted projection');
-
-// Rehydrate must not clobber a live capture that beat it (only fill urls not already present).
-assert.ok(/!this\.capturedFiles\.has\(f\.url\)/.test(bg), 'rehydrate only fills urls not already present');
 
 // getFiles tolerates a rehydrated lean object (which has no dependencies array).
 assert.ok(/dependencyCount:\s*Array\.isArray\(f\.dependencies\)/.test(bg),
