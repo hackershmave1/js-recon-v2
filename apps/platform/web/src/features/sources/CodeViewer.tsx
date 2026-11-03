@@ -170,9 +170,13 @@ export function CodeViewer({ text, truncated, marks, focusLine, ranges, focusRan
         <div className="sv-note sv-warn">File truncated — showing a capped preview. Download to view the full file.</div>
       )}
       <div className="sv-code" ref={scrollRef} onScroll={onScroll}>
-        <div style={{ height: start * CODE_ROW_HEIGHT }} />
-        {rows}
-        <div style={{ height: (total - end) * CODE_ROW_HEIGHT }} />
+        {/* As wide as the widest mounted row, so every row (and its sticky line number) spans the
+            full scroll width — otherwise a horizontal scroll carries short rows' numbers away. */}
+        <div className="sv-code-inner">
+          <div style={{ height: start * CODE_ROW_HEIGHT }} />
+          {rows}
+          <div style={{ height: (total - end) * CODE_ROW_HEIGHT }} />
+        </div>
       </div>
       {scrolled && (
         <button type="button" className="sv-top" onClick={scrollToTop}
