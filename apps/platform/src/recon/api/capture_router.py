@@ -11,9 +11,9 @@ egressed) -> INGESTING/CORRELATING (no-op stubs) -> ANALYZING (real) -> finalize
 Mounted only when ``settings.enable_capture_ingest`` is true (see ``api/app.py``).
 
 Idempotency (trap T6, settled "run-per-capture-session"): a retried batch re-stores
-the SAME content-addressed blob key, ``seed_pending`` skips the existing
-``(run_id, url)`` row, and an already-``fetch_ok`` asset is left untouched — so a
-retry never makes a duplicate run or asset. No client idempotency key, no schema
+the SAME content-addressed blob key and finds its bytes already on the url's row
+(``runs/captured_versions``) — so a retry never makes a duplicate run or asset; a url
+re-captured with DIFFERENT bytes gets its own ``url#sha256=`` version row. No client idempotency key, no schema
 change.
 
 Shaped by the §4 adversarial design review — two deliberate omissions on the
@@ -33,7 +33,6 @@ import hashlib
 import json
 import time
 import uuid
-from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -48,12 +47,13 @@ from recon.api.deps import get_redis
 from recon.auth import token as auth_token
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
-from recon.db.models import EngagementSession, Job, Run, RunAsset, Tenant
-from recon.domain import TERMINAL_STATES, AssetStatus, RunStage, RunState
+from recon.db.models import EngagementSession, Job, Run, Tenant
+from recon.discover import manifest as discovery
+from recon.domain import TERMINAL_STATES, AssetStatus, DiscoveryStatus, RunStage, RunState
 from recon.engagements import service as engagements_service
-from recon.events.log import emit, publish, record_event
+from recon.events.log import emit, publish
 from recon.observability import get_logger
-from recon.runs import assets, coordinator
+from recon.runs import assets, captured_versions, coordinator
 from recon.runs import service as runs_service
 from recon.sessions import service as sessions_service
 
@@ -393,95 +393,37 @@ def _valid_source_map(f: dict, max_bytes: int) -> tuple[bytes | None, bool]:
     return data, False
 
 
-@dataclass
-class _Upload:
-    """One stored file of a batch, on its way to a ``run_asset`` row."""
-
-    url: str
-    key: str  # the content-addressed input blob key (ends with the content's SHA-256)
-    result: dict  # this file's entry in the response, corrected if the file is turned away
-    map_key: str | None = None
-    map_skipped: bool = False  # D32-A2: a map was sent but exceeded max_source_map_bytes
-
-
 def _seed_fetched_assets(
-    tenant_id: str, run_id: str, uploads: list[_Upload], max_versions: int
+    tenant_id: str,
+    run_id: str,
+    uploads: list[tuple[captured_versions.CapturedAsset, dict]],
+    max_versions: int,
 ) -> tuple[int, int]:
-    """Seed this batch's files as ``run_asset`` rows and mark each ``fetch_ok`` with its
-    uploaded blob key — in ONE transaction, so a row is never left committed as
-    PENDING-without-``input_ref`` (which the FETCHING stage would try to egress).
-
-    One rule per file, in upload order: claim the url's row if it is free; do nothing if it
-    already holds these bytes (a retry — idempotent); otherwise the url was re-captured with
-    DIFFERENT bytes (a deploy, a per-request config script) and the bytes go to the version row
-    ``url#sha256=<content hash>``, under the same three cases. So every version is analyzed and
-    none is clobbered. Unlike browser capture (capture/stage._asset_rows), which suffixes every
-    copy, the bare url here is the FIRST version captured — it was committed before the second
-    arrived. At most ``max_versions`` version rows per url: a script whose bytes change on every
-    load must not grow the run without bound. A source map (or the D32-A2
-    ``source_map_skipped`` flag, so analyze reports coverage ``"skipped"`` not ``"none"``) is
-    linked in the same step that marks the row ``fetch_ok``, so it is set once per version.
+    """Seed this batch's stored files as ``run_asset`` rows in ONE transaction — every
+    version of a re-captured url kept (``assets.add_captured_versions``) — and mark each file
+    turned away (the per-url version cap, or its row deleted mid-batch) ``stored: false``.
 
     Returns ``(the run's cumulative asset count, version rows added)``. The count is the
     ABSOLUTE value the slice-2 ``capture.received`` indicator reports (eventually-consistent
     under concurrent same-session batches; the UI reducer keeps the max)."""
-    added_versions = 0
-    claimed: dict[str, str] = {}  # url -> key claimed in this transaction (rows read are stale)
     with tenant_session(tenant_id) as session:
-        by_url = _seed_rows(session, tenant_id, run_id, list(dict.fromkeys(u.url for u in uploads)))
-
-        def held(url: str) -> str | None:
-            return claimed.get(url) or by_url[url].input_ref
-
-        for upload in uploads:
-            url = upload.url
-            if held(url) not in (None, upload.key):
-                url = _version_url(upload.url, upload.key)
-                if url not in by_url:
-                    if _version_count(by_url, upload.url) >= max_versions:
-                        upload.result.update(stored=False, error="too many versions of this url")
-                        log.warning("capture.asset_version_capped", run_id=run_id, url=upload.url)
-                        continue
-                    by_url = _seed_rows(session, tenant_id, run_id, [url])
-                    added_versions += 1
-                    log.info("capture.asset_version_added", run_id=run_id, url=url)
-            if held(url) is None:
-                _claim(session, str(by_url[url].id), upload)
-                claimed[url] = upload.key
-        return len(by_url), added_versions
-
-
-def _claim(session, asset_id: str, upload: _Upload) -> None:
-    assets.set_fetch_ok(session, asset_id, upload.key)
-    if upload.map_key:
-        assets.set_source_map_ref(session, asset_id, upload.map_key)
-    elif upload.map_skipped:
-        assets.set_source_map_skipped(session, asset_id)
-
-
-def _seed_rows(session, tenant_id: str, run_id: str, urls: list[str]) -> dict[str, RunAsset]:
-    """Seed ``urls`` as pending rows (existing ones are kept) and return every row of the run
-    by url, read in the same transaction."""
-    assets.seed_pending(session, tenant_id=tenant_id, run_id=run_id, urls=urls)
-    session.flush()  # make the seeded rows visible to the query below, same tx
-    return {
-        row.url: row
-        for row in session.scalars(select(RunAsset).where(RunAsset.run_id == str(run_id)))
-    }
-
-
-_VERSION_MARK = "#sha256="
-
-
-def _version_url(url: str, blob_key: str) -> str:
-    """The asset url for another version of ``url``: the same ``#sha256=<content hash>``
-    form browser capture gives same-url scripts (capture/stage._asset_rows). Stable across
-    retries, since the blob key ends with the content's SHA-256."""
-    return f"{url}{_VERSION_MARK}{blob_key.rsplit('/', 1)[-1]}"
-
-
-def _version_count(by_url: dict[str, RunAsset], url: str) -> int:
-    return sum(1 for u in by_url if u.startswith(url + _VERSION_MARK))
+        added = captured_versions.add_captured_versions(
+            session,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            files=[asset for asset, _ in uploads],
+            max_versions=max_versions,
+        )
+    for url in added.versions:
+        log.info("capture.asset_version_added", run_id=run_id, url=url)
+    for asset, result in uploads:
+        if asset in added.capped:
+            result.update(stored=False, error="too many versions of this url")
+            log.warning("capture.asset_version_capped", run_id=run_id, url=asset.url)
+        elif asset in added.vanished:
+            result.update(stored=False, error="asset removed during upload")
+            log.warning("capture.asset_vanished", run_id=run_id, url=asset.url)
+    return added.total, len(added.versions)
 
 
 @router.post("/save-files")
@@ -524,7 +466,7 @@ def save_files(
     run_id = _accumulating_run_id(tenant_id, session_id, ext_session_id, redis)
 
     file_results: list[dict] = []
-    uploads: list[_Upload] = []
+    uploads: list[tuple[captured_versions.CapturedAsset, dict]] = []
     seen: set[tuple[str, str]] = set()  # (url, content sha) already in this batch
     failed = 0
     total_bytes = 0
@@ -563,9 +505,9 @@ def save_files(
             )
             continue
         seen.add((url, digest))
-        upload = _Upload(url=url, key="", result={"url": url, "contentHash": content_hash})
+        map_key = None
         try:
-            upload.key = storage.put_blob(tenant_id, run_id, "input", data)
+            key = storage.put_blob(tenant_id, run_id, "input", data)
             # Store the captured source map alongside the JS. A storage infra failure
             # here is STILL a 503 so the whole idempotent batch retries (a retry
             # re-stores the same content-addressed blobs). A missing/malformed map is
@@ -575,13 +517,12 @@ def save_files(
             # map is recorded as skipped (honest coverage), not silently dropped.
             map_bytes, map_skipped = _valid_source_map(f, settings.max_source_map_bytes)
             if map_bytes is not None:
-                upload.map_key = storage.put_blob(tenant_id, run_id, "source_map", map_bytes)
+                map_key = storage.put_blob(tenant_id, run_id, "source_map", map_bytes)
                 total_bytes += len(map_bytes)
             elif map_skipped:
                 # D32-A2 honesty: a present-but-oversized map is a real coverage gap
-                # (analyze -> source_map:"skipped"), not "no map". Flagged in
-                # _seed_fetched_assets below (same tx as the fetch_ok seed).
-                upload.map_skipped = True
+                # (analyze -> source_map:"skipped"), not "no map". Flagged on the
+                # asset's row below (same tx as the fetch_ok seed).
                 log.info(
                     "capture.source_map_skipped",
                     run_id=run_id,
@@ -592,16 +533,23 @@ def save_files(
             log.error("capture.save_files.blob_failed", url=url, error=str(exc))
             raise HTTPException(status_code=503, detail="blob storage unavailable") from exc
         total_bytes += len(data)
-        upload.result.update(runId=run_id, stored=True)
-        file_results.append(upload.result)
-        uploads.append(upload)
+        result = {"url": url, "contentHash": content_hash, "runId": run_id, "stored": True}
+        file_results.append(result)
+        uploads.append(
+            (
+                captured_versions.CapturedAsset(
+                    url=url, input_ref=key, source_map_ref=map_key, source_map_skipped=map_skipped
+                ),
+                result,
+            )
+        )
 
     stored = added_versions = 0
     if uploads:
         total, added_versions = _seed_fetched_assets(
             tenant_id, run_id, uploads, settings.capture_max_versions_per_url
         )
-        stored = sum(1 for upload in uploads if upload.result["stored"])
+        stored = sum(1 for _, result in uploads if result["stored"])
         # Slice 2 — tell the run workspace captures are arriving, LIVE. The batch is
         # already durably stored+committed above, so this capture.received event is a
         # BEST-EFFORT side-channel: an event-bus hiccup (or a malformed url below) must
@@ -617,7 +565,7 @@ def save_files(
         try:
             # urlsplit(...).hostname raises on a malformed url (e.g. an unterminated IPv6
             # bracket); keep it INSIDE the guard so a durably-stored batch never 5xxs.
-            last_host = urlsplit(uploads[-1].url).hostname
+            last_host = urlsplit(uploads[-1][0].url).hostname
             emit(
                 redis,
                 tenant_id=tenant_id,
@@ -769,31 +717,22 @@ def analyze_start(
         # completed prior round). Do not enqueue a second walk.
         return {"started": True, "message": "analysis already started", "runId": run_id}
 
-    # Store an assets manifest so GET /runs/{id}/assets reads back (trap T5), then
-    # emit the discover.assets event: the coordinator uses it to (a) short-circuit
-    # the crawl stage and (b) finalize DONE/PARTIAL from per-asset status. status
-    # MUST be the literal "ok" (coordinator._finalize_state). This put stays OUTSIDE
-    # the seal transaction below on purpose, so the run-row lock never spans this S3
-    # round-trip; on the rare concurrent-loser path it's a harmless content-addressed
-    # re-write of identical bytes (do NOT move it into the winner-only branch).
-    manifest = {
-        "domain": _manifest_domain(rows, ext_session_id),
-        "status": "ok",
-        "assets": [{"url": r.url, "source": "extension"} for r in rows],
-    }
-    assets_ref = storage.put_blob(tenant_id, run_id, "assets", json.dumps(manifest).encode("utf-8"))
-    # Runtime request observations (DEBT D45b1): persist the { method, url } calls the extension
-    # observed as the run's capture-requests blob, referenced on the event below so CORRELATING
-    # promotes matching suspected endpoints to confirmed. Same content-addressed put as the
-    # manifest, OUTSIDE the seal transaction (no S3 round-trip under the run-row lock). None when
-    # the client sent no observations (an older/non-extension client) — correlate then no-ops.
-    requests_ref = None
-    if body is not None and body.observations:
-        observed = _normalize_observations(body.observations)
-        if observed:
-            requests_ref = storage.put_blob(
-                tenant_id, run_id, "capture-requests", json.dumps(observed).encode("utf-8")
-            )
+    # Store the manifest (so GET /runs/{id}/assets reads back, trap T5) and the runtime request
+    # observations (DEBT D45b1: CORRELATING promotes matching suspected endpoints to confirmed;
+    # none from an older client, and correlate then no-ops) OUTSIDE the seal transaction below,
+    # so the run-row lock never spans an S3 round-trip. On the rare concurrent-loser path this is
+    # a harmless content-addressed re-write of identical bytes (do NOT move it into the
+    # winner-only branch).
+    observed = _normalize_observations(body.observations) if body and body.observations else []
+    found = discovery.store_manifest(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        domain=_manifest_domain(rows, ext_session_id),
+        status=DiscoveryStatus.OK,
+        asset_urls=[r.url for r in rows],
+        source="extension",
+        observed_requests=observed or None,
+    )
     # ONE transaction: seal the run, record discover.assets, and insert the Job — all
     # atomic. The seal is a GUARDED update (DEBT D14): null the capture accumulator
     # marker only while it is still set, and let the rowcount elect a single winner.
@@ -816,16 +755,7 @@ def analyze_start(
         )
         if sealed.rowcount != 1:
             return {"started": True, "message": "analysis already started", "runId": run_id}
-        payload = {"count": len(rows), "assets_ref": assets_ref, "status": "ok"}
-        if requests_ref:
-            payload["requests_ref"] = requests_ref
-        event = record_event(
-            session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            event_type="discover.assets",
-            payload=payload,
-        )
+        event = discovery.record(session, tenant_id=tenant_id, run_id=run_id, found=found)
         job_id, job_message = coordinator.create_stage_job(
             session, tenant_id=tenant_id, run_id=run_id, stage=RunStage.DISCOVERING
         )

@@ -5,14 +5,14 @@ import pytest
 
 from recon import storage
 from recon.db.base import tenant_session
-from recon.discover import queries
+from recon.discover import manifest, queries
 from recon.events.log import record_event
 from recon.runs import service as runs_service
 
 pytestmark = pytest.mark.integration  # DB + object storage; needs the docker stack
 
 
-def test_latest_assets_event_and_manifest(authorized_session, redis):
+def test_latest_discovery_and_manifest(authorized_session, redis):
     tenant_id, session_id = authorized_session
     run = runs_service.create_run(
         redis, tenant_id=tenant_id, session_id=session_id, target="acme.io"
@@ -46,7 +46,7 @@ def test_latest_assets_event_and_manifest(authorized_session, redis):
             payload={"count": 2, "assets_ref": new_ref, "status": "ok"},
         )
     # The newest event (highest run_event.id) wins.
-    assert queries.latest_assets_event(tenant_id, run.id)["count"] == 2
+    assert manifest.read_latest(tenant_id, run.id).count == 2
     assert queries.get_assets_manifest(tenant_id, run.id) == new
 
 

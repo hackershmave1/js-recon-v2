@@ -13,18 +13,18 @@ an accepted residual risk, closed only by the deferred egress-proxy slice.
 
 from __future__ import annotations
 
-import json
 from urllib.parse import urlsplit
 
 from redis import Redis
 
-from recon import storage
 from recon.capture import stage as capture_stage
 from recon.config import get_settings
 from recon.db.base import tenant_session
 from recon.db.models import Run
-from recon.discover import harness, katana, queries
-from recon.events.log import publish, record_event
+from recon.discover import harness, katana
+from recon.discover import manifest as discovery
+from recon.domain import DiscoveryStatus
+from recon.events.log import publish
 from recon.fetch import egress
 from recon.observability import get_logger
 from recon.queue import retry
@@ -35,7 +35,7 @@ log = get_logger("recon.discover")
 
 
 def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> None:
-    if queries.latest_assets_event(tenant_id, run_id) is not None:
+    if discovery.read_latest(tenant_id, run_id) is not None:
         return  # already discovered (stage retry / redelivery)
 
     target, session_id, input_ref, crawl_mode, max_fetch_bytes = _load_target(tenant_id, run_id)
@@ -113,23 +113,22 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
     )
     capped = len(in_scope) > settings.crawl_max_assets
     kept = in_scope[: settings.crawl_max_assets]
-    status = "timeout" if result.timed_out else ("capped" if capped else "ok")
+    if result.timed_out:
+        status = DiscoveryStatus.TIMEOUT
+    else:
+        status = DiscoveryStatus.CAPPED if capped else DiscoveryStatus.OK
 
-    manifest = {
-        "domain": target,
-        "status": status,
-        "assets": [{"url": u, "source": "katana"} for u in kept],
-    }
-    assets_ref = storage.put_blob(tenant_id, run_id, "assets", json.dumps(manifest).encode("utf-8"))
+    found = discovery.store_manifest(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        domain=target,
+        status=status,
+        asset_urls=kept,
+        source="katana",
+    )
     with tenant_session(tenant_id) as session:
         assets.seed_pending(session, tenant_id=tenant_id, run_id=run_id, urls=kept)
-        event = record_event(
-            session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            event_type="discover.assets",
-            payload={"count": len(kept), "assets_ref": assets_ref, "status": status},
-        )
+        event = discovery.record(session, tenant_id=tenant_id, run_id=run_id, found=found)
     publish(redis, event)
     log.info("discover.done", run_id=run_id, count=len(kept), status=status)
 

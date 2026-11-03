@@ -131,7 +131,10 @@ page** — autoscroll, click-all, and same-origin route-enum — so lazily-loade
 click-gated chunks execute and are captured (each source is fetched on-parse, so repeated navigations
 don't strand earlier routes). Captured scripts are written as the same capture asset contract the
 extension produces (`run_asset` `input` blobs pre-marked `fetch_ok` + a `discover.assets` event), so
-FETCH no-ops and ANALYZE is unchanged. Each script's external source map — the `sourceMapURL` V8
+FETCH no-ops and ANALYZE is unchanged. All three producers (crawl, browser capture, extension ingest)
+write — and the coordinator, correlate and the assets read side read — that event through one module,
+`recon/discover/manifest.py` (`store_manifest` → `record`, `read_latest`); its `status` is
+`recon.domain.DiscoveryStatus`, and only `ok` is complete (anything else finalizes PARTIAL). Each script's external source map — the `sourceMapURL` V8
 reports on parse — is fetched through the same egress guard the static crawl uses and linked on its
 asset, so a captured minified bundle recovers its real source paths in ANALYZE (inline `data:` maps
 are already recovered from the source itself). It is **default-off** behind `RECON_ENABLE_CAPTURE_MODE`
@@ -229,7 +232,8 @@ The path is idempotent by construction — content-addressed blobs + `(run_id, u
 so the extension's whole-batch retries never duplicate a run or an asset. A url re-captured with
 DIFFERENT bytes (a deploy, a per-request config script) is kept as an extra `url#sha256=<hash>`
 asset — the form browser capture uses for same-url scripts — so every version is analyzed; the bare
-url is the first version captured, and versions per url are capped (`capture_max_versions_per_url`). Per-file source maps the
+url is the first version captured, and versions per url are capped (`capture_max_versions_per_url`;
+`recon.runs.captured_versions`). Per-file source maps the
 extension sends are stored per asset (`run_asset.source_map_ref`, migration `0010`) and recovered
 with the tolerant `source_map_origin="capture"`, so a malformed map falls back to bundle analysis
 instead of dropping the asset's findings.

@@ -17,7 +17,7 @@ from recon import storage
 from recon.config import get_settings
 from recon.db.base import tenant_session
 from recon.db.models import Job, Run
-from recon.discover import queries as discover_queries
+from recon.discover import manifest as discovery
 from recon.domain import AssetStatus, JobState, QueueName, RunStage, RunState
 from recon.fetch import egress
 from recon.observability import get_logger
@@ -380,12 +380,11 @@ def _finalize_state(tenant_id: str, run_id: str) -> tuple[RunState, dict]:
     Legacy single-asset runs (no discover.assets event) keep the historical
     hardcoded DONE.
     """
-    event = discover_queries.latest_assets_event(tenant_id, run_id)
-    if event is None:
+    found = discovery.read_latest(tenant_id, run_id)
+    if found is None:
         return RunState.DONE, {"fetch_ok": True, "analyze_ok": True}
     rows = run_assets.list_for_run(tenant_id, run_id)
-    crawl_ok = event.get("status") == "ok"
-    fetch_ok = crawl_ok and all(a.fetch_status == AssetStatus.OK.value for a in rows)
+    fetch_ok = found.is_complete and all(a.fetch_status == AssetStatus.OK.value for a in rows)
     analyze_ok = fetch_ok and all(a.analyze_status == AssetStatus.OK.value for a in rows)
     to_state = RunState.DONE if (fetch_ok and analyze_ok) else RunState.PARTIAL
     return to_state, {"fetch_ok": fetch_ok, "analyze_ok": analyze_ok}

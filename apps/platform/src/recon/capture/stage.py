@@ -38,6 +38,8 @@ from recon import storage
 from recon.capture import driver
 from recon.config import Settings, clamp_fetch_bytes, get_settings
 from recon.db.base import tenant_session
+from recon.discover import manifest as discovery
+from recon.domain import DiscoveryStatus
 from recon.events.log import publish, record_event
 from recon.fetch import egress, fetch
 from recon.observability import get_logger
@@ -45,6 +47,7 @@ from recon.progress import heartbeat as progress
 from recon.queue import retry
 from recon.runs import assets
 from recon.runs import queries as run_queries
+from recon.runs.captured_versions import VERSION_MARK
 from recon.sessions import service as sessions_service
 
 log = get_logger("recon.capture")
@@ -180,34 +183,23 @@ def capture_run(
     # A hard navigation failure (bot-wall / TLS / ERR_*) is recorded as "blocked"
     # (→ PARTIAL in coordinator finalize), NOT a false "ok"/DONE with zero scripts —
     # capture mode exists to defeat such walls, so it must not silently hide them.
-    status = "blocked" if result.nav_error else "ok"
-    manifest = {
-        "domain": target,
-        "status": status,
-        "assets": [{"url": r["url"], "source": "capture"} for r in seed_rows],
-    }
-    assets_ref = storage.put_blob(tenant_id, run_id, "assets", json.dumps(manifest).encode("utf-8"))
-    # REQ-C3: persist the in-scope observed request URLs for the correlate stage — a blob
-    # (not rows), parity with assets_ref, referenced from the same discover.assets event.
-    requests_ref = storage.put_blob(
-        tenant_id, run_id, "capture-requests", json.dumps(kept_requests).encode("utf-8")
+    status = DiscoveryStatus.BLOCKED if result.nav_error else DiscoveryStatus.OK
+    # REQ-C3: the in-scope observed request URLs go to the correlate stage — always stored, even
+    # when empty, so correlate reports "0 observed" for a capture run.
+    found = discovery.store_manifest(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        domain=target,
+        status=status,
+        asset_urls=[r["url"] for r in seed_rows],
+        source="capture",
+        observed_requests=kept_requests,
     )
     # Atomic manifest: seed every fetched row + record the discover.assets event in
     # ONE transaction, then publish after commit (REQ-R2 commit-then-publish).
     with tenant_session(tenant_id) as session:
         assets.seed_captured(session, tenant_id=tenant_id, run_id=run_id, rows=seed_rows)
-        event = record_event(
-            session,
-            tenant_id=tenant_id,
-            run_id=run_id,
-            event_type="discover.assets",
-            payload={
-                "count": len(seed_rows),
-                "assets_ref": assets_ref,
-                "requests_ref": requests_ref,
-                "status": status,
-            },
-        )
+        event = discovery.record(session, tenant_id=tenant_id, run_id=run_id, found=found)
     publish(redis, event)
 
     # Task 7: ONE fingerprint-signal blob per capture run (T6) — same schema/event
@@ -385,7 +377,7 @@ def _asset_rows(
         if script.url and counts[script.url] == 1:
             url = script.url
         elif script.url:
-            url = f"{script.url}#sha256={script.sha256}"
+            url = f"{script.url}{VERSION_MARK}{script.sha256}"
         else:
             url = f"vm://{script.sha256}"
         input_ref = storage.put_blob(tenant_id, run_id, "input", script.source)

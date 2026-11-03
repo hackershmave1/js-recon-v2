@@ -157,7 +157,8 @@ def _run_capture(
             "recon.capture.stage.assets.seed_captured",
             side_effect=lambda s, **k: seeded.update(k),
         ),
-        patch("recon.capture.stage.record_event", side_effect=_record),
+        patch("recon.discover.manifest.record_event", side_effect=_record),
+        patch("recon.capture.stage.record_event", side_effect=_record),  # fingerprint.signal
         patch("recon.capture.stage.publish") as publish,
     ):
         stage.capture_run(
@@ -309,6 +310,8 @@ def test_capture_nav_error_marks_blocked():
         [], engagement, nav_error="net::ERR_NAME_NOT_RESOLVED"
     )
     assert recorded["payload"]["status"] == "blocked"
+    # Zero kept requests still store the blob, so correlate reports "0 observed".
+    assert recorded["payload"]["requests_ref"]
     assert recorded["payload"]["count"] == 0
 
 
