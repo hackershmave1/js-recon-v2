@@ -21,11 +21,11 @@ assert.match(bg, /recordObservation[\s\S]*?isTelemetryPath\(rawUrl\)/, 'observat
 assert.match(bg, /recordObservation[\s\S]*?isApiIshObservation\(/, 'observation drops non-API content-types');
 // The observation base is method+url; a request body (D45b2) is attached separately when present.
 assert.match(bg, /const obs = \{ method, url \};/, 'observation base is method+url');
-assert.match(bg, /this\.observations\.push\(obs\)/, 'observation is recorded');
+assert.match(bg, /this\.session\.observations\.push\(obs\)/, 'observation is recorded');
 // Deduped + capped + durable across an MV3 teardown.
 assert.match(bg, /observationKeys\.has\(key\)/, 'observations deduped by method+url');
 assert.ok(bg.includes('OBSERVATION_CAP'), 'observations are capped');
-assert.match(bg, /await this\.rehydrateObservations\(\)/, 'observations rehydrated on init (survive teardown before Analyze)');
+assert.match(bg, /await this\.session\.restore\(\)/, 'session (incl. observations) restored on init; rehydrate tested in test_capture_session.mjs');
 assert.match(bg, /from '\.\/modules\/observation-filter\.js'/, 'imports the observation filter');
 
 // --- workspace-client: observations ride the analyze/start body ---

@@ -13,6 +13,20 @@ Effort: S (hours) · M (a day-ish) · L (multi-day).
 
 ## Open debt
 
+### 2026-11-03 extension end-to-end walkthrough — OPEN (D71)
+
+Found while driving the unpacked extension against the live stack (the findings-summary 404 found in the
+same walkthrough was fixed with it).
+
+#### D71 · An IP-literal capture scope makes `/api/save-files` return 500, and the extension retries forever [S]  ·  correctness
+
+`sessions/service.py:_resolve_scope_hosts` rejects an IP-literal scope host (e.g. `127.0.0.1`) by design, but
+the `SessionInvalid` it raises escapes `capture_router.save_files` → `_get_or_create_session` as an HTTP 500.
+The extension treats 500 as retryable, so the popup shows "1 pending" indefinitely with no reason given.
+
+**Fix:** map `SessionInvalid` to a 4xx in the capture ingest, and have the extension surface a non-retryable
+scope error (or reject IP-literal scopes in the popup's scope field up front).
+
 ### 2026-09-06 extension swarm review — OPEN (D55–D63)
 
 Uncovered by a 5-agent Google-engineer-style review of the chrome-extension against MV3 best-practices
@@ -152,6 +166,48 @@ so only direct API callers hit it.
 Since the LLM call records (D72 section), the same race is visible: the old task's `_store_results` can
 overwrite the re-triggered run's threats while the Threat Model tab shows the new run's call details. Also
 guard those writes with `WHERE llm_call_id = <this run's call>`.
+
+### 2026-11-02 capture history fix + CaptureSession refactor — OPEN (D67–D70)
+
+Left on purpose when the past-sessions findings count was fixed (session-keyed cache + tenant-tagged rows).
+
+#### D67 · Past-session finding counts only exist if the popup was open when analysis finished [S]  ·  correctness
+
+The findings summary is fetched by the popup (`src/popup/app.jsx` effect on `analysis.status === 'done'`),
+and the worker caches only what the popup asked for, in memory. Close the popup before analysis finishes,
+or let the MV3 worker idle out (~30 s) after it did, then start a new session, and that history row has no
+count. Separately, logout and a tenant-changing login rotate the session without saving it to history, so
+a same-tenant logout drops that session's row (deliberate for tenant isolation; unchanged by the fix).
+
+**Fix:** have the worker fetch the summary itself at save time (or persist the cache), and decide whether a
+same-tenant logout should save its row.
+
+#### D68 · A history row without a count can mean "0 findings" or "never fetched" [S]  ·  UX
+
+`HomeView.jsx` shows the count only when `counts.total > 0`, and D67 rows have no summary at all, so the two
+cases look identical.
+
+**Fix:** render "0 findings" for a fetched summary with no findings, and nothing (or "—") for no summary.
+
+#### D69 · "New session" leaves the old binding persisted while it rotates [S]  ·  correctness
+
+`CaptureSession.startNew` rotates (and persists) the new session id before it overwrites
+`pendingSessionConfig`. A worker respawn in that window restores the new id with the previous session's
+engagement binding, and the first upload binds the new session to the old engagement (immutable on the
+server). Pre-existing; found by the CaptureSession adversarial design review.
+
+**Fix:** remove `pendingSessionConfig` before `sessionStore.rotate()`, so the window is "unbound" (the
+next `startNew` write re-binds) instead of "wrongly bound".
+
+#### D70 · A batch already taken off the processing queue can be stamped with the new session id [S]  ·  correctness
+
+`processQueue` splices up to 10 requests into a local batch (`background.js` `processQueue`) and stamps
+each file with `this.session.sessionId` as it processes it. A rotation mid-batch empties the queue but not
+that local batch, so its remaining files land in the new session. The "drop stragglers before rotating"
+comment overstated this.
+
+**Fix:** capture the session id when the batch is taken, and drop (or stamp with that id) files whose
+session rotated mid-batch.
 
 ### 2026-09-03 review swarm — OPEN (D40–D54)
 

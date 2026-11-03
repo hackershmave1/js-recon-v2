@@ -28,6 +28,7 @@ restate it elsewhere. (Each `AGENTS.md` is a pointer-stub to the `CLAUDE.md` bes
 | *Why* a load-bearing decision was made — MADR trail, each cites its code | [`docs/adr/`](docs/adr/README.md) |
 | The `REQ-*` capability/invariant IDs the ADRs cite (41 + a `REQ-CE*` addendum) | [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) |
 | Known, deliberate tech debt (effort + status) — before "why isn't X done" | [`DEBT.md`](DEBT.md) |
+| Domain terms (capture session, standalone, …) — use these names | [`GLOSSARY.md`](GLOSSARY.md) |
 | Backend — run, test, migrations, async-pipeline detail | [`apps/platform/README.md`](apps/platform/README.md) |
 | Web workspace (React/Vite SPA) | [`apps/platform/web/README.md`](apps/platform/web/README.md) |
 | Finding-identity / hash-normalization spec | [`apps/platform/docs/req-d3-finding-hash-normalization.md`](apps/platform/docs/req-d3-finding-hash-normalization.md) |

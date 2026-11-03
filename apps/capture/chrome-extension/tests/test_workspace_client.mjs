@@ -36,6 +36,22 @@ async function run() {
   assert.equal(withUrl('').resolveApiBase(), 'http://localhost:8000', 'empty workspace URL defaults to localhost');
   assert.equal(new WorkspaceClient({ getSettings: () => ({}) }).resolveApiBase(), 'http://localhost:8000', 'missing workspace URL defaults to localhost');
 
+  // The findings summary lives on the platform's sessions router, which is mounted at the root
+  // (not under /api like the capture routes). A wrong path 404s and the popup silently hides the
+  // findings card and history counts, so pin the exact URL the client requests.
+  const requested = [];
+  const fetchSandbox = {
+    console, URL, AbortController, setTimeout, clearTimeout,
+    fetch: async (url) => { requested.push(url); return { ok: true, json: async () => ({ status: 'complete', counts: { total: 6 } }) }; },
+  };
+  vm.createContext(fetchSandbox);
+  vm.runInContext(`${source}\nthis.WorkspaceClient = WorkspaceClient;`, fetchSandbox, { filename: modPath });
+  const client = new fetchSandbox.WorkspaceClient({ getSettings: () => ({ workspaceUrl: 'http://localhost:8000' }), getSessionId: () => 's1' });
+  const summary = await client.getSessionFindingsSummary('ext id/1');
+  assert.deepEqual(requested, ['http://localhost:8000/sessions/ext%20id%2F1/findings/summary'], 'summary is requested from the root sessions router');
+  assert.equal(summary.success, true);
+  assert.equal(summary.summary.counts.total, 6);
+
   console.log('test_workspace_client: ok');
   process.exit(0);
 }

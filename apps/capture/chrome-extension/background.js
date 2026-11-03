@@ -16,10 +16,7 @@ import { normalizeRootDomains } from './modules/normalize-scope.js';
 import { isRelevantInlineScript } from './modules/inline-relevance.js';
 import { normalizeObservedUrl, isApiIshObservation, isTelemetryPath } from './modules/observation-filter.js';
 import { prepareRequestBody, redactBody, capBody } from './modules/body-capture.js';
-
-// D46(c): capture history — persisted list of past session summaries (FIFO, capped).
-const CAPTURE_HISTORY_KEY = 'captureHistory';
-const HISTORY_MAX = 10;
+import { CaptureSession } from './modules/capture-session.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -53,55 +50,14 @@ const BODY_TOTAL_CAP = 2 * 1024 * 1024;
 
 class JSExtractor {
   constructor() {
-    this.capturedFiles = new Map(); // url -> fileObject (for export/display)
-    // Reset-to-zero fix: the popup's file/map/secret counters read capturedFiles, which an MV3
-    // service-worker teardown wipes even though the session + uploads survive. A lean projection
-    // is persisted (debounced) under this key and rehydrated on initialize().
-    this.capturedMetaKey = 'capturedFilesMeta';
-    this._captureMetaTimer = null;
     this.processingTimer = null;
-    this.capturedHashes = new Map(); // hash -> {url, capturedAt} (for deduplication)
-    this.processingQueue = [];
     this.isCapturing = false;
     // One-shot guard so a run of 401s during an auth-expiry episode fires a single "session
-    // expired" notification, not one per failed batch (DEBT D41). Reset on a successful (re-)login.
+    // expired" notification, not one per failed batch (DEBT D41). Reset on a successful (re-)login
+    // and on every session transition.
     this.authNotified = false;
     this.settings = null;
     this.sessionStore = new SessionStore();
-    // Placeholder id for the brief window before initialize() restores the persisted
-    // one; overwritten in initialize() before any capture/message listener attaches.
-    this.sessionId = this.sessionStore.generate();
-    this.totalCapturedBytes = 0;
-    // Out-of-scope script hosts observed this session (host -> hit count). A discovery aid (D44):
-    // app JS served from a separate apex (e.g. a CDN) falls outside the target root and is dropped;
-    // surfacing the host lets the operator one-click add it instead of silently missing that bundle.
-    this.outOfScopeHosts = new Map();
-    // Per-origin count of captured inline <script> bodies this session (DEBT D45a), for the
-    // INLINE_PER_PAGE_CAP flood guard. Reset on session rotation (newSession).
-    this.inlinePerPage = new Map();
-    // Runtime API-call observations this session (DEBT D45b1): { method, url } the app actually
-    // issued. Sent with analyze/start so the platform's correlate stage promotes a statically-
-    // SUSPECTED endpoint to CONFIRMED. observationKeys dedups on "METHOD url". Persisted
-    // (debounced) so they survive an MV3 teardown before the operator hits Analyze.
-    this.observations = [];
-    this.observationKeys = new Set();
-    this.observationsKey = 'capturedObservations';
-    this._obsPersistTimer = null;
-    // Request bodies captured via onBeforeRequest, keyed by requestId until onCompleted attaches
-    // them to the observation (DEBT D45b2). bodyBytesUsed bounds total captured body bytes/session.
-    this.pendingRequestBodies = new Map();
-    this.bodyBytesUsed = 0;
-    // D46(c): last successful findings summary fetched for the current session; cached so
-    // _saveSessionToHistory can persist it before rotating to a new session.
-    this._lastFindingsSummary = null;
-    this.processingStats = {
-      processedFiles: 0,
-      failedFiles: 0,
-      lastFailureReason: null,
-      lastFailureUrl: null,
-      lastFailureMessage: null
-    };
-    this._resetSessionState();
 
     this.limits = {
       // NOTE: must not exceed the backend's per-file cap (SecurityValidator.
@@ -130,10 +86,10 @@ class JSExtractor {
     // Workspace backend client (health / analyze / progress + API-base resolution).
     this.workspaceClient = new WorkspaceClient({
       getSettings: () => this.settings,
-      getSessionId: () => this.sessionId,
+      getSessionId: () => this.session.sessionId,
       batchUploader: this.batchUploader,
       // Runtime request observations to ship with analyze/start (DEBT D45b1).
-      getObservations: () => this.observations
+      getObservations: () => this.session.observations
     });
     // Durable stores (IndexedDB) that outlive the service worker: the upload outbox
     // (unsent files) and the dedup set (hash -> {url, capturedAt}). Separate DBs to
@@ -143,70 +99,27 @@ class JSExtractor {
     // Tracks whether the durable-flush alarm is armed, so per-file reconcile calls
     // don't re-create it on every capture.
     this.flushAlarmArmed = false;
+    // Per-session state, its persistence and the new-session / standalone / clear transitions.
+    // Built after its dependencies and before listeners attach (they read it only behind `ready`).
+    this.session = new CaptureSession({
+      storage: chrome.storage.local,
+      sessionStore: this.sessionStore,
+      dedupStore: this.dedupStore,
+      uploader: this.batchUploader,
+      authTracker: this.authTracker,
+      getSettings: () => this.settings,
+      observationCap: OBSERVATION_CAP
+    });
     // Resolves when initialize() completes; the bootstrap replaces this with the real
     // init promise. Listener handlers await it so a cold-woken worker finishes loading
     // settings/session/stores before handling the event that woke it.
     this.ready = Promise.resolve();
   }
 
-  // Reset all per-session mutable state to zero/empty. Called from the constructor (to
-  // clear the redundant initial block), and from newSession, resetCaptureSession, and
-  // clearFiles so the reset logic lives in one place and can't drift across callers.
-  _resetSessionState() {
-    this.outOfScopeHosts.clear();
-    this.inlinePerPage.clear();
-    this.observations = [];
-    this.observationKeys.clear();
-    this.pendingRequestBodies.clear();
-    this.bodyBytesUsed = 0;
-    this.totalCapturedBytes = 0;
-    this.authNotified = false;
-    this.processingStats = {
-      processedFiles: 0,
-      failedFiles: 0,
-      lastFailureReason: null,
-      lastFailureUrl: null,
-      lastFailureMessage: null
-    };
-  }
-
-  // D46(c): persist a snapshot of the current session to the capture history list before
-  // rotating to a new session. Skipped when there are no captured files (nothing worth saving).
-  async _saveSessionToHistory() {
-    if (!this.capturedFiles.size) return;
-    let mapsCount = 0, secretCount = 0;
-    for (const f of this.capturedFiles.values()) {
-      if (f.hasSourceMap) mapsCount++;
-      secretCount += f.secretCount || 0;
-    }
-    const uploaderStats = this.batchUploader.getStats();
-    const entry = {
-      sessionId: this.sessionId,
-      timestamp: new Date().toISOString(),
-      projectId: uploaderStats.projectId || null,
-      scope: this.settings
-        ? { rootDomains: this.settings.domainScopes || [], includeSubdomains: this.settings.includeSubdomains !== false }
-        : null,
-      fileCount: this.capturedFiles.size,
-      mapsCount,
-      secretCount,
-      findingsSummary: this._lastFindingsSummary || null,
-      workspaceUrl: this.settings?.workspaceUrl || null,
-    };
-    try {
-      const stored = await chrome.storage.local.get(CAPTURE_HISTORY_KEY);
-      const history = Array.isArray(stored[CAPTURE_HISTORY_KEY]) ? stored[CAPTURE_HISTORY_KEY] : [];
-      history.unshift(entry);
-      if (history.length > HISTORY_MAX) history.length = HISTORY_MAX;
-      await chrome.storage.local.set({ [CAPTURE_HISTORY_KEY]: history });
-    } catch (e) { /* storage unavailable — non-fatal */ }
-  }
-
-  // D46(c): return the persisted capture history list.
+  // D46(c): return the persisted capture history list — only the signed-in tenant's rows.
   async getHistory(sendResponse) {
     try {
-      const stored = await chrome.storage.local.get(CAPTURE_HISTORY_KEY);
-      sendResponse({ history: stored[CAPTURE_HISTORY_KEY] || [] });
+      sendResponse({ history: await this.session.history(this.settings?.authTenantId) });
     } catch (e) {
       sendResponse({ history: [] });
     }
@@ -219,10 +132,10 @@ class JSExtractor {
   }
 
   recordProcessingFailure(reason, url, message) {
-    this.processingStats.failedFiles += 1;
-    this.processingStats.lastFailureReason = reason;
-    this.processingStats.lastFailureUrl = url || null;
-    this.processingStats.lastFailureMessage = message || null;
+    this.session.processingStats.failedFiles += 1;
+    this.session.processingStats.lastFailureReason = reason;
+    this.session.processingStats.lastFailureUrl = url || null;
+    this.session.processingStats.lastFailureMessage = message || null;
     this.updateBadge();
   }
 
@@ -231,9 +144,6 @@ class JSExtractor {
     // Register the opt-in main-world response-body hook if it's enabled (DEBT D45b2).
     // Awaited so the XHR hook is registered before any requests arrive after a respawn.
     await this.syncResponseBodyHook();
-    // Restore the persisted session id (or mint one on first run) so a service-worker
-    // respawn resumes the SAME backend session instead of fragmenting into a new one.
-    this.sessionId = await this.sessionStore.loadOrCreate();
     this.batchUploader.setEndpoint(this.workspaceClient.resolveApiBase());
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
     // Re-apply the persisted Bearer token so a service-worker respawn keeps routing the
@@ -247,12 +157,9 @@ class JSExtractor {
         includeSubdomains: this.settings.includeSubdomains !== false
       });
     }
-    // Re-apply the persisted project/config snapshot so a respawn before the first upload still
-    // binds the session to its project (scope is re-applied above via its own flat keys).
-    const pendingSessionConfig = (await chrome.storage.local.get('pendingSessionConfig')).pendingSessionConfig;
-    if (pendingSessionConfig && typeof pendingSessionConfig === 'object') {
-      this.batchUploader.setConfig(pendingSessionConfig);
-    }
+    // Resume the SAME backend session a previous worker instance was using (id, engagement
+    // binding, dedup set, popup counters, observations) instead of fragmenting into a new one.
+    await this.session.restore();
     this.isCapturing = this.settings.isCapturing || false;
 
     // --- durability wiring (S2): back the uploader with the persistent outbox and
@@ -281,20 +188,14 @@ class JSExtractor {
     // bottom), not here — MV3 tears the worker down and routes the waking event only to
     // listeners present in the first turn. Their handlers gate on `this.ready`.
 
-    // Restore the dedup set (so we don't re-fetch/re-upload files already captured in
-    // this session) and resume any uploads a previous worker instance left unsent.
-    await this.rehydrateDedup();
-    // Restore the popup's file/map/secret counters so a cold start doesn't read 0.
-    await this.rehydrateCapturedFilesMeta();
-    // Restore runtime request observations so a teardown before Analyze doesn't lose them (D45b1).
-    await this.rehydrateObservations();
+    // Resume any uploads a previous worker instance left unsent.
     // rehydrate() returns pending count, or -1 if the outbox READ failed. Treat both
     // "has files" and "unknown" as reasons to keep the flush alarm armed (fail safe).
     const pendingUploads = await this.batchUploader.rehydrate();
     this.reconcileFlushAlarm(pendingUploads !== 0);
 
     console.log('JSExtractor initialized', {
-      sessionId: this.sessionId,
+      sessionId: this.session.sessionId,
       pendingUploads
     });
   }
@@ -349,7 +250,7 @@ class JSExtractor {
 
     // Drop a captured request body if the request errors (never completes) so the map can't leak.
     chrome.webRequest.onErrorOccurred.addListener(
-      (details) => { this.ready.then(() => this.pendingRequestBodies.delete(details.requestId)); },
+      (details) => { this.ready.then(() => this.session.pendingRequestBodies.delete(details.requestId)); },
       {
         urls: ["<all_urls>"],
         types: ["xmlhttprequest"]
@@ -405,20 +306,6 @@ class JSExtractor {
     }
   }
 
-  // Rebuild the in-memory dedup set from the persistent store after a respawn.
-  async rehydrateDedup() {
-    try {
-      const entries = (await this.dedupStore.getAll()) || [];
-      for (const entry of entries) {
-        if (entry && entry.contentHash) {
-          this.capturedHashes.set(entry.contentHash, { url: entry.url, capturedAt: entry.capturedAt });
-        }
-      }
-    } catch (e) {
-      console.warn('Dedup rehydrate failed:', e);
-    }
-  }
-
   // Noise denylist + out-of-scope "exclude" mode → drop before capture.
   shouldSkipUrl(url, documentUrl) {
     // Never capture the recon workspace's own assets — the tool must not recon itself. Safety
@@ -460,7 +347,7 @@ class JSExtractor {
     const authContext = this.authTracker.consume(details.requestId, details.url);
     const fileMetadata = this.extractMetadata(details, authContext);
     
-    this.processingQueue.push({
+    this.session.processingQueue.push({
       metadata: fileMetadata,
       tabId: details.tabId,
       frameId: details.frameId
@@ -470,9 +357,9 @@ class JSExtractor {
   }
 
   async processQueue() {
-    if (this.processingQueue.length === 0) return;
+    if (this.session.processingQueue.length === 0) return;
 
-    const batch = this.processingQueue.splice(0, 10);
+    const batch = this.session.processingQueue.splice(0, 10);
     
     for (const item of batch) {
       try {
@@ -487,7 +374,7 @@ class JSExtractor {
       }
     }
 
-    if (this.processingQueue.length > 0) {
+    if (this.session.processingQueue.length > 0) {
       setTimeout(() => this.processQueue(), 100);
     }
   }
@@ -658,26 +545,26 @@ class JSExtractor {
     const contentHash = await this.calculateHash(content);
 
     // Version-aware deduplication - check if we already have this exact content
-    if (this.capturedHashes.has(contentHash)) {
-      const existingCapture = this.capturedHashes.get(contentHash);
+    if (this.session.capturedHashes.has(contentHash)) {
+      const existingCapture = this.session.capturedHashes.get(contentHash);
       console.log(`Skipping duplicate content (hash: ${contentHash.substring(0, 8)}...) - same content as ${existingCapture.url}`);
       return;
     }
     
     // Check if this URL was captured with different content
-    const existingFile = this.capturedFiles.get(url);
+    const existingFile = this.session.capturedFiles.get(url);
     if (existingFile && existingFile.contentHash !== contentHash) {
       console.log(`Re-capturing URL with changed content - old hash: ${existingFile.contentHash.substring(0, 8)}..., new hash: ${contentHash.substring(0, 8)}...`);
       // Remove old content hash tracking (memory + persistent store, so a superseded
       // version isn't resurrected on respawn and dedupStore can't grow unbounded).
-      this.capturedHashes.delete(existingFile.contentHash);
+      this.session.capturedHashes.delete(existingFile.contentHash);
       this.dedupStore.delete(existingFile.contentHash).catch(() => {});
     }
 
     const fileObject = {
       url: url,
       contentHash: contentHash,
-      sessionId: this.sessionId,
+      sessionId: this.session.sessionId,
       tabId: tabId,
       frameId: frameId,
       capturedAt: new Date().toISOString(),
@@ -707,9 +594,9 @@ class JSExtractor {
     };
 
     // Track both URL and content hash for version-aware deduplication (in-memory).
-    this.capturedFiles.set(url, fileObject);
+    this.session.capturedFiles.set(url, fileObject);
     this.updateBadge();
-    this.capturedHashes.set(contentHash, {url: url, capturedAt: fileObject.capturedAt});
+    this.session.capturedHashes.set(contentHash, {url: url, capturedAt: fileObject.capturedAt});
 
     // Persist the OUTBOX entry BEFORE the durable dedup entry (DEBT D43d): a worker teardown in the
     // gap must never leave a file marked "seen" (dedup) yet never queued for upload — that dropped
@@ -725,10 +612,10 @@ class JSExtractor {
     try { await this.dedupStore.put(contentHash, { contentHash, url, capturedAt: fileObject.capturedAt }); }
     catch (e) { /* dedup is an optimization; a miss just re-uploads (server dedupes) */ }
     // Keep the persisted counter projection in step so a worker teardown can't reset it to 0.
-    this.schedulePersistCapturedMeta();
+    this.session.schedulePersistCapturedMeta();
 
-    this.totalCapturedBytes += contentByteLength;
-    this.processingStats.processedFiles += 1;
+    this.session.totalCapturedBytes += contentByteLength;
+    this.session.processingStats.processedFiles += 1;
 
     for (const dep of dependencies) {
       if (dep && dep.type === 'package') {
@@ -744,8 +631,8 @@ class JSExtractor {
       if (this.shouldSkipUrl(depUrl, url)) {
         continue;
       }
-      if (!this.capturedFiles.has(depUrl)) {
-        this.processingQueue.push({
+      if (!this.session.capturedFiles.has(depUrl)) {
+        this.session.processingQueue.push({
           metadata: {
             url: depUrl,
             timestamp: new Date().toISOString(),
@@ -841,11 +728,11 @@ class JSExtractor {
       this.handleLimitExceeded('File exceeds maximum size limit.');
       return false;
     }
-    if (this.capturedFiles.size >= this.limits.maxFiles) {
+    if (this.session.capturedFiles.size >= this.limits.maxFiles) {
       this.handleLimitExceeded('Maximum file count reached.');
       return false;
     }
-    if (this.totalCapturedBytes + newBytes > this.limits.maxTotalBytes) {
+    if (this.session.totalCapturedBytes + newBytes > this.limits.maxTotalBytes) {
       this.handleLimitExceeded('Total captured size limit reached.');
       return false;
     }
@@ -970,8 +857,8 @@ class JSExtractor {
       if (matchesDenylist(url, this.settings.denyRules || [], this.settings.denyDefaultProfile !== false)) return;
       const host = new URL(url).hostname.toLowerCase();
       if (!host) return;
-      if (!this.outOfScopeHosts.has(host) && this.outOfScopeHosts.size >= 50) return;
-      this.outOfScopeHosts.set(host, (this.outOfScopeHosts.get(host) || 0) + 1);
+      if (!this.session.outOfScopeHosts.has(host) && this.session.outOfScopeHosts.size >= 50) return;
+      this.session.outOfScopeHosts.set(host, (this.session.outOfScopeHosts.get(host) || 0) + 1);
     } catch (e) { /* ignore malformed URL */ }
   }
 
@@ -1077,73 +964,13 @@ class JSExtractor {
     }
   }
 
-  // A lean, content-free projection of one captured file — just what the popup counter and the
-  // recent-captures feed render. Rehydrated objects carry dependencyCount (not the full
-  // dependencies array) to stay small; getFiles reads either shape.
-  _projectCapturedFile(f) {
-    return {
-      url: f.url,
-      contentHash: f.contentHash,
-      contentLength: f.contentLength,
-      capturedAt: f.capturedAt,
-      hasSourceMap: f.hasSourceMap === true,
-      secretCount: f.secretCount || 0,
-      isMinified: f.isMinified === true,
-      classification: f.classification || 'app',
-      isThirdParty: f.isThirdParty === true,
-      dependencyCount: Array.isArray(f.dependencies) ? f.dependencies.length : (f.dependencyCount || 0),
-      sourceMapFetchStatus: f.sourceMapFetchStatus,
-      sourceMapFetchError: f.sourceMapFetchError
-    };
-  }
-
-  // Debounced so a burst of captures collapses into one storage write (avoids O(n^2) writes as
-  // the map grows). Best-effort: a serialize/quota failure just means the counter resets on the
-  // next respawn, which is exactly today's behaviour — it never throws into capture.
-  schedulePersistCapturedMeta() {
-    if (this._captureMetaTimer) return;
-    this._captureMetaTimer = setTimeout(() => {
-      this._captureMetaTimer = null;
-      const meta = Array.from(this.capturedFiles.values()).map((f) => this._projectCapturedFile(f));
-      chrome.storage.local.set({ [this.capturedMetaKey]: meta }).catch(() => {});
-    }, 750);
-  }
-
-  // Restore the persisted projection into capturedFiles on a cold start so getStatus/getFiles
-  // report the real counts instead of 0. Only fills urls not already present (a live capture that
-  // beat rehydrate wins). getExportData tolerates these lean objects — export-builder only reads
-  // fields, so missing ones serialize as absent.
-  async rehydrateCapturedFilesMeta() {
-    try {
-      const stored = (await chrome.storage.local.get(this.capturedMetaKey))[this.capturedMetaKey];
-      if (!Array.isArray(stored)) return;
-      for (const f of stored) {
-        if (f && f.url && !this.capturedFiles.has(f.url)) this.capturedFiles.set(f.url, f);
-      }
-      // Reconstruct totalCapturedBytes from persisted metadata so the size limit check
-      // (enforceLimits) works correctly after a service-worker respawn.
-      let total = 0;
-      for (const [, meta] of this.capturedFiles) {
-        total += (meta.contentLength || 0);
-      }
-      this.totalCapturedBytes = total;
-    } catch (e) {
-      // no persisted meta / storage unavailable — the counter just starts empty
-    }
-  }
-
-  clearCapturedFilesMeta() {
-    if (this._captureMetaTimer) { clearTimeout(this._captureMetaTimer); this._captureMetaTimer = null; }
-    chrome.storage.local.remove(this.capturedMetaKey).catch(() => {});
-  }
-
   handleMessage(request, sender, sendResponse) {
     const handlers = {
       startCapture: () => this.startCapture(sendResponse),
       newSession: (req) => this.newSession(req, sendResponse),
       stopCapture: () => this.stopCapture(sendResponse),
       getFiles: () => this.getFiles(sendResponse),
-      clearFiles: () => this.clearFiles(sendResponse),
+      clearFiles: async () => { await this.clearFiles(sendResponse); },
       getStatus: () => this.getStatus(sendResponse),
       updateSettings: (req) => this.updateSettings(req, sendResponse),
       getExportData: (req) => this.getExportData(req, sendResponse),
@@ -1153,8 +980,8 @@ class JSExtractor {
       getSessionFindingsSummary: async (req) => {
         try {
           const result = await this.workspaceClient.getSessionFindingsSummary(req.sessionId);
-          // D46(c): cache the summary so _saveSessionToHistory can persist it before rotation.
-          if (result && result.status === 'complete') this._lastFindingsSummary = result;
+          // D46(c): cache the summary so history can persist it before rotation.
+          this.session.noteFindingsSummary(req.sessionId, result);
           sendResponse(result);
         } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); }
       },
@@ -1187,7 +1014,7 @@ class JSExtractor {
     const tabId = Number.isInteger(senderTabId) ? senderTabId : -1;
     const frameId = Number.isInteger(senderFrameId) ? senderFrameId : 0;
 
-    this.processingQueue.push({
+    this.session.processingQueue.push({
       metadata: {
         url: request.url,
         timestamp: request.timestamp || new Date().toISOString(),
@@ -1216,9 +1043,9 @@ class JSExtractor {
 
     // Per-page cap so a churny SPA can't flood the outbox (review Claim 4).
     const origin = this.originOf(pageUrl);
-    const seen = this.inlinePerPage.get(origin) || 0;
+    const seen = this.session.inlinePerPage.get(origin) || 0;
     if (seen >= INLINE_PER_PAGE_CAP) return;
-    this.inlinePerPage.set(origin, seen + 1);
+    this.session.inlinePerPage.set(origin, seen + 1);
 
     // Synthetic URL keyed on the reported ordinal, not content hash. A full re-scan (reload/bfcache)
     // reuses document-order ordinals, so a changed inline block at the same slot SUPERSEDES via
@@ -1233,7 +1060,7 @@ class JSExtractor {
     const tabId = Number.isInteger(senderTabId) ? senderTabId : -1;
     const frameId = Number.isInteger(senderFrameId) ? senderFrameId : 0;
 
-    this.processingQueue.push({
+    this.session.processingQueue.push({
       metadata: {
         url: syntheticUrl,
         timestamp: request.timestamp || new Date().toISOString(),
@@ -1265,8 +1092,8 @@ class JSExtractor {
     // orphans when we bail below (capture toggled off mid-flight, extension request, out of scope).
     // A completed request always hits onCompleted, so this is the reliable cleanup point (review
     // Finding 3).
-    const reqBody = this.pendingRequestBodies.get(details.requestId);
-    if (reqBody !== undefined) this.pendingRequestBodies.delete(details.requestId);
+    const reqBody = this.session.pendingRequestBodies.get(details.requestId);
+    if (reqBody !== undefined) this.session.pendingRequestBodies.delete(details.requestId);
     if (!this.isCapturing) return;
     if (this.isExtensionRequest(details)) return;
 
@@ -1280,23 +1107,23 @@ class JSExtractor {
     if (!url) return;
     const method = (details.method || 'GET').toUpperCase();
     const key = method + ' ' + url;
-    if (this.observationKeys.has(key)) return;
-    if (this.observationKeys.size >= OBSERVATION_CAP) return;
-    this.observationKeys.add(key);
+    if (this.session.observationKeys.has(key)) return;
+    if (this.session.observationKeys.size >= OBSERVATION_CAP) return;
+    this.session.observationKeys.add(key);
 
     const obs = { method, url };
     // Attach the redacted request body if we captured one and we're under the total-body budget.
-    if (reqBody && this.bodyBytesUsed < BODY_TOTAL_CAP) {
+    if (reqBody && this.session.bodyBytesUsed < BODY_TOTAL_CAP) {
       obs.reqBody = reqBody;
-      this.bodyBytesUsed += reqBody.length;
+      this.session.bodyBytesUsed += reqBody.length;
     }
-    this.observations.push(obs);
+    this.session.observations.push(obs);
     // Eager persist every 50 observations so the loss window on an MV3 teardown is bounded
     // to at most 50 entries regardless of the debounce timer state (Fix 8).
-    if (this.observations.length % 50 === 0) {
-      this.persistObservations();
+    if (this.session.observations.length % 50 === 0) {
+      this.session.persistObservations();
     } else {
-      this.schedulePersistObservations();
+      this.session.schedulePersistObservations();
     }
   }
 
@@ -1310,11 +1137,11 @@ class JSExtractor {
     const url = details.url;
     if (!this.isInScope(url)) return;
     if (this.shouldSkipUrl(url, details.documentUrl)) return;
-    if (this.bodyBytesUsed >= BODY_TOTAL_CAP) return;
-    if (this.pendingRequestBodies.size >= 512) return; // bound un-completed requests
+    if (this.session.bodyBytesUsed >= BODY_TOTAL_CAP) return;
+    if (this.session.pendingRequestBodies.size >= 512) return; // bound un-completed requests
     const prepared = prepareRequestBody(details.requestBody, REQ_BODY_CAP);
     if (!prepared || !prepared.text) return;
-    this.pendingRequestBodies.set(details.requestId, prepared.text);
+    this.session.pendingRequestBodies.set(details.requestId, prepared.text);
   }
 
   // A RESPONSE body from the opt-in main-world hook (DEBT D45b2). Lower-trust (page-forgeable) —
@@ -1331,7 +1158,7 @@ class JSExtractor {
     // Apply the same API-ish content-type gate as recordObservation — the forgeable hook's own
     // filter is not trusted in the worker (review nit).
     if (!isApiIshObservation(request.contentType)) return;
-    if (this.bodyBytesUsed >= BODY_TOTAL_CAP) return;
+    if (this.session.bodyBytesUsed >= BODY_TOTAL_CAP) return;
 
     const url = normalizeObservedUrl(rawUrl);
     if (!url) return;
@@ -1341,22 +1168,22 @@ class JSExtractor {
     if (!respBody) return;
 
     let obs = null;
-    if (this.observationKeys.has(key)) {
-      for (let i = this.observations.length - 1; i >= 0; i--) {
-        const o = this.observations[i];
+    if (this.session.observationKeys.has(key)) {
+      for (let i = this.session.observations.length - 1; i >= 0; i--) {
+        const o = this.session.observations[i];
         if (o.method + ' ' + o.url === key) { obs = o; break; }
       }
     }
     if (!obs) {
-      if (this.observationKeys.size >= OBSERVATION_CAP) return;
-      this.observationKeys.add(key);
+      if (this.session.observationKeys.size >= OBSERVATION_CAP) return;
+      this.session.observationKeys.add(key);
       obs = { method, url };
-      this.observations.push(obs);
+      this.session.observations.push(obs);
     }
     if (obs.respBody) return; // keep the first response body for this endpoint
     obs.respBody = respBody;
-    this.bodyBytesUsed += respBody.length;
-    this.schedulePersistObservations();
+    this.session.bodyBytesUsed += respBody.length;
+    this.session.schedulePersistObservations();
   }
 
   // Register/unregister the opt-in main-world response-body hook (DEBT D45b2). A statically-declared
@@ -1395,47 +1222,6 @@ class JSExtractor {
     return '';
   }
 
-  // Immediately write the current observation list to chrome.storage. Persist only
-  // { method, url } — never the captured bodies (review Finding 2). Bodies are best-effort
-  // enrichment; keeping them out of chrome.storage avoids writing (redacted) PII to disk.
-  persistObservations() {
-    const lean = this.observations.map((o) => ({ method: o.method, url: o.url }));
-    chrome.storage.local.set({ [this.observationsKey]: lean }).catch(() => {});
-  }
-
-  // Debounced persist of the observation list so it survives an MV3 teardown before the operator
-  // clicks Analyze (mirrors schedulePersistCapturedMeta). Best-effort — a miss just loses some
-  // endpoint-confirmations, never a capture.
-  schedulePersistObservations() {
-    if (this._obsPersistTimer) return;
-    this._obsPersistTimer = setTimeout(() => {
-      this._obsPersistTimer = null;
-      this.persistObservations();
-    }, 750);
-  }
-
-  async rehydrateObservations() {
-    try {
-      const stored = (await chrome.storage.local.get(this.observationsKey))[this.observationsKey];
-      if (!Array.isArray(stored)) return;
-      for (const o of stored) {
-        if (!o || typeof o.method !== 'string' || typeof o.url !== 'string') continue;
-        const key = o.method + ' ' + o.url;
-        if (this.observationKeys.has(key)) continue;
-        if (this.observationKeys.size >= OBSERVATION_CAP) break;
-        this.observationKeys.add(key);
-        this.observations.push({ method: o.method, url: o.url });
-      }
-    } catch (e) {
-      // no persisted observations / storage unavailable — start empty
-    }
-  }
-
-  clearObservationsStore() {
-    if (this._obsPersistTimer) { clearTimeout(this._obsPersistTimer); this._obsPersistTimer = null; }
-    try { chrome.storage.local.remove(this.observationsKey).catch(() => {}); } catch (e) { /* best effort */ }
-  }
-
   // Capture just turned on: pull in the JS the ACTIVE tab already loaded. webRequest only sees
   // NEW script requests and nothing else re-reads a loaded page, so without this an already-open
   // tab captures nothing until the operator reloads. Best-effort + fire-and-forget — a tab with
@@ -1457,7 +1243,7 @@ class JSExtractor {
     this.persistCaptureState(true);
     this.updateBadge();
     this.rescanActiveTab();
-    sendResponse({ success: true, sessionId: this.sessionId });
+    sendResponse({ success: true, sessionId: this.session.sessionId });
   }
 
   // Toolbar badge (D46): show live capture state while the popup is closed. Empty when paused; the
@@ -1466,10 +1252,10 @@ class JSExtractor {
     try {
       if (!chrome.action || !chrome.action.setBadgeText) return;
       if (!this.isCapturing) { chrome.action.setBadgeText({ text: '' }); return; }
-      const n = this.capturedFiles.size;
+      const n = this.session.capturedFiles.size;
       const up = this.batchUploader.getStats();
       const bad = !!up.lastError || (up.droppedFiles || 0) > 0 || up.paired === false ||
-        up.authPaused === true || (this.processingStats.failedFiles || 0) > 0;
+        up.authPaused === true || (this.session.processingStats.failedFiles || 0) > 0;
       chrome.action.setBadgeText({ text: n > 999 ? '999+' : String(n) });
       chrome.action.setBadgeBackgroundColor({ color: bad ? '#ff8a47' : '#4ea86b' });
     } catch (e) { /* action API unavailable in this context */ }
@@ -1572,59 +1358,12 @@ class JSExtractor {
       this.isCapturing = false;
       this.persistCaptureState(false);
     }
-    this.processingQueue = [];
-    this.sessionId = await this.sessionStore.rotate();
-    this.capturedFiles.clear();
-    this.clearCapturedFilesMeta();
-    this.clearObservationsStore();
-    this.capturedHashes.clear();
-    this.dedupStore.clear().catch(() => {});
-    this.authTracker.clear();
-    // Reset failure counters too (parity with newSession) so a logout / tenant switch doesn't
-    // leave stale failure state visible in getStatus.
-    this._resetSessionState();
-    // Drop the engagement binding: clear the live uploader config AND the persisted snapshot so a
-    // respawn can't re-bind the fresh session to the old engagement.
-    this.batchUploader.setConfig(null);
-    try {
-      await chrome.storage.local.remove('pendingSessionConfig');
-    } catch (e) {
-      // best-effort; the in-memory setConfig(null) already unbound the live uploader.
-    }
-    // Tenant change only: drop any unsent captures too. The durable outbox drains under whatever
-    // token is CURRENT, so a previous tenant's queued JS would otherwise flush under the new
-    // tenant's token — a cross-tenant leak. Losing a few unsent files is the safe trade.
-    if (dropOutbox) {
-      await this.batchUploader.clearOutbox();
-    }
+    await this.session.startStandalone({ dropOutbox });
+    this.authNotified = false;
   }
 
   async newSession(request, sendResponse) {
-    // Drop not-yet-processed capture requests BEFORE rotating the id, so a straggler
-    // can't be stamped with the new session id (fileObject.sessionId is set at process
-    // time). Already-built batches in the uploader keep their own old per-file id, so
-    // flush them under the previous session first.
-    this.processingQueue = [];
-    await this.batchUploader.flushAll();
-
-    // D46(c): save the current session summary to history before clearing state.
-    await this._saveSessionToHistory();
-    this._lastFindingsSummary = null;
-
-    // Rotate to a fresh, PERSISTED session id and drop the previous session's captured
-    // state (mirrors clearFiles) so the new session starts clean and survives respawns.
-    this.sessionId = await this.sessionStore.rotate();
-    this.capturedFiles.clear();
-    this.clearCapturedFilesMeta();
-    this.clearObservationsStore();
-    this.capturedHashes.clear();
-    // Reset the persistent dedup set for the new session. The outbox is intentionally
-    // NOT cleared — any still-unsent files carry their own (old) per-file session id.
-    this.dedupStore.clear().catch(() => {});
-    this.authTracker.clear();
-    this._resetSessionState();
-
-    // Apply the client-resolved effective config. The popup resolved (project.defaults +
+    // Map the client-resolved effective config. The popup resolved (project.defaults +
     // per-session overrides) and sent the snapshot; here we map it onto the flat capture-gate
     // keys and the uploader. A blank/absent captureConfig leaves the non-scope gate as-is
     // (back-compat with pre-project popups); a blank scope RESETS gating (settingsFromConfig
@@ -1637,19 +1376,19 @@ class JSExtractor {
     const captureConfig = (req.captureConfig && typeof req.captureConfig === 'object') ? req.captureConfig : {};
     const overrideKeys = Array.isArray(req.overrideKeys) ? req.overrideKeys : [];
     const projectId = req.projectId || null;
+    const patch = settingsFromConfig({ scope: { rootDomains, includeSubdomains }, ...captureConfig });
 
-    // Reconstruct the resolved effective config (scope + non-scope groups) and map to storage.
-    const effective = { scope: { rootDomains, includeSubdomains }, ...captureConfig };
-    const patch = settingsFromConfig(effective);
-    Object.assign(this.settings, patch);
-    // Persist the flat gate keys AND the project snapshot together. The snapshot lets a worker
-    // respawn before the first upload still bind the session to its project — scope persists
-    // via the flat keys, but projectId/captureConfig/overrideKeys need their own key.
-    await chrome.storage.local.set({ ...patch, pendingSessionConfig: { projectId, captureConfig, overrideKeys } });
-
-    // Uploader: scope + project/config snapshot + analyze flag (mirrors updateSettings's sync).
+    // Flush + save history under the old id, rotate, clear, and bind the new engagement. The
+    // flat gate keys go in the same storage write as the binding, so a respawn sees both or
+    // neither. The in-memory gate switches in the same turn as the rotation (onRotated): history
+    // was saved with the OLD settings, and no request may see the new id with the old scope.
+    await this.session.startNew({
+      binding: { projectId, captureConfig, overrideKeys },
+      persistWith: patch,
+      onRotated: () => Object.assign(this.settings, patch)
+    });
+    this.authNotified = false;
     this.batchUploader.setScope({ rootDomains, includeSubdomains });
-    this.batchUploader.setConfig({ projectId, captureConfig, overrideKeys });
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
 
     // A fresh session on an already-loaded page should still capture that page (parity with
@@ -1658,7 +1397,7 @@ class JSExtractor {
 
     sendResponse({
       success: true,
-      sessionId: this.sessionId,
+      sessionId: this.session.sessionId,
       scope: { rootDomains, includeSubdomains },
       projectId,
       overrideKeys
@@ -1669,19 +1408,19 @@ class JSExtractor {
     this.isCapturing = false;
     // Drop request bodies captured for still-in-flight requests so a stop/start can't strand them
     // in the pending map (review Finding 3); the completed-request path also self-cleans up-front.
-    this.pendingRequestBodies.clear();
+    this.session.pendingRequestBodies.clear();
     this.persistCaptureState(false);
     this.updateBadge();
     await this.batchUploader.flushAll();
     sendResponse({
       success: true,
-      fileCount: this.capturedFiles.size,
+      fileCount: this.session.capturedFiles.size,
       uploader: this.batchUploader.getStats()
     });
   }
 
   getFiles(sendResponse) {
-    const files = Array.from(this.capturedFiles.values()).map(f => ({
+    const files = Array.from(this.session.capturedFiles.values()).map(f => ({
       url: f.url,
       size: f.contentLength,
       hasSourceMap: f.hasSourceMap,
@@ -1698,28 +1437,22 @@ class JSExtractor {
     sendResponse({
       files,
       total: files.length,
-      sessionId: this.sessionId,
+      sessionId: this.session.sessionId,
       isCapturing: this.isCapturing
     });
   }
 
-  clearFiles(sendResponse) {
-    this.capturedFiles.clear();
+  async clearFiles(sendResponse) {
+    await this.session.clearCaptured();
+    this.authNotified = false;
     this.updateBadge();
-    this.clearCapturedFilesMeta();
-    this.clearObservationsStore();
-    this.capturedHashes.clear();
-    this.dedupStore.clear().catch(() => {});
-    this.processingQueue = [];
-    this.authTracker.clear();
-    this._resetSessionState();
     sendResponse({ success: true });
   }
 
   getStatus(sendResponse) {
     let mapsCount = 0;
     let secretCount = 0;
-    for (const f of this.capturedFiles.values()) {
+    for (const f of this.session.capturedFiles.values()) {
       if (f.hasSourceMap) mapsCount += 1;
       secretCount += f.secretCount || 0;
     }
@@ -1734,13 +1467,13 @@ class JSExtractor {
     const safeSettings = { ...restSettings, authToken: authToken ? 'session' : '' };
     sendResponse({
       isCapturing: this.isCapturing,
-      sessionId: this.sessionId,
-      fileCount: this.capturedFiles.size,
+      sessionId: this.session.sessionId,
+      fileCount: this.session.capturedFiles.size,
       mapsCount,
       secretCount,
-      queueLength: this.processingQueue.length,
-      processingStats: this.processingStats,
-      outOfScopeHosts: [...this.outOfScopeHosts.entries()].map(([host, count]) => ({ host, count })),
+      queueLength: this.session.processingQueue.length,
+      processingStats: this.session.processingStats,
+      outOfScopeHosts: [...this.session.outOfScopeHosts.entries()].map(([host, count]) => ({ host, count })),
       uploader: uploaderStats,
       projectId: uploaderStats.projectId || null,
       standalone: !uploaderStats.projectId,
@@ -1783,14 +1516,14 @@ class JSExtractor {
   }
 
   getExportData(request, sendResponse) {
-    const files = Array.from(this.capturedFiles.values());
+    const files = Array.from(this.session.capturedFiles.values());
     // D46: let the operator export WITH the captured code, not just metadata. Best-effort — files
     // rehydrated after a worker respawn are lean (no content) and simply export without it.
     const includeContent = !!(request && request.includeContent);
 
     try {
       const exportData = buildExportData({
-        sessionId: this.sessionId,
+        sessionId: this.session.sessionId,
         files,
         includeContent,
         version: '3.0.0'
@@ -1798,7 +1531,7 @@ class JSExtractor {
 
       sendResponse({
         success: true,
-        filename: `js-extraction-${this.sessionId}${includeContent ? '-with-code' : ''}.json`,
+        filename: `js-extraction-${this.session.sessionId}${includeContent ? '-with-code' : ''}.json`,
         exportData
       });
     } catch (error) {

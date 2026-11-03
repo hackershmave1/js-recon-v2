@@ -1,49 +1,77 @@
-// D46(c): structural test — verifies the capture history wiring in background.js.
-// Pattern-B: reads background.js as a string and asserts on structural invariants.
+// D46(c): capture history rules (modules/capture-history.js). Pure module, imported directly, so
+// these tests exercise behaviour rather than background.js source text. Covers the two bugs the
+// old regex-only test let through: the summary cache never filled (wrong response shape), and a
+// cached summary or a history row could surface under the wrong session or the wrong tenant.
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import {
+  HISTORY_MAX,
+  summaryToCache,
+  summaryForSession,
+  addToHistory,
+  historyForTenant,
+} from '../modules/capture-history.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const bg = fs.readFileSync(path.resolve(__dirname, '../background.js'), 'utf8');
+const complete = { status: 'complete', counts: { total: 17, endpoints: 12, secrets: 5 } };
 
-// Storage key and cap constant exist.
-assert.ok(/CAPTURE_HISTORY_KEY\s*=\s*'captureHistory'/.test(bg), 'declares CAPTURE_HISTORY_KEY');
-assert.ok(/HISTORY_MAX\s*=\s*10/.test(bg), 'declares HISTORY_MAX = 10');
+function test_caches_the_client_response_shape() {
+  // WorkspaceClient.getSessionFindingsSummary returns { success, summary } — not the summary itself.
+  const cached = summaryToCache('s1', { success: true, summary: complete });
+  assert.deepEqual(cached, { sessionId: 's1', summary: complete });
+}
 
-// The worker caches the last findings summary so history can persist it before rotation.
-assert.ok(bg.includes('this._lastFindingsSummary = null'), 'initialises _lastFindingsSummary to null');
-assert.ok(
-  /getSessionFindingsSummary[\s\S]{0,300}this\._lastFindingsSummary\s*=\s*result/.test(bg),
-  'getSessionFindingsSummary handler caches a complete summary'
-);
+function test_does_not_cache_incomplete_or_failed() {
+  assert.equal(summaryToCache('s1', { success: true, summary: { status: 'running' } }), null);
+  assert.equal(summaryToCache('s1', { success: false, status: 404 }), null);
+  assert.equal(summaryToCache('s1', null), null);
+  assert.equal(summaryToCache('', { success: true, summary: complete }), null, 'no session id => nothing to key on');
+}
 
-// _saveSessionToHistory method: exists, reads capturedFiles, writes to storage.
-assert.ok(bg.includes('async _saveSessionToHistory()'), 'declares _saveSessionToHistory');
-// These invariants must all appear somewhere in the method body.
-assert.ok(bg.includes("chrome.storage.local.get(CAPTURE_HISTORY_KEY)"), '_saveSessionToHistory reads from storage');
-assert.ok(bg.includes("chrome.storage.local.set({ [CAPTURE_HISTORY_KEY]: history })"), '_saveSessionToHistory writes history to storage');
-assert.ok(bg.includes('history.length > HISTORY_MAX'), '_saveSessionToHistory trims history to cap');
+function test_summary_only_attaches_to_its_own_session() {
+  const cached = summaryToCache('s1', { success: true, summary: complete });
+  assert.deepEqual(summaryForSession(cached, 's1'), complete);
+  // Logout rotates s1 -> s2 without a history save; s2's row must not inherit s1's counts.
+  assert.equal(summaryForSession(cached, 's2'), null);
+  assert.equal(summaryForSession(null, 's1'), null);
+}
 
-// getHistory method: exists and reads CAPTURE_HISTORY_KEY.
-assert.ok(bg.includes('async getHistory(sendResponse)'), 'declares getHistory method');
-assert.ok(
-  /getHistory[\s\S]{0,200}chrome\.storage\.local\.get\(CAPTURE_HISTORY_KEY\)/.test(bg),
-  'getHistory reads from storage'
-);
+function test_add_to_history_prepends_and_caps() {
+  let history = [];
+  for (let i = 0; i < HISTORY_MAX + 3; i++) history = addToHistory(history, { sessionId: `s${i}` });
+  assert.equal(history.length, HISTORY_MAX);
+  assert.equal(history[0].sessionId, `s${HISTORY_MAX + 2}`, 'newest first');
+  assert.deepEqual(addToHistory('not-an-array', { sessionId: 'x' }), [{ sessionId: 'x' }], 'corrupt storage resets');
+}
 
-// handleMessage wires getHistory.
-assert.ok(/getHistory:\s*async/.test(bg), 'handleMessage registers getHistory');
+function test_history_shows_only_the_current_tenant() {
+  const history = [
+    { sessionId: 'a1', tenantId: 'tenant-a' },
+    { sessionId: 'b1', tenantId: 'tenant-b' },
+    { sessionId: 'anon', tenantId: '' },
+    { sessionId: 'legacy' }, // pre-tagging row: belongs to no tenant, so hidden everywhere
+  ];
+  assert.deepEqual(historyForTenant(history, 'tenant-a').map((e) => e.sessionId), ['a1']);
+  assert.deepEqual(historyForTenant(history, 'tenant-b').map((e) => e.sessionId), ['b1']);
+  assert.deepEqual(historyForTenant(history, '').map((e) => e.sessionId), ['anon']);
+  assert.deepEqual(historyForTenant(history, undefined).map((e) => e.sessionId), ['anon']);
+  assert.deepEqual(historyForTenant(null, 'tenant-a'), []);
+}
 
-// newSession saves history before rotating.
-assert.ok(
-  /await this\._saveSessionToHistory\(\);[\s\S]{0,100}this\._lastFindingsSummary\s*=\s*null/.test(bg),
-  'newSession saves to history and clears the summary cache before rotating'
-);
-assert.ok(
-  /await this\._saveSessionToHistory\(\);[\s\S]{0,300}this\.sessionId\s*=\s*await this\.sessionStore\.rotate\(\)/.test(bg),
-  'newSession calls _saveSessionToHistory before rotating the session id'
-);
+// Wiring that only the source can show: background.js routes the summary cache and the history
+// read through CaptureSession (whose save/clear behaviour is tested in test_capture_session.mjs).
+function test_background_uses_the_module() {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const bg = fs.readFileSync(path.resolve(__dirname, '../background.js'), 'utf8');
+  assert.ok(/this\.session\.noteFindingsSummary\(req\.sessionId,\s*result\)/.test(bg), 'handler caches keyed by the requested session');
+  assert.ok(/this\.session\.history\(this\.settings\?\.authTenantId\)/.test(bg), 'getHistory reads only the signed-in tenant');
+}
 
-console.log('ok - D46(c) capture history wiring');
+test_caches_the_client_response_shape();
+test_does_not_cache_incomplete_or_failed();
+test_summary_only_attaches_to_its_own_session();
+test_add_to_history_prepends_and_caps();
+test_history_shows_only_the_current_tenant();
+test_background_uses_the_module();
+console.log('ok - D46(c) capture history: session-keyed summary cache + tenant-scoped rows');
