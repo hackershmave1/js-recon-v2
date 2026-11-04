@@ -101,6 +101,12 @@ describe("HostsPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows an unknown Tech count, not 0, when tech detection never ran", () => {
+    render(<HostsPage data={data} techUnknown />);
+    const row = screen.getByText("acme.io").closest("tr") as HTMLElement;
+    expect(within(row).getByTitle("technology detection did not run for this run")).toHaveTextContent("—");
+  });
+
   it("explains why localhost isn't in scope when the server's local-targets switch is off", () => {
     const local = { ...data, local_targets_disabled: true,
       hosts: [{ host: "localhost", in_scope: false, declared: false, assets: 5, endpoints: 10, inferred: 1, suspected: 0, routes: 0, techs: 0 }] };

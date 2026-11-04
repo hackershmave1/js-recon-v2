@@ -50,12 +50,11 @@ async def trigger_threat_model(
 async def get_threat_model(
     session_id: str,
     tenant_id: str = Depends(get_tenant_id),
-) -> dict:
-    """Return the current threat model state and threats for the session."""
-    result = await _run_in_thread(service.get_threat_model, tenant_id, session_id)
-    if result is None:
-        raise HTTPException(status_code=404, detail="no threat model for this session")
-    return result
+) -> dict | None:
+    """The current threat model state and threats for the session, or ``null`` when none has
+    been generated yet — a normal empty state, not an error (a 404 made every browser log a
+    failed request on the Threat Model tab)."""
+    return await _run_in_thread(service.get_threat_model, tenant_id, session_id)
 
 
 @router.get("/sessions/{session_id}/threat-model/presets")

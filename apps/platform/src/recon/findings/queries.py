@@ -184,6 +184,10 @@ class TechnologyView:
 class TechnologiesView:
     run_id: str
     hosts: dict[str, list[TechnologyView]]
+    # Whether detection ran at all. It needs a fingerprint signal (response headers, script URLs)
+    # that crawls and server-side captures collect and extension captures do not yet (DEBT D77):
+    # False means "not collected", which the UI must not show as "0 technologies".
+    detection_ran: bool = True
 
 
 @dataclass(frozen=True)
@@ -604,6 +608,14 @@ def list_technologies(tenant_id: str, run_id: str) -> TechnologiesView | None:
             .where(RunTechnology.run_id == str(run_id))
             .order_by(RunTechnology.host, RunTechnology.confidence.desc(), RunTechnology.name)
         ).all()
+        detection_ran = (
+            session.scalar(
+                select(RunEvent.id)
+                .where(RunEvent.run_id == str(run_id), RunEvent.type == "analyze.technologies")
+                .limit(1)
+            )
+            is not None
+        )
     hosts: dict[str, list[TechnologyView]] = {}
     for row in rows:
         hosts.setdefault(row.host, []).append(
@@ -615,7 +627,7 @@ def list_technologies(tenant_id: str, run_id: str) -> TechnologiesView | None:
                 evidence=list(row.evidence or []),
             )
         )
-    return TechnologiesView(run_id=str(run_id), hosts=hosts)
+    return TechnologiesView(run_id=str(run_id), hosts=hosts, detection_ran=detection_ran)
 
 
 def _cross_run_sightings(

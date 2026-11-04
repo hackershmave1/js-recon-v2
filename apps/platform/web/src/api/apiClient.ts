@@ -339,7 +339,8 @@ export function resumeRun(tenantId: string, runId: string): Promise<RunControlRe
 // Blob variant: the export route streams a file (Content-Disposition), not JSON, so it
 // bypasses request<T> (which forces Accept: application/json + res.json()). A bare
 // <a href> can't carry X-Tenant-Id, so we fetch + trigger the download in JS.
-export function getThreatModel(tenantId: string, sessionId: string): Promise<import("./types").ThreatModelResponse> {
+// null = no threat model generated yet for this session.
+export function getThreatModel(tenantId: string, sessionId: string): Promise<import("./types").ThreatModelResponse | null> {
   return request(`/sessions/${encodeURIComponent(sessionId)}/threat-model`, {}, tenantId);
 }
 export function triggerThreatModel(tenantId: string, sessionId: string, preset?: string): Promise<import("./types").ThreatModelResponse> {

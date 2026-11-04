@@ -133,4 +133,12 @@ describe("ThreatModelPage", () => {
     render(<MemoryRouter><ThreatModelPage sessionId="s1" /></MemoryRouter>);
     expect(await screen.findByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
   });
+
+  it("treats a null answer as 'no threat model yet' and offers to generate one", async () => {
+    vi.spyOn(api, "getThreatModel").mockResolvedValue(null);
+    vi.spyOn(tmApi, "getRunPresets").mockResolvedValue(OR_PRESETS);
+    render(<MemoryRouter><ThreatModelPage sessionId="s1" /></MemoryRouter>);
+    expect(await screen.findByRole("button", { name: /Generate Threat Model/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to load threat model/)).toBeNull();
+  });
 });

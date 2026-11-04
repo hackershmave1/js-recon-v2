@@ -119,7 +119,7 @@ function OperationDetail({ op, onOpenFinding }: {
       <div className="as-note">
         <span className="as-note-text">
           Operations reflect only what was reconstructed from the client JavaScript.
-          Authentication requirements and vulnerabilities will be assessed by the planned Threat Model (coming soon).
+          Authentication requirements and likely vulnerabilities are assessed on the Threat Model tab.
         </span>
       </div>
     </div>

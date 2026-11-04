@@ -99,11 +99,11 @@ export function ThreatModelPage({ sessionId }: { sessionId: string }) {
       const result = await getThreatModel(tenantId, sessionId);
       setData(result);
       setFetchError(null);
-      if (result.status === "done" || result.status === "failed") {
+      if (result && (result.status === "done" || result.status === "failed")) {
         if (pollRef.current) clearInterval(pollRef.current);
       }
     } catch (err: any) {
-      if (err?.status === 404) {
+      if (err?.status === 404) { // an older server reports "none yet" as 404
         setData(null);
       } else {
         setFetchError(err?.message ?? "Failed to load threat model");

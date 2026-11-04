@@ -29,3 +29,16 @@ describe("TechPage", () => {
     expect(screen.getByText(/no technologies/i)).toBeInTheDocument();
   });
 });
+
+describe("TechPage when detection did not run", () => {
+  it("says the stack is unknown, not empty", () => {
+    render(<TechPage data={{ run_id: "r", count: 0, hosts: {}, detection_ran: false }} />);
+    expect(screen.getByText(/Not collected for this run/)).toBeInTheDocument();
+    expect(screen.queryByText(/No technologies detected/)).toBeNull();
+  });
+
+  it("says detection is still to come while the run is active", () => {
+    render(<TechPage data={{ run_id: "r", count: 0, hosts: {}, detection_ran: false }} runFinished={false} />);
+    expect(screen.getByText(/runs at the end of analysis/)).toBeInTheDocument();
+  });
+});

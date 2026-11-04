@@ -113,6 +113,7 @@ export function OverviewRoute() {
           data={findings}
           technologies={technologies}
           hosts={hosts}
+          runFinished={TERMINAL_STATES.has(state)}
           prevRunId={prevRunId}
           onCompare={prevRunId ? () => navigate(`/runs/${id}/diff?base=${prevRunId}`) : undefined}
         />
@@ -170,10 +171,10 @@ export function DiffRoute() {
 }
 
 export function TechRoute() {
-  const { technologies, loaded } = useRunData();
+  const { technologies, loaded, state } = useRunData();
   if (!loaded) return <NotReady title="Loading…" body="Fetching this run's technologies." />;
   if (!technologies) return <NotReady title="No tech stack yet" body="Technologies appear here once analysis has run." />;
-  return <TechPage data={technologies} />;
+  return <TechPage data={technologies} runFinished={TERMINAL_STATES.has(state)} />;
 }
 
 // GraphQL findings ride the same findings payload as the Findings page, so this reads
@@ -193,10 +194,10 @@ export function GraphQLRoute() {
 }
 
 export function HostsRoute() {
-  const { hosts, loaded } = useRunData();
+  const { hosts, technologies, loaded } = useRunData();
   if (!loaded) return <NotReady title="Loading…" body="Fetching this run's hosts." />;
   if (!hosts) return <NotReady title="No hosts yet" body="Discovered hosts appear here once analysis has run." />;
-  return <HostsPage data={hosts} />;
+  return <HostsPage data={hosts} techUnknown={technologies?.detection_ran === false} />;
 }
 
 export function ThreatModelRoute() {

@@ -173,6 +173,9 @@ def _mount_spa(app: FastAPI, settings) -> None:
         return
     app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
     index = dist / "index.html"
+    # The build's other top-level files (favicon.svg, from web/public/) — an exact allow-list
+    # taken from the dist dir at startup, so no request path is ever joined onto the filesystem.
+    root_files = {p.name: p for p in dist.iterdir() if p.is_file() and p.name != "index.html"}
 
     # A few client-side routes share a path with an API GET of the same name, so the
     # catch-all below can't cover them — the API route matches first, and a full-page
@@ -213,6 +216,8 @@ def _mount_spa(app: FastAPI, settings) -> None:
     # deep-link; anything else (e.g. a typo'd API path from fetch) stays JSON 404.
     @app.get("/{full_path:path}")
     def spa_fallback(full_path: str, accept: str = Header(default="")) -> FileResponse:
+        if full_path in root_files:
+            return FileResponse(root_files[full_path])
         if "text/html" in accept:
             return FileResponse(index, headers=shell_headers)
         raise HTTPException(status_code=404, detail="not found")

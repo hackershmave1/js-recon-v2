@@ -20,7 +20,8 @@ type SortKey = "host" | "assets" | "endpoints" | "inferred" | "suspected" | "rou
 
 const SCOPE_LABEL: Record<ScopeFilter, string> = { all: "All", in: "In scope", out: "Out of scope" };
 
-export function HostsPage({ data }: { data: HostsResponse }) {
+// techUnknown: technology detection never ran for this run, so per-host Tech counts are unknown, not 0.
+export function HostsPage({ data, techUnknown = false }: { data: HostsResponse; techUnknown?: boolean }) {
   const [scope, setScope] = useState<ScopeFilter>("all");
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("host");
@@ -151,7 +152,7 @@ export function HostsPage({ data }: { data: HostsResponse }) {
           </thead>
           <tbody>
             {rows.map((h) => (
-              <HostTableRow key={h.host} row={h} />
+              <HostTableRow key={h.host} row={h} techUnknown={techUnknown} />
             ))}
           </tbody>
         </table>
@@ -162,7 +163,7 @@ export function HostsPage({ data }: { data: HostsResponse }) {
 
 // A host's scope is shown by icon + label (never colour alone — accessibility);
 // `declared` marks a host known only from an operator base-URL rule (REQ-C2).
-function HostTableRow({ row }: { row: HostRow }) {
+function HostTableRow({ row, techUnknown }: { row: HostRow; techUnknown: boolean }) {
   return (
     <tr>
       <td className="hosts-host">
@@ -188,7 +189,9 @@ function HostTableRow({ row }: { row: HostRow }) {
         )}
       </td>
       <td className="hosts-num">{row.routes}</td>
-      <td className="hosts-num">{row.techs}</td>
+      <td className="hosts-num" title={techUnknown ? "technology detection did not run for this run" : undefined}>
+        {techUnknown ? "—" : row.techs}
+      </td>
     </tr>
   );
 }

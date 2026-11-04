@@ -24,8 +24,10 @@ function priorityRank(f: Finding): number {
 }
 
 export function OverviewPanel(
-  { data, technologies, hosts, prevRunId, onCompare }: {
+  { data, technologies, hosts, prevRunId, onCompare, runFinished = true }: {
     data: FindingsResponse; technologies?: TechnologiesResponse | null; hosts?: HostsResponse | null;
+    // false while the run is still active: tech detection runs at the end of analysis.
+    runFinished?: boolean;
     // D54: if set, a "Compare to previous run" button navigates to the diff page.
     prevRunId?: string | null; onCompare?: () => void;
   },
@@ -104,8 +106,10 @@ export function OverviewPanel(
       value: attributionPct == null ? DASH : `${attributionPct}%`,
       sub: c ? `${c.attributed} attributed · ${c.unattributed} not` : "awaiting analysis" },
     { key: "tech", label: "Tech stack", section: "tech",
-      value: techCount == null ? DASH : String(techCount),
-      sub: techTop || "server · framework · libs" },
+      value: techCount == null || technologies?.detection_ran === false ? DASH : String(techCount),
+      sub: technologies?.detection_ran === false
+        ? (runFinished ? "not collected for this run" : "awaiting analysis")
+        : techTop || "server · framework · libs" },
   ];
 
   const top = [...data.findings].sort((a, b) => priorityRank(a) - priorityRank(b)).slice(0, 6);

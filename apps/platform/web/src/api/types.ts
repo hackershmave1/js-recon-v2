@@ -219,6 +219,8 @@ export interface Technology {
 // from a 404 unknown run.
 export interface TechnologiesResponse {
   run_id: string; count: number; hosts: Record<string, Technology[]>;
+  // false: detection never ran (no fingerprint signal, e.g. an extension capture) — not "0 found".
+  detection_ran?: boolean;
 }
 
 // GET /runs/{id}/hosts — the discovered-host inventory (DEBT D26). Each host is
