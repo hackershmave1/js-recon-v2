@@ -1170,6 +1170,7 @@ def _record_endpoint(
 ) -> int:
     normalized = normalize.normalize_endpoint(ep.method, ep.url)
     endpoint_attributes: dict[str, Any] = {"kind": ep.kind, "method": ep.method}
+    endpoint_attributes.update(_placeholder_attributes(normalized))
     if ep.wrapper:
         endpoint_attributes["wrapper"] = ep.wrapper
     if ep.headers:
@@ -1233,7 +1234,53 @@ def _record_endpoint(
             ),
             attributes=param_attributes,
         )
+    # Identity v3: each positional path param ({id}/{uuid}/{hash}) is its own finding keyed by
+    # POSITION; the identifier the source used (`userId`, or a minified `e`) is evidence.
+    for path_param in normalized.path_params:
+        written += _write(
+            session,
+            tenant_id,
+            run_id,
+            FindingType.PARAM,
+            normalize.normalize_param_value(operation, "path", str(path_param.position)),
+            path,
+            occurrence=store.Occurrence(
+                host=normalized.host,
+                raw_url=ep.url,
+                source_path=source_path,
+                line=ep.line,
+                col=ep.col,
+                offset_start=ep.start_byte,
+                offset_end=ep.end_byte,
+                engine="vespasian",
+                run_asset_id=run_asset_id,
+                asset_url=asset_url,
+                view=view,
+            ),
+            attributes=store.path_param_attributes(
+                path_param.position, [path_param.name] if path_param.name else []
+            ),
+        )
     return written
+
+
+def _placeholder_attributes(normalized: normalize.Endpoint) -> dict[str, Any]:
+    """Display-only evidence for the positional tokens in an endpoint value (identity v3):
+    the names each position was seen with, whether every sighting was a literal integer, and
+    whether the query was built at runtime. Not hashed; unioned on merge by the store."""
+    attributes: dict[str, Any] = {}
+    if normalized.path_params:
+        attributes["path_params"] = [
+            {
+                "position": p.position,
+                "names": [p.name] if p.name else [],
+                "integer_only": p.integer,
+            }
+            for p in normalized.path_params
+        ]
+    if normalized.dynamic_query:
+        attributes["dynamic_query"] = True
+    return attributes
 
 
 def _record_unresolved_endpoint(
@@ -1320,6 +1367,7 @@ def _record_suspected_endpoint(
     attributes: dict[str, Any] = {"kind": ep.kind, "method": ep.method}
     if ep.wrapper:  # provenance: the taught wrapper / receiver this sink came through
         attributes["wrapper"] = ep.wrapper
+    attributes.update(_placeholder_attributes(normalized))
     return _write(
         session,
         tenant_id,

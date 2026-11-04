@@ -17,7 +17,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from recon.db import models
-from recon.findings import normalize
+from recon.findings import normalize, risk_tags
 from recon.findings.located import ViewLoc
 
 
@@ -70,6 +70,45 @@ class RecordResult:
     occurrence_created: bool
 
 
+def path_param_attributes(position: int, names: list[str]) -> dict[str, Any]:
+    """Attributes of a positional path-param finding (identity v3): every observed name is
+    kept as evidence, the display ``name`` is the most meaningful one (``id`` when every name
+    is a minifier mangle), and risk tags come ONLY from readable observed names —
+    ``classify_param("id")`` is ``idor``, so tagging the fallback would flag every ``${e}``."""
+    observed = sorted(set(names))
+    attributes: dict[str, Any] = {
+        "location": "path",
+        "position": position,
+        "names": observed,
+        "name": normalize.display_param_name(observed) or "id",
+    }
+    tags = sorted(
+        {tag for n in observed if normalize.is_readable_name(n) for tag in risk_tags.classify_param(n)}
+    )
+    if tags:
+        attributes["risk_tags"] = tags
+    return attributes
+
+
+def _merge_path_params(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Union an endpoint's per-position path-param evidence: names unioned, ``integer_only``
+    ANDed (one template sighting means the value is not known to be an integer)."""
+    by_position: dict[int, dict[str, Any]] = {}
+    for entry in [*existing, *incoming]:
+        position = entry["position"]
+        current = by_position.get(position)
+        if current is None:
+            by_position[position] = {
+                "position": position,
+                "names": sorted(set(entry.get("names") or [])),
+                "integer_only": bool(entry.get("integer_only")),
+            }
+            continue
+        current["names"] = sorted(set(current["names"]) | set(entry.get("names") or []))
+        current["integer_only"] = current["integer_only"] and bool(entry.get("integer_only"))
+    return [by_position[position] for position in sorted(by_position)]
+
+
 def _merge_attributes(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     """Union the two findings' attributes when a normalization merge (v2: same
     type+value, different source file) collapses them onto one row.
@@ -102,12 +141,28 @@ def _merge_attributes(existing: dict[str, Any], incoming: dict[str, Any]) -> dic
             merged["kind"] = incoming["kind"]
         elif existing.get("kind") != incoming.get("kind"):
             merged["kind"] = None
+    # Identity v3 evidence: an endpoint's per-position path-param names, and whether any
+    # sighting built its query at runtime.
+    if incoming.get("path_params"):
+        merged["path_params"] = _merge_path_params(
+            existing.get("path_params") or [], incoming["path_params"]
+        )
+    if incoming.get("dynamic_query"):
+        merged["dynamic_query"] = True
     # wrapper (and any other scalar): first non-null wins; fill only if absent.
     for key, val in incoming.items():
-        if key in ("auth", "risk_tags", "kind"):
+        if key in ("auth", "risk_tags", "kind", "path_params", "dynamic_query", "names", "name"):
             continue
         if merged.get(key) is None and val is not None:
             merged[key] = val
+    # A path param's display name + risk tags derive from ALL observed names, so they are
+    # recomputed (first-non-null would freeze a minified `e` if that copy landed first).
+    if merged.get("location") == "path" and "position" in merged:
+        names = [*(existing.get("names") or []), *(incoming.get("names") or [])]
+        merged.pop("risk_tags", None)
+        merged.update(path_param_attributes(int(merged["position"]), names))
+    elif "name" in incoming and merged.get("name") is None:
+        merged["name"] = incoming["name"]
     return merged
 
 

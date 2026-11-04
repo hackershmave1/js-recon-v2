@@ -38,6 +38,14 @@ def test_fetch_extracts_query_params():
     assert {p.name for p in ep.params if p.location == "query"} == {"q", "page"}
 
 
+def test_a_runtime_built_query_is_not_a_param_name():
+    # `?${qs}` keys are unknown statically; a `?` inside a substitution is not the query.
+    ep = _only("fetch(`/search?q=1&${extra}`)")
+    assert [p.name for p in ep.params] == ["q"]
+    ep = _only("fetch(`/items/${id}${q ? `?${q}` : ''}`)")
+    assert not ep.params
+
+
 def test_fetch_template_string_keeps_shape():
     ep = _only("fetch(`/api/users/${id}/orders`)")
     assert ep.url == "/api/users/${id}/orders"

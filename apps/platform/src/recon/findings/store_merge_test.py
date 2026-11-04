@@ -53,3 +53,32 @@ def test_merge_is_order_independent_and_idempotent():
     assert ab["risk_tags"] == ba["risk_tags"] == ["x", "y"]
     # re-merging an identical payload changes nothing (A3 retry safety)
     assert _merge_attributes(ab, b) == ab
+
+
+# --- identity v3: path params (names are evidence, unioned order-independently) ---------
+
+
+def test_path_param_names_union_and_display_recomputes_whichever_copy_lands_first():
+    from recon.findings.store import path_param_attributes
+
+    minified = path_param_attributes(1, ["e"])
+    mapped = path_param_attributes(1, ["userId"])
+    assert minified["name"] == "id" and "risk_tags" not in minified  # never tag the fallback
+    a = _merge_attributes(minified, mapped)
+    b = _merge_attributes(mapped, minified)
+    assert a == b
+    assert a["names"] == ["e", "userId"] and a["name"] == "userId"
+    assert a["risk_tags"] == ["idor"]
+
+
+def test_endpoint_path_params_union_names_and_and_integer_only_by_position():
+    literal = {"path_params": [{"position": 1, "names": [], "integer_only": True}]}
+    template = {"path_params": [{"position": 1, "names": ["userId"], "integer_only": False}]}
+    merged = _merge_attributes(literal, template)
+    assert merged["path_params"] == [{"position": 1, "names": ["userId"], "integer_only": False}]
+    assert _merge_attributes(template, literal) == merged
+
+
+def test_dynamic_query_is_sticky():
+    assert _merge_attributes({}, {"dynamic_query": True})["dynamic_query"] is True
+    assert _merge_attributes({"dynamic_query": True}, {})["dynamic_query"] is True

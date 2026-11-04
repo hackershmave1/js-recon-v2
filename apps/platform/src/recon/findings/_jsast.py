@@ -13,10 +13,10 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from urllib.parse import parse_qsl
-
 import tree_sitter_javascript as tsjs
 from tree_sitter import Language, Node, Parser
+
+from recon.findings.normalize import is_readable_name, url_query_names
 
 _LANGUAGE = Language(tsjs.language())
 _PARSER = Parser(_LANGUAGE)
@@ -348,22 +348,6 @@ def _string_value(node: Node | None) -> str | None:
 
 _EXPR = "EXPR"  # jsluice-style placeholder for a non-constant URL sub-expression
 
-_VOWELS = frozenset("aeiouAEIOU")
-
-
-def _is_readable_name(name: str) -> bool:
-    """True when ``name`` reads like a real identifier rather than a minifier mangle.
-    Rejects 1-char names and vowelless 2-char names (``u``, ``e``, ``xr``, ``bt``) — the
-    shapes that flood a mangled bundle — while keeping short-but-meaningful names
-    (``id`` has a vowel, so it passes). This is what decides whether a dynamic URL leaf
-    is worth surfacing as a ``:holder`` token instead of a blind ``EXPR``; a length
-    floor alone would both admit mangles and reject the common ``:id`` param."""
-    if not name or not name.replace("_", "").isalnum():
-        return False
-    if len(name) == 1:
-        return False
-    return len(name) != 2 or any(char in _VOWELS for char in name)
-
 
 def _expr_token(node: Node | None) -> str:
     """Render a non-constant URL leaf as a ``:holder`` token from its source identifier
@@ -393,7 +377,7 @@ def _expr_token(node: Node | None) -> str:
         # holder a triager recognizes rather than a blind EXPR. Only an all-mangled / all-computed
         # chain stays EXPR (QA #6: fewer unexplainable tokens; the call snippet carries the rest).
         for segment in reversed(segments):
-            if _is_readable_name(segment):
+            if is_readable_name(segment):
                 return ":" + segment
     return _EXPR
 
@@ -594,12 +578,9 @@ def _object_pairs(node: Node | None) -> dict[str, Node]:
 
 
 def _query_params(url: str) -> list[RawParam]:
-    query = url.split("?", 1)[1] if "?" in url else ""
-    seen: dict[str, None] = {}
-    for key, _value in parse_qsl(query, keep_blank_values=True):
-        if key:
-            seen.setdefault(key, None)
-    return [RawParam(name, "query") for name in seen]
+    # Substitution-safe: a `?` inside `${...}` is not the query, and a runtime-built key
+    # (`?${qs}`) is not a name (it used to become a fake `query:${...}` param).
+    return [RawParam(name, "query") for name in url_query_names(url)]
 
 
 def _body_params(node: Node | None) -> list[RawParam]:
