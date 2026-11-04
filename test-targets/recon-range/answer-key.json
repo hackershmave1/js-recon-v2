@@ -3,7 +3,7 @@
   "spec": "test-targets/recon-range/DESIGN.md",
   "should_find": [
     { "id": "ep-profile", "src": "src/api/profile.js", "method": "GET", "operation": "/api/v1/profile", "value": "GET /api/v1/profile", "params": [] },
-    { "id": "ep-user", "src": "src/api/profile.js", "method": "GET", "operation": "/api/v1/users/${userId}", "value": "GET /api/v1/users/${userId}", "params": [] },
+    { "id": "ep-user", "src": "src/api/profile.js", "method": "GET", "operation": "/api/v1/users/{id}", "value": "GET /api/v1/users/{id}", "params": [] },
     { "id": "ep-search", "src": "src/api/profile.js", "method": "GET", "operation": "/api/v1/search", "value": "GET /api/v1/search?limit&q", "params": [ { "location": "query", "name": "q" }, { "location": "query", "name": "limit" } ] },
     { "id": "ep-order", "src": "src/api/profile.js", "method": "POST", "operation": "/api/v1/orders", "value": "POST /api/v1/orders", "params": [ { "location": "body", "name": "sku" }, { "location": "body", "name": "qty" } ] },
     { "id": "ep-cart", "src": "src/api/cart.js", "method": "PUT", "operation": "/api/v1/cart/{id}", "value": "PUT /api/v1/cart/{id}", "params": [] },
