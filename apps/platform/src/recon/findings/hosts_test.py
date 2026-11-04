@@ -279,3 +279,12 @@ def test_a_local_host_with_the_switch_off_is_explained():
         _agg(asset_urls=["https://acme.io/app.js"], allow_local=False).local_targets_disabled
         is False
     )
+
+
+def test_a_dev_url_inside_a_public_bundle_does_not_trigger_the_local_targets_note():
+    view = _agg(
+        asset_urls=["https://acme.io/app.js"],
+        endpoint_occurrences=[("localhost", "h1"), ("backend", "h2")],
+        allow_local=False,
+    )
+    assert view.local_targets_disabled is False

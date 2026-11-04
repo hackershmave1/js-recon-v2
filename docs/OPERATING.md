@@ -79,8 +79,13 @@ RECON_ALLOW_LOCAL_EGRESS=true docker compose up -d
 | New Recon crawl of `localhost` | refused, with a message naming this switch | allowed |
 
 Capture scope is display-only (the server fetches nothing for a capture), which is why a capture
-never fails on it. The switch also relaxes the crawler's SSRF guard for single-label hosts, so
-**leave it off in production**. The workspace **Settings** page shows its current state.
+never fails on it. The switch relaxes the server's SSRF guard: single-label hosts become valid scope,
+and loopback / private addresses are allowed for in-scope hosts (e.g. an in-scope name resolving to
+`10.x`), so **leave it off in production**. The workspace **Settings** page shows its current state.
+
+Crawling from the stack: the worker runs in a container, where `localhost` is the container itself.
+To crawl an app on your machine use `host.docker.internal` (Docker Desktop) or the compose
+`fixture-site` service, not `localhost`. Extension captures are unaffected — your browser fetched them.
 
 ### Host dev + tests
 

@@ -20,9 +20,10 @@ describe("LocalTargetsCard", () => {
     expect(await screen.findByText("Enabled")).toBeInTheDocument();
   });
 
-  it("says the status is unavailable when the server can't be reached", async () => {
+  it("shows a loading state first, then 'unavailable' when the server can't be reached", async () => {
     vi.spyOn(api, "getServerHealth").mockRejectedValue(new Error("down"));
     render(<LocalTargetsCard />);
+    expect(screen.getByText("Checking…")).toBeInTheDocument();
     expect(await screen.findByText("Status unavailable.")).toBeInTheDocument();
   });
 });

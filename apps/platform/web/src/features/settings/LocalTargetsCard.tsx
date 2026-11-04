@@ -4,7 +4,8 @@ import { getServerHealth } from "../../api/apiClient";
 // Read-only status of the stack's dev-only local-targets switch (RECON_ALLOW_LOCAL_EGRESS).
 // It is a server setting, not a per-user one, so this card only reports it and says how to change it.
 export function LocalTargetsCard() {
-  const [allowed, setAllowed] = useState<boolean | null>(null);
+  // undefined = still loading; null = the server could not be reached.
+  const [allowed, setAllowed] = useState<boolean | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
     getServerHealth().then((h) => { if (live) setAllowed(h.allowLocalTargets === true); }).catch(() => { if (live) setAllowed(null); });
@@ -13,14 +14,16 @@ export function LocalTargetsCard() {
   return (
     <section className="card settings-card" aria-labelledby="local-targets-title">
       <h2 id="local-targets-title" className="rp-title">Local development targets</h2>
-      {allowed === null ? (
+      {allowed === undefined ? (
+        <p className="muted">Checking…</p>
+      ) : allowed === null ? (
         <p className="muted">Status unavailable.</p>
       ) : (
         <>
           <p>
             <strong>{allowed ? "Enabled" : "Disabled"}</strong>
             {allowed
-              ? " — localhost can be crawled from New Recon and counts as declared scope."
+              ? " — localhost counts as declared scope and the server's SSRF guard allows local / private addresses for in-scope hosts."
               : " — extension captures of localhost still upload and analyze; localhost just can't be crawled from New Recon or marked in scope."}
           </p>
           <p className="muted">
