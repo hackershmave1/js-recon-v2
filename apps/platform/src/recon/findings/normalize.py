@@ -194,12 +194,31 @@ def normalize_source_path(source: str | None) -> str:
 
 
 @dataclass(frozen=True)
+class PathParam:
+    """A positional path parameter of an endpoint (identity v3).
+
+    ``position`` (1-based ordinal among the path's ``{id}``/``{uuid}``/``{hash}`` tokens) is
+    the identity; ``name`` is EVIDENCE only — the identifier the source used (``userId`` from
+    a source map, ``e`` from a minified build), never hashed; ``integer`` is True when this
+    sighting was a literal integer segment (``/users/42``)."""
+
+    position: int
+    name: str | None
+    integer: bool
+
+
+@dataclass(frozen=True)
 class Endpoint:
-    """A normalized endpoint. ``value`` is hashed; ``host`` is occurrence-only
-    (NOT hashed) so REQ-C2 base-URL re-resolution cannot churn identity."""
+    """A normalized endpoint. ``value`` is hashed; ``host``, ``path_params`` and
+    ``dynamic_query`` are occurrence/attribute evidence (NOT hashed), so REQ-C2 base-URL
+    re-resolution or a minifier rename cannot churn identity."""
 
     value: str
     host: str | None
+    path_params: tuple[PathParam, ...] = ()
+    # The URL carries a query built at runtime (``?${qs}``): its keys are unknown, so none
+    # is asserted (no fake ``query:${...}`` param).
+    dynamic_query: bool = False
 
 
 def _decode_unreserved(text: str) -> str:
@@ -227,37 +246,188 @@ def template_segment(segment: str) -> str:
     return segment
 
 
-def _templatize_path(path: str) -> str:
-    segments = [template_segment(_decode_unreserved(seg)) for seg in path.split("/") if seg != ""]
-    return "/" + "/".join(segments) if segments else "/"
+_VALUE_TEMPLATES = frozenset({"{id}", "{uuid}", "{hash}"})
+
+# A `${...}` substitution is masked before any URL splitting, because its JS expression can
+# hold `/`, `?`, `&` or `=` (`${ids.join("/")}`, `${q ? `?${q}` : ""}`) that must never split
+# the URL. Private-use code points: urlsplit strips leading C0 controls, and these never occur
+# in a real URL.
+_MASK_OPEN, _MASK_CLOSE = "\ue000", "\ue001"
+_MASK_RE = re.compile(f"{_MASK_OPEN}(\\d+){_MASK_CLOSE}")
 
 
-def _normalize_query(query: str) -> str:
-    """Sorted, de-duped param *names* only; array keys canonicalized (§4.1, L1)."""
-    if not query:
-        return ""
+def _mask_substitutions(text: str) -> tuple[str, list[str]]:
+    """Replace every balanced ``${...}`` (nested templates included) with an indexed mask.
+    An unbalanced one masks to the end of the text — it can't be split safely either."""
+    out: list[str] = []
+    subs: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        if not text.startswith("${", i):
+            out.append(text[i])
+            i += 1
+            continue
+        depth, j = 0, i + 1
+        while j < n:
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        end = min(j + 1, n)
+        out.append(f"{_MASK_OPEN}{len(subs)}{_MASK_CLOSE}")
+        subs.append(text[i:end])
+        i = end
+    return "".join(out), subs
+
+
+def _unmask(text: str, subs: list[str]) -> str:
+    return _MASK_RE.sub(lambda m: subs[int(m.group(1))], text)
+
+
+def is_readable_name(name: str) -> bool:
+    """True when ``name`` reads like a real identifier rather than a minifier mangle.
+    Rejects 1-char names and vowelless 2-char names (``u``, ``e``, ``xr``, ``bt``) — the
+    shapes that flood a mangled bundle — while keeping short-but-meaningful names (``id``)."""
+    if not name or not name.replace("_", "").isalnum():
+        return False
+    if len(name) == 1:
+        return False
+    return len(name) != 2 or any(char in "aeiouAEIOU" for char in name)
+
+
+# Value-preserving wrappers a URL substitution is commonly passed through; the identifier
+# inside is the developer's name for the value.
+_PASS_THROUGH_CALL = re.compile(r"(?:encodeURIComponent|encodeURI|String|Number)\((.*)\)", re.S)
+_IDENTIFIER_CHAIN = re.compile(r"[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*")
+
+
+def placeholder_name(substitution: str) -> str | None:
+    """The identifier a ``${...}`` substitution reads, as evidence for a path param's name:
+    the readable leaf of an identifier/member chain (``${item.DSStoragePath}`` ->
+    ``DSStoragePath``), through ``encodeURIComponent``/``String``/... wrappers. A mangled
+    name is returned as-is (``${e}`` -> ``e``: still evidence); any other expression (a call,
+    a ternary) -> ``None``. Read from the source text, never invented."""
+    inner = substitution[2:-1] if substitution.endswith("}") else substitution[2:]
+    inner = inner.strip()
+    while match := _PASS_THROUGH_CALL.fullmatch(inner):
+        inner = match.group(1).strip()
+    if not _IDENTIFIER_CHAIN.fullmatch(inner):
+        return None
+    segments = [segment.strip() for segment in inner.split(".")]
+    return next((s for s in reversed(segments) if is_readable_name(s)), segments[-1])
+
+
+def display_param_name(names: list[str] | tuple[str, ...]) -> str | None:
+    """The most meaningful observed name for a path param: readable beats mangled, then
+    longest, then alphabetical (deterministic). ``None`` when no observed name is readable —
+    the caller falls back to a positional name and must NOT derive risk tags from it."""
+    readable = sorted({n for n in names if is_readable_name(n)}, key=lambda n: (-len(n), n))
+    return readable[0] if readable else None
+
+
+def _whole_placeholder(segment: str, *, holders: bool) -> bool:
+    if _MASK_RE.fullmatch(segment):
+        return True
+    return holders and (segment == _SUSPECTED_EXPR or bool(_SUSPECTED_HOLDER.fullmatch(segment)))
+
+
+def _templatize_path(
+    path: str, subs: list[str], *, holders: bool = False
+) -> tuple[str, tuple[PathParam, ...]]:
+    """Template a MASKED path. A whole-segment placeholder AFTER a static segment becomes a
+    positional ``{id}`` (identity v3: the name is evidence, not identity); a leading one is an
+    unresolved base and a partial one is shape, so both stay verbatim (spec classification and
+    capture correlation key on that literal ``${``). ``holders`` adds the unconfirmed lane's
+    ``:holder``/``EXPR`` tokens to the placeholder set."""
+    out: list[str] = []
+    params: list[PathParam] = []
+    seen_static = False
+    for raw in (segment for segment in path.split("/") if segment != ""):
+        if _whole_placeholder(raw, holders=holders):
+            if not seen_static:
+                out.append(_unmask(raw, subs))
+                continue
+            mask = _MASK_RE.fullmatch(raw)
+            name = placeholder_name(subs[int(mask.group(1))]) if mask else raw.lstrip(":")
+            params.append(PathParam(len(params) + 1, name, integer=False))
+            out.append("{id}")
+            continue
+        if _MASK_RE.search(raw):
+            out.append(_unmask(raw, subs))
+            seen_static = True
+            continue
+        templated = template_segment(_decode_unreserved(raw))
+        if templated in _VALUE_TEMPLATES:
+            params.append(PathParam(len(params) + 1, None, integer=templated == "{id}"))
+        else:
+            seen_static = True
+        out.append(templated)
+    return ("/" + "/".join(out) if out else "/"), tuple(params)
+
+
+def _query_keys(masked_query: str) -> tuple[list[str], bool]:
+    """Sorted, de-duped param *names* only; array keys canonicalized (§4.1, L1). A key that
+    is (or contains) a runtime substitution is not a name — dropped, and reported as dynamic."""
+    if not masked_query:
+        return [], False
     keys: set[str] = set()
-    for key, _value in parse_qsl(query, keep_blank_values=True):
+    dynamic = False
+    for key, _value in parse_qsl(masked_query, keep_blank_values=True):
+        if _MASK_RE.search(key):
+            dynamic = True
+            continue
         name = _ARRAY_KEY_RE.sub("", key)
         if name:  # drop empty keys so `?=v&x=1` == `?x=1` (review LOW-6)
             keys.add(name)
-    return "&".join(sorted(keys))
+    return sorted(keys), dynamic
+
+
+def url_query_names(url: str) -> list[str]:
+    """The literal query param names in a URL, in first-seen order — substitution-safe (a
+    ``?`` inside ``${...}`` is not the query) and without runtime-built keys."""
+    masked, _subs = _mask_substitutions(url)
+    query = masked.split("?", 1)[1] if "?" in masked else ""
+    seen: dict[str, None] = {}
+    for key, _value in parse_qsl(query.split("#", 1)[0], keep_blank_values=True):
+        if key and not _MASK_RE.search(key):
+            seen.setdefault(key, None)
+    return list(seen)
+
+
+def _normalize(method: str, url: str, *, holders: bool) -> tuple[Endpoint, str] | None:
+    masked, subs = _mask_substitutions(url)
+    if holders and masked.startswith("//"):
+        # A leading `//` (a protocol-relative literal or a `_collapse_url` artifact) would let
+        # urlsplit eat the first PATH segment as a host; the unconfirmed lane collapses it.
+        masked = "/" + masked.lstrip("/")
+    split = urlsplit(masked)
+    path = split.path or "/"
+    if holders and _path_static_segment_count(_unmask(path, subs)) < 1:
+        return None
+    template, params = _templatize_path(path, subs, holders=holders)
+    keys, dynamic = _query_keys(split.query)
+    verb = method.strip().upper()
+    operation = f"{verb} {template}" if verb else template
+    value = operation + (f"?{'&'.join(keys)}" if keys else "")
+    host = _unmask(split.hostname, subs) if split.hostname else None
+    return Endpoint(value=value, host=host, path_params=params, dynamic_query=dynamic), operation
 
 
 def endpoint_operation(method: str, url: str) -> str:
     """`METHOD + templated path` (no query, no host) — the param's owning op."""
-    path = urlsplit(url).path or "/"
-    verb = method.strip().upper()
-    template = _templatize_path(path)
-    return f"{verb} {template}" if verb else template
+    normalized = _normalize(method, url, holders=False)
+    assert normalized is not None  # the confirmed lane never rejects
+    return normalized[1]
 
 
 def normalize_endpoint(method: str, url: str) -> Endpoint:
     """Normalize an endpoint call into its hashed ``value`` + occurrence ``host``."""
-    split = urlsplit(url)
-    query = _normalize_query(split.query)
-    value = endpoint_operation(method, url) + (f"?{query}" if query else "")
-    return Endpoint(value=value, host=split.hostname)
+    normalized = _normalize(method, url, holders=False)
+    assert normalized is not None  # the confirmed lane never rejects
+    return normalized[0]
 
 
 # Placeholder token forms in a `_collapse_url` skeleton (mirrors recon.findings._jsast's
@@ -277,9 +447,10 @@ def _path_static_segment_count(path: str) -> int:
     ``/:handle/inbox_views`` -> 1 (``inbox_views``); ``${e.id}/${t}`` -> 0. This gates the
     suspected-endpoint lane: >=1 static segment is a real (if partial) endpoint; an
     all-placeholder path is not (it stays unconfirmed)."""
+    masked, _subs = _mask_substitutions(path)
     count = 0
-    for segment in path.split("/"):
-        residue = _SUSPECTED_HOLDER.sub("", _SUSPECTED_TEMPLATE_SUB.sub("", segment)).strip()
+    for segment in masked.split("/"):
+        residue = _SUSPECTED_HOLDER.sub("", _MASK_RE.sub("", segment)).strip()
         if residue and residue != _SUSPECTED_EXPR:
             count += 1
     return count
@@ -289,28 +460,21 @@ def normalize_suspected_endpoint(method: str, url: str) -> Endpoint | None:
     """Normalize a SUSPECTED sink skeleton (a generic-client call, or an unresolved sink whose
     collapsed URL still carries a real path) into a counted endpoint ``value`` + ``host``,
     mirroring :func:`normalize_endpoint` — or ``None`` when the path is all-placeholder /
-    pure-variable, which stays in the unconfirmed lane. Placeholders (``${...}``/``:holder``/
-    ``EXPR``) survive templating verbatim (``template_segment`` only rewrites int/UUID/hash).
+    pure-variable, which stays in the unconfirmed lane. A whole-segment ``${...}``/``:holder``/
+    ``EXPR`` after a static segment becomes the same positional ``{id}`` as the confirmed lane;
+    leading/partial placeholders survive verbatim.
 
     Guards the ``urlsplit`` ``//``-authority swallow: a leading ``//`` (a protocol-relative
     literal or a ``_collapse_url`` artifact) would otherwise eat the first PATH segment as a
     host, so it is collapsed to a single ``/`` before splitting — no path segment is lost, while
     a real ``http(s)://`` URL still splits its host out normally into the occurrence attribute."""
-    guarded = "/" + url.lstrip("/") if url.startswith("//") else url
-    split = urlsplit(guarded)
-    path = split.path or "/"
-    if _path_static_segment_count(path) < 1:
-        return None
-    query = _normalize_query(split.query)
-    value = f"{method.strip().upper()} {_templatize_path(path)}".strip()
-    if query:
-        value += f"?{query}"
-    return Endpoint(value=value, host=split.hostname)
+    normalized = _normalize(method, url, holders=True)
+    return normalized[0] if normalized is not None else None
 
 
 def normalize_param_value(operation: str, location: str, name: str) -> str:
     """`operation + location:name` (§4.3). Build ``operation`` via
-    ``endpoint_operation``."""
+    ``endpoint_operation``. A path param's ``name`` is its 1-based position (identity v3)."""
     return f"{operation} {location}:{name}"
 
 
@@ -318,8 +482,10 @@ def operation_of_endpoint_value(value: str) -> str:
     """The operation (`METHOD + templated path`) of a stored ENDPOINT finding value.
 
     An endpoint value is ``operation`` + an optional ``?query`` suffix
-    (see :func:`normalize_endpoint`), so the operation is everything before ``?``."""
-    return value.split("?", 1)[0]
+    (see :func:`normalize_endpoint`), so the operation is everything before the first ``?``
+    that is not inside a verbatim ``${...}``."""
+    masked, subs = _mask_substitutions(value)
+    return _unmask(masked.split("?", 1)[0], subs)
 
 
 def operation_of_param_value(value: str) -> str:
@@ -327,8 +493,35 @@ def operation_of_param_value(value: str) -> str:
 
     A param value is ``f"{operation} {location}:{name}"`` (see
     :func:`normalize_param_value`); ``location:name`` is the final space-separated
-    token and contains no space, so the operation is everything before it."""
-    return value.rsplit(" ", 1)[0]
+    token outside any ``${...}``, so the operation is everything before it."""
+    masked, subs = _mask_substitutions(value)
+    return _unmask(masked.rsplit(" ", 1)[0], subs)
+
+
+def rewrite_v2_value(finding_type: str, value: str) -> str | None:
+    """Map a stored identity-v2 ``value`` to its v3 value — what the v2→v3 migration uses to
+    re-key session state (triage, spec status, base-URL picks, threat citations) so it
+    survives the identity change. ``None`` = the finding has no v3 counterpart (a fake
+    runtime-built query key). Types whose value did not change map to themselves."""
+    if finding_type in ("endpoint", "endpoint_suspected"):
+        method, _sep, rest = value.partition(" ")
+        if value.startswith("/"):
+            method, rest = "", value
+        if finding_type == "endpoint":
+            return normalize_endpoint(method, rest).value
+        suspected = normalize_suspected_endpoint(method, rest)
+        return suspected.value if suspected is not None else value
+    if finding_type == "param":
+        masked, subs = _mask_substitutions(value)
+        head, _sep, token = masked.rpartition(" ")
+        if _MASK_RE.search(token):
+            return None
+        operation = _unmask(head, subs)
+        method, _sep, path = operation.partition(" ")
+        if operation.startswith("/"):
+            method, path = "", operation
+        return f"{endpoint_operation(method, path)} {token}"
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -416,7 +609,7 @@ def _canonical(obj: dict[str, object]) -> bytes:
 # keep their stored hashes untouched (no backfill — new-runs-only). ``record_finding``
 # uses this to refuse an out-of-band re-extract onto an older-version run, whose
 # additive write would otherwise land a divergent hash (a duplicate finding).
-FINDING_HASH_VERSION = 2
+FINDING_HASH_VERSION = 3
 
 
 def finding_hash(finding_type: str, value: str) -> str:
