@@ -146,11 +146,13 @@
 
   // On a full load (and bfcache restore), scan — but only when capture is active, so an idle
   // extension never wakes its service worker on every page. `isCapturing` is read straight
-  // from storage (no runtime message → no wakeup); the no-reload path (capture toggled on over
+  // from storage.session — the one value the worker publishes to content scripts; storage.local
+  // (token, settings) is closed to them (modules/storage-access.js) — no runtime message → no
+  // wakeup; the no-reload path (capture toggled on over
   // a loaded page) is driven separately by startCapture's explicit `rescanScripts` message.
   async function scanIfCapturing() {
     try {
-      const { isCapturing } = await chrome.storage.local.get('isCapturing');
+      const { isCapturing } = await chrome.storage.session.get('isCapturing');
       if (isCapturing) scanLoadedScripts();
     } catch (e) { /* storage unavailable — skip */ }
   }
@@ -164,7 +166,7 @@
 
   const scriptObserver = new MutationObserver((mutations) => {
     try {
-      chrome.storage.local.get('isCapturing').then(({ isCapturing }) => {
+      chrome.storage.session.get('isCapturing').then(({ isCapturing }) => {
         if (!isCapturing) return;
         mutations.forEach((mutation) => {
           mutation.addedNodes.forEach((node) => {

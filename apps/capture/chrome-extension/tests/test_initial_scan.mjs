@@ -24,7 +24,8 @@ assert.ok(cs.includes("action: 'dynamicScriptDetected'"), 'scan reports on the e
 
 // The load-time scan gates on persisted isCapturing read from STORAGE (no runtime message), so
 // an idle extension never wakes its service worker on every page load.
-assert.ok(cs.includes("storage.local.get('isCapturing')"), 'load-time scan gates on persisted isCapturing');
+assert.ok(cs.includes("storage.session.get('isCapturing')"), 'load-time scan gates on the published isCapturing');
+assert.ok(!cs.includes('chrome.storage.local'), 'content script never touches storage.local (token + settings)');
 assert.ok(cs.includes("addEventListener('load'"), 'scan triggers on window load');
 
 // The no-reload path: a rescanScripts message (sent by startCapture) re-runs the scan.

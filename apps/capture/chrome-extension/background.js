@@ -17,7 +17,8 @@ import { isRelevantInlineScript } from './modules/inline-relevance.js';
 import { normalizeObservedUrl, isApiIshObservation, isTelemetryPath } from './modules/observation-filter.js';
 import { prepareRequestBody, redactBody, capBody } from './modules/body-capture.js';
 import { CaptureSession } from './modules/capture-session.js';
-import { PAGE_ACTIONS, isAllowedSender } from './modules/message-sender.js';
+import { PAGE_ACTIONS, admitMessage } from './modules/message-sender.js';
+import { restrictStorageAccess, publishCaptureState } from './modules/storage-access.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -141,6 +142,8 @@ class JSExtractor {
   }
 
   async initialize() {
+    // Every start: keep the token/settings store away from content scripts (modules/storage-access.js).
+    await restrictStorageAccess(chrome.storage).catch((e) => console.warn('storage access level', e));
     this.settings = await this.loadSettings();
     // Register the opt-in main-world response-body hook if it's enabled (DEBT D45b2).
     // Awaited so the XHR hook is registered before any requests arrive after a respawn.
@@ -162,6 +165,8 @@ class JSExtractor {
     // binding, dedup set, popup counters, observations) instead of fragmenting into a new one.
     await this.session.restore();
     this.isCapturing = this.settings.isCapturing || false;
+    // storage.session is cleared on browser restart: re-publish the page-visible capture bit.
+    await publishCaptureState(chrome.storage, this.isCapturing).catch(() => {});
 
     // --- durability wiring (S2): back the uploader with the persistent outbox and
     // let it clear the flush alarm once fully drained.
@@ -272,12 +277,7 @@ class JSExtractor {
       (request, sender, sendResponse) => {
         // A web page can forge content-script messages: reject a command from the wrong sender
         // before any handler runs (modules/message-sender.js).
-        const action = request && request.action;
-        if (!isAllowedSender(action, sender, chrome.runtime)) {
-          console.warn('[recon] rejected message from an unexpected sender', action, sender && sender.url);
-          if (!FIRE_AND_FORGET_ACTIONS.has(action)) sendResponse({ success: false, error: 'forbidden' });
-          return false;
-        }
+        if (!admitMessage(request, sender, chrome.runtime, sendResponse)) return false;
         // Defer handling until init has populated settings/session/stores. Hold the
         // sendResponse channel open ONLY for actions that actually respond — a fire-and-
         // forget message (e.g. dynamicScriptDetected) returning true would leak the port
@@ -286,6 +286,11 @@ class JSExtractor {
         return !FIRE_AND_FORGET_ACTIONS.has(request && request.action);
       }
     );
+
+    // Wake on browser start / install so initialize() closes storage.local to content scripts
+    // (modules/storage-access.js) before the first page loads, not on the first captured request.
+    chrome.runtime.onStartup.addListener(() => { this.ready.then(() => {}); });
+    chrome.runtime.onInstalled.addListener(() => { this.ready.then(() => {}); });
 
     chrome.alarms.onAlarm.addListener((alarm) => {
       // Cold-respawn safety net: if the worker was torn down with unsent uploads, this
@@ -968,6 +973,7 @@ class JSExtractor {
   async persistCaptureState(isCapturing) {
     try {
       await chrome.storage.local.set({ isCapturing });
+      await publishCaptureState(chrome.storage, isCapturing); // what content scripts read
     } catch (e) {
       console.warn('Failed to persist capture state', e);
     }
