@@ -104,8 +104,8 @@ export function OverviewPanel(
       value: attributionPct == null ? DASH : `${attributionPct}%`,
       sub: c ? `${c.attributed} attributed · ${c.unattributed} not` : "awaiting analysis" },
     { key: "tech", label: "Tech stack", section: "tech",
-      value: techCount == null ? DASH : String(techCount),
-      sub: techTop || "server · framework · libs" },
+      value: techCount == null || technologies?.detection_ran === false ? DASH : String(techCount),
+      sub: technologies?.detection_ran === false ? "not collected for this capture" : techTop || "server · framework · libs" },
   ];
 
   const top = [...data.findings].sort((a, b) => priorityRank(a) - priorityRank(b)).slice(0, 6);

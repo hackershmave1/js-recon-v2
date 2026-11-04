@@ -220,6 +220,21 @@ describe("OverviewPanel", () => {
     expect(within(card("Tech stack")).getByText("—")).toBeInTheDocument();
   });
 
+  it("says 'not collected' instead of 0 when tech detection never ran (extension capture)", () => {
+    const data: FindingsResponse = {
+      run_id: "r", count: 1, coverage: null, spec: null,
+      findings: [finding({ type: "endpoint", value: "/x" })],
+    };
+    const technologies = { run_id: "r", count: 0, hosts: {}, detection_ran: false };
+    const router = createMemoryRouter(
+      [{ path: "/runs/:id", element: <OverviewPanel data={data} technologies={technologies} /> }],
+      { initialEntries: ["/runs/r1"] },
+    );
+    render(<RouterProvider router={router} />);
+    expect(within(card("Tech stack")).getByText("—")).toBeInTheDocument();
+    expect(within(card("Tech stack")).getByText("not collected for this capture")).toBeInTheDocument();
+  });
+
   it("shows a dash for Tech stack when technologies is explicitly null", () => {
     const data: FindingsResponse = {
       run_id: "r", count: 1, coverage: null, spec: null,

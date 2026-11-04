@@ -6,6 +6,18 @@ import "./tech.css";
 // (Phase 1 honesty — T12).
 export function TechPage({ data }: { data: TechnologiesResponse }) {
   const hosts = Object.entries(data.hosts);
+  if (data.detection_ran === false) {
+    return (
+      <div className="card">
+        <h2 className="rp-title">Tech stack</h2>
+        <p className="muted">
+          Not collected for this run. Technology detection reads the response headers and page
+          signals a crawl collects; extension captures don't send them yet, so this is unknown —
+          not "no technologies".
+        </p>
+      </div>
+    );
+  }
   if (data.count === 0 || hosts.length === 0) {
     return (
       <div className="card">

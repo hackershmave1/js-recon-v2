@@ -25,6 +25,7 @@ def get_run_technologies(
     return {
         "run_id": result.run_id,
         "count": sum(len(techs) for techs in result.hosts.values()),
+        "detection_ran": result.detection_ran,
         "hosts": {
             host: [
                 {

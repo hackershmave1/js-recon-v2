@@ -614,3 +614,17 @@ reads keep only the resolved value, not the declarator node.
 **Fix:** carry the declarator's byte span on the declared `RawEndpoint` (as `mark_start_byte` /
 `mark_end_byte`), so `analyze._endpoint_view` locates it like any other endpoint.
 
+### 2026-11-04 QA run (recon-range) — OPEN (D77)
+
+#### D77 · Extension captures never get technology detection [M]  ·  recall
+
+`findings/techdetect_pass.run_fingerprint_pass` needs a `fingerprint-signal` blob (allowlisted response
+headers, script URLs, meta, cookies per host). Crawls (`fetch/fetch.py`) and server-side captures
+(`capture/stage.py`) write one; the extension ingest (`/api/save-files`) does not, so every extension
+run shows no tech stack whatever the site uses (QA: recon-range bundles axios -> nothing). The tiles now
+say "not collected" instead of a misleading 0 (`detection_ran`).
+
+**Fix:** the extension already uploads each file's response `headers` and URL; build the same
+fingerprint-signal from the run's captured files at analyze time (allowlist the same headers), so the
+existing pass runs unchanged.
+

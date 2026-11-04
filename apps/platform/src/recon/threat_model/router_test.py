@@ -92,3 +92,11 @@ def test_trigger_without_a_body_runs_with_no_preset(client, tenant, recorded_run
     r = client.post(f"/sessions/{sid}/threat-model", headers={"X-Tenant-Id": tenant})
     assert r.status_code == 202
     assert [(c[0], c[2]) for c in recorded_runs] == [(tenant, None)]
+
+
+def test_no_threat_model_yet_is_a_normal_empty_answer(client, tenant):
+    # Not a 404: "none generated yet" is the tab's normal empty state, and a 404 made every
+    # browser log a failed request on the Threat Model tab.
+    sid = _session(tenant)
+    r = client.get(f"/sessions/{sid}/threat-model", headers={"X-Tenant-Id": tenant})
+    assert r.status_code == 200 and r.json() is None

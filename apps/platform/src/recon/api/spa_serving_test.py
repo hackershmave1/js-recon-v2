@@ -148,3 +148,16 @@ def test_relative_setting_resolves_to_absolute(tmp_path, monkeypatch):
     directory = Path(assets[0].app.directory)
     assert directory.is_absolute()
     assert directory == (tmp_path / "dist" / "assets")
+
+
+def test_the_builds_top_level_files_are_served_by_exact_name(tmp_path, monkeypatch):
+    _client_with_dist(tmp_path, monkeypatch)
+    (tmp_path / "dist" / "favicon.svg").write_text("<svg/>", encoding="utf-8")
+    get_settings.cache_clear()
+    client = TestClient(create_app())  # the allow-list is taken from dist/ at startup
+    r = client.get("/favicon.svg", headers={"accept": "image/avif,image/webp,*/*"})
+    assert r.status_code == 200 and r.text == "<svg/>"
+    # Only the allow-listed names: index.html is never served through this path to a non-browser
+    # fetch, and an unknown name stays a JSON 404.
+    assert client.get("/index.html", headers={"accept": "application/json"}).status_code == 404
+    assert client.get("/secrets.env", headers={"accept": "*/*"}).status_code == 404

@@ -83,3 +83,28 @@ def test_other_tenant_sees_none(client, authorized_session):
     other = sessions_service.create_tenant("tech-other")
     resp = client.get(f"/runs/{run_id}/technologies", headers=_headers(other))
     assert resp.status_code == 404  # RLS -> run invisible -> None -> 404
+
+
+def test_technologies_say_whether_detection_ran(client, authorized_session):
+    # No fingerprint signal (e.g. an extension capture) -> detection never ran: the UI must not
+    # present that as "0 technologies". The pass records analyze.technologies when it runs.
+    from recon.events.log import record_event
+
+    tenant, session_id = authorized_session
+    run_id = _run_with_tech(tenant, session_id)
+    assert (
+        client.get(f"/runs/{run_id}/technologies", headers=_headers(tenant)).json()["detection_ran"]
+        is False
+    )
+    with tenant_session(tenant) as session:
+        record_event(
+            session,
+            tenant_id=tenant,
+            run_id=run_id,
+            event_type="analyze.technologies",
+            payload={"hosts": {}},
+        )
+    assert (
+        client.get(f"/runs/{run_id}/technologies", headers=_headers(tenant)).json()["detection_ran"]
+        is True
+    )
