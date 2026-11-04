@@ -36,6 +36,19 @@ A suite whose promise never settles lets Node drain the event loop and exit 0 wi
 green (C7 review: `test_popup_api.mjs` silently stopped running this way; fixed there with an
 "exited before finishing" guard). **Fix:** have the lane require each suite's final sentinel line (or
 run them under `node --test`, which reports a never-settled test as a failure).
+#### D80 · webpack module identity: names are poisoned bundle-wide, not per module [M]  ·  recall
+
+`_base_env._declared_names` poisons a name bound more than once ANYWHERE in the file, and webpack
+emits many modules per chunk that each reuse the same short names (`t`, `s`, `o`). So on real
+multi-module chunks: a local const base used by a wrapper is unresolvable (example_js_files/02: the
+inferred wrapper `c` is recognized but its base `s=o+i` is poisoned because module 9004 reuses `o`,
+so its calls land as unresolved rows attributed to `c`; corpus 0/7), and a `.create({baseURL})`
+FACTORY reached through a module alias (`t.A.delete(...)`) is deliberately not claimed — `t.A` is
+"export A of whatever module `t` is", and a sibling module may reuse `t` for a store (adversarial
+review 2026-11-04 proved confirmed FPs). recon-range webpack-nomap therefore misses
+`DELETE /api/v1/session` (a strict-xfail known-red test pins it). **Fix:** scope poisoning and
+instance identity per webpack module body (`_modulegraph._webpack_module_defs` already finds the
+disjoint bodies), keying factories by (module id, export) via `collect_webpack_requires`.
 
 #### D79 · identity v3 placeholder edge cases left verbatim (accepted) [S]  ·  recall
 

@@ -13,11 +13,12 @@ import re
 
 from tree_sitter import Node
 
-from recon.findings import _receivers
+from recon.findings import _inferred, _receivers
 from recon.findings._dataflow import resolve_local_consts
 from recon.findings._jsast import (
     _MAX_URL_SPAN,
     BaseEnv,
+    InferredWrapper,
     _args,
     _object_pairs,
     _string_value,
@@ -112,6 +113,15 @@ def _declared_names(root: Node) -> set[str]:
     for node in _walk(root):
         if node.type in ("variable_declarator", "function_declaration"):
             mark(node.child_by_field_name("name"))
+        elif node.type == "class_declaration":
+            mark(node.child_by_field_name("name"))  # `class T {}` shadows an outer `T`
+        elif node.type == "import_specifier":
+            mark(node.child_by_field_name("alias") or node.child_by_field_name("name"))
+        elif node.type in ("namespace_import", "import_clause"):
+            # `* as T` / a default import `T` — the bound identifier is a direct child.
+            for child in node.named_children:
+                if child.type == "identifier":
+                    mark(child)
         elif node.type == "catch_clause":
             mark(node.child_by_field_name("parameter"))
         elif node.type == "arrow_function":
@@ -168,8 +178,12 @@ def collect_base_env(root: Node, data: bytes) -> BaseEnv:
     has_with = False
     # What `.get()`/`.post()` receivers ARE (collection vs HTTP client), gathered in this same walk.
     receivers: dict[str, int] = {}
+    # QA #4: clients/wrappers the bundle proves under any (minified) name, same walk.
+    inferred_instances: set[str] = set()
+    wrappers: dict[str, InferredWrapper | None] = {}
     for node in _walk(root):
         _receivers.observe(node, receivers)
+        _inferred.observe(node, poisoned, instances, inferred_instances, wrappers)
         if node.type == "with_statement":
             has_with = True
         elif node.type == "variable_declarator":
@@ -212,6 +226,8 @@ def collect_base_env(root: Node, data: bytes) -> BaseEnv:
         default_base=default_base,
         const_prefixes=const_prefixes,
         receivers=receivers,
+        inferred_instances=frozenset(inferred_instances),
+        wrappers={key: w for key, w in wrappers.items() if w is not None},
     )
 
 
@@ -398,13 +414,15 @@ def _fold_indirect(node: Node, env: BaseEnv) -> str | None:
     `fetch(u + "/x")`, Phase 2), a cross-module ESM import (`fetch(API_BASE + ORDERS_PATH)`),
     or a webpack require-alias member (`fetch(r.t + r.M)`).
 
-    Returns ``None`` unless SOME const source is in scope (local / cross-module / webpack), so
-    a file with no resolvable consts is a no-op and behavior is byte-for-byte unchanged.
-    All-operands-or-``None`` — a partial resolution never yields a guess (REQ-C2).
+    With no const source in scope only a ``+`` chain can fold — and then only when every
+    operand is a literal (`"/api/v1/"+"widgets"`, which minifiers emit): that must not depend on
+    whether some unrelated const happens to exist in the same file. All-operands-or-``None`` — a
+    partial resolution never yields a guess (REQ-C2).
     """
-    if not env.const_prefixes and not env.cross_module_consts and not env.webpack_members:
-        return None
     if node.type not in ("identifier", "member_expression", "binary_expression"):
+        return None
+    has_sources = env.const_prefixes or env.cross_module_consts or env.webpack_members
+    if not has_sources and node.type != "binary_expression":
         return None
     if node.end_byte - node.start_byte > _MAX_URL_SPAN:
         return None  # over-cap expression — bail before the O(span) walk (DoS)
