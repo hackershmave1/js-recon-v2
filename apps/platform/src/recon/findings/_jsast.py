@@ -208,6 +208,9 @@ class BaseEnv:
     # sink folds to a value. Alias -> {export_name: value}; build-scoped + poison-safe
     # upstream (recon.findings._modulegraph), so a wrong module can never leak in.
     webpack_members: dict[str, dict[str, str]] = field(default_factory=dict)
+    # What each `.get()`-style receiver IS, per the bundle's own evidence (recon.findings._receivers):
+    # receiver text -> evidence rank. Read through `_receivers.kind_of`.
+    receivers: dict[str, int] = field(default_factory=dict)
 
 
 # --- tree helpers ------------------------------------------------------------

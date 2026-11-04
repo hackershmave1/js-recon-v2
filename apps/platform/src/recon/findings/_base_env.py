@@ -13,6 +13,7 @@ import re
 
 from tree_sitter import Node
 
+from recon.findings import _receivers
 from recon.findings._dataflow import resolve_local_consts
 from recon.findings._jsast import (
     _MAX_URL_SPAN,
@@ -165,7 +166,10 @@ def collect_base_env(root: Node, data: bytes) -> BaseEnv:
     # dropping ALL local consts when it appears costs ~0 real recall and closes the 0-FP (§4
     # gate-2 LOW). Flagged here, applied after the walk.
     has_with = False
+    # What `.get()`/`.post()` receivers ARE (collection vs HTTP client), gathered in this same walk.
+    receivers: dict[str, int] = {}
     for node in _walk(root):
+        _receivers.observe(node, receivers)
         if node.type == "with_statement":
             has_with = True
         elif node.type == "variable_declarator":
@@ -203,7 +207,12 @@ def collect_base_env(root: Node, data: bytes) -> BaseEnv:
     # differ at the sink (0-FP); the sink resolver then folds by an O(1) `const_prefixes` lookup.
     # A `with` anywhere drops them all (see above) — its dynamic scope defeats the certainty.
     const_prefixes = {} if has_with else resolve_local_consts(raw_consts)
-    return BaseEnv(instances=instances, default_base=default_base, const_prefixes=const_prefixes)
+    return BaseEnv(
+        instances=instances,
+        default_base=default_base,
+        const_prefixes=const_prefixes,
+        receivers=receivers,
+    )
 
 
 def _is_axios_create(node: Node) -> bool:

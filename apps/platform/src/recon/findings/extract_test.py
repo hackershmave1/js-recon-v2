@@ -617,9 +617,11 @@ def test_generic_call_reads_verb_as_method():
 
 
 def test_generic_call_this_http_angular_pattern():
-    # `this.http.get("/x")` — `this.`-prefixed HTTP client is promoted from Tier 5
-    # generic (suspected) to a confirmed endpoint so URL resolution runs.
-    r = extract('this.http.get("/api/orders")')
+    # An INJECTED `this.http` (assigned from a constructor parameter — Angular/TS DI) is proven
+    # to be a client, so its call is a confirmed endpoint and URL resolution runs.
+    r = extract(
+        'class S{constructor(http){this.http=http} g(){return this.http.get("/api/orders")}}'
+    )
     assert r.generic == []
     assert len(r.endpoints) == 1 and r.endpoints[0].url == "/api/orders"
 
@@ -687,9 +689,10 @@ def test_generic_call_skips_dotted_non_http_receiver():
     # confirmed endpoint (not generic), so all three produce no generic entries.
     assert extract('this.store.get("/api/x")').generic == []
     assert extract('this.cache.get("/api/x")').generic == []
+    # With no evidence of what `this.http` is, it stays a SUSPECTED call (never confirmed).
     r = extract('this.http.get("/api/x")')
-    assert r.generic == []
-    assert len(r.endpoints) == 1 and r.endpoints[0].url == "/api/x"
+    assert r.endpoints == []
+    assert len(r.generic) == 1 and r.generic[0].url == "/api/x"
 
 
 # --- enrichment B: auth header capture --------------------------------------- #
@@ -1627,3 +1630,137 @@ def test_the_highlight_mark_is_the_url_argument_not_the_whole_call(source, url_l
     data = source.encode()
     assert data[endpoint.mark_start_byte : endpoint.mark_end_byte] == url_literal.encode()
     assert endpoint.end_byte - endpoint.start_byte > len(url_literal)
+
+
+# --- receiver evidence: what the bundle says a `.get()` receiver IS ----------------------- #
+
+
+def _calls(r):
+    """Every call the extractor surfaced in any lane, and the honesty counter."""
+    return [*r.endpoints, *r.unresolved, *r.generic], r.unattributed
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # Created as a collection (the real rrweb shape: `this.idNodeMap.get(e) || null`).
+        "class M{constructor(){this.idNodeMap=new Map} n(e){return this.idNodeMap.get(e)||null}}",
+        "class M{constructor(){this.styles=new WeakMap()} n(e){return this.styles.get(e)}}",
+        "class M{dismissed=new Set(); n(e){return this.dismissed.delete(e)}}",  # class field
+        # Created elsewhere, but USED as a collection (.set/.has/.add/.clear/.forEach/...).
+        "class M{n(e,v){this.queues.set(e,v)} o(e){return this.queues.get(e)}}",
+        "class M{n(e){this.flags.has(e)&&this.flags.delete(e)}}",
+        # Local collections, even with a path-like key, are never endpoints.
+        'const routes=new Map(); routes.get("/users");',
+        'const seen=new Set(); seen.add(x); seen.delete("/api/x");',
+    ],
+)
+def test_a_proven_collection_is_never_an_http_call(src):
+    assert _calls(extract(src)) == ([], 0)
+
+
+def test_an_injected_client_with_an_unresolved_url_is_still_a_real_gap():
+    r = extract(
+        "class S{constructor(e,t){this.http=e,this.store=t} g(id){return this.http.get(id)}}"
+    )
+    assert r.unattributed == 1 and len(r.unresolved) == 1
+
+
+def test_a_client_created_by_axios_create_is_confirmed():
+    r = extract(
+        'class S{constructor(){this.api=axios.create({baseURL:"/v1"})} g(){return this.api.get("/u")}}'
+    )
+    assert [e.url for e in r.endpoints] == ["/u"]
+
+
+def test_a_receiver_with_no_evidence_is_only_suspected():
+    # Nothing in the bundle says what `this.backend` is: a path-shaped call is SUSPECTED, a
+    # key-shaped one is nothing — and neither moves the "unattributed calls" counter.
+    assert _calls(extract("class S{g(id){return this.backend.get(id)}}")) == ([], 0)
+    r = extract('class S{g(){return this.backend.get("/users")}}')
+    assert r.endpoints == [] and r.unattributed == 0 and [g.url for g in r.generic] == ["/users"]
+
+
+def test_an_injected_field_also_used_as_a_collection_is_only_suspected():
+    # Contradictory evidence (an injected cache, or two classes reusing `this.http`): never
+    # confirmed, never silently dropped — a path-shaped call stays visible as SUSPECTED.
+    cache = "class S{constructor(c){this.cache=c} a(k,v){this.cache.set(k,v)} b(k){return this.cache.get(k)}}"
+    assert _calls(extract(cache)) == ([], 0)
+    collision = (
+        'class A{constructor(e){this.http=e} g(){return this.http.get("/api/u")}}'
+        'class B{x(){this.http.set("k",1)}}'
+    )
+    r = extract(collision)
+    assert r.endpoints == [] and r.unattributed == 0 and [g.url for g in r.generic] == ["/api/u"]
+
+
+def test_a_client_proven_by_its_own_api_is_confirmed():
+    r = extract(
+        "class S{constructor(){this.client.interceptors.request.use(f)} g(u){return this.client.get(u)}}"
+    )
+    assert r.unattributed == 1
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A class's own `this.get(k)` (an LRU / Backbone model), next to bundled axios internals.
+        "n.interceptors.request.use(f); class LRU{peek(k){return this.get(k)}}",
+        'n.interceptors.request.use(f); class M{full(){return this.get("first")+this.get("last")}}',
+        # `e.request` is an AxiosError / FetchEvent field, not evidence about `e`.
+        "function h(e){if(e.response){}else if(e.request){}} function f(e,t){return e.get(t)||null}",
+        'self.addEventListener("fetch",e=>e.respondWith(e.request)); function f(e,t){return e.get(t)}',
+    ],
+)
+def test_library_internals_never_promote_an_unrelated_receiver(src):
+    r = extract(src)
+    assert r.endpoints == [] and r.unattributed == 0
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        'class S{http=inject(HttpClient); g(){return this.http.get(this.base+"/users")}}',  # Angular 14+
+        'class S{constructor(){this.http=i0.ɵɵinject(H)} g(){return this.http.get(this.base+"/u")}}',
+        'function S(e){this.http=e} S.prototype.g=function(){return this.http.get(this.url+"/users")};',  # ES5
+        'class S{constructor(){this.client=n.a.create({})} g(){return this.client.get(this.u+"/x")}}',
+        'class S{constructor(){this.api=ky.create({})} g(){return this.api.get(this.u+"/x")}}',
+        'class S{constructor(e=null){this.http=e} g(){return this.http.get(this.u+"/x")}}',  # default param
+    ],
+)
+def test_injected_clients_in_every_common_shape_stay_real_gaps(src):
+    assert extract(src).unattributed == 1, src
+
+
+def test_object_create_is_a_plain_object_not_a_client():
+    src = "class S{constructor(){this.byId=Object.create(null)} g(k){return this.byId.get(k)}}"
+    assert extract(src).unattributed == 0
+
+
+def test_receiver_evidence_decodes_linearly_on_nested_computed_keys():
+    # DoS guard (adversarial review): a computed class-field key / method name can span the rest
+    # of the bundle; decoding it once per nesting level would be depth x span. Count the bytes
+    # the evidence pass decodes instead of timing it, so the guard is deterministic.
+    from recon.findings import _base_env, _receivers
+
+    core = '"' + "x" * 200_000 + '"'
+    src = "class A{[" * 300 + core + "]=1}" * 300
+    decoded = 0
+    real_text, real_short = _receivers._text, _receivers._text_if_short
+
+    def counting(fn):
+        def wrapper(node):
+            nonlocal decoded
+            out = fn(node)
+            decoded += len(out)
+            return out
+
+        return wrapper
+
+    _receivers._text, _receivers._text_if_short = counting(real_text), counting(real_short)
+    try:
+        data = src.encode()
+        _base_env.collect_base_env(_PARSER.parse(data).root_node, data)
+    finally:
+        _receivers._text, _receivers._text_if_short = real_text, real_short
+    assert decoded < len(src)  # linear; the uncapped version decoded ~depth x 200 KB
