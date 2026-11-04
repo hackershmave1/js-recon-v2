@@ -89,7 +89,8 @@ function makeSandbox({ sendMessageImpl = null, tabsQueryImpl = null } = {}) {
     URL: MockURL,
     chrome: mockChrome,
     document: mockDocument,
-    setTimeout(fn, ms) { /* suppress revoke timer in tests */ },
+    setTimeout(fn, ms) { /* suppress revoke + no-reply timers in tests */ },
+    clearTimeout() {},
     _appendedChildren: appendedChildren,
     _removedChildren: removedChildren,
     _createdObjectURLs: createdObjectURLs,
@@ -106,13 +107,13 @@ function makeSandbox({ sendMessageImpl = null, tabsQueryImpl = null } = {}) {
 // ─── Test 1: send() — callback receives undefined → resolves to {} ──────────
 
 async function testSendUndefinedCallbackResolvesToEmpty() {
-  const name = 'send(): callback receives undefined → resolves to {}';
+  const name = 'send(): callback receives undefined → an explicit failure';
   try {
     const sb = makeSandbox({
       sendMessageImpl: (msg, cb) => { cb(undefined); }
     });
     const result = await sb._send('getStatus');
-    assertJsonEqual(result, {}, 'undefined callback arg must resolve to {}');
+    assertJsonEqual(result, { ok: false, error: 'empty_reply' }, 'an empty reply is not a success');
     pass(name);
   } catch (err) { fail(name, err); }
 }
@@ -120,13 +121,13 @@ async function testSendUndefinedCallbackResolvesToEmpty() {
 // ─── Test 2: send() — callback receives null → resolves to {} ───────────────
 
 async function testSendNullCallbackResolvesToEmpty() {
-  const name = 'send(): callback receives null → resolves to {}';
+  const name = 'send(): callback receives null → an explicit failure';
   try {
     const sb = makeSandbox({
       sendMessageImpl: (msg, cb) => { cb(null); }
     });
     const result = await sb._send('getStatus');
-    assertJsonEqual(result, {}, 'null callback arg must resolve to {}');
+    assertJsonEqual(result, { ok: false, error: 'empty_reply' }, 'a null reply is not a success');
     pass(name);
   } catch (err) { fail(name, err); }
 }
@@ -134,13 +135,13 @@ async function testSendNullCallbackResolvesToEmpty() {
 // ─── Test 3: send() — chrome.runtime.sendMessage throws (context invalidated) ─
 
 async function testSendThrowsResolvesToEmpty() {
-  const name = 'send(): chrome.runtime.sendMessage throws (context torn down) → resolves to {}';
+  const name = 'send(): chrome.runtime.sendMessage throws (context torn down) → an explicit failure';
   try {
     const sb = makeSandbox({
       sendMessageImpl: () => { throw new Error('Extension context invalidated.'); }
     });
     const result = await sb._send('getStatus');
-    assertJsonEqual(result, {}, 'thrown sendMessage must resolve to {}');
+    assertJsonEqual(result, { ok: false, error: 'Extension context invalidated.' }, 'a throw is a failure with its reason');
     pass(name);
   } catch (err) { fail(name, err); }
 }
@@ -283,7 +284,14 @@ async function run() {
   await testGetActiveTabHostThrows();
   await testDownloadJsonCreatesAnchorAndClicks();
   console.log('test_popup_api: ok');
+  finished = true;
   process.exit(0);
 }
 
-run().catch((e) => { console.error(e); process.exit(1); });
+// A test whose promise never settles lets Node drain the loop and exit 0 with no output —
+// a false green in CI (it only checks exit codes). Treat "exited without finishing" as a failure.
+process.on('exit', (code) => {
+  if (code === 0 && !finished) { console.error('test_popup_api: exited before all tests ran'); process.exitCode = 1; }
+});
+let finished = false;
+run().then(() => { finished = true; }).catch((e) => { console.error(e); process.exit(1); });

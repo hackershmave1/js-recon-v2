@@ -70,7 +70,6 @@ export class WorkspaceClient {
         body: JSON.stringify({ username: username || '', password: password || '' }),
         signal: controller.signal
       });
-      clearTimeout(timer);
       if (!resp.ok) {
         let detail = `HTTP ${resp.status}`;
         try { const b = await resp.json(); if (b && b.detail) detail = b.detail; } catch (e) { /* keep default */ }
@@ -79,8 +78,9 @@ export class WorkspaceClient {
       const data = await resp.json();
       return { success: true, token: data.token, user: data.user, role: data.role, tenant: data.tenant || null };
     } catch (error) {
-      clearTimeout(timer);
       return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    } finally {
+      clearTimeout(timer); // after the body read too: a stalled body is a timeout
     }
   }
 
@@ -91,11 +91,11 @@ export class WorkspaceClient {
     const startedAt = Date.now();
     try {
       const resp = await fetch(target, { method: 'GET', signal: controller.signal });
-      clearTimeout(timer);
       return { ok: resp.ok, status: resp.status, latencyMs: Date.now() - startedAt };
     } catch (error) {
-      clearTimeout(timer);
       return { ok: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    } finally {
+      clearTimeout(timer); // after the body read too: a stalled body is a timeout
     }
   }
 
@@ -142,15 +142,15 @@ export class WorkspaceClient {
         body: JSON.stringify({ options: {}, observations: this.getObservations() || [] }),
         signal: controller.signal
       });
-      clearTimeout(timer);
       if (!resp.ok) {
         return { success: false, status: resp.status, error: `HTTP ${resp.status}` };
       }
       const data = await resp.json();
       return { success: true, started: data.started !== false, message: data.message, job: data.job };
     } catch (error) {
-      clearTimeout(timer);
       return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    } finally {
+      clearTimeout(timer); // after the body read too: a stalled body is a timeout
     }
   }
 
@@ -161,15 +161,15 @@ export class WorkspaceClient {
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
       const resp = await fetch(target, { method: 'GET', headers: { ...this.authHeaders() }, signal: controller.signal });
-      clearTimeout(timer);
       if (!resp.ok) {
         return { success: false, status: resp.status };
       }
       const data = await resp.json();
       return { success: true, job: data.job || null };
     } catch (error) {
-      clearTimeout(timer);
       return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    } finally {
+      clearTimeout(timer); // after the body read too: a stalled body is a timeout
     }
   }
 
@@ -180,13 +180,13 @@ export class WorkspaceClient {
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
       const resp = await fetch(target, { method: 'GET', headers: { ...this.authHeaders() }, signal: controller.signal });
-      clearTimeout(timer);
       if (!resp.ok) return { success: false, status: resp.status, error: `HTTP ${resp.status}` };
       const projects = await resp.json();
       return { success: true, projects: Array.isArray(projects) ? projects : [] };
     } catch (error) {
-      clearTimeout(timer);
       return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    } finally {
+      clearTimeout(timer); // after the body read too: a stalled body is a timeout
     }
   }
 
@@ -202,13 +202,13 @@ export class WorkspaceClient {
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
       const resp = await fetch(target, { method: 'GET', headers: { ...this.authHeaders() }, signal: controller.signal });
-      clearTimeout(timer);
       if (!resp.ok) return { success: false, status: resp.status };
       const data = await resp.json();
       return { success: true, summary: data };
     } catch (error) {
-      clearTimeout(timer);
       return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    } finally {
+      clearTimeout(timer); // after the body read too: a stalled body is a timeout
     }
   }
 
@@ -224,7 +224,6 @@ export class WorkspaceClient {
         body: JSON.stringify(project || {}),
         signal: controller.signal
       });
-      clearTimeout(timer);
       if (!resp.ok) {
         let detail = `HTTP ${resp.status}`;
         try { const body = await resp.json(); if (body && body.detail) detail = body.detail; } catch (e) { /* keep default */ }
@@ -232,8 +231,9 @@ export class WorkspaceClient {
       }
       return { success: true, project: await resp.json() };
     } catch (error) {
-      clearTimeout(timer);
       return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    } finally {
+      clearTimeout(timer); // after the body read too: a stalled body is a timeout
     }
   }
 
@@ -250,7 +250,6 @@ export class WorkspaceClient {
         body: JSON.stringify({ provider, model, api_key: apiKey }),
         signal: controller.signal
       });
-      clearTimeout(timer);
       if (!resp.ok) {
         let detail = `HTTP ${resp.status}`;
         try { const body = await resp.json(); if (body && body.detail) detail = body.detail; } catch (e) { /* keep default */ }
@@ -258,8 +257,9 @@ export class WorkspaceClient {
       }
       return { ok: true };
     } catch (error) {
-      clearTimeout(timer);
       return { ok: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    } finally {
+      clearTimeout(timer); // after the body read too: a stalled body is a timeout
     }
   }
 
@@ -274,7 +274,6 @@ export class WorkspaceClient {
         headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
         signal: controller.signal
       });
-      clearTimeout(timer);
       if (!resp.ok) {
         let detail = `HTTP ${resp.status}`;
         try { const body = await resp.json(); if (body && body.detail) detail = body.detail; } catch (e) { /* keep default */ }
@@ -282,8 +281,9 @@ export class WorkspaceClient {
       }
       return { ok: true, ...(await resp.json()) };
     } catch (error) {
-      clearTimeout(timer);
       return { ok: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
+    } finally {
+      clearTimeout(timer); // after the body read too: a stalled body is a timeout
     }
   }
 }

@@ -95,7 +95,7 @@ export function EngagementPicker({ vm }) {
           <div style={{ display: 'flex', gap: '8px' }}>
             <button onClick={async () => {
               const r = await vm.createProject(newName, newScope);
-              if (r && r.success) { setCreating(false); setNewName(''); setNewScope(''); setScopeText(inheritedScope(r.project)); }
+              if (r && r.ok) { setCreating(false); setNewName(''); setNewScope(''); setScopeText(inheritedScope(r.project)); }
             }} style={{ padding: '7px 14px', borderRadius: '8px', border: 'none', background: C.lime, color: C.onLime, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700 }}>Create</button>
             <button onClick={() => setCreating(false)} style={{ padding: '7px 12px', borderRadius: '8px', border: `1px solid ${C.lineHover}`, background: C.control, color: C.muted, cursor: 'pointer', fontSize: '11.5px', fontWeight: 600 }}>Cancel</button>
           </div>

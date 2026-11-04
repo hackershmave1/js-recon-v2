@@ -22,11 +22,11 @@ export function isAllowedSender(action, sender, runtime) {
 }
 
 // The onMessage listener's first step. True = hand the message to its handler. False = rejected:
-// no handler runs, and a sender that waits for a reply gets {success:false, error:'forbidden'}.
+// no handler runs, and a sender that waits for a reply gets { ok: false, error: 'forbidden' } (the C7 wire shape).
 export function admitMessage(request, sender, runtime, sendResponse) {
   const action = request && request.action;
   if (isAllowedSender(action, sender, runtime)) return true;
   console.warn('[recon] rejected message from an unexpected sender', action, sender && sender.url);
-  if (!PAGE_ACTIONS.has(action)) sendResponse({ success: false, error: 'forbidden' });
+  if (!PAGE_ACTIONS.has(action)) sendResponse({ ok: false, error: 'forbidden' });
   return false;
 }

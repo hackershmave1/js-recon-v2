@@ -29,6 +29,13 @@ The extension treats 500 as retryable, so the popup shows "1 pending" indefinite
 **Fix:** map `SessionInvalid` to a 4xx in the capture ingest, and have the extension surface a non-retryable
 scope error (or reject IP-literal scopes in the popup's scope field up front).
 
+#### D81 · extension CI lane passes a test suite that hangs [S]  ·  ci
+
+`.github/workflows/ci.yml`'s extension lane runs each `tests/test_*.mjs` and checks only the exit code.
+A suite whose promise never settles lets Node drain the event loop and exit 0 with no output — a false
+green (C7 review: `test_popup_api.mjs` silently stopped running this way; fixed there with an
+"exited before finishing" guard). **Fix:** have the lane require each suite's final sentinel line (or
+run them under `node --test`, which reports a never-settled test as a failure).
 #### D80 · webpack module identity: names are poisoned bundle-wide, not per module [M]  ·  recall
 
 `_base_env._declared_names` poisons a name bound more than once ANYWHERE in the file, and webpack
