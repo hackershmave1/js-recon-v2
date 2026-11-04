@@ -20,7 +20,7 @@ function DiffSection({ title, entries, className }: { title: string; entries: Di
                 title={`Priority ${e.priority}/100`}>{e.severity}</span>
             )}
             <span className={`fp-type fp-type-${e.type}`}>{typeLabel(e.type)}</span>
-            <span className="diff-val">{e.value ?? e.path ?? "(unnamed)"}</span>
+            <span className="diff-val">{e.display_value ?? e.value ?? e.path ?? "(unnamed)"}</span>
           </li>
         ))}
       </ul>
@@ -54,6 +54,13 @@ export function DiffPage({ runId, baseRunId }: { runId: string; baseRunId: strin
           <span>Comparing <code>{runId.slice(0, 8)}</code> vs base <code>{baseRunId.slice(0, 8)}</code></span>
           <span>{total} findings across both runs</span>
         </div>
+        {diff.identity_upgraded && (
+          <div className="diff-warning">
+            One of these runs was analyzed with an older finding identity. Its findings were
+            translated to the current identity, so this compares like with like — a renamed
+            variable in a URL is no longer reported as removed and re-added.
+          </div>
+        )}
         {diff.base_incomplete && (
           <div className="diff-warning">
             The base run is incomplete (partial / failed / cancelled). Findings in the

@@ -57,6 +57,8 @@ export interface SpecStatus {
 export interface Sightings { capture: number; platform: number; }
 export interface Finding {
   finding_hash: string; type: string; value: string | null; path: string | null;
+  // Identity v3: `value` stores a positional `{id}`; this is the reader's form (`{userId}`).
+  display_value?: string;
   // D49: read-time priority 0-100 (type + risk tags); `severity` is its label. Optional so
   // pre-D49 fixtures/responses stay valid.
   severity: string | null; priority?: number; attributes: Record<string, unknown>; first_stage: string | null;
@@ -255,11 +257,14 @@ export interface HostsResponse {
 // as a warning so an operator doesn't treat absent-in-base as "resolved".
 export interface DiffEntry {
   finding_hash: string; type: string; value: string | null; path: string | null;
+  display_value?: string;
   severity: string | null; priority: number;
 }
 export interface DiffResponse {
   run_id: string; base_run_id: string; base_incomplete: boolean;
   new: DiffEntry[]; persisted: DiffEntry[]; gone: DiffEntry[];
+  // A run predates the current finding identity; its findings were translated to compare.
+  identity_upgraded?: boolean;
 }
 
 export const TERMINAL_STATES = new Set(["done", "partial", "failed", "cancelled"]);

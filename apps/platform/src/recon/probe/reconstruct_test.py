@@ -186,3 +186,15 @@ def test_build_omits_content_type_for_jquery_body():
     (req,) = reconstruct.build_requests(findings)
     assert req.body_params == ("name",)
     assert req.content_type is None
+
+
+def test_build_carries_merged_path_param_evidence():
+    mapped = _endpoint("GET /u/{id}", finding_hash="e1")
+    mapped.attributes["path_params"] = [{"position": 1, "names": ["userId"], "integer_only": False}]
+    literal = _endpoint("GET /u/{id}?page", finding_hash="e2")
+    literal.attributes["path_params"] = [{"position": 1, "names": [], "integer_only": True}]
+    (req,) = reconstruct.build_requests([mapped, literal])
+    assert req.path_params == (
+        reconstruct.PathParamEvidence(position=1, names=("userId",), integer_only=False),
+    )
+    assert req.path_params[0].name == "userId"

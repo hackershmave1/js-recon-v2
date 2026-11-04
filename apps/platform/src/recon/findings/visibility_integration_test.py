@@ -86,3 +86,64 @@ def test_a_run_diff_ignores_hidden_findings(run):
     other = _run(tenant, session_id)
     diff = queries.diff_runs(tenant, other, run_id)
     assert {e.value for e in diff.persisted} == {"/dashboard", "https://acme.io/login"}
+
+
+def _endpoint_run(tenant: str, session_id: str, value: str, *, as_v2: bool) -> str:
+    """A run holding one endpoint; ``as_v2`` stores the hash a pre-v3 build wrote."""
+    import hashlib
+    import json
+
+    from sqlalchemy import update
+
+    with tenant_session(tenant) as session:
+        run = models.Run(tenant_id=tenant, session_id=session_id, state="done")
+        session.add(run)
+        session.flush()
+        stored = store.record_finding(
+            session,
+            tenant_id=tenant,
+            run_id=str(run.id),
+            finding_type=FindingType.ENDPOINT,
+            value=value,
+            path="input.js",
+            occurrence=store.Occurrence(host="acme.io", source_path="input.js"),
+            first_stage="analyzing",
+        )
+        if as_v2:
+            canonical = {"type": "endpoint", "v": 2, "value": value}
+            v2 = hashlib.sha256(
+                json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            session.execute(
+                update(models.Finding)
+                .where(models.Finding.id == stored.finding_id)
+                .values(finding_hash=v2)
+            )
+        return str(run.id)
+
+
+def test_a_diff_against_a_pre_v3_run_compares_like_with_like(run):
+    # Identity v3: the base run stored `GET /u/${userId}` under v2; the new run stores
+    # `GET /u/{id}`. Same endpoint -> persisted, not "1 gone + 1 new".
+    tenant, session_id, _ = run
+    base = _endpoint_run(tenant, session_id, "GET /u/${userId}", as_v2=True)
+    current = _endpoint_run(tenant, session_id, "GET /u/{id}", as_v2=False)
+    with tenant_session(tenant) as session:
+        store.record_finding(
+            session,
+            tenant_id=tenant,
+            run_id=current,
+            finding_type=FindingType.PARAM,
+            value="GET /u/{id} path:1",
+            path="input.js",
+            occurrence=store.Occurrence(host="acme.io", source_path="input.js"),
+            first_stage="analyzing",
+            attributes=store.path_param_attributes(1, ["userId"]),
+        )
+    diff = queries.diff_runs(tenant, current, base)
+    # The v2 base never recorded path params: the new one is carried, not "new surface".
+    assert sorted(e.value for e in diff.persisted) == ["GET /u/{id}", "GET /u/{id} path:1"]
+    assert diff.new == [] and diff.gone == []
+    assert diff.identity_upgraded is True
+    same_version = queries.diff_runs(tenant, current, current)
+    assert same_version.identity_upgraded is False

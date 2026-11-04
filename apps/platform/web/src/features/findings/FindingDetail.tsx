@@ -20,7 +20,8 @@ export function FindingDetail({ finding, runId, onJumpToSource }: {
   // Header identity: the finding's own value (the endpoint/param/secret), falling back
   // to its real source — never the "input.js" placeholder that `finding.path` carries.
   const headerLabel =
-    finding.value ?? [...new Set(finding.occurrences.map((o) => occSource(o).primary))][0] ?? "";
+    finding.display_value ?? finding.value
+    ?? [...new Set(finding.occurrences.map((o) => occSource(o).primary))][0] ?? "";
   return (
     <div className="card">
       <div>

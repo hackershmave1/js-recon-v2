@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
+
 from recon.findings import normalize as nz
 
 # --- entropy -----------------------------------------------------------------
@@ -163,7 +165,7 @@ def test_suspected_splits_host_from_full_url_path():
         "GET", "https://api.hackerone.com/v1/organizations/${id}/scim_v2"
     )
     assert ep is not None
-    assert ep.value == "GET /v1/organizations/${id}/scim_v2"
+    assert ep.value == "GET /v1/organizations/{id}/scim_v2"  # v3: positional, name is evidence
     assert ep.host == "api.hackerone.com"
 
 
@@ -178,7 +180,8 @@ def test_suspected_guards_protocol_relative_authority_swallow():
 def test_suspected_keeps_partial_query_and_uppercases_method():
     ep = nz.normalize_suspected_endpoint("post", "/bugs/count?${e.queryString}")
     assert ep is not None
-    assert ep.value.startswith("POST /bugs/count?")
+    # v3: a runtime-built query has no knowable keys -> dropped from identity, flagged dynamic.
+    assert ep.value == "POST /bugs/count" and ep.dynamic_query
 
 
 def test_suspected_templates_concrete_id_segments():
@@ -320,10 +323,10 @@ def test_endpoint_drops_fragment_and_empty_query_key():  # review LOW-6
 
 def test_finding_hash_golden_vector_locks_cross_process_stability():
     # Hardcoded digest — any change to the canonical form or algorithm (incl. a
-    # FINDING_HASH_VERSION bump) breaks this by design. v2 = sha256 over
-    # {"type":"endpoint","v":2,"value":"GET /users/{id}"}.
+    # FINDING_HASH_VERSION bump) breaks this by design. v3 = sha256 over
+    # {"type":"endpoint","v":3,"value":"GET /users/{id}"}.
     assert nz.finding_hash("endpoint", "GET /users/{id}") == (
-        "e6bca99690ea97c2e4cfd62d8a47aedb5ca624acb193385c23220ffa5f3f6fa7"
+        "9047a89918ccab9e6cb8af29594a8a9ddcab5340315ab6e4ccce223d8276c520"
     )
 
 
@@ -376,3 +379,186 @@ def test_graphql_value_feeds_stable_path_free_finding_hash():
     value = nz.normalize_graphql_value("query", "Me")
     assert nz.finding_hash("graphql", value) == nz.finding_hash("graphql", value)
     assert nz.finding_hash("graphql", value) != nz.finding_hash("graphql", "mutation Me")
+
+
+# --- v3: placeholder identity (positional {id}, names as evidence) ------------
+
+
+def test_v3_mapped_and_minified_names_share_one_endpoint_identity():
+    mapped = nz.normalize_endpoint("GET", "https://api.acme.com/api/v1/users/${userId}")
+    minified = nz.normalize_endpoint("GET", "https://api.acme.com/api/v1/users/${e}")
+    assert mapped.value == minified.value == "GET /api/v1/users/{id}"
+    assert mapped.path_params == (nz.PathParam(position=1, name="userId", integer=False),)
+    assert minified.path_params == (nz.PathParam(position=1, name="e", integer=False),)
+
+
+def test_v3_integer_literal_and_template_merge_and_record_the_literal():
+    literal = nz.normalize_endpoint("GET", "/users/42/orders/${o.id}")
+    assert literal.value == "GET /users/{id}/orders/{id}"
+    assert literal.path_params == (
+        nz.PathParam(position=1, name=None, integer=True),
+        nz.PathParam(position=2, name="id", integer=False),
+    )
+
+
+def test_v3_uuid_and_hash_segments_count_in_the_ordinal():
+    ep = nz.normalize_endpoint("GET", "/o/f47ac10b-58cc-4372-a567-0e02b2c3d479/items/${itemId}")
+    assert ep.value == "GET /o/{uuid}/items/{id}"
+    assert [p.position for p in ep.path_params] == [1, 2]
+    assert ep.path_params[1].name == "itemId"
+
+
+def test_v3_leading_and_partial_placeholders_stay_verbatim():
+    # A leading placeholder is an unresolved base, a partial one is shape: neither is a param
+    # (spec classify / capture correlation key on the literal `${`).
+    ep = nz.normalize_endpoint("GET", "/${apiBase}/users/${slug}")
+    assert ep.value == "GET /${apiBase}/users/{id}"
+    assert ep.path_params == (nz.PathParam(position=1, name="slug", integer=False),)
+    partial = nz.normalize_endpoint("POST", "/api${CREATE_PATH}/x/file-${n}.json")
+    assert partial.value == "POST /api${CREATE_PATH}/x/file-${n}.json"
+    assert partial.path_params == ()
+
+
+def test_v3_a_slash_or_question_mark_inside_a_substitution_never_splits_the_url():
+    ep = nz.normalize_endpoint("GET", '/api/items/${ids.join("/")}')
+    assert ep.value == "GET /api/items/{id}"
+    tern = nz.normalize_endpoint("GET", '/api/items/${id}${q ? `?${q}` : ""}')
+    assert tern.value == 'GET /api/items/${id}${q ? `?${q}` : ""}'
+    assert not tern.dynamic_query
+
+
+def test_v3_placeholder_query_is_dropped_and_marked_dynamic():
+    ep = nz.normalize_endpoint("POST", "/${m}?${new URLSearchParams(r)}")
+    assert ep.value == "POST /${m}"
+    assert ep.dynamic_query
+    mixed = nz.normalize_endpoint("GET", "/search?q=1&${extra}")
+    assert mixed.value == "GET /search?q" and mixed.dynamic_query
+
+
+def test_v3_endpoint_operation_matches_the_endpoint_value():
+    url = "/users/${userId}?page=2"
+    assert nz.endpoint_operation("get", url) == "GET /users/{id}"
+
+
+def test_v3_suspected_lane_positional_tokens_for_holders_and_templates():
+    a = nz.normalize_suspected_endpoint("GET", "/getUiSessionId/${Be}")
+    b = nz.normalize_suspected_endpoint("GET", "/getUiSessionId/:Be")
+    c = nz.normalize_suspected_endpoint("GET", "/getUiSessionId/EXPR")
+    assert a is not None and b is not None and c is not None
+    assert a.value == b.value == c.value == "GET /getUiSessionId/{id}"
+    lead = nz.normalize_suspected_endpoint("GET", "/:handle/inbox_views")
+    assert lead is not None and lead.value == "GET /:handle/inbox_views"
+
+
+def test_v3_placeholder_name_reads_the_identifier_never_invents_one():
+    assert nz.placeholder_name("${userId}") == "userId"
+    assert nz.placeholder_name("${item.DSStoragePath}") == "DSStoragePath"
+    assert nz.placeholder_name("${ encodeURIComponent(sessionId) }") == "sessionId"
+    assert nz.placeholder_name("${String(t.id)}") == "id"
+    assert nz.placeholder_name("${e}") == "e"
+    assert nz.placeholder_name("${a.b()}") is None
+    assert nz.placeholder_name("${x ? y : z}") is None
+
+
+def test_v3_display_name_prefers_readable_then_longest():
+    assert nz.display_param_name(["e", "userId", "uid"]) == "userId"
+    assert nz.display_param_name(["t", "e"]) is None
+    assert nz.display_param_name([]) is None
+
+
+def test_v3_rewrite_maps_a_stored_v2_value_to_its_v3_value():
+    assert (
+        nz.rewrite_v2_value("endpoint", "GET /api/v1/users/${userId}") == "GET /api/v1/users/{id}"
+    )
+    assert nz.rewrite_v2_value("endpoint", "POST /${m}?${new URLSearchParams(r)}") == "POST /${m}"
+    assert nz.rewrite_v2_value("endpoint_suspected", "GET /x/:Be") == "GET /x/{id}"
+    assert nz.rewrite_v2_value("param", "GET /u/${userId} query:page") == "GET /u/{id} query:page"
+    assert nz.rewrite_v2_value("secret", "aws:abc") == "aws:abc"
+    assert nz.rewrite_v2_value("param", "POST /x query:${new URLSearchParams(r)}") is None
+
+
+def test_v3_display_value_names_each_position_from_its_evidence():
+    evidence = [
+        {"position": 1, "names": ["e", "orgId"], "integer_only": False},
+        {"position": 2, "names": ["t"], "integer_only": False},
+    ]
+    value = "GET /orgs/{id}/users/{id}?page"
+    assert nz.display_endpoint_value(value, evidence) == "GET /orgs/{orgId}/users/{id}?page"
+    assert nz.display_endpoint_value(value, None) == value
+    assert nz.display_endpoint_value("GET /${b}/x/{id}", [evidence[0]]) == "GET /${b}/x/{orgId}"
+
+
+def test_v3_merge_path_param_evidence_is_order_independent():
+    a = [{"position": 1, "names": [], "integer_only": True}]
+    b = [{"position": 1, "names": ["userId"], "integer_only": False}]
+    assert (
+        nz.merge_path_param_evidence(a, b)
+        == nz.merge_path_param_evidence(b, a)
+        == [{"position": 1, "names": ["userId"], "integer_only": False}]
+    )
+
+
+def test_v3_current_hash_translates_an_older_run_and_leaves_current_rows_alone():
+    import json
+
+    v2 = hashlib.sha256(
+        json.dumps(
+            {"v": 2, "type": "endpoint", "value": "GET /u/${userId}"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    current = nz.finding_hash("endpoint", "GET /u/{id}")
+    assert nz.current_finding_hash("endpoint", "GET /u/${userId}", v2) == current
+    assert nz.current_finding_hash("endpoint", "GET /u/{id}", current) == current
+
+
+def test_v3_display_value_for_endpoints_path_params_and_others():
+    endpoint_attrs = {
+        "path_params": [{"position": 1, "names": ["e", "userId"], "integer_only": False}]
+    }
+    assert nz.display_value("endpoint", "GET /u/{id}", endpoint_attrs) == "GET /u/{userId}"
+    param_attrs = {"location": "path", "position": 1, "names": ["e", "userId"], "name": "userId"}
+    assert (
+        nz.display_value("param", "GET /u/{id} path:1", param_attrs)
+        == "GET /u/{userId} path:userId"
+    )
+    mangled = {"location": "path", "position": 1, "names": ["e"], "name": "id"}
+    assert nz.display_value("param", "GET /u/{id} path:1", mangled) == "GET /u/{id} path:id"
+    assert nz.display_value("param", "GET /u/{id} query:page", {"location": "query"}) == (
+        "GET /u/{id} query:page"
+    )
+    assert nz.display_value("secret", "aws:abc", None) == "aws:abc"
+
+
+# --- v3 review fixes ------------------------------------------------------------
+
+
+def test_v3_a_url_already_holding_the_mask_sentinel_never_crashes_or_corrupts():
+    hostile = nz.normalize_endpoint("GET", "/users/7/x/${id}")
+    assert hostile.value == "GET /users/�7�/x/{id}"
+    assert hostile.path_params[0].name == "id"
+
+
+def test_v3_expr_sentinel_is_not_an_observed_name():
+    ep = nz.normalize_suspected_endpoint("GET", "/api/EXPR")
+    assert ep is not None and ep.path_params[0].name is None
+
+
+def test_v3_a_body_param_with_a_substitution_keeps_its_v3_counterpart():
+    assert nz.rewrite_v2_value("param", "POST /x body:${k}") == "POST /x body:${k}"
+
+
+def test_v3_suspected_lane_still_strips_trailing_whitespace():
+    ep = nz.normalize_suspected_endpoint("GET", "/x ")
+    assert ep is not None and ep.value == "GET /x"
+
+
+@pytest.mark.dos_timing
+def test_v3_masking_is_free_for_a_url_without_substitutions():
+    import time
+
+    url = "/a/" + "b" * 2_000_000
+    start = time.perf_counter()
+    nz.normalize_endpoint("GET", url)
+    assert time.perf_counter() - start < 0.5

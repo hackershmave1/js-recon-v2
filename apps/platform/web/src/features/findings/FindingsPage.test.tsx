@@ -230,4 +230,18 @@ describe("FindingsPage", () => {
     view();
     expect(screen.queryByRole("checkbox", { name: /hidden/ })).toBeNull();
   });
+
+  it("shows the observed path-param name, and search finds it (identity v3)", async () => {
+    const named: FindingsResponse = { ...data, count: 2, findings: [
+      f({ finding_hash: "u1", value: "GET /api/v1/users/{id}", display_value: "GET /api/v1/users/{userId}" }),
+      f({ finding_hash: "u2", type: "param", value: "GET /api/v1/users/{id} path:1",
+        display_value: "GET /api/v1/users/{userId} path:userId",
+        attributes: { location: "path", position: 1, names: ["e", "userId"], name: "userId" } }),
+    ] };
+    render(<TenantProvider><FindingsPage data={named} runId="r" onJumpToSource={() => {}} /></TenantProvider>);
+    expect(screen.getByText("GET /api/v1/users/{userId}")).toBeInTheDocument();
+    expect(screen.getByTitle("Also seen as: e")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(/search findings/i), "userId");
+    expect(screen.getByText("GET /api/v1/users/{userId} path:userId")).toBeInTheDocument();
+  });
 });

@@ -160,7 +160,7 @@ export function OverviewPanel(
                 <li key={f.finding_hash} className="ov-row">
                   <span className={`ov-type ov-type-${f.type}`}>{typeLabel(f.type)}</span>
                   {isShadow && <span className="chip chip-shadow">shadow</span>}
-                  <span className="ov-val">{f.value ?? f.path ?? "(unnamed)"}</span>
+                  <span className="ov-val">{f.display_value ?? f.value ?? f.path ?? "(unnamed)"}</span>
                   {where && <span className="ov-where">{where}</span>}
                 </li>
               );

@@ -247,6 +247,41 @@ def test_param_findings_carry_risk_tags(redis, authorized_session):
     assert "risk_tags" not in params["POST /api/orders body:name"].attributes
 
 
+_JS_PLACEHOLDERS = """
+fetch(`/api/v1/users/${userId}`);
+fetch(`/api/v1/users/${e}`);
+fetch("/api/v1/users/42");
+fetch(`/api/v1/items/${t}`);
+fetch(`/search?q=1&${extra}`);
+"""
+
+
+def test_placeholder_names_are_evidence_not_identity(redis, authorized_session):
+    """Identity v3 (QA #5): a readable and a minified copy of one templated call are ONE
+    endpoint, with one positional path param that keeps every observed name as evidence."""
+    tenant, session_id = authorized_session
+    view = coordinator.start_run_with_input(
+        redis, tenant_id=tenant, session_id=session_id, js_source=_JS_PLACEHOLDERS, target="acme.io"
+    )
+    assert _drive(redis, view.id, tenant) == RunState.DONE.value
+
+    findings = _findings(tenant, view.id)
+    endpoints = {f.value: f for f in findings if f.type == "endpoint"}
+    assert set(endpoints) == {"GET /api/v1/users/{id}", "GET /api/v1/items/{id}", "GET /search?q"}
+    users = endpoints["GET /api/v1/users/{id}"]
+    assert users.attributes["path_params"] == [
+        {"position": 1, "names": ["e", "userId"], "integer_only": False}
+    ]
+    assert endpoints["GET /search?q"].attributes["dynamic_query"] is True
+
+    params = {f.value: f.attributes for f in findings if f.type == "param"}
+    assert params["GET /api/v1/users/{id} path:1"]["name"] == "userId"
+    assert params["GET /api/v1/users/{id} path:1"]["risk_tags"] == ["idor"]
+    minified_only = params["GET /api/v1/items/{id} path:1"]
+    assert minified_only["name"] == "id" and "risk_tags" not in minified_only
+    assert not any(":${" in value for value in params)  # no fake runtime-query param
+
+
 def test_endpoint_finding_carries_auth_headers(redis, authorized_session):
     """Enrichment B: a captured auth request header lands in the endpoint finding's
     attributes as name + scheme (never a credential value)."""

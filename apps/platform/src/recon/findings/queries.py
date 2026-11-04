@@ -34,7 +34,7 @@ from recon.db.models import (
     SessionWrapper,
 )
 from recon.domain import TOTAL_ENDPOINT_TYPES, AssetStatus, FindingType
-from recon.findings import priority, visibility
+from recon.findings import normalize, priority, visibility
 from recon.findings.base_url import BaseUrlRule
 from recon.findings.coverage import Coverage, read_run_coverage
 from recon.findings.located import ViewLoc
@@ -150,6 +150,8 @@ class DiffEntry:
     path: str
     severity: str | None
     priority: int
+    # The value as a reader should see it (`GET /users/{userId}`): identity v3 stores `{id}`.
+    display_value: str = ""
 
 
 @dataclass(frozen=True)
@@ -169,6 +171,9 @@ class DiffView:
     new: list[DiffEntry]
     persisted: list[DiffEntry]
     gone: list[DiffEntry]
+    # A run was analyzed under an older finding-identity version; its findings were
+    # translated to the current identity so the diff compares like with like.
+    identity_upgraded: bool = False
 
 
 @dataclass(frozen=True)
@@ -546,7 +551,14 @@ def diff_runs(tenant_id: str, run_id: str, base_run_id: str) -> DiffView | None:
         if base is None:
             return None
 
-        def _load(rid: str) -> dict[str, DiffEntry]:
+        upgraded = False
+        # Path-param findings exist only since identity v3; a translated older run can't have
+        # them, so their absence there is not "new attack surface".
+        path_param_keys: set[str] = set()
+
+        def _load(rid: str) -> tuple[dict[str, DiffEntry], bool]:
+            nonlocal upgraded
+            side_upgraded = False
             hidden = visibility.hidden_finding_ids(session, rid)
             rows = session.execute(
                 select(
@@ -556,25 +568,37 @@ def diff_runs(tenant_id: str, run_id: str, base_run_id: str) -> DiffView | None:
                     Finding.value,
                     Finding.path,
                     Finding.attributes,
-                ).where(Finding.run_id == rid)
+                )
+                .where(Finding.run_id == rid)
+                .order_by(Finding.finding_hash)  # deterministic pick when two rows share a key
             ).all()
             out: dict[str, DiffEntry] = {}
             for fid, fhash, ftype, fvalue, fpath, fattrs in rows:
                 if str(fid) in hidden:
                     continue  # each run's hidden findings drop out, as in the workspace
                 score, label = priority.derive_priority(ftype, fattrs or {})
-                out[fhash] = DiffEntry(
+                # Key by the CURRENT identity: a run analyzed before an identity change
+                # (v2 `${userId}`) then matches the same finding in a v3 run (`{id}`).
+                key = normalize.current_finding_hash(ftype, fvalue, fhash)
+                side_upgraded = side_upgraded or key != fhash
+                if ftype == "param" and (fattrs or {}).get("location") == "path":
+                    path_param_keys.add(key)
+                if key in out:
+                    continue  # two older findings merged into one current finding: keep the first
+                out[key] = DiffEntry(
                     finding_hash=fhash,
                     type=ftype,
                     value=fvalue,
                     path=fpath,
                     severity=label,
                     priority=score,
+                    display_value=normalize.display_value(ftype, fvalue, fattrs),
                 )
-            return out
+            upgraded = upgraded or side_upgraded
+            return out, side_upgraded
 
-        run_findings = _load(str(run_id))
-        base_findings = _load(str(base_run_id))
+        run_findings, _run_upgraded = _load(str(run_id))
+        base_findings, base_upgraded = _load(str(base_run_id))
 
         run_hashes = frozenset(run_findings)
         base_hashes = frozenset(base_findings)
@@ -583,8 +607,15 @@ def diff_runs(tenant_id: str, run_id: str, base_run_id: str) -> DiffView | None:
             return sorted(entries.values(), key=lambda e: (-e.priority, e.type, e.value))
 
         new_hashes = run_hashes - base_hashes
+        if base_upgraded:
+            # The base predates path-param findings: count them as carried, not new.
+            carried = new_hashes & path_param_keys
+            new_hashes -= carried
+            persisted_hashes_extra = carried
+        else:
+            persisted_hashes_extra = frozenset()
         gone_hashes = base_hashes - run_hashes
-        persisted_hashes = run_hashes & base_hashes
+        persisted_hashes = (run_hashes & base_hashes) | persisted_hashes_extra
 
         return DiffView(
             run_id=str(run_id),
@@ -593,6 +624,7 @@ def diff_runs(tenant_id: str, run_id: str, base_run_id: str) -> DiffView | None:
             new=_sorted({h: run_findings[h] for h in new_hashes}),
             gone=_sorted({h: base_findings[h] for h in gone_hashes}),
             persisted=_sorted({h: run_findings[h] for h in persisted_hashes}),
+            identity_upgraded=upgraded,
         )
 
 
