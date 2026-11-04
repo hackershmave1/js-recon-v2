@@ -1783,3 +1783,194 @@ def test_receiver_evidence_decodes_linearly_on_nested_computed_keys():
     finally:
         _receivers._text, _receivers._text_if_short = real_text, real_short
     assert decoded < len(src)  # linear; the uncapped version decoded ~depth x 200 KB
+
+
+# --- QA #4: minified HTTP clients, decided by evidence (never by name) ------------------------
+
+
+def _eps(src: str) -> list[tuple[str, str]]:
+    return sorted((e.method, e.url) for e in extract(src).endpoints)
+
+
+def test_a_create_with_base_url_result_is_a_client_and_so_is_its_factory():
+    # recon-range vite-nomap inventory chunk, verbatim shape: bundled axios under mangled names.
+    src = (
+        'const T=zt(le),wt=T.create({baseURL:"/api/v2"});async function As(){'
+        'await wt.get("/inventory"),await wt.post("/checkout",{token:"t"}),'
+        'await T.delete("/api/v1/session")}'
+    )
+    r = extract(src)
+    assert sorted((e.method, e.url) for e in r.endpoints) == [
+        ("DELETE", "/api/v1/session"),
+        ("GET", "/api/v2/inventory"),
+        ("POST", "/api/v2/checkout"),
+    ]
+    checkout = next(e for e in r.endpoints if e.method == "POST")
+    assert [p.name for p in checkout.params] == ["token"]
+
+
+def test_a_webpack_instance_resolves_but_its_member_chain_factory_is_not_guessed():
+    # `t.A` means "export A of whatever module t is" — a sibling module may reuse `t` for a
+    # store, so the factory is not claimed without per-module identity (DEBT D80).
+    src = (
+        'var t=n(690);const s=t.A.create({baseURL:"/api/v2"});'
+        'async function c(){await s.get("/inventory"),await t.A.delete("/api/v1/session")}'
+    )
+    assert _eps(src) == [("GET", "/api/v2/inventory")]
+
+
+@pytest.mark.xfail(strict=True, reason="known-red: needs per-webpack-module identity (DEBT D80)")
+def test_known_red_a_webpack_member_chain_factory_call():
+    src = 'var t=n(690);const s=t.A.create({baseURL:"/api/v2"});t.A.delete("/api/v1/session")'
+    assert ("DELETE", "/api/v1/session") in _eps(src)
+
+
+def test_a_create_result_that_behaves_like_a_collection_is_not_a_client():
+    # Ember Classic: `EmberObject.create({baseURL})` is a config object read with get/set.
+    assert _eps('const cfg=E.create({baseURL:"/api"});cfg.get("apiKey");cfg.set("a",1)') == []
+
+
+def test_create_without_base_url_or_object_create_is_not_evidence():
+    assert _eps('const x=F.create({name:"a"});x.get("/a")') == []
+    assert _eps('const o=Object.create({baseURL:"/api"});o.get("/a")') == []
+
+
+def test_a_nested_create_does_not_overwrite_a_known_base():
+    src = (
+        'const a=axios.create({baseURL:"/v1"}),b=a.create({baseURL:"/v2"});a.get("/x");b.get("/y")'
+    )
+    assert _eps(src) == [("GET", "/v1/x"), ("GET", "/v2/y")]
+
+
+def test_a_client_instance_is_callable():
+    src = 'const api=axios.create({baseURL:"/v1"});api("/users");api({url:"/o",method:"post"})'
+    assert _eps(src) == [("GET", "/v1/users"), ("POST", "/v1/o")]
+
+
+def test_a_function_passing_its_param_to_fetch_makes_its_call_sites_endpoints():
+    # recon-range social chunk, verbatim shape (a jQuery-like shim).
+    src = (
+        "const t={getJSON:a=>fetch(a).then(e=>e.json()),"
+        "ajax:a=>fetch(a.url,{method:a.method,body:JSON.stringify(a.data)})};"
+        'function o(){t.getJSON("/api/v1/config"),'
+        't.ajax({url:"/api/v1/feedback",method:"POST",data:{msg:"hi"}})}'
+    )
+    r = extract(src)
+    assert sorted((e.method, e.url) for e in r.endpoints) == [
+        ("GET", "/api/v1/config"),
+        ("POST", "/api/v1/feedback"),
+    ]
+    feedback = next(e for e in r.endpoints if e.method == "POST")
+    assert [p.name for p in feedback.params] == ["msg"]
+    assert {e.inferred_wrapper for e in r.endpoints} == {"t.getJSON", "t.ajax"}
+    assert all(e.wrapper is None for e in r.endpoints)  # not a TAUGHT wrapper
+
+
+def test_a_wrapper_with_a_base_and_positional_method_and_body_resolves_each_call():
+    # example_js_files/02 shape: `function c(e,t,n){return fetch(s+e,{method:t||"GET",...})}`.
+    src = (
+        'const s="https://api.x.io";'
+        'function c(e,t,n){return fetch(s+e,{method:t||"GET",'
+        "body:n?JSON.stringify(n):void 0}).then(r=>r.json())}"
+        'c("/orders");c("/orders/"+"42"+"/cancel","POST");c("/items","PUT",{a:1})'
+    )
+    r = extract(src)
+    assert sorted((e.method, e.url) for e in r.endpoints) == [
+        ("GET", "https://api.x.io/orders"),
+        ("POST", "https://api.x.io/orders/42/cancel"),
+        ("PUT", "https://api.x.io/items"),
+    ]
+    put = next(e for e in r.endpoints if e.method == "PUT")
+    assert [p.name for p in put.params] == ["a"]
+
+
+def test_an_unresolvable_wrapper_argument_is_an_attributed_unresolved_row():
+    r = extract("function w(p){return fetch(p)} w(dyn)")
+    assert r.endpoints == []
+    assert any(u.inferred_wrapper == "w" for u in r.unresolved)
+
+
+def test_a_shadowed_param_or_a_non_return_fetch_is_not_a_wrapper():
+    assert _eps('const w=p=>xs.map(p=>fetch(p));w("/x")') == []
+    assert _eps('function w(p){log(p);fetch("/fixed")} w("/x")') == [("GET", "/fixed")]
+
+
+def test_a_wrapper_key_named_open_is_not_mistaken_for_xhr():
+    assert _eps('const t={open:p=>fetch(p)};t.open("/x")') == [("GET", "/x")]
+
+
+@pytest.mark.dos_timing
+def test_wrapper_inference_stays_linear_on_nested_functions():
+    import time
+
+    depth = 3000
+    nested = "".join(f"const a{i}=p=>{{" for i in range(depth)) + "fetch(p)" + "}" * depth
+    start = time.perf_counter()
+    extract(nested)
+    assert time.perf_counter() - start < 5.0
+
+
+# --- QA #4 code-review fixes ------------------------------------------------------------------
+
+
+def test_review_a_wrapper_that_rewrites_its_param_is_not_a_wrapper():
+    assert _eps('function c(e){e="/api"+e;return fetch(e)} c("/x")') == []
+    assert _eps('const R={u:"/api/u"};function c(e){e=R[e];return fetch(e)} c("u")') == []
+
+
+def test_review_options_bound_through_a_param_spread_or_shorthand():
+    assert _eps('function f(u,o){return fetch(u,o)} f("/x",{method:"DELETE"})') == [
+        ("DELETE", "/x")
+    ]
+    assert _eps('const r=o=>fetch(o.url,o);r({url:"/x",method:"POST"})') == [("POST", "/x")]
+    assert _eps('function f(u,method){return fetch(u,{method})} f("/x","PUT")') == [("PUT", "/x")]
+    assert _eps('function f(u,o){return fetch(u,{...o})} f("/x",{method:"PATCH"})') == [
+        ("PATCH", "/x")
+    ]
+
+
+def test_review_an_unresolved_wrapper_call_shows_the_url_argument_not_the_first():
+    r = extract(
+        'function track(e,t){return fetch(t,{method:"POST",body:e})} track("/page/view",dyn)'
+    )
+    assert r.endpoints == []
+    assert [u.url for u in r.unresolved if u.inferred_wrapper] == [":dyn"]
+    base = extract('const s="https://a.io";function c(e){return fetch(s+e)} c(dyn)')
+    assert [u.url for u in base.unresolved if u.inferred_wrapper] == ["https://a.io:dyn"]
+
+
+def test_review_a_class_or_import_shadow_poisons_the_name():
+    src = (
+        'import{a as T}from"./i.js";const wt=T.create({baseURL:"/v2"});'
+        'function f(){class T{static get(k){}} T.get("/cacheKey")}'
+    )
+    assert ("GET", "/cacheKey") not in _eps(src)
+    assert _eps('function c(e){return fetch(e)} function g(){class c{} return c("/notreq")}') == []
+
+
+def test_review_an_inferred_client_needs_a_path_shaped_argument():
+    assert _eps('const cfg=E.create({baseURL:"/api"});cfg.get("apiKey")') == []
+
+
+def test_review_a_wrapper_call_keeps_the_wrappers_auth_headers():
+    src = 'function c(e){return fetch(e,{headers:{Authorization:"Bearer "+tok}})} c("/me")'
+    (ep,) = extract(src).endpoints
+    assert [(h.name, h.scheme) for h in ep.headers] == [("Authorization", "bearer")]
+
+
+def test_review_a_word_in_a_literal_or_a_reassigned_member_is_not_a_wrapper():
+    assert _eps('function load(data){return fetch("/api/data")} load(1);load(2)') == [
+        ("GET", "/api/data")
+    ]
+    assert _eps('const t={k:p=>fetch(p)};t.k=function(x){return x};t.k("/notreq")') == []
+
+
+@pytest.mark.dos_timing
+def test_review_wrapper_keys_decode_linearly_on_nested_computed_keys():
+    import time
+
+    depth = 2000
+    src = "const t=" + "".join("{[" for _ in range(depth)) + "1" + "]:1}" * depth + ";"
+    start = time.perf_counter()
+    extract(src)
+    assert time.perf_counter() - start < 5.0

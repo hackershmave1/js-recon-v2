@@ -161,6 +161,9 @@ class RawEndpoint:
     # above stay the whole call (occurrence identity + the evidence snippet). None = use those.
     mark_start_byte: int | None = None
     mark_end_byte: int | None = None
+    # Provenance for an endpoint recovered through an INFERRED one-hop wrapper (QA #4): the
+    # wrapper's callee (`t.getJSON`). Distinct from `wrapper`, which means "taught by an analyst".
+    inferred_wrapper: str | None = None
 
 
 @dataclass
@@ -195,6 +198,17 @@ class Extraction:
 
 
 @dataclass(frozen=True)
+class InferredWrapper:
+    """A function whose returned call is ``fetch(<url expr>, <options>)`` and whose ``url``
+    reads its own parameters: a call site binds ``params`` to its arguments and evaluates
+    ``url``/``options`` (recon.findings._wrapper_calls)."""
+
+    params: tuple[str, ...]
+    url: Node
+    options: Node | None
+
+
+@dataclass(frozen=True)
 class BaseEnv:
     instances: dict[str, str | None]  # axios.create var -> base literal, or None if dynamic
     default_base: str | None  # axios.defaults.baseURL literal
@@ -212,6 +226,11 @@ class BaseEnv:
     # What each `.get()`-style receiver IS, per the bundle's own evidence (recon.findings._receivers):
     # receiver text -> evidence rank. Read through `_receivers.kind_of`.
     receivers: dict[str, int] = field(default_factory=dict)
+    # QA #4 evidence rules (recon.findings._inferred): instances recognized from a
+    # `.create({baseURL})` result/factory (still subject to the collection-evidence gate), and
+    # one-hop wrappers — a function whose param flows into a fetch URL — keyed by callee text.
+    inferred_instances: frozenset[str] = frozenset()
+    wrappers: dict[str, InferredWrapper] = field(default_factory=dict)
 
 
 # --- tree helpers ------------------------------------------------------------
