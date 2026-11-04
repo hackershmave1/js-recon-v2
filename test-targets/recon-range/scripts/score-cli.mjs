@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { scoreFindings } from "./score.mjs";
+import { findingsUrl, scoreFindings } from "./score.mjs";
 
 const argv = process.argv.slice(2);
 const args = {};
@@ -40,19 +40,22 @@ if (login.ok) {
 }
 
 const key = JSON.parse(await readFile(new URL("../answer-key.json", import.meta.url)));
-// include_hidden=true: score everything the pipeline CAPTURED. The default view hides findings on
+// Score everything the pipeline CAPTURED (include_hidden): the default view hides findings on
 // analytics/vendor hosts (recon.findings.visibility), which would report the planted Google
-// Analytics / Stripe / Sentry calls as missed although they were found — a false FAIL on every run.
-const res = await fetch(`${base}/runs/${args.run}/findings?include_hidden=true`, { headers });
+// Analytics / Stripe / Sentry calls as missed although they were found. The default view is read
+// too, so an expected endpoint the operator would NOT see still fails (scoreFindings `visible`).
+const res = await fetch(findingsUrl(base, args.run, { includeHidden: true }), { headers });
+const visibleRes = res.ok ? await fetch(findingsUrl(base, args.run, { includeHidden: false }), { headers }) : null;
 // NOTE: set process.exitCode and fall off the end rather than process.exit() — after two
 // fetches (login + findings) undici holds pooled keep-alive sockets, and a hard process.exit()
 // races their teardown, crashing with a libuv assertion (wrong exit code) on Windows. Draining
 // the loop exits promptly with the intended PASS/FAIL code, which is this CLI's whole contract.
-if (!res.ok) {
-  console.error(`findings fetch failed: ${res.status} ${res.statusText}`);
+if (!res.ok || !visibleRes.ok) {
+  const bad = res.ok ? visibleRes : res;
+  console.error(`findings fetch failed: ${bad.status} ${bad.statusText}`);
   process.exitCode = 2;
 } else {
-  const r = scoreFindings(await res.json(), key, { nomap: args.nomap === true });
+  const r = scoreFindings(await res.json(), key, { nomap: args.nomap === true, visible: await visibleRes.json() });
   console.log(JSON.stringify(r, null, 2));
   console.log(r.pass ? "PASS" : "FAIL");
   process.exitCode = r.pass ? 0 : 1;

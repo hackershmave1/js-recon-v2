@@ -17,9 +17,15 @@ test("secrets.must has positive counts", () => {
   for (const [p, n] of Object.entries(key.secrets.must)) assert.ok(n >= 1, `${p} must>=1`);
 });
 
-test("the resolved cross-module call is a should_find endpoint, not a blind spot", () => {
-  const ep = key.should_find.find(e => e.id === "bs-crosschunk");
-  assert.deepEqual([ep?.method, ep?.host, ep?.operation], ["GET", "api.acme.com", "/api/v3/orders"]);
+test("the graduated cross-module call is scored by host + operation", async () => {
+  const { scoreFindings } = await import("./score.mjs");
   assert.ok(!key.known_blind_spots.some(b => b.id === "bs-crosschunk"), "graduated: no longer a blind spot");
+  const payload = (host) => ({ coverage: {}, findings: [{ type: "endpoint", value: "GET /api/v3/orders", occurrences: [{ host }] }] });
+  assert.ok(!scoreFindings(payload("api.acme.com"), key).missedEndpoints.includes("bs-crosschunk"), "resolved with its host: found");
+  assert.ok(scoreFindings(payload(null), key).missedEndpoints.includes("bs-crosschunk"), "path only (base lost): missed");
+});
+
+test("only the planted analytics/vendor calls may be hidden from the operator", () => {
+  assert.deepEqual(key.should_find.filter(e => e.expect_hidden).map(e => e.id).sort(), ["ep-ga", "ep-sentry", "ep-stripe"]);
 });
 

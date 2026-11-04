@@ -14,9 +14,9 @@
     { "id": "ep-config", "src": "src/api/social.js", "method": "GET", "operation": "/api/v1/config", "value": "GET /api/v1/config", "params": [] },
     { "id": "ep-feedback", "src": "src/api/social.js", "method": "POST", "operation": "/api/v1/feedback", "value": "POST /api/v1/feedback", "params": [ { "location": "body", "name": "msg" } ] },
     { "id": "ep-ws", "src": "src/api/live.js", "method": "WSS", "operation": "/ws/live", "value": "WSS /ws/live", "params": [] },
-    { "id": "ep-ga", "src": "src/api/thirdparty.js", "method": "GET", "host": "www.google-analytics.com", "params": [] },
-    { "id": "ep-stripe", "src": "src/api/thirdparty.js", "method": "POST", "host": "api.stripe.com", "operation": "/v1/tokens", "params": [] },
-    { "id": "ep-sentry", "src": "src/api/thirdparty.js", "method": "POST", "host": "o0.ingest.sentry.io", "params": [] },
+    { "id": "ep-ga", "src": "src/api/thirdparty.js", "method": "GET", "host": "www.google-analytics.com", "params": [], "expect_hidden": true },
+    { "id": "ep-stripe", "src": "src/api/thirdparty.js", "method": "POST", "host": "api.stripe.com", "operation": "/v1/tokens", "params": [], "expect_hidden": true },
+    { "id": "ep-sentry", "src": "src/api/thirdparty.js", "method": "POST", "host": "o0.ingest.sentry.io", "params": [], "expect_hidden": true },
     { "id": "bs-concat", "src": "src/api/blindspots.js", "method": "GET", "operation": "/api/v1/widgets", "value": "GET /api/v1/widgets", "params": [], "note": "graduated from blind spot: single-unshadowed local const `resource` now folds (Phase 2, Option B)" },
     { "id": "bs-crosschunk", "src": "src/api/orders.js", "method": "GET", "host": "api.acme.com", "operation": "/api/v3/orders", "params": [], "note": "graduated from blind spot: the run-wide export index resolves the imported base.js consts (also via the minified export aliases in the no-map builds)" }
   ],

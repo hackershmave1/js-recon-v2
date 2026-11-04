@@ -141,8 +141,11 @@ npm run score -- --run <run_id> --tenant <tenant_uuid>
 ```
 
 (Optional `--base http://localhost:8000` if the platform isn't on the default.) Scoring a `-nomap`
-build? Add `--nomap`: it skips only the three source-map coverage checks, which a build that
-ships no maps can never meet; every endpoint, param and secret check still applies. This fetches `GET /runs/{run_id}/findings` and diffs it against
+build? Add `--nomap`: the three source-map checks are inverted (the run must honestly report
+`source_map: none`, nothing recovered); every endpoint, param, secret and unattributed check still
+applies. The scorer also reads the default (operator-visible) view: a `should_find` endpoint that
+was captured but is hidden from the operator fails the run as `hiddenFromOperator`, unless the key
+marks it `expect_hidden` (only the planted Google Analytics / Stripe / Sentry calls). This fetches `GET /runs/{run_id}/findings` and diffs it against
 `answer-key.json`, printing a JSON breakdown followed by `PASS` or `FAIL` (and a non-zero exit code
 on `FAIL`).
 
@@ -171,8 +174,8 @@ design spec's grounded-constraints section), not to an aspirational ideal. Keep 
 reading a score:
 
 - **Blind spots are expected-missing, not bugs.** `known_blind_spots` in the answer key
-  (`bs-eventsource`, `bs-concat`, `bs-variable`, `bs-wrapper`, `bs-headers`) are
-  planted specifically to prove documented limits: `EventSource` calls, concatenated/variable URLs,
+  (`bs-eventsource`, `bs-variable`, `bs-wrapper`, `bs-headers`) are
+  planted specifically to prove documented limits: `EventSource` calls, variable URLs,
   untaught custom HTTP wrappers, and request headers (auth/signature) are all invisible to the
   extractor by design. Their absence from `should_find` results is correct behavior, not something
   to chase.
@@ -181,9 +184,10 @@ reading a score:
   `fetch(API_BASE + ORDERS_PATH)`. The run-wide export index (analyze's pre-pass) maps the imported
   names to `base.js`'s string consts — through the minified export aliases too (`import{A as a,O as o}`
   in the no-map builds) — so the call resolves to `GET https://api.acme.com/api/v3/orders`, which is now
-  in `should_find`. The resolver must stay scoped to IMPORTED const operands: folding `bs-concat`'s
-  `"/api/v1/" + resource` (a *local* const) would drop `unattributed` below the `min_unattributed: 2`
-  floor and read as a regression.
+  in `should_find`. `bs-concat` graduated the same way earlier (its single-unshadowed local const
+  `resource` now folds). The `min_unattributed: 2` floor is still met by genuinely unresolvable sinks
+  (`blindspots.js`'s `fetch(u)` on a call result and `fetch(p)` on a parameter, plus the social
+  helper's `fetch(a)`), so a resolver that started guessing those would read as a regression.
 - **GitHub, Slack, and HMAC secret classes are informational, not gating.** Only Stripe (×2,
   including the one hidden in a preserved `/*! … */` legal comment) and AWS are *verified*
   Kingfisher rule classes in this repo; `secrets.must` only requires those. GitHub/Slack/HMAC
@@ -208,5 +212,5 @@ reading a score:
 | `npm run serve:vite:nomap` | Serve `dist/vite-nomap/` on `:4175` |
 | `npm run serve:webpack` | Serve `dist/webpack/` on `:4174` |
 | `npm run serve:webpack:nomap` | Serve `dist/webpack-nomap/` on `:4176` |
-| `npm run score -- --run <id>` | Score a run's findings against `answer-key.json` (logs in as `admin`/`admin`; see §6) |
+| `npm run score -- --run <id> [--nomap]` | Score a run's findings against `answer-key.json` (logs in as `admin`/`admin`; `--nomap` for a `-nomap` build; see §6) |
 | `npm test` | Build all four bundles, then run every `scripts/*.test.mjs` (build invariants, answer-key consistency, planted-surface presence, scoring logic) |
