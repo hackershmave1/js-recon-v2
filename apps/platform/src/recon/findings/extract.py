@@ -590,7 +590,7 @@ def _handle_call(call: Node, result: Extraction, env: BaseEnv, callees: frozense
             _axios_call(call, result, env, base=env.default_base or "")
         elif name in env.wrappers:  # QA #4: an inferred one-hop wrapper `c("/orders")`
             record_wrapper_call(call, name, env.wrappers[name], result, env)
-        elif name in env.instances and not _behaves_like_collection(name, env):
+        elif name in env.instances and _client_call_allowed(name, call, env):
             # An axios(-like) instance is itself callable: `api("/users")`, `api({url})`.
             _axios_call(call, result, env, base=env.instances[name] or "")
         return
@@ -634,7 +634,7 @@ def _dispatch_member(
         _axios_member(call, prop, result, env, base=env.default_base or "")
     elif obj in _JQUERY:
         _jquery(call, prop, result, env)
-    elif obj in env.instances and not _behaves_like_collection(obj, env):
+    elif obj in env.instances and _client_call_allowed(obj, call, env):
         base = env.instances[obj]  # may be None (recognized instance, unknown base)
         _axios_member(call, prop, result, env, base=base or "")
     elif obj in callees:  # taught wrapper — MUST be last so native/instance collisions win
@@ -663,13 +663,19 @@ def _dispatch_member(
         _record_generic(call, prop, result)
 
 
-def _behaves_like_collection(obj: str, env: BaseEnv) -> bool:
-    """An INFERRED instance (a `.create({baseURL})` result/factory) the bundle also shows used
-    as a collection (`.set`/`.has`/...) is not a client — Ember's `cfg = E.create({baseURL})`."""
-    return (
-        obj in env.inferred_instances
-        and _receivers.kind_of(env.receivers, obj) == _receivers.COLLECTION
-    )
+def _client_call_allowed(obj: str, call: Node, env: BaseEnv) -> bool:
+    """An INFERRED instance (a `.create({baseURL})` result/factory, not `axios.create`) must
+    look like a client at this call: never used as a collection (`.set`/`.has`), and its first
+    argument path-shaped (`/inventory`, a URL, or a config object) — Ember's
+    `cfg = E.create({baseURL}); cfg.get("apiKey")` is a property read, not a request."""
+    if obj not in env.inferred_instances:
+        return True
+    if _receivers.kind_of(env.receivers, obj) == _receivers.COLLECTION:
+        return False
+    args = _args(call)
+    if not args:
+        return False
+    return args[0].type == "object" or _looks_like_api_path(_collapse_url(args[0]))
 
 
 def _fetch(call: Node, result: Extraction, env: BaseEnv, base: str = "") -> None:

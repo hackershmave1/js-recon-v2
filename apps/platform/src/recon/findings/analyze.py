@@ -1371,6 +1371,8 @@ def _record_suspected_endpoint(
     attributes: dict[str, Any] = {"kind": ep.kind, "method": ep.method}
     if ep.wrapper:  # provenance: the taught wrapper / receiver this sink came through
         attributes["wrapper"] = ep.wrapper
+    if ep.inferred_wrapper:
+        attributes["inferred_wrapper"] = ep.inferred_wrapper
     attributes.update(_placeholder_attributes(normalized))
     return _write(
         session,

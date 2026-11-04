@@ -21,8 +21,6 @@ Bindings the poison set marks as ambiguous (bound more than once) are never used
 
 from __future__ import annotations
 
-import re
-
 from tree_sitter import Node
 
 from recon.findings._jsast import (
@@ -39,7 +37,6 @@ _NON_CLIENT_FACTORIES = frozenset({"Object", "Reflect"})
 _BASE_URL_KEYS = frozenset({"baseURL"})
 # A returned call chain (`fetch(a).then(r => r.json()).catch(...)`) is followed this far.
 _MAX_CHAIN = 8
-_IDENTIFIER = re.compile(r"[A-Za-z_$][\w$]*")
 
 
 def observe(
@@ -55,6 +52,13 @@ def observe(
         declared = node.child_by_field_name("name")
         if declared is not None and _text(declared) not in poisoned:
             _observe_wrapper(_text(declared), node, wrappers)
+        return
+    if node.type == "assignment_expression":
+        left = node.child_by_field_name("left")
+        if left is not None and left.type == "member_expression":
+            target = _text_if_short(left)
+            if target:
+                wrappers[target] = None  # `t.k = ...` rebinds a wrapper key: ambiguous
         return
     if node.type != "variable_declarator":
         return
@@ -73,15 +77,22 @@ def observe(
             if member.type == "pair":
                 key, fn = member.child_by_field_name("key"), member.child_by_field_name("value")
                 if key is not None and fn is not None and fn.type in _FUNCTION_TYPES:
-                    _observe_wrapper(f"{name}.{_key_text(key)}", fn, wrappers)
+                    _observe_wrapper_member(name, key, fn, wrappers)
             elif member.type == "method_definition":
                 key = member.child_by_field_name("name")
                 if key is not None:
-                    _observe_wrapper(f"{name}.{_key_text(key)}", member, wrappers)
+                    _observe_wrapper_member(name, key, member, wrappers)
 
 
-def _key_text(key: Node) -> str:
-    return (_string_value(key) or "") if key.type == "string" else _text(key)
+def _observe_wrapper_member(
+    owner: str, key: Node, function: Node, wrappers: dict[str, InferredWrapper | None]
+) -> None:
+    # A computed key (`[expr]: ...`) is never a static callee, so it is never decoded (DoS:
+    # nested computed keys would re-decode overlapping spans).
+    if key.type in ("property_identifier", "private_property_identifier"):
+        _observe_wrapper(f"{owner}.{_text(key)}", function, wrappers)
+    elif key.type == "string":
+        _observe_wrapper(f"{owner}.{_string_value(key) or ''}", function, wrappers)
 
 
 def _observe_create(
@@ -103,6 +114,8 @@ def _observe_create(
     factory_text = _text_if_short(factory)
     if not factory_text or factory_text.split(".", 1)[0] in _NON_CLIENT_FACTORIES:
         return
+    if factory_text == "axios":
+        return  # `axios.create` instances are already recognized by name-free axios evidence
     args = _args(call)
     if not args or args[0].type != "object":
         return
@@ -113,8 +126,7 @@ def _observe_create(
     # `a`'s known base (nor may a later sighting overwrite an earlier one).
     instances.setdefault(name, base)
     inferred_instances.add(name)
-    # `axios` itself already has its own dispatch branch; only a renamed factory needs claiming.
-    if factory.type == "identifier" and factory_text != "axios" and factory_text not in poisoned:
+    if factory.type == "identifier" and factory_text not in poisoned:
         instances.setdefault(factory_text, None)
         inferred_instances.add(factory_text)
 
@@ -145,11 +157,39 @@ def _observe_wrapper(key: str, function: Node, wrappers: dict[str, InferredWrapp
     url = args[0]
     # The URL must read a parameter, or this is just a function that fetches a fixed URL
     # (already an ordinary endpoint) — nothing to bind at the call sites.
-    if not set(_IDENTIFIER.findall(_text_if_short(url))) & set(params):
+    if not _identifiers(url) & set(params):
         return
-    options = args[1] if len(args) >= 2 and args[1].type == "object" else None
+    options = args[1] if len(args) >= 2 else None
+    # Options the call sites can be evaluated against: an object literal or a parameter. Any
+    # other expression (a call, a variable) hides the method/body — not a provable wrapper.
+    if options is not None and not (
+        options.type == "object" or (options.type == "identifier" and _text(options) in params)
+    ):
+        return
     # Two definitions under one key (two objects reusing a minified name) prove nothing.
     wrappers[key] = None if key in wrappers else InferredWrapper(params, url, options)
+
+
+def identifiers_of(node: Node) -> set[str]:
+    """Every identifier the expression reads (string contents excluded), or an empty set for
+    an over-cap expression — the same bound `_text_if_short` applies everywhere."""
+    return _identifiers(node)
+
+
+def _identifiers(node: Node) -> set[str]:
+    if not _text_if_short(node):
+        return set()  # over the decode cap: a URL expression that large is not a wrapper's
+    found: set[str] = set()
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type == "identifier":
+            found.add(_text(current))
+        elif current.type not in ("string", "template_string", "property_identifier"):
+            stack.extend(current.named_children)
+        elif current.type == "template_string":
+            stack.extend(c for c in current.named_children if c.type == "template_substitution")
+    return found
 
 
 def _param_names(function: Node) -> tuple[str, ...]:
@@ -175,10 +215,14 @@ def _returned_fetch(function: Node) -> Node | None:
         return None
     expr: Node | None = body
     if body.type == "statement_block":
-        returns = [s for s in body.named_children if s.type == "return_statement"]
+        # Only `{ return fetch(...) }`: a statement before the return (`e = "/api" + e`,
+        # `e = R[e]`) could rewrite a parameter, and binding the raw argument would then
+        # confirm a wrong URL.
+        statements = [s for s in body.named_children if s.type != "comment"]
+        sole = statements[0] if len(statements) == 1 else None
         expr = (
-            returns[0].named_children[0]
-            if len(returns) == 1 and returns[0].named_children
+            sole.named_children[0]
+            if sole is not None and sole.type == "return_statement" and sole.named_children
             else None
         )
     for _ in range(_MAX_CHAIN):

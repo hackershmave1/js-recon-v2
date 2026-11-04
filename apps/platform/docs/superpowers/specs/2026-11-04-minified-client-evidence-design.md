@@ -13,6 +13,19 @@ Status: BUILT (2026-11-04) · QA finding #4 (recon-range scored run, no-map buil
 > (4) The wrapper's own `fetch(p)` row is KEPT (an exported wrapper's only signal; REQ-C2).
 > (5) Callable instances (`api("/x")`) dispatch too; provenance is `inferred_wrapper`, not the
 > taught `wrapper`; the wrapper check runs before `.open`. Class methods deferred.
+>
+> **Code review (REQUEST CHANGES -> fixed):** a block-bodied wrapper must be ONLY
+> `{ return fetch(...) }` (a prior `e = "/api" + e` would confirm a wrong URL); options bound
+> through a parameter / spread / shorthand are read from the call site, and options or a method
+> that can't be read make the call UNRESOLVED (never a defaulted GET); the unresolved skeleton and
+> location mark use the argument the URL actually reads; class and import bindings now poison;
+> an inferred (non-`axios.create`) client call needs a path-shaped first argument; the wrapper's
+> auth headers carry over; computed keys are never decoded. A 2,625-file main-vs-HEAD corpus
+> diff (2,598 real library files) adds confirmed endpoints ONLY in the recon-range chunks.
+>
+> **Coverage note:** the wrapper's own `fetch(p)` stays an unattributed row (it is a real
+> dynamic sink), and each call whose argument can't be resolved adds one more — so a file's
+> `unattributed` count can rise while confirmed recall rises too (example 02: 2 -> 7).
 
 ## 1. Problem (what users see)
 

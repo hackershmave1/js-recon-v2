@@ -1897,3 +1897,69 @@ def test_wrapper_inference_stays_linear_on_nested_functions():
     start = time.perf_counter()
     extract(nested)
     assert time.perf_counter() - start < 5.0
+
+
+# --- QA #4 code-review fixes ------------------------------------------------------------------
+
+
+def test_review_a_wrapper_that_rewrites_its_param_is_not_a_wrapper():
+    assert _eps('function c(e){e="/api"+e;return fetch(e)} c("/x")') == []
+    assert _eps('const R={u:"/api/u"};function c(e){e=R[e];return fetch(e)} c("u")') == []
+
+
+def test_review_options_bound_through_a_param_spread_or_shorthand():
+    assert _eps('function f(u,o){return fetch(u,o)} f("/x",{method:"DELETE"})') == [
+        ("DELETE", "/x")
+    ]
+    assert _eps('const r=o=>fetch(o.url,o);r({url:"/x",method:"POST"})') == [("POST", "/x")]
+    assert _eps('function f(u,method){return fetch(u,{method})} f("/x","PUT")') == [("PUT", "/x")]
+    assert _eps('function f(u,o){return fetch(u,{...o})} f("/x",{method:"PATCH"})') == [
+        ("PATCH", "/x")
+    ]
+
+
+def test_review_an_unresolved_wrapper_call_shows_the_url_argument_not_the_first():
+    r = extract(
+        'function track(e,t){return fetch(t,{method:"POST",body:e})} track("/page/view",dyn)'
+    )
+    assert r.endpoints == []
+    assert [u.url for u in r.unresolved if u.inferred_wrapper] == [":dyn"]
+    base = extract('const s="https://a.io";function c(e){return fetch(s+e)} c(dyn)')
+    assert [u.url for u in base.unresolved if u.inferred_wrapper] == ["https://a.io:dyn"]
+
+
+def test_review_a_class_or_import_shadow_poisons_the_name():
+    src = (
+        'import{a as T}from"./i.js";const wt=T.create({baseURL:"/v2"});'
+        'function f(){class T{static get(k){}} T.get("/cacheKey")}'
+    )
+    assert ("GET", "/cacheKey") not in _eps(src)
+    assert _eps('function c(e){return fetch(e)} function g(){class c{} return c("/notreq")}') == []
+
+
+def test_review_an_inferred_client_needs_a_path_shaped_argument():
+    assert _eps('const cfg=E.create({baseURL:"/api"});cfg.get("apiKey")') == []
+
+
+def test_review_a_wrapper_call_keeps_the_wrappers_auth_headers():
+    src = 'function c(e){return fetch(e,{headers:{Authorization:"Bearer "+tok}})} c("/me")'
+    (ep,) = extract(src).endpoints
+    assert [(h.name, h.scheme) for h in ep.headers] == [("Authorization", "bearer")]
+
+
+def test_review_a_word_in_a_literal_or_a_reassigned_member_is_not_a_wrapper():
+    assert _eps('function load(data){return fetch("/api/data")} load(1);load(2)') == [
+        ("GET", "/api/data")
+    ]
+    assert _eps('const t={k:p=>fetch(p)};t.k=function(x){return x};t.k("/notreq")') == []
+
+
+@pytest.mark.dos_timing
+def test_review_wrapper_keys_decode_linearly_on_nested_computed_keys():
+    import time
+
+    depth = 2000
+    src = "const t=" + "".join("{[" for _ in range(depth)) + "1" + "]:1}" * depth + ";"
+    start = time.perf_counter()
+    extract(src)
+    assert time.perf_counter() - start < 5.0

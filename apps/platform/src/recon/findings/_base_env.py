@@ -113,6 +113,15 @@ def _declared_names(root: Node) -> set[str]:
     for node in _walk(root):
         if node.type in ("variable_declarator", "function_declaration"):
             mark(node.child_by_field_name("name"))
+        elif node.type == "class_declaration":
+            mark(node.child_by_field_name("name"))  # `class T {}` shadows an outer `T`
+        elif node.type == "import_specifier":
+            mark(node.child_by_field_name("alias") or node.child_by_field_name("name"))
+        elif node.type in ("namespace_import", "import_clause"):
+            # `* as T` / a default import `T` — the bound identifier is a direct child.
+            for child in node.named_children:
+                if child.type == "identifier":
+                    mark(child)
         elif node.type == "catch_clause":
             mark(node.child_by_field_name("parameter"))
         elif node.type == "arrow_function":
