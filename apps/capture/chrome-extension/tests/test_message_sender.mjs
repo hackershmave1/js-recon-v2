@@ -59,9 +59,9 @@ function admit(request, sender) {
 const warn = console.warn;
 console.warn = () => {};
 try {
-  assert.deepEqual(admit({ action: 'updateSettings', settings: {} }, page), { admitted: false, replies: [{ success: false, error: 'forbidden' }] });
+  assert.deepEqual(admit({ action: 'updateSettings', settings: {} }, page), { admitted: false, replies: [{ ok: false, error: 'forbidden' }] });
   assert.deepEqual(admit({ action: 'dynamicScriptDetected' }, popup), { admitted: false, replies: [] });
-  assert.deepEqual(admit(null, page), { admitted: false, replies: [{ success: false, error: 'forbidden' }] });
+  assert.deepEqual(admit(null, page), { admitted: false, replies: [{ ok: false, error: 'forbidden' }] });
   assert.deepEqual(admit({ action: 'getStatus' }, popup), { admitted: true, replies: [] });
   assert.deepEqual(admit({ action: 'inlineScriptDetected' }, pageFrame), { admitted: true, replies: [] });
 } finally {

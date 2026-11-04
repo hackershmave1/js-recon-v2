@@ -22,8 +22,10 @@ export function replyOnce(sendResponse) {
   let replied = false;
   return (result) => {
     if (replied) return;
-    replied = true;
+    // Mark AFTER the send: if Chrome refuses it (a message over the 64 MiB limit throws), the
+    // handler's own failure reply must still be able to go out instead of being a "duplicate".
     sendResponse(toWire(result));
+    replied = true;
   };
 }
 

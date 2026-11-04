@@ -8,6 +8,12 @@
 // instead of showing a failure. newSession rotates and re-binds the session, so it gets longer.
 const NO_REPLY_MS = { newSession: 300000 };
 const DEFAULT_NO_REPLY_MS = 60000;
+// Reads the popup already repeats on its 2 s poll: an unanswered one needs no re-sync of its own
+// (re-syncing would send more reads, which would time out too — a feedback loop).
+const POLLED_READS = new Set(['getStatus', 'getFiles', 'getAnalysisProgress', 'getHistory', 'listProjects', 'getSessionFindingsSummary']);
+// The worker took the message and died before answering (MV3 teardown, a crash): Chrome closes
+// the channel. Unlike "Receiving end does not exist" (never delivered), the action may have run.
+const CHANNEL_CLOSED = /message (port|channel) closed/i;
 let onNoReply = () => {};
 
 // The app registers what "re-sync" means (re-read status/files) once, on mount.
@@ -24,15 +30,17 @@ export function send(action, extra = {}) {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (res) => { if (!settled) { settled = true; clearTimeout(timer); resolve(res); } };
-    const timer = setTimeout(() => {
+    const unknown = () => {
       if (settled) return;
       finish({ ok: false, error: 'no_reply', unknownOutcome: true });
-      onNoReply(action);
-    }, NO_REPLY_MS[action] || DEFAULT_NO_REPLY_MS);
+      if (!POLLED_READS.has(action)) onNoReply(action);
+    };
+    const timer = setTimeout(unknown, NO_REPLY_MS[action] || DEFAULT_NO_REPLY_MS);
     try {
       chrome.runtime.sendMessage({ action, ...extra }, (resp) => {
         const lastError = chrome.runtime.lastError;  // read it, or Chrome logs "unchecked"
-        if (lastError) finish({ ok: false, error: lastError.message || 'no_receiver' });
+        if (lastError && CHANNEL_CLOSED.test(lastError.message || '')) unknown();
+        else if (lastError) finish({ ok: false, error: lastError.message || 'no_receiver' });
         else finish(resp || { ok: false, error: 'empty_reply' });
       });
     } catch (e) {

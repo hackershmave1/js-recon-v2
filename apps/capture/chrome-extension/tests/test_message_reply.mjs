@@ -29,6 +29,18 @@ pass('toWire: one { ok, error? } shape, failures-as-values never read as success
   pass('replyOnce: a second reply is dropped');
 }
 
+{
+  // Chrome throws on a reply over its message-size limit (a huge export); the handler then sends
+  // its own failure reply, which must not be swallowed as a duplicate.
+  const sent = [];
+  let first = true;
+  const reply = replyOnce((r) => { if (first) { first = false; throw new Error('Message length exceeded'); } sent.push(r); });
+  assert.throws(() => reply({ success: true, exportData: 'huge' }));
+  reply({ success: false, error: 'Message length exceeded' });
+  assert.deepEqual(sent, [{ error: 'Message length exceeded', ok: false }]);
+  pass('replyOnce: a reply Chrome refused does not block the failure reply');
+}
+
 // --- dispatchReply: a throwing / rejecting handler still answers ----------------------------
 {
   const sent = [];

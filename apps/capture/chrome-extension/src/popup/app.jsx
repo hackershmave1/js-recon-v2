@@ -83,6 +83,16 @@ export function App() {
   // cold worker shows "Loading…", never a wrong gate). Adopt-once so later polls don't clobber edits.
   function adoptSettings(s) { setSettings((prev) => prev || s); }
 
+  // Adopt the session's analysis job (on open, and after an unknown-outcome re-sync) so the feed
+  // resumes for a run already in flight or shows a finished one.
+  function adoptAnalysisJob(res) {
+    if (!res?.ok || !res.job?.counts) return;
+    const c = res.job.counts;
+    const inFlight = (c.queued || 0) + (c.analyzing || 0);
+    if (inFlight > 0) setAnalysis({ status: 'running', counts: c, files: res.job.files || [] });
+    else if ((c.completed || 0) > 0 || (c.failed || 0) > 0) setAnalysis({ status: 'done', counts: c, files: res.job.files || [] });
+  }
+
   async function refresh() {
     const [st, fl] = await Promise.all([api.getStatus(), api.getFiles()]);
     if (st && typeof st.isCapturing === 'boolean') setStatus(st);
@@ -92,19 +102,20 @@ export function App() {
 
   useEffect(() => {
     // C7: if the worker never answers, the outcome is unknown — re-read its state, don't fail.
-    api.setNoReplyHandler(() => { showToast(api.replyError({ unknownOutcome: true }), 'warn'); refresh(); });
+    // An action's outcome is unknown, so re-read everything it could have changed: status/files,
+    // the engagement list (a create may have landed) and the analysis job (an analyze may run).
+    api.setNoReplyHandler(() => {
+      showToast(api.replyError({ unknownOutcome: true }), 'warn');
+      refresh();
+      api.listProjects().then((r) => { if (r && Array.isArray(r.projects)) setProjects(r.projects); });
+      api.getAnalysisProgress().then(adoptAnalysisJob);
+    });
     api.getActiveTabHost().then(setActiveHost);
     refresh();
     // D46(c): load persisted past sessions so the history section renders on first open.
     api.getHistory().then((r) => { if (r?.history) setCaptureHistory(r.history); });
     // Seed analysis state on open so reopening the popup mid-run resumes the feed.
-    api.getAnalysisProgress().then((res) => {
-      if (!res?.ok || !res.job?.counts) return;
-      const c = res.job.counts;
-      const inFlight = (c.queued || 0) + (c.analyzing || 0);
-      if (inFlight > 0) setAnalysis({ status: 'running', counts: c, files: res.job.files || [] });
-      else if ((c.completed || 0) > 0 || (c.failed || 0) > 0) setAnalysis({ status: 'done', counts: c, files: res.job.files || [] });
-    });
+    api.getAnalysisProgress().then(adoptAnalysisJob);
     // Load engagements for the picker (cached in the worker; refreshed on open).
     api.listProjects().then((res) => { if (res && Array.isArray(res.projects)) setProjects(res.projects); });
     const id = setInterval(refresh, 2000);
@@ -374,7 +385,7 @@ export function App() {
       return;
     }
     setAnalysis((a) => ({ ...a, status: 'idle' }));
-    if (res?.unknownOutcome) return;  // re-synced by the no-reply handler; re-trying is safe
+    if (res?.unknownOutcome) return;  // the no-reply handler re-reads the job and resumes the feed
     // Analyze is blocked until captures finish uploading, so it can't run on a partial set (D43c).
     // An expired session will never drain without re-auth, so it reads differently from slow uploads.
     if (res?.reason === 'session_expired') {
@@ -405,6 +416,8 @@ export function App() {
     if (res?.ok) {
       setConnState('ok'); setLatency(`${res.latencyMs} ms`);
       showToast(`Connection OK · ${res.latencyMs} ms`);
+    } else if (res?.unknownOutcome) {
+      setConnState('fail'); setLatency('');  // the no-reply handler already said why
     } else {
       setConnState('fail'); setLatency('timeout');
       showToast('Connection failed', 'error');

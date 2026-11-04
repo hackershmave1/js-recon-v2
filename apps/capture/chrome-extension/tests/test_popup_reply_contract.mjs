@@ -61,6 +61,36 @@ this.api = { send };`, sandbox);
   pass('no reply -> { ok:false, error:"no_reply", unknownOutcome:true } + re-sync');
 }
 
+// 3b. The worker took the message and died: Chrome closes the channel. That is the real
+// "unknown outcome" (the action may have run) — re-sync, never "Could not start session".
+{
+  const runtime = { lastError: null, getManifest: () => ({ version: '1' }) };
+  runtime.sendMessage = (msg, cb) => {
+    runtime.lastError = { message: 'A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received' };
+    cb(undefined);
+  };
+  const sandbox = { chrome: { runtime, tabs: {} }, setTimeout: (fn) => setTimeout(fn, 5), clearTimeout, console };
+  vm.createContext(sandbox);
+  vm.runInContext(`${apiSource}\nthis.api = { send, setNoReplyHandler };`, sandbox);
+  const resynced = [];
+  sandbox.api.setNoReplyHandler((a) => resynced.push(a));
+  const res = await sandbox.api.send('newSession');
+  assert.equal(res.unknownOutcome, true);
+  assert.deepEqual([...resynced], ['newSession']);
+  pass('a channel closed mid-request is an unknown outcome -> re-sync');
+}
+
+// 3c. An unanswered POLLED read never triggers a re-sync (it would feed back into more reads).
+{
+  const api = loadApi(() => {});
+  const resynced = [];
+  api.setNoReplyHandler((a) => resynced.push(a));
+  const res = await api.send('getStatus');
+  assert.equal(res.unknownOutcome, true);
+  assert.deepEqual([...resynced], []);
+  pass('an unanswered poll read does not re-sync (no feedback loop)');
+}
+
 // 4. A reply that lands after the safety net fired is ignored (the popup already re-synced).
 {
   let late;
