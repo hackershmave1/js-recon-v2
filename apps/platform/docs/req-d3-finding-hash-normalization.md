@@ -11,6 +11,13 @@
 > (L1). `UNIQUE(run_id, finding_hash)` confirmed correct (cross-run uniqueness would
 > break D5).
 >
+> **v3 (2026-11-04, `FINDING_HASH_VERSION = 3`): placeholder names removed from identity.**
+> A whole-segment `${userId}` after a static segment is a positional `{id}` (names become
+> evidence; path params become findings keyed by position) — see §4.1 / §4.3. Session state
+> keyed by hash (triage, spec status, base-URL picks) is carried by migration 0033 (additive
+> v3 copies), and the run diff translates an older run's hashes to the current identity
+> (`normalize.current_finding_hash`) instead of showing every finding as removed + re-added.
+>
 > **v2 (2026-08-19, `FINDING_HASH_VERSION = 2`): source path removed from hashed
 > identity.** The same logical finding seen in several source files is now ONE finding
 > with several occurrences — the C1 treatment (host) applied to path. A version tag is
@@ -114,9 +121,20 @@ Documented, acceptable.
   ambiguous segments stay literal by design. Pure-numeric API versions (`/api/2/`) still
   collapse to `{id}` — accepted, but now **visible**: the distinct raw paths are
   recorded as occurrences and countable for REQ-C2.
+- **Placeholders (identity v3, 2026-11-04)**: `${...}` substitutions are masked (balanced,
+  nested templates included) before any splitting, so a `/` or `?` inside one never splits the
+  URL. A segment that is EXACTLY one `${...}` and comes after a static segment becomes `{id}`
+  — the same token as a literal integer, so `/users/${userId}`, `/users/${e}` (minified) and
+  `/users/42` are ONE finding. The identifier is evidence (`attributes.path_params`), never
+  hashed. Leading placeholders (an unresolved base, `/${apiBase}/users`) and partial segments
+  (`api${PATH}`) stay verbatim: spec classification and capture correlation key on that literal
+  `${`, and `${AUTH_URL}/login` vs `${API_URL}/login` must not merge. The suspected lane also
+  treats a whole `:holder`/`EXPR` segment this way. Design + review:
+  `docs/superpowers/specs/2026-11-04-placeholder-identity-design.md`.
 - **Trailing slash** stripped (except root `/`).
 - **Query**: parse, **de-dupe** keys, sort ascending, join with `&` (no values); array
-  keys canonicalized (`ids[]`, `ids[0]` → `ids`). Empty ⇒ nothing appended.
+  keys canonicalized (`ids[]`, `ids[0]` → `ids`). Empty ⇒ nothing appended. A key built at
+  runtime (`?${qs}`) is dropped and the endpoint is marked `dynamic_query` (v3).
 - **Fragment** dropped. Percent-decode unreserved chars before templating.
 
 Example: `POST https://API.acme.io:443/users/4821/orders/f47ac10b-58cc-4372-a567-0e02b2c3d479?sort=asc&page=2&sort=desc`
@@ -140,7 +158,10 @@ Example: `POST https://API.acme.io:443/users/4821/orders/f47ac10b-58cc-4372-a567
 
 - **operation**: owning endpoint's `METHOD + " " + templated-path` (no query, no host).
 - **location**: `path` | `query` | `header` | `body` | `cookie`.
-- **name**: parameter name, case preserved.
+- **name**: parameter name, case preserved. For `location = path` (v3) the identity is the
+  1-based POSITION among the operation's `{id}`/`{uuid}`/`{hash}` tokens
+  (`GET /users/{id} path:1`); observed names are attributes (`names`, display `name`, risk
+  tags from readable names only). Only confirmed-lane endpoints get path params.
 
 ## 5. Hash construction
 
