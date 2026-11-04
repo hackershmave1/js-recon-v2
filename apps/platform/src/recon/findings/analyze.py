@@ -1173,6 +1173,8 @@ def _record_endpoint(
     endpoint_attributes.update(_placeholder_attributes(normalized))
     if ep.wrapper:
         endpoint_attributes["wrapper"] = ep.wrapper
+    if ep.inferred_wrapper:  # QA #4 provenance: the inferred one-hop wrapper it came through
+        endpoint_attributes["inferred_wrapper"] = ep.inferred_wrapper
     if ep.headers:
         # Auth surface captured statically (enrichment B): header names + scheme keyword,
         # never a credential value. Non-identity attribute -> no finding_hash churn.
@@ -1313,6 +1315,8 @@ def _record_unresolved_endpoint(
     attributes: dict[str, Any] = {"kind": ep.kind, "method": ep.method}
     if ep.wrapper:  # provenance: the taught wrapper this sink came through (display-only)
         attributes["wrapper"] = ep.wrapper
+    if ep.inferred_wrapper:
+        attributes["inferred_wrapper"] = ep.inferred_wrapper
     if finding_type == FindingType.PAGE_ROUTE:  # route-lane display confidence: "high" | "low"
         attributes["confidence"] = ep.confidence
     return _write(

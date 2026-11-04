@@ -70,6 +70,7 @@ from recon.findings._jsast import (
     _text_if_short,
     _walk,
 )
+from recon.findings._wrapper_calls import record_wrapper_call
 from recon.findings.wrappers import WrapperRule, wrapper_callees
 
 __all__ = [
@@ -587,6 +588,11 @@ def _handle_call(call: Node, result: Extraction, env: BaseEnv, callees: frozense
             _fetch(call, result, env)
         elif name == "axios":
             _axios_call(call, result, env, base=env.default_base or "")
+        elif name in env.wrappers:  # QA #4: an inferred one-hop wrapper `c("/orders")`
+            record_wrapper_call(call, name, env.wrappers[name], result, env)
+        elif name in env.instances and not _behaves_like_collection(name, env):
+            # An axios(-like) instance is itself callable: `api("/users")`, `api({url})`.
+            _axios_call(call, result, env, base=env.instances[name] or "")
         return
     # Member access, dotted (axios.get) or computed (axios["get"]) — the latter is
     # common in property-mangled bundles and must not be silently dropped (C2).
@@ -611,8 +617,13 @@ def _dispatch_member(
     call: Node, obj: str, prop: str, result: Extraction, env: BaseEnv, callees: frozenset[str]
 ) -> None:
     nav_arg = _nav_route_arg(obj, prop)
+    wrapper_key = f"{obj}.{prop}"
     if prop == "fetch" and obj in _GLOBAL_OBJECTS:
         _fetch(call, result, env)
+    elif wrapper_key in env.wrappers:
+        # QA #4: `t.getJSON("/x")` where `t.getJSON = a => fetch(a)` — before `.open`/nav, so a
+        # wrapper KEY named `open` is the wrapper the file defines, not an XHR.
+        record_wrapper_call(call, wrapper_key, env.wrappers[wrapper_key], result, env)
     elif (
         nav_arg is not None
     ):  # client-navigation sink -> page route; before .open so window.open wins
@@ -623,7 +634,7 @@ def _dispatch_member(
         _axios_member(call, prop, result, env, base=env.default_base or "")
     elif obj in _JQUERY:
         _jquery(call, prop, result, env)
-    elif obj in env.instances:
+    elif obj in env.instances and not _behaves_like_collection(obj, env):
         base = env.instances[obj]  # may be None (recognized instance, unknown base)
         _axios_member(call, prop, result, env, base=base or "")
     elif obj in callees:  # taught wrapper — MUST be last so native/instance collisions win
@@ -650,6 +661,15 @@ def _dispatch_member(
         # SUSPECTED custom client. STRICTLY last — every real sink, axios instance, and taught
         # wrapper above wins first; this only sees receivers nothing else claimed.
         _record_generic(call, prop, result)
+
+
+def _behaves_like_collection(obj: str, env: BaseEnv) -> bool:
+    """An INFERRED instance (a `.create({baseURL})` result/factory) the bundle also shows used
+    as a collection (`.set`/`.has`/...) is not a client — Ember's `cfg = E.create({baseURL})`."""
+    return (
+        obj in env.inferred_instances
+        and _receivers.kind_of(env.receivers, obj) == _receivers.COLLECTION
+    )
 
 
 def _fetch(call: Node, result: Extraction, env: BaseEnv, base: str = "") -> None:

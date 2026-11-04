@@ -13,11 +13,12 @@ import re
 
 from tree_sitter import Node
 
-from recon.findings import _receivers
+from recon.findings import _inferred, _receivers
 from recon.findings._dataflow import resolve_local_consts
 from recon.findings._jsast import (
     _MAX_URL_SPAN,
     BaseEnv,
+    InferredWrapper,
     _args,
     _object_pairs,
     _string_value,
@@ -168,8 +169,12 @@ def collect_base_env(root: Node, data: bytes) -> BaseEnv:
     has_with = False
     # What `.get()`/`.post()` receivers ARE (collection vs HTTP client), gathered in this same walk.
     receivers: dict[str, int] = {}
+    # QA #4: clients/wrappers the bundle proves under any (minified) name, same walk.
+    inferred_instances: set[str] = set()
+    wrappers: dict[str, InferredWrapper | None] = {}
     for node in _walk(root):
         _receivers.observe(node, receivers)
+        _inferred.observe(node, poisoned, instances, inferred_instances, wrappers)
         if node.type == "with_statement":
             has_with = True
         elif node.type == "variable_declarator":
@@ -212,6 +217,8 @@ def collect_base_env(root: Node, data: bytes) -> BaseEnv:
         default_base=default_base,
         const_prefixes=const_prefixes,
         receivers=receivers,
+        inferred_instances=frozenset(inferred_instances),
+        wrappers={key: w for key, w in wrappers.items() if w is not None},
     )
 
 
