@@ -398,13 +398,15 @@ def _fold_indirect(node: Node, env: BaseEnv) -> str | None:
     `fetch(u + "/x")`, Phase 2), a cross-module ESM import (`fetch(API_BASE + ORDERS_PATH)`),
     or a webpack require-alias member (`fetch(r.t + r.M)`).
 
-    Returns ``None`` unless SOME const source is in scope (local / cross-module / webpack), so
-    a file with no resolvable consts is a no-op and behavior is byte-for-byte unchanged.
-    All-operands-or-``None`` — a partial resolution never yields a guess (REQ-C2).
+    With no const source in scope only a ``+`` chain can fold — and then only when every
+    operand is a literal (`"/api/v1/"+"widgets"`, which minifiers emit): that must not depend on
+    whether some unrelated const happens to exist in the same file. All-operands-or-``None`` — a
+    partial resolution never yields a guess (REQ-C2).
     """
-    if not env.const_prefixes and not env.cross_module_consts and not env.webpack_members:
-        return None
     if node.type not in ("identifier", "member_expression", "binary_expression"):
+        return None
+    has_sources = env.const_prefixes or env.cross_module_consts or env.webpack_members
+    if not has_sources and node.type != "binary_expression":
         return None
     if node.end_byte - node.start_byte > _MAX_URL_SPAN:
         return None  # over-cap expression — bail before the O(span) walk (DoS)
