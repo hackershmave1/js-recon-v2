@@ -245,6 +245,8 @@ export interface HostRow {
 export interface HostsResponse {
   run_id: string; count: number; in_scope: number;
   endpoints_unattributed: number; inferred_unattributed: number; suspected_unattributed: number; hosts: HostRow[];
+  // A local host (localhost) was seen while the server's local-targets switch is off.
+  local_targets_disabled?: boolean;
 }
 
 // D54: run-to-run finding-set diff (REQ-D5).

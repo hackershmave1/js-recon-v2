@@ -118,6 +118,12 @@ def _resolve_scope_hosts(scope_hosts: list[str], target: str | None) -> list[str
     for entry in scope_hosts:
         normalized = egress.normalize_scope_entry(entry, allow_local=allow_local)
         if normalized is None:
+            if egress.is_local_only_scope_entry(entry):
+                raise SessionInvalid(
+                    f"invalid scope host: {entry!r} is a local target, and local targets are "
+                    "disabled on this server (enable them for development with "
+                    "RECON_ALLOW_LOCAL_EGRESS=true)"
+                )
             raise SessionInvalid(f"invalid scope host: {entry!r}")
         if normalized not in cleaned:
             cleaned.append(normalized)
@@ -208,6 +214,20 @@ def resolve_session_id(tenant_id: str, session_id: str) -> str:
     return platform_id
 
 
+def capture_scope_hosts(raw_domains: list[str]) -> list[str]:
+    """The extension's declared capture scope, cleaned for storage. Capture scope is DISPLAY-ONLY
+    (captured assets never egress, so the egress guard is inert): an entry the server can't
+    accept — ``localhost`` with local targets disabled, an IP literal — is left out of the
+    declared scope instead of failing the upload. Normalized and de-duplicated."""
+    allow_local = get_settings().allow_local_egress
+    cleaned: list[str] = []
+    for entry in raw_domains:
+        normalized = egress.normalize_scope_entry(entry, allow_local=allow_local)
+        if normalized is not None and normalized not in cleaned:
+            cleaned.append(normalized)
+    return cleaned
+
+
 def seed_scope_hosts_if_empty(tenant_id: str, session_id: str, raw_domains: list[str]) -> None:
     """Set scope_hosts on a capture session that currently has none.
 
@@ -218,12 +238,7 @@ def seed_scope_hosts_if_empty(tenant_id: str, session_id: str, raw_domains: list
     that already has scope is never overwritten."""
     if not raw_domains:
         return
-    allow_local = get_settings().allow_local_egress
-    cleaned = [
-        n
-        for d in raw_domains
-        if (n := egress.normalize_scope_entry(d, allow_local=allow_local)) is not None
-    ]
+    cleaned = capture_scope_hosts(raw_domains)
     if not cleaned:
         return
     with tenant_session(tenant_id) as session:

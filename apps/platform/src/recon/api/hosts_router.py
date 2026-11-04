@@ -35,6 +35,7 @@ def get_run_hosts(
         "endpoints_unattributed": result.endpoints_unattributed,
         "inferred_unattributed": result.inferred_unattributed,
         "suspected_unattributed": result.suspected_unattributed,
+        "local_targets_disabled": result.local_targets_disabled,
         "hosts": [
             {
                 "host": row.host,

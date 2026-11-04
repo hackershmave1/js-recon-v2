@@ -1150,3 +1150,30 @@ def test_concurrent_batches_store_each_version_once(make_capture_client, monkeyp
     rows = [r for r in run_assets.list_for_run(tid, run_id) if r.url.startswith(url)]
     assert sorted(r.input_ref for r in rows) == sorted([key_a, key_b])  # each version once
     assert {r.fetch_status for r in rows} == {"ok"}
+
+
+@pytest.mark.parametrize(("switch", "scope"), [("false", []), ("true", ["localhost"])])
+def test_a_localhost_capture_uploads_whatever_the_switch(make_capture_client, switch, scope):
+    # DEBT D71: a local / IP-literal capture scope used to 500 every upload (retried forever).
+    client = make_capture_client(RECON_ALLOW_LOCAL_EGRESS=switch)
+    sid = str(uuid.uuid4())
+    r = client.post(
+        "/api/save-files",
+        json={
+            "metadata": {
+                "sessionId": sid,
+                "disableAnalysis": True,
+                "rootDomains": ["localhost", "127.0.0.1"],
+            },
+            "files": [_file("http://localhost:4173/assets/app.js", "fetch('/api/x')", sid)],
+        },
+    )
+    assert r.status_code == 200, r.text
+    tenant = _tenant_id(client.capture_tenant_name)
+    with tenant_session(tenant) as session:
+        stored = session.scalar(
+            select(EngagementSession.scope_hosts).where(EngagementSession.external_id == sid)
+        )
+    assert list(stored or []) == scope  # declared scope = only what the server accepts
+    health = client.get("/api/health").json()
+    assert health["allowLocalTargets"] is (switch == "true")

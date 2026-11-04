@@ -87,10 +87,15 @@ def start_run(
         session.scope_hosts,
         allow_local=get_settings().allow_local_egress,
     ):
-        raise HTTPException(
-            status_code=400,
-            detail=f"crawl target {body.target!r} is not in the session scope",
-        )
+        detail = f"crawl target {body.target!r} is not in the session scope"
+        if not get_settings().allow_local_egress and egress.is_local_only_scope_entry(
+            egress.host_of(body.target)
+        ):
+            detail += (
+                " — it is a local target, and local targets are disabled on this server "
+                "(enable them for development with RECON_ALLOW_LOCAL_EGRESS=true)"
+            )
+        raise HTTPException(status_code=400, detail=detail)
     if body.capture:
         # Kill-switch + precondition: capture drives a real browser (SSRF residual),
         # so it must be explicitly enabled and needs a URL to open.

@@ -111,6 +111,10 @@ class HostsView:
     # endpoints_unattributed but kept SEPARATE so neither denominator mixes lanes.
     suspected_unattributed: int
     hosts: list[HostRow]
+    # Assets were captured/crawled from a local host (e.g. localhost) while the dev-only
+    # local-targets switch is off: it can't be declared scope on this server, so it never shows
+    # "in scope". The UI says so. Endpoint hosts don't count (a dev URL in a bundle is not that).
+    local_targets_disabled: bool = False
 
 
 def _host(value: str | None) -> str:
@@ -240,6 +244,8 @@ def _aggregate_hosts(
         inferred_unattributed=inferred_unattributed,
         suspected_unattributed=suspected_unattributed,
         hosts=rows,
+        local_targets_disabled=not allow_local
+        and any(egress.is_local_only_scope_entry(h) for h in assets_by_host),
     )
 
 

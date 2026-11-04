@@ -13,12 +13,14 @@ Effort: S (hours) · M (a day-ish) · L (multi-day).
 
 ## Open debt
 
-### 2026-11-03 extension end-to-end walkthrough — OPEN (D71)
+### 2026-11-03 extension end-to-end walkthrough — RESOLVED (D71) · OPEN (D78)
 
 Found while driving the unpacked extension against the live stack (the findings-summary 404 found in the
 same walkthrough was fixed with it).
 
 #### D71 · An IP-literal capture scope makes `/api/save-files` return 500, and the extension retries forever [S]  ·  correctness
+
+> ✅ **RESOLVED** (2026-11-04). Wider than recorded: `localhost` hit it too on the default stack. Capture scope is display-only, so `sessions.capture_scope_hosts` now leaves out entries the server can't accept (an IP literal; `localhost` unless the dev switch is on) instead of failing the upload. The switch is passed through compose, reported by `/api/health` and the Settings page, and the Hosts tab explains a local host that can't be in scope.
 
 `sessions/service.py:_resolve_scope_hosts` rejects an IP-literal scope host (e.g. `127.0.0.1`) by design, but
 the `SessionInvalid` it raises escapes `capture_router.save_files` → `_get_or_create_session` as an HTTP 500.
@@ -26,6 +28,15 @@ The extension treats 500 as retryable, so the popup shows "1 pending" indefinite
 
 **Fix:** map `SessionInvalid` to a 4xx in the capture ingest, and have the extension surface a non-retryable
 scope error (or reject IP-literal scopes in the popup's scope field up front).
+
+#### D78 · katana keeps a stored `localhost` crawl scope after the local-targets switch is turned off [S]  ·  security
+
+`discover/katana.build_argv` passes the session's raw stored `scope_hosts` as `-crawl-scope` without
+re-checking them against the current `RECON_ALLOW_LOCAL_EGRESS` (every other egress path does). A mixed
+scope stored while the switch was on (`["acme.io","localhost"]`) keeps `-crawl-scope localhost` after it is
+turned off. Bounded by the seed guard, `-field-scope rdn` and the `_revalidate` post-filter; katana's own
+requests are the documented residual. **Fix:** filter `scope_hosts` through `egress.is_valid_scope_entry`
+with the current flag in `build_argv`.
 
 ### 2026-09-06 extension swarm review — OPEN (D55–D63)
 

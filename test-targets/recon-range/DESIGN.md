@@ -109,7 +109,7 @@ Matching rule: endpoints match on **method + operation** (value split on space, 
 | id | construct | source | expected platform behavior |
 |---|---|---|---|
 | bs-eventsource | `new EventSource('/api/v1/stream')` | blindspots.js | no finding at all |
-| bs-concat | `fetch('/api/v1/'+resource)` | blindspots.js | increments `coverage.unattributed` |
+| bs-concat | `fetch('/api/v1/'+resource)` | blindspots.js | GRADUATED to `should_find` (local-const folding) |
 | bs-variable | `const u = pickUrl(); fetch(u)` | blindspots.js | increments `coverage.unattributed` |
 | bs-wrapper | `makeClient().get('/api/v1/hidden')` | blindspots.js | no trace (untaught wrapper) |
 | bs-headers | `Authorization` + `X-Signature`(HMAC) + `X-Timestamp` on ep-secure | secure.js | the URL (`ep-secure`) is found; the **headers/signing are invisible** — documented, not scored |
@@ -128,14 +128,14 @@ All secrets are synthetic, non-live, local-only fixtures. `--no-validate` flags 
 
 ## 5. Scoring (`scripts/score.mjs`)
 
-Args: `--run <run_id>` `--tenant <tenant_uuid>` `--base http://localhost:8000`. Steps:
+Args: `--run <run_id>` `--nomap` `--tenant <tenant_uuid>` `--base http://localhost:8000` (the README §6 is the current runbook). Steps:
 1. `GET {base}/runs/{run_id}/findings`, **authenticated**. Under the default auth-on stack this route needs an `Authorization: Bearer <token>` from `POST /auth/login` (`admin`/`admin`); the token carries the tenant, so no `X-Tenant-Id` is required. With auth on the platform ignores `X-Tenant-Id` and 401s (`deps.py:96-97`) unless `RECON_ALLOW_HEADER_TENANT=1` re-enables the header path — in which case the value must be the tenant **UUID**, not the name (`get_tenant_id` 400s a non-UUID, `deps.py:104-105`). Signed-in captures land in the **operator** tenant (dev default `QA`), not the unauthenticated-capture fallback `capture-spike` (`config.py:141`), so resolve and pass the operator tenant's UUID (see §6).
 2. Partition `findings[]` explicitly by `type` into `endpoint` / `param` / `secret` (all three exist — `domain.py:64-71`).
 3. **Endpoints**: for each `should_find`, match method + operation (value before `?`); for third-party rows match `occurrences[].host`. Report found / missed. Endpoint findings not in the key → `unexpected` (informational).
 4. **Params**: for each expected `param`, require a `param`-type finding with matching `attributes.location` + `attributes.name`.
 5. **Secrets**: collect providers from each secret finding's `attributes.rule`/`attributes.name` (fallback: the `value` `provider:` prefix). Require the **must-find** classes (Stripe ×2 incl. the comment one, AWS). GitHub/Slack/HMAC informational.
 6. **Source-map re-extraction** (Phase 3 proof): assert `coverage.source_map == "capture"` (accept `"inline"`; `analyze.py:224,469-470`), `coverage.sources_recovered > 0`, and that ≥1 **endpoint or param** finding has an `occurrences[].source_path` ≠ `input.js` (secrets always `input.js`, so never assert on them — `analyze.py:364,540`).
-7. **Blind spots**: assert no endpoint finding matches bs-eventsource / bs-wrapper, and `coverage.unattributed >= 2` (concat + variable). A blind spot that *did* resolve is surfaced as a note, not a failure.
+7. **Blind spots**: assert no endpoint finding matches bs-eventsource / bs-wrapper, and `coverage.unattributed >= 2` (variable + call-result + helper-parameter sinks). A blind spot that *did* resolve is surfaced as a note, not a failure.
 8. Print a table + verdict. **PASS = all `should_find` endpoints found + all expected `param` findings present + must-find secrets present + source-map re-extraction observed (step 6).** Blind spots, informational secrets, and `unexpected` do not fail. Exit non-zero on FAIL.
 
 The same key scores both the Vite run and the Webpack run (two invocations); divergence between bundlers is itself a reported signal.

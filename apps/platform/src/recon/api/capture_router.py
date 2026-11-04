@@ -94,7 +94,14 @@ def capture_health() -> dict:
     """The extension's workspace-client health probe (``testConnection``). Carries the
     ingest ``contractVersion`` so a client can detect wire-shape drift; the current
     extension ignores the body, so adding the field is backward-compatible."""
-    return {"status": "ok", "mode": "platform", "contractVersion": CAPTURE_CONTRACT_VERSION}
+    return {
+        "status": "ok",
+        "mode": "platform",
+        "contractVersion": CAPTURE_CONTRACT_VERSION,
+        # The dev-only local-targets switch (RECON_ALLOW_LOCAL_EGRESS), so a client can show
+        # whether `localhost` can be crawled / counted as declared scope on this server.
+        "allowLocalTargets": get_settings().allow_local_egress,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -234,11 +241,13 @@ def _create_capture_session(
     engagement_id: str | None,
     scope_hosts: list[str] | None = None,
 ) -> str:
+    scope_hosts = sessions_service.capture_scope_hosts(scope_hosts or [])
     # scope_hosts seeds the Hosts-tab in/out-of-scope classification: captured assets
     # never egress so the security guard is inert here (§4 defect B), but the operator's
-    # declared domains matter for display. Invalid entries are dropped by create_session's
-    # _resolve_scope_hosts → SessionInvalid; the engagement retry below handles that too.
-    # Bind the engagement (projectId) if it resolves cleanly, but NEVER raise on the
+    # declared domains matter for display. capture_scope_hosts leaves out entries the server
+    # can't accept (localhost with local targets disabled, an IP literal) — passing them through
+    # made create_session raise SessionInvalid on BOTH attempts below, a 500 the extension
+    # retried forever (DEBT D71). Bind the engagement (projectId) if it resolves cleanly, but NEVER raise on the
     # ingest hot path (§4 defect A): a foreign/deleted engagement makes create_session
     # raise SessionInvalid *before* any row is added, so we retry unbound. A malformed
     # id was already filtered to None by _safe_uuid upstream. external_id is the

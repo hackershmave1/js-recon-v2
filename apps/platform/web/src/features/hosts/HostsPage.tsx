@@ -86,6 +86,12 @@ export function HostsPage({ data, techUnknown = false }: { data: HostsResponse; 
             </>
           )}
         </p>
+        {data.local_targets_disabled && (
+          <p className="hosts-note">
+            localhost can't be marked in scope: local targets are disabled on this server (development stacks
+            enable them with RECON_ALLOW_LOCAL_EGRESS=true).
+          </p>
+        )}
       </div>
 
       <div className="hosts-controls">

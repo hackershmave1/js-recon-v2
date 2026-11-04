@@ -266,3 +266,25 @@ def test_apex_already_declared_no_duplicate():
         scope_hosts=["canditech.io"],
     )
     assert _row(view, "api.canditech.io").in_scope
+
+
+def test_a_local_host_with_the_switch_off_is_explained():
+    off = _agg(asset_urls=["http://localhost:4173/app.js"], allow_local=False)
+    assert off.local_targets_disabled is True
+    on = _agg(
+        asset_urls=["http://localhost:4173/app.js"], scope_hosts=["localhost"], allow_local=True
+    )
+    assert on.local_targets_disabled is False
+    assert (
+        _agg(asset_urls=["https://acme.io/app.js"], allow_local=False).local_targets_disabled
+        is False
+    )
+
+
+def test_a_dev_url_inside_a_public_bundle_does_not_trigger_the_local_targets_note():
+    view = _agg(
+        asset_urls=["https://acme.io/app.js"],
+        endpoint_occurrences=[("localhost", "h1"), ("backend", "h2")],
+        allow_local=False,
+    )
+    assert view.local_targets_disabled is False
