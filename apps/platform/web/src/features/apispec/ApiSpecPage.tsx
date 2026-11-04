@@ -109,7 +109,7 @@ function OperationDetail({ op, onOpenFinding }: {
             <span>
               <span className="as-linkbox-cap">LINKED FINDING</span>
               <span className="as-linkbox-val as-linkbox-finding">
-                {finding.type}: {finding.value ?? finding.path ?? "(unnamed)"}
+                {finding.type}: {finding.display_value ?? finding.value ?? finding.path ?? "(unnamed)"}
               </span>
             </span>
           </button>

@@ -128,8 +128,21 @@ def test_a_diff_against_a_pre_v3_run_compares_like_with_like(run):
     tenant, session_id, _ = run
     base = _endpoint_run(tenant, session_id, "GET /u/${userId}", as_v2=True)
     current = _endpoint_run(tenant, session_id, "GET /u/{id}", as_v2=False)
+    with tenant_session(tenant) as session:
+        store.record_finding(
+            session,
+            tenant_id=tenant,
+            run_id=current,
+            finding_type=FindingType.PARAM,
+            value="GET /u/{id} path:1",
+            path="input.js",
+            occurrence=store.Occurrence(host="acme.io", source_path="input.js"),
+            first_stage="analyzing",
+            attributes=store.path_param_attributes(1, ["userId"]),
+        )
     diff = queries.diff_runs(tenant, current, base)
-    assert [e.value for e in diff.persisted] == ["GET /u/{id}"]
+    # The v2 base never recorded path params: the new one is carried, not "new surface".
+    assert sorted(e.value for e in diff.persisted) == ["GET /u/{id}", "GET /u/{id} path:1"]
     assert diff.new == [] and diff.gone == []
     assert diff.identity_upgraded is True
     same_version = queries.diff_runs(tenant, current, current)

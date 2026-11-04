@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
+
 from recon.findings import normalize as nz
 
 # --- entropy -----------------------------------------------------------------
@@ -527,3 +529,36 @@ def test_v3_display_value_for_endpoints_path_params_and_others():
         "GET /u/{id} query:page"
     )
     assert nz.display_value("secret", "aws:abc", None) == "aws:abc"
+
+
+# --- v3 review fixes ------------------------------------------------------------
+
+
+def test_v3_a_url_already_holding_the_mask_sentinel_never_crashes_or_corrupts():
+    hostile = nz.normalize_endpoint("GET", "/users/7/x/${id}")
+    assert hostile.value == "GET /users/�7�/x/{id}"
+    assert hostile.path_params[0].name == "id"
+
+
+def test_v3_expr_sentinel_is_not_an_observed_name():
+    ep = nz.normalize_suspected_endpoint("GET", "/api/EXPR")
+    assert ep is not None and ep.path_params[0].name is None
+
+
+def test_v3_a_body_param_with_a_substitution_keeps_its_v3_counterpart():
+    assert nz.rewrite_v2_value("param", "POST /x body:${k}") == "POST /x body:${k}"
+
+
+def test_v3_suspected_lane_still_strips_trailing_whitespace():
+    ep = nz.normalize_suspected_endpoint("GET", "/x ")
+    assert ep is not None and ep.value == "GET /x"
+
+
+@pytest.mark.dos_timing
+def test_v3_masking_is_free_for_a_url_without_substitutions():
+    import time
+
+    url = "/a/" + "b" * 2_000_000
+    start = time.perf_counter()
+    nz.normalize_endpoint("GET", url)
+    assert time.perf_counter() - start < 0.5

@@ -29,6 +29,18 @@ The extension treats 500 as retryable, so the popup shows "1 pending" indefinite
 **Fix:** map `SessionInvalid` to a 4xx in the capture ingest, and have the extension surface a non-retryable
 scope error (or reject IP-literal scopes in the popup's scope field up front).
 
+#### D79 · identity v3 placeholder edge cases left verbatim (accepted) [S]  ·  recall
+
+Identity v3 (`normalize._templatize_path`, 2026-11-04) collapses a whole `${...}` segment after a
+static segment to `{id}`. Known shapes it leaves alone, each an honest (extra-row) outcome, never an
+over-merge: (1) a literal host plus a LEADING placeholder (`https://api.x.com/${userId}`) stays verbatim,
+so its readable/minified copies are still two rows; (2) `${...}` masking counts braces without parsing JS
+strings, so `${fmt("{")}` swallows the rest of the URL into one placeholder; (3) a base-URL prefix rule
+written against a v2 path with a non-leading `${var}` (`/api/${ver}`) no longer matches the v3 `{id}`
+path (hash-keyed selection rules ARE migrated by 0033). **Fix when seen in data:** treat a leading
+placeholder as a param when the host is literal; string-aware brace scan; rewrite `path_prefix` in a
+migration via `normalize.rewrite_v2_value`.
+
 #### D78 · katana keeps a stored `localhost` crawl scope after the local-targets switch is turned off [S]  ·  security
 
 `discover/katana.build_argv` passes the session's raw stored `scope_hosts` as `-crawl-scope` without

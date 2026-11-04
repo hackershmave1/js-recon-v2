@@ -259,7 +259,14 @@ _MASK_RE = re.compile(f"{_MASK_OPEN}(\\d+){_MASK_CLOSE}")
 
 def _mask_substitutions(text: str) -> tuple[str, list[str]]:
     """Replace every balanced ``${...}`` (nested templates included) with an indexed mask.
-    An unbalanced one masks to the end of the text — it can't be split safely either."""
+    An unbalanced one masks to the end of the text — it can't be split safely either.
+
+    A sentinel code point already in the text (a hostile literal) is replaced with U+FFFD
+    first, so it can never be read back as a mask index (IndexError / wrong substitution)."""
+    if _MASK_OPEN in text or _MASK_CLOSE in text:
+        text = text.replace(_MASK_OPEN, "\ufffd").replace(_MASK_CLOSE, "\ufffd")
+    if "${" not in text:
+        return text, []  # fast path: byte-identical, and O(1) Python work for plain URLs
     out: list[str] = []
     subs: list[str] = []
     i, n = 0, len(text)
@@ -410,7 +417,10 @@ def _templatize_path(
                 out.append(_unmask(raw, subs))
                 continue
             mask = _MASK_RE.fullmatch(raw)
-            name = placeholder_name(subs[int(mask.group(1))]) if mask else raw.lstrip(":")
+            if mask:
+                name = placeholder_name(subs[int(mask.group(1))])
+            else:  # `:holder` reads a real identifier; the `EXPR` sentinel is not a name
+                name = None if raw == _SUSPECTED_EXPR else raw.lstrip(":")
             params.append(PathParam(len(params) + 1, name, integer=False))
             out.append("{id}")
             continue
@@ -470,6 +480,8 @@ def _normalize(method: str, url: str, *, holders: bool) -> tuple[Endpoint, str] 
     keys, dynamic = _query_keys(split.query)
     verb = method.strip().upper()
     operation = f"{verb} {template}" if verb else template
+    if holders:
+        operation = operation.strip()  # the suspected lane always stripped (identity-stable)
     value = operation + (f"?{'&'.join(keys)}" if keys else "")
     host = _unmask(split.hostname, subs) if split.hostname else None
     return Endpoint(value=value, host=host, path_params=params, dynamic_query=dynamic), operation
@@ -573,13 +585,14 @@ def rewrite_v2_value(finding_type: str, value: str) -> str | None:
     if finding_type == "param":
         masked, subs = _mask_substitutions(value)
         head, _sep, token = masked.rpartition(" ")
-        if _MASK_RE.search(token):
+        # Only a runtime-built QUERY key lost its v3 counterpart; a body key keeps its text.
+        if token.startswith("query:") and _MASK_RE.search(token):
             return None
         operation = _unmask(head, subs)
         method, _sep, path = operation.partition(" ")
         if operation.startswith("/"):
             method, path = "", operation
-        return f"{endpoint_operation(method, path)} {token}"
+        return f"{endpoint_operation(method, path)} {_unmask(token, subs)}"
     return value
 
 

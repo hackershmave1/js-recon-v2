@@ -16,8 +16,10 @@ verdicts too. When several v2 findings merge into one v3 finding (``${userId}`` 
 the most recently updated verdict wins. Threat citations are left alone: they are verified
 against the run they were generated from and rendered as plain hashes, never re-resolved.
 
-The v3 hash is computed here with the version FROZEN at 3 (not ``FINDING_HASH_VERSION``), so a
-future identity bump cannot change what this revision did.
+The v3 hash is computed here with the version FROZEN at 3 (not ``FINDING_HASH_VERSION``). The
+v2 -> v3 value rewrite is the live ``normalize.rewrite_v2_value``: a future identity change
+that alters it must keep this migration's behavior (a database still at 0032 then upgraded by
+that later build would otherwise compute different v3 keys).
 """
 
 from __future__ import annotations

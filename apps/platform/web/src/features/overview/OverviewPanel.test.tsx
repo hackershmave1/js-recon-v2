@@ -125,6 +125,15 @@ describe("OverviewPanel", () => {
     expect(screen.queryByText(/input\.js/)).toBeNull();
   });
 
+  it("shows a top finding under its display value (`{userId}`, not the stored `path:1`)", () => {
+    renderPanel({
+      run_id: "r", count: 1, coverage: null, spec: null,
+      findings: [finding({ finding_hash: "u", type: "param", value: "GET /u/{id} path:1",
+        display_value: "GET /u/{userId} path:userId" })],
+    });
+    expect(screen.getByText("GET /u/{userId} path:userId")).toBeInTheDocument();
+  });
+
   it("counts total endpoints as API + promoted (suspected) and shows the split", () => {
     renderPanel({
       run_id: "r", count: 3, coverage: null, spec: null,
