@@ -17,6 +17,7 @@ import { isRelevantInlineScript } from './modules/inline-relevance.js';
 import { normalizeObservedUrl, isApiIshObservation, isTelemetryPath } from './modules/observation-filter.js';
 import { prepareRequestBody, redactBody, capBody } from './modules/body-capture.js';
 import { CaptureSession } from './modules/capture-session.js';
+import { PAGE_ACTIONS, isAllowedSender } from './modules/message-sender.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -30,7 +31,7 @@ const DEFAULT_DENY_RULES = [
 
 // Messages the popup/content-script send without waiting for a response. The onMessage
 // listener must NOT hold the response channel open for these (see setupListeners).
-const FIRE_AND_FORGET_ACTIONS = new Set(['dynamicScriptDetected', 'inlineScriptDetected', 'responseBodyObserved']);
+const FIRE_AND_FORGET_ACTIONS = PAGE_ACTIONS;
 
 // Per-page cap on captured inline <script> bodies (DEBT D45a). A churny SPA can inject a fresh
 // inline script per route; the content-hash dedup + relevance filter thin most, this bounds the
@@ -269,6 +270,14 @@ class JSExtractor {
 
     chrome.runtime.onMessage.addListener(
       (request, sender, sendResponse) => {
+        // A web page can forge content-script messages: reject a command from the wrong sender
+        // before any handler runs (modules/message-sender.js).
+        const action = request && request.action;
+        if (!isAllowedSender(action, sender, chrome.runtime)) {
+          console.warn('[recon] rejected message from an unexpected sender', action, sender && sender.url);
+          if (!FIRE_AND_FORGET_ACTIONS.has(action)) sendResponse({ success: false, error: 'forbidden' });
+          return false;
+        }
         // Defer handling until init has populated settings/session/stores. Hold the
         // sendResponse channel open ONLY for actions that actually respond — a fire-and-
         // forget message (e.g. dynamicScriptDetected) returning true would leak the port

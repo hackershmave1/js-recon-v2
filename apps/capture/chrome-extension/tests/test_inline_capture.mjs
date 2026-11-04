@@ -22,7 +22,9 @@ assert.match(cs, /addedNodes[\s\S]*?isCapturableInlineScript[\s\S]*?textContent/
 assert.match(cs, /scanLoadedScripts\(\)\s*\{[\s\S]*?scanInlineScripts\(\);/, 'initial scan also reads inline scripts');
 
 // --- background: route + gate + no-noise + flood cap ---
-assert.ok(bg.includes("'inlineScriptDetected'"), 'inline message is fire-and-forget + routed');
+const sender = fs.readFileSync(path.resolve(__dirname, '../modules/message-sender.js'), 'utf8');
+assert.ok(sender.includes("'inlineScriptDetected'"), 'inline message is a fire-and-forget page notice');
+assert.match(bg, /inlineScriptDetected:\s*\(req\)\s*=>\s*this\.handleInlineScript/, 'inline message is routed');
 assert.match(bg, /handleInlineScript\(request, sender\)\s*\{/, 'has an inline handler');
 assert.match(bg, /handleInlineScript[\s\S]*?isInScope\(pageUrl\)/, 'inline scope-gates on the page url');
 assert.match(bg, /handleInlineScript[\s\S]*?isRelevantInlineScript\(request\.content\)/, 'inline applies the content relevance filter (no-noise linchpin)');
