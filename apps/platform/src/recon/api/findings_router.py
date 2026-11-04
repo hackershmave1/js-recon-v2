@@ -159,6 +159,7 @@ def get_run_diff(
         "new": [_diff_entry_dict(e) for e in result.new],
         "persisted": [_diff_entry_dict(e) for e in result.persisted],
         "gone": [_diff_entry_dict(e) for e in result.gone],
+        "identity_upgraded": result.identity_upgraded,
     }
 
 
@@ -167,6 +168,7 @@ def _diff_entry_dict(e: queries.DiffEntry) -> dict:
         "finding_hash": e.finding_hash,
         "type": e.type,
         "value": e.value,
+        "display_value": e.display_value or e.value,
         "path": e.path,
         "severity": e.severity,
         "priority": e.priority,

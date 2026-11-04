@@ -494,3 +494,18 @@ def test_v3_merge_path_param_evidence_is_order_independent():
         == nz.merge_path_param_evidence(b, a)
         == [{"position": 1, "names": ["userId"], "integer_only": False}]
     )
+
+
+def test_v3_current_hash_translates_an_older_run_and_leaves_current_rows_alone():
+    import json
+
+    v2 = hashlib.sha256(
+        json.dumps(
+            {"v": 2, "type": "endpoint", "value": "GET /u/${userId}"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    current = nz.finding_hash("endpoint", "GET /u/{id}")
+    assert nz.current_finding_hash("endpoint", "GET /u/${userId}", v2) == current
+    assert nz.current_finding_hash("endpoint", "GET /u/{id}", current) == current

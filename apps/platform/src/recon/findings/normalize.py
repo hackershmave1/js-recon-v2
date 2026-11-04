@@ -674,6 +674,18 @@ def finding_hash(finding_type: str, value: str) -> str:
     ).hexdigest()
 
 
+def current_finding_hash(finding_type: str, value: str, stored_hash: str) -> str:
+    """The identity a stored finding has under the CURRENT version — so a run-to-run diff
+    against a run analyzed before an identity change compares like with like instead of
+    reporting every finding as removed and re-added. A current-version row maps to itself; an
+    older one is rewritten (``rewrite_v2_value``) and rehashed; one with no current
+    counterpart keeps its stored hash (it then honestly shows as gone)."""
+    if finding_hash(finding_type, value) == stored_hash:
+        return stored_hash
+    rewritten = rewrite_v2_value(finding_type, value)
+    return finding_hash(finding_type, rewritten) if rewritten is not None else stored_hash
+
+
 def occurrence_hash(**fields: object) -> str:
     """Idempotency key for one sighting — canonical over its volatile identifying
     fields (raw value, host, source-path variant, offsets), so a retry re-emits

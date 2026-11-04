@@ -34,7 +34,7 @@ from recon.db.models import (
     SessionWrapper,
 )
 from recon.domain import TOTAL_ENDPOINT_TYPES, AssetStatus, FindingType
-from recon.findings import priority, visibility
+from recon.findings import normalize, priority, visibility
 from recon.findings.base_url import BaseUrlRule
 from recon.findings.coverage import Coverage, read_run_coverage
 from recon.findings.located import ViewLoc
@@ -150,6 +150,8 @@ class DiffEntry:
     path: str
     severity: str | None
     priority: int
+    # The value as a reader should see it (`GET /users/{userId}`): identity v3 stores `{id}`.
+    display_value: str = ""
 
 
 @dataclass(frozen=True)
@@ -169,6 +171,9 @@ class DiffView:
     new: list[DiffEntry]
     persisted: list[DiffEntry]
     gone: list[DiffEntry]
+    # A run was analyzed under an older finding-identity version; its findings were
+    # translated to the current identity so the diff compares like with like.
+    identity_upgraded: bool = False
 
 
 @dataclass(frozen=True)
@@ -542,7 +547,10 @@ def diff_runs(tenant_id: str, run_id: str, base_run_id: str) -> DiffView | None:
         if base is None:
             return None
 
+        upgraded = False
+
         def _load(rid: str) -> dict[str, DiffEntry]:
+            nonlocal upgraded
             hidden = visibility.hidden_finding_ids(session, rid)
             rows = session.execute(
                 select(
@@ -559,13 +567,20 @@ def diff_runs(tenant_id: str, run_id: str, base_run_id: str) -> DiffView | None:
                 if str(fid) in hidden:
                     continue  # each run's hidden findings drop out, as in the workspace
                 score, label = priority.derive_priority(ftype, fattrs or {})
-                out[fhash] = DiffEntry(
+                # Key by the CURRENT identity: a run analyzed before an identity change
+                # (v2 `${userId}`) then matches the same finding in a v3 run (`{id}`).
+                key = normalize.current_finding_hash(ftype, fvalue, fhash)
+                upgraded = upgraded or key != fhash
+                out[key] = DiffEntry(
                     finding_hash=fhash,
                     type=ftype,
                     value=fvalue,
                     path=fpath,
                     severity=label,
                     priority=score,
+                    display_value=normalize.display_endpoint_value(
+                        fvalue, (fattrs or {}).get("path_params")
+                    ),
                 )
             return out
 
@@ -589,6 +604,7 @@ def diff_runs(tenant_id: str, run_id: str, base_run_id: str) -> DiffView | None:
             new=_sorted({h: run_findings[h] for h in new_hashes}),
             gone=_sorted({h: base_findings[h] for h in gone_hashes}),
             persisted=_sorted({h: run_findings[h] for h in persisted_hashes}),
+            identity_upgraded=upgraded,
         )
 
 
