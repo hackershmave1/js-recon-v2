@@ -15,6 +15,10 @@ x-app-env: &app-env
   # REQUIRED and the tenant comes from the signed session token; empty would disable auth
   # and brick the served SPA (login 503s), so it ships enabled.
   RECON_AUTH_SECRET: dev-only-auth-secret-change-in-prod
+  # Dev-only local-targets switch (docs/OPERATING.md "Local development targets"): lets the
+  # server crawl `localhost` and count it as declared scope. Off by default; enable per stack with
+  # `RECON_ALLOW_LOCAL_EGRESS=true docker compose up -d`. Never enable it in production.
+  RECON_ALLOW_LOCAL_EGRESS: ${RECON_ALLOW_LOCAL_EGRESS:-false}
   # D53-a: prometheus-client multiprocess mode. Both api and worker write metric files
   # here; the /metrics endpoint aggregates them via MultiProcessCollector.
   # The prometheusdata volume is shared between the two containers.

@@ -100,4 +100,16 @@ describe("HostsPage", () => {
       screen.getByText("no resolved host: 2 API · 1 inferred API · 1 suspected call"),
     ).toBeInTheDocument();
   });
+
+  it("explains why localhost isn't in scope when the server's local-targets switch is off", () => {
+    const local = { ...data, local_targets_disabled: true,
+      hosts: [{ host: "localhost", in_scope: false, declared: false, assets: 5, endpoints: 10, inferred: 1, suspected: 0, routes: 0, techs: 0 }] };
+    render(<HostsPage data={local} />);
+    expect(screen.getByText(/local targets are disabled on this server/)).toBeInTheDocument();
+  });
+
+  it("says nothing about local targets otherwise", () => {
+    render(<HostsPage data={data} />);
+    expect(screen.queryByText(/local targets are disabled/)).toBeNull();
+  });
 });

@@ -344,3 +344,10 @@ def test_validate_target_localhost_blocked_by_default(monkeypatch):
     # Flag off: localhost isn't a valid scope entry -> out of scope -> blocked.
     with pytest.raises(EgressBlocked):
         egress.validate_target("http://localhost:4173/app.js", ["localhost"])
+
+
+def test_local_only_scope_entries_are_the_ones_the_dev_switch_unlocks():
+    for local in ["localhost", "LOCALHOST", "devbox"]:
+        assert egress.is_local_only_scope_entry(local) is True, local
+    for not_local in ["acme.io", "127.0.0.1", "10.0.0.1", "github.io", "https://localhost", ""]:
+        assert egress.is_local_only_scope_entry(not_local) is False, not_local

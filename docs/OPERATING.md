@@ -64,6 +64,24 @@ use the extension:
 3. Browse the target normally; captured scripts upload to the platform. Hit **Analyze** to run the
    same Vespasian/Kingfisher/Sourcemapper pipeline over them.
 
+### Local development targets
+
+To test against an app running on your own machine (`localhost`), start the stack with the dev-only
+switch:
+
+```bash
+RECON_ALLOW_LOCAL_EGRESS=true docker compose up -d
+```
+
+| | Switch off (default) | Switch on |
+|---|---|---|
+| Extension capture of a `localhost` site | uploads and analyzes normally; `localhost` is just not recorded as declared scope (Hosts explains why) | same, and `localhost` counts as in scope |
+| New Recon crawl of `localhost` | refused, with a message naming this switch | allowed |
+
+Capture scope is display-only (the server fetches nothing for a capture), which is why a capture
+never fails on it. The switch also relaxes the crawler's SSRF guard for single-label hosts, so
+**leave it off in production**. The workspace **Settings** page shows its current state.
+
 ### Host dev + tests
 
 Running without the app containers, running the test lanes, and capture-mode runs are documented in

@@ -80,6 +80,14 @@ export async function login(username: string, password: string): Promise<LoginRe
 
 // GET /auth/me — re-validate the stored token server-side (its HMAC signature can't be
 // checked in the browser). A 401 means the token is stale/rejected and the caller logs out.
+// The capture health probe (public): carries the stack's local-targets switch.
+export interface ServerHealth { status: string; allowLocalTargets?: boolean; }
+export async function getServerHealth(): Promise<ServerHealth> {
+  const res = await fetch("/api/health", { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new ApiError(res.status, await readErrorDetail(res));
+  return res.json() as Promise<ServerHealth>;
+}
+
 export async function getMe(): Promise<MeResult> {
   const res = await fetch("/auth/me", { headers: { Accept: "application/json", ...authHeader() } });
   if (!res.ok) throw new ApiError(res.status, await readErrorDetail(res));

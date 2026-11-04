@@ -20,6 +20,8 @@ same walkthrough was fixed with it).
 
 #### D71 · An IP-literal capture scope makes `/api/save-files` return 500, and the extension retries forever [S]  ·  correctness
 
+> ✅ **RESOLVED** (2026-11-04). Wider than recorded: `localhost` hit it too on the default stack. Capture scope is display-only, so `sessions.capture_scope_hosts` now leaves out entries the server can't accept (an IP literal; `localhost` unless the dev switch is on) instead of failing the upload. The switch is passed through compose, reported by `/api/health` and the Settings page, and the Hosts tab explains a local host that can't be in scope.
+
 `sessions/service.py:_resolve_scope_hosts` rejects an IP-literal scope host (e.g. `127.0.0.1`) by design, but
 the `SessionInvalid` it raises escapes `capture_router.save_files` → `_get_or_create_session` as an HTTP 500.
 The extension treats 500 as retryable, so the popup shows "1 pending" indefinitely with no reason given.
