@@ -188,3 +188,22 @@ def test_sse_replays_events_including_terminal(client, authorized_session, redis
     body = resp.text
     assert "event: run.created" in body
     assert '"to":"done"' in body
+
+
+def test_a_localhost_crawl_target_names_the_switch(client, authorized_session):
+    # New Recon leaves scope blank (it defaults to the target); a localhost target then fails
+    # this fail-fast scope check, which must say which switch enables local targets.
+    tenant, session_id = authorized_session
+    resp = client.post(
+        "/runs",
+        json={"session_id": session_id, "target": "http://localhost:4173"},
+        headers=_headers(tenant),
+    )
+    assert resp.status_code == 400
+    assert "RECON_ALLOW_LOCAL_EGRESS=true" in resp.json()["detail"]
+    other = client.post(
+        "/runs", json={"session_id": session_id, "target": "evil.example"}, headers=_headers(tenant)
+    )
+    assert (
+        "RECON_ALLOW_LOCAL_EGRESS" not in other.json()["detail"]
+    )  # only local targets get the hint

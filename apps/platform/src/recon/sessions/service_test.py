@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import pytest
 
+from recon.config import get_settings
 from recon.sessions.service import (
     SessionInvalid,
     _card_label,
     _resolve_scope_hosts,
     _target_host,
+    capture_scope_hosts,
 )
 
 
@@ -219,3 +221,27 @@ def test_card_label_unparseable_target_falls_through_and_never_raises():
         )
         == "app.acme.io"
     )
+
+
+def test_a_local_scope_says_which_switch_enables_it(monkeypatch):
+    monkeypatch.delenv("RECON_ALLOW_LOCAL_EGRESS", raising=False)
+    get_settings.cache_clear()
+    with pytest.raises(SessionInvalid, match="RECON_ALLOW_LOCAL_EGRESS=true"):
+        _resolve_scope_hosts(["localhost"], None)
+    with pytest.raises(SessionInvalid) as plain:
+        _resolve_scope_hosts(["github.io"], None)
+    assert "RECON_ALLOW_LOCAL_EGRESS" not in str(plain.value)  # only local targets get the hint
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("switch", "expected"), [("false", ["acme.io"]), ("true", ["localhost", "acme.io"])]
+)
+def test_capture_scope_keeps_what_the_server_accepts_and_never_fails(monkeypatch, switch, expected):
+    # Capture scope is display-only: localhost (switch off) and IP literals (always) are left out.
+    monkeypatch.setenv("RECON_ALLOW_LOCAL_EGRESS", switch)
+    get_settings.cache_clear()
+    try:
+        assert capture_scope_hosts(["localhost", "ACME.io", "127.0.0.1", "acme.io."]) == expected
+    finally:
+        get_settings.cache_clear()

@@ -123,6 +123,17 @@ def is_valid_scope_entry(entry: str, *, allow_local: bool = False) -> bool:
     return host not in _PUBLIC_SUFFIX_DENYLIST
 
 
+def is_local_only_scope_entry(entry: str) -> bool:
+    """A scope entry that is valid ONLY with the dev-only local-targets switch
+    (``RECON_ALLOW_LOCAL_EGRESS``) — ``localhost`` or another single-label host. Lets callers
+    tell "a local target, switch off" apart from a malformed entry, so the message can say which
+    switch to turn on. IP literals are not local-only: they stay invalid either way."""
+    return (
+        normalize_scope_entry(entry, allow_local=True) is not None
+        and normalize_scope_entry(entry, allow_local=False) is None
+    )
+
+
 def normalize_scope_entry(entry: str, *, allow_local: bool = False) -> str | None:
     """The normalized host for a VALID user-supplied scope entry, or ``None`` if it
     is not a usable host-scope declaration (see :func:`is_valid_scope_entry`).

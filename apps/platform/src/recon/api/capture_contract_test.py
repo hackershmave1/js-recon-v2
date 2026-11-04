@@ -44,6 +44,8 @@ def test_health_reports_contract_version(capture_client):
         "status": "ok",
         "mode": "platform",
         "contractVersion": capture_router.CAPTURE_CONTRACT_VERSION,
+        # Additive (the extension ignores the body): the dev-only local-targets switch.
+        "allowLocalTargets": False,
     }
     assert isinstance(capture_router.CAPTURE_CONTRACT_VERSION, str)
 

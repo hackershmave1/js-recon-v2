@@ -68,7 +68,9 @@ rest of the runbook (build, score) is automatable; this step is not.
      auth ON, so captures are attributed to the signed-in operator's tenant — see §5. Skip this and
      the capture lands nowhere you can score).
    - **Capture scope**: add `localhost` (the extension is fail-closed by registrable domain — a
-     host not in scope is silently dropped, so this step is required, not optional).
+     host not in scope is silently dropped, so this step is required, not optional). The captures
+     upload on any stack; to also see `localhost` marked in scope on the Hosts tab, start the stack
+     with the dev switch `RECON_ALLOW_LOCAL_EGRESS=true` (docs/OPERATING.md "Local development targets").
 3. Click **Start** capture.
 4. Load the target page (`http://localhost:4173`, or `:4174` for the Webpack run — or the matching
    `:4175`/`:4176` no-map origin) and **scroll to the bottom**. The 4 lazy chunks (`inventory.js`,
