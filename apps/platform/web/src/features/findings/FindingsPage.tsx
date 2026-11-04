@@ -337,12 +337,11 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                         )}
                         <span className={`fp-type fp-type-${f.type}`}>{typeLabel(f.type)}</span>
                         <span className={`chip chip-${cls}`}>{cls}</span>
-                        <span className="fp-val">{shownValue(f)}</span>
-                        {alsoSeenAs(f).length > 0 && (
-                          <span className="chip" title={`Also seen as: ${alsoSeenAs(f).join(", ")}`}>
-                            +{alsoSeenAs(f).length} name{alsoSeenAs(f).length > 1 ? "s" : ""}
-                          </span>
-                        )}
+                        {/* Other observed names ride the tooltip: a chip here squeezed the value out. */}
+                        <span className="fp-val"
+                          title={alsoSeenAs(f).length > 0 ? `Also seen as: ${alsoSeenAs(f).join(", ")}` : undefined}>
+                          {shownValue(f)}
+                        </span>
                         {host && <span className="fp-host">{host}</span>}
                         {riskTags(f).map((t) => (
                           <span key={t} className={`fp-risk fp-risk-${t}`}
