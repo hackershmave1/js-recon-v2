@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+
 import tree_sitter_javascript as tsjs
 from tree_sitter import Language, Node, Parser
 

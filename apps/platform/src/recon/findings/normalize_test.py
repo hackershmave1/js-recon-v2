@@ -420,8 +420,8 @@ def test_v3_leading_and_partial_placeholders_stay_verbatim():
 def test_v3_a_slash_or_question_mark_inside_a_substitution_never_splits_the_url():
     ep = nz.normalize_endpoint("GET", '/api/items/${ids.join("/")}')
     assert ep.value == "GET /api/items/{id}"
-    tern = nz.normalize_endpoint("GET", "/api/items/${id}${q ? `?${q}` : \"\"}")
-    assert tern.value == "GET /api/items/${id}${q ? `?${q}` : \"\"}"
+    tern = nz.normalize_endpoint("GET", '/api/items/${id}${q ? `?${q}` : ""}')
+    assert tern.value == 'GET /api/items/${id}${q ? `?${q}` : ""}'
     assert not tern.dynamic_query
 
 
@@ -465,9 +465,32 @@ def test_v3_display_name_prefers_readable_then_longest():
 
 
 def test_v3_rewrite_maps_a_stored_v2_value_to_its_v3_value():
-    assert nz.rewrite_v2_value("endpoint", "GET /api/v1/users/${userId}") == "GET /api/v1/users/{id}"
+    assert (
+        nz.rewrite_v2_value("endpoint", "GET /api/v1/users/${userId}") == "GET /api/v1/users/{id}"
+    )
     assert nz.rewrite_v2_value("endpoint", "POST /${m}?${new URLSearchParams(r)}") == "POST /${m}"
     assert nz.rewrite_v2_value("endpoint_suspected", "GET /x/:Be") == "GET /x/{id}"
     assert nz.rewrite_v2_value("param", "GET /u/${userId} query:page") == "GET /u/{id} query:page"
     assert nz.rewrite_v2_value("secret", "aws:abc") == "aws:abc"
     assert nz.rewrite_v2_value("param", "POST /x query:${new URLSearchParams(r)}") is None
+
+
+def test_v3_display_value_names_each_position_from_its_evidence():
+    evidence = [
+        {"position": 1, "names": ["e", "orgId"], "integer_only": False},
+        {"position": 2, "names": ["t"], "integer_only": False},
+    ]
+    value = "GET /orgs/{id}/users/{id}?page"
+    assert nz.display_endpoint_value(value, evidence) == "GET /orgs/{orgId}/users/{id}?page"
+    assert nz.display_endpoint_value(value, None) == value
+    assert nz.display_endpoint_value("GET /${b}/x/{id}", [evidence[0]]) == "GET /${b}/x/{orgId}"
+
+
+def test_v3_merge_path_param_evidence_is_order_independent():
+    a = [{"position": 1, "names": [], "integer_only": True}]
+    b = [{"position": 1, "names": ["userId"], "integer_only": False}]
+    assert (
+        nz.merge_path_param_evidence(a, b)
+        == nz.merge_path_param_evidence(b, a)
+        == [{"position": 1, "names": ["userId"], "integer_only": False}]
+    )

@@ -592,3 +592,32 @@ def test_graphql_extension_absent_when_no_operations():
     # Default (no ops) — the extension key must not appear at all.
     doc = build_openapi([_req()], run_id="00000000-0000-0000-0000-000000000000")
     assert "x-recon-graphql-operations" not in doc
+
+
+def test_path_params_take_their_observed_name_and_type_from_evidence():
+    from recon.probe.reconstruct import PathParamEvidence
+
+    observed = (PathParamEvidence(1, ("e", "userId"), integer_only=False),)
+    path, params = _canonicalize_path("/users/{id}/orders", observed)
+    assert path == "/users/{userId}/orders"
+    assert params[0]["schema"] == {"type": "string"}  # a template sighting: not known integer
+    assert "observed" in params[0]["description"]
+    literal = (PathParamEvidence(1, (), integer_only=True),)
+    path, params = _canonicalize_path("/users/{id}", literal)
+    assert path == "/users/{id}" and params[0]["schema"] == {"type": "integer"}
+
+
+def test_operations_on_one_path_share_the_observed_names():
+    from recon.probe.reconstruct import PathParamEvidence
+
+    get = _req(
+        operation="GET /users/{id}",
+        method="GET",
+        path="/users/{id}",
+        path_params=(PathParamEvidence(1, ("userId",), False),),
+    )
+    delete = _req(operation="DELETE /users/{id}", method="DELETE", path="/users/{id}")
+    doc = build_openapi([get, delete], run_id="00000000-0000-0000-0000-000000000000")
+    validate(doc)
+    assert list(doc["paths"]) == ["/users/{userId}"]
+    assert set(doc["paths"]["/users/{userId}"]) == {"get", "delete"}

@@ -34,6 +34,35 @@ class QueryParam:
 
 
 @dataclass(frozen=True)
+class PathParamEvidence:
+    """What the source showed for one positional path param (identity v3): every identifier
+    the value was read from, and whether every sighting was a literal integer."""
+
+    position: int
+    names: tuple[str, ...]
+    integer_only: bool
+
+    @property
+    def name(self) -> str | None:
+        """The most meaningful observed name, or ``None`` when all are minifier mangles."""
+        return normalize.display_param_name(self.names)
+
+
+def evidence_from_dicts(entries: list[dict]) -> tuple[PathParamEvidence, ...]:
+    return tuple(
+        PathParamEvidence(int(e["position"]), tuple(e["names"]), bool(e["integer_only"]))
+        for e in entries
+    )
+
+
+def evidence_to_dicts(evidence: tuple[PathParamEvidence, ...]) -> list[dict]:
+    return [
+        {"position": e.position, "names": list(e.names), "integer_only": e.integer_only}
+        for e in evidence
+    ]
+
+
+@dataclass(frozen=True)
 class ReconstructedRequest:
     operation: str  # METHOD + templated path (the grouping key)
     method: str
@@ -48,6 +77,8 @@ class ReconstructedRequest:
     # Auth-relevant request headers seen for this operation (enrichment B): (name, scheme)
     # pairs deduped by name; scheme is "bearer"/"basic"/None. Empty when none were observed.
     auth: tuple[tuple[str, str | None], ...] = ()
+    # Positional path-param evidence (identity v3), unioned across the operation's findings.
+    path_params: tuple[PathParamEvidence, ...] = ()
 
 
 def _method_and_path(operation: str) -> tuple[str, str]:
@@ -106,6 +137,11 @@ def _merge(a: ReconstructedRequest, b: ReconstructedRequest) -> ReconstructedReq
         example_url=example_url,
         endpoint_hashes=endpoint_hashes,
         auth=tuple(sorted(merged_auth.items())),
+        path_params=evidence_from_dicts(
+            normalize.merge_path_param_evidence(
+                evidence_to_dicts(a.path_params), evidence_to_dicts(b.path_params)
+            )
+        ),
     )
 
 
@@ -217,6 +253,11 @@ def build_requests(
                 probeable=method not in _WEBSOCKET_METHODS,
                 endpoint_hashes=tuple(sorted(f.finding_hash for f in endpoint_findings)),
                 auth=tuple(sorted(auth_by_name.items())),
+                path_params=evidence_from_dicts(
+                    normalize.merge_path_param_evidence(
+                        *(f.attributes.get("path_params") or [] for f in endpoint_findings)
+                    )
+                ),
             )
         )
 

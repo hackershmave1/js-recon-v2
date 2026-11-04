@@ -83,30 +83,16 @@ def path_param_attributes(position: int, names: list[str]) -> dict[str, Any]:
         "name": normalize.display_param_name(observed) or "id",
     }
     tags = sorted(
-        {tag for n in observed if normalize.is_readable_name(n) for tag in risk_tags.classify_param(n)}
+        {
+            tag
+            for n in observed
+            if normalize.is_readable_name(n)
+            for tag in risk_tags.classify_param(n)
+        }
     )
     if tags:
         attributes["risk_tags"] = tags
     return attributes
-
-
-def _merge_path_params(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Union an endpoint's per-position path-param evidence: names unioned, ``integer_only``
-    ANDed (one template sighting means the value is not known to be an integer)."""
-    by_position: dict[int, dict[str, Any]] = {}
-    for entry in [*existing, *incoming]:
-        position = entry["position"]
-        current = by_position.get(position)
-        if current is None:
-            by_position[position] = {
-                "position": position,
-                "names": sorted(set(entry.get("names") or [])),
-                "integer_only": bool(entry.get("integer_only")),
-            }
-            continue
-        current["names"] = sorted(set(current["names"]) | set(entry.get("names") or []))
-        current["integer_only"] = current["integer_only"] and bool(entry.get("integer_only"))
-    return [by_position[position] for position in sorted(by_position)]
 
 
 def _merge_attributes(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
@@ -144,7 +130,7 @@ def _merge_attributes(existing: dict[str, Any], incoming: dict[str, Any]) -> dic
     # Identity v3 evidence: an endpoint's per-position path-param names, and whether any
     # sighting built its query at runtime.
     if incoming.get("path_params"):
-        merged["path_params"] = _merge_path_params(
+        merged["path_params"] = normalize.merge_path_param_evidence(
             existing.get("path_params") or [], incoming["path_params"]
         )
     if incoming.get("dynamic_query"):

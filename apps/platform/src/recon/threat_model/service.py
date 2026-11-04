@@ -34,7 +34,7 @@ from recon.db.models import (
     Threat,
 )
 from recon.domain import FindingType, RunState
-from recon.findings import visibility
+from recon.findings import normalize, visibility
 from recon.llm import calls, run_choice
 from recon.llm.crypto import KeyDecryptError
 from recon.observability import get_logger
@@ -182,7 +182,12 @@ def _assemble_context(tenant_id: str, session_id: str) -> _Context:
                         ", ".join(fattrs.get("methods", [])) if fattrs.get("methods") else ""
                     )
                     method = f"[{m}] " if m else ""
-                endpoints.append(f"{method}{fvalue}")
+                # Display value: `{id}` named from the observed identifier (`{userId}`), so the
+                # model keeps the hint a developer's name carries (identity v3).
+                shown = normalize.display_endpoint_value(
+                    fvalue, (fattrs or {}).get("path_params") if isinstance(fattrs, dict) else None
+                )
+                endpoints.append(f"{method}{shown}")
             elif ftype in _SECRET_TYPES:
                 # REQ-S2: never surface raw secret values. Count by provider prefix.
                 provider_prefix = fvalue.split(":")[0] if ":" in fvalue else ftype

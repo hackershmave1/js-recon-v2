@@ -28,6 +28,7 @@ import math
 import re
 import unicodedata
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
 # Sentinels: a null source-map entry (allowed by ECMA-426) must not be conflated
@@ -326,6 +327,50 @@ def display_param_name(names: list[str] | tuple[str, ...]) -> str | None:
     the caller falls back to a positional name and must NOT derive risk tags from it."""
     readable = sorted({n for n in names if is_readable_name(n)}, key=lambda n: (-len(n), n))
     return readable[0] if readable else None
+
+
+def merge_path_param_evidence(*evidence_lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Union per-position path-param evidence (``{position, names, integer_only}`` dicts, the
+    endpoint ``path_params`` attribute): names unioned, ``integer_only`` ANDed (one template
+    sighting means the value is not known to be an integer). Order-independent."""
+    by_position: dict[int, dict[str, Any]] = {}
+    for entry in (entry for entries in evidence_lists for entry in entries):
+        position = int(entry["position"])
+        names = set(entry.get("names") or [])
+        current = by_position.get(position)
+        if current is None:
+            by_position[position] = {
+                "position": position,
+                "names": sorted(names),
+                "integer_only": bool(entry.get("integer_only")),
+            }
+            continue
+        current["names"] = sorted(set(current["names"]) | names)
+        current["integer_only"] = current["integer_only"] and bool(entry.get("integer_only"))
+    return [by_position[position] for position in sorted(by_position)]
+
+
+def display_endpoint_value(value: str, path_params: list[dict[str, Any]] | None) -> str:
+    """The endpoint value as a reader should see it: each positional ``{id}`` named from its
+    most meaningful observed identifier (``GET /users/{id}`` -> ``GET /users/{userId}``), so
+    the hint the developer's name carries (IDOR on ``userId``) survives identity v3.
+    Display-only — the stored value and its hash never change."""
+    names = {
+        int(entry["position"]): display_param_name(entry.get("names") or [])
+        for entry in path_params or []
+    }
+    if not any(names.values()):
+        return value
+    masked, subs = _mask_substitutions(value)
+    head, sep, query = masked.partition("?")
+    ordinal = 0
+    segments = head.split("/")
+    for index, segment in enumerate(segments):
+        if segment in _VALUE_TEMPLATES:
+            ordinal += 1
+            if segment == "{id}" and names.get(ordinal):
+                segments[index] = "{" + str(names[ordinal]) + "}"
+    return _unmask("/".join(segments) + sep + query, subs)
 
 
 def _whole_placeholder(segment: str, *, holders: bool) -> bool:

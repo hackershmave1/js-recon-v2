@@ -20,7 +20,13 @@ import yaml
 from openapi_spec_validator import validate
 
 from recon.findings import risk_tags
-from recon.probe.reconstruct import ReconstructedRequest
+from recon.findings.normalize import merge_path_param_evidence
+from recon.probe.reconstruct import (
+    PathParamEvidence,
+    ReconstructedRequest,
+    evidence_from_dicts,
+    evidence_to_dicts,
+)
 
 # Version of the recon OpenAPI-EXPORT contract — the machine-readable shape of the
 # ``x-recon-*`` extensions this serializer emits. This is NOT the reconstructed
@@ -46,6 +52,9 @@ _PARAM_DESCRIPTION = (
     "Name synthesized and type inferred from a templated path segment; "
     "the original parameter name is not recoverable from static analysis."
 )
+_OBSERVED_PARAM_DESCRIPTION = (
+    "Name observed in the source (the identifier the path value was read from); type inferred."
+)
 
 # Methods OpenAPI 3.x allows as path-item operation keys. A client call using any
 # other verb (PURGE, PROPFIND, SUBSCRIBE, ...) is real attack surface but is not a
@@ -64,29 +73,43 @@ def _unique(base: str, used: set[str]) -> str:
     return name
 
 
-def _path_param(name: str, schema: dict) -> dict:
+def _path_param(name: str, schema: dict, *, observed: bool = False) -> dict:
     return {
         "name": name,
         "in": "path",
         "required": True,
         "schema": dict(schema),
-        "description": _PARAM_DESCRIPTION,
+        "description": _OBSERVED_PARAM_DESCRIPTION if observed else _PARAM_DESCRIPTION,
     }
 
 
-def _canonicalize_path(path: str) -> tuple[str, list[dict]]:
+def _canonicalize_path(
+    path: str, evidence: Sequence[PathParamEvidence] = ()
+) -> tuple[str, list[dict]]:
     """Rewrite ``path`` so every interpolation becomes one balanced, uniquely-named
     path parameter with a matching declaration. Guarantees the emitted path contains
-    only balanced ``{legalName}`` tokens — the OpenAPI-validity invariant (gate B1/B2)."""
+    only balanced ``{legalName}`` tokens — the OpenAPI-validity invariant (gate B1/B2).
+
+    ``evidence`` (identity v3) names each positional ``{id}``/``{uuid}``/``{hash}`` from the
+    identifier the source read it from, and keeps ``{id}`` an integer only when every
+    sighting was a literal integer (a ``${userId}`` sighting makes it a string)."""
+    by_position = {e.position: e for e in evidence}
     out_segments: list[str] = []
     params: list[dict] = []
     used: set[str] = set()
     positional = 0
+    ordinal = 0
     for segment in path.split("/"):
         if segment in _RECOGNIZED:
-            name = _unique(segment[1:-1], used)  # strip the braces
+            ordinal += 1
+            seen = by_position.get(ordinal)
+            observed = seen.name if seen is not None else None
+            name = _unique(observed or segment[1:-1], used)  # strip the braces
+            schema = _RECOGNIZED[segment]
+            if segment == "{id}" and seen is not None and not seen.integer_only:
+                schema = {"type": "string"}
             out_segments.append("{" + name + "}")
-            params.append(_path_param(name, _RECOGNIZED[segment]))
+            params.append(_path_param(name, schema, observed=observed is not None))
         elif "{" in segment or "}" in segment or "$" in segment:
             match = _SINGLE_INTERP.match(segment)
             if match:
@@ -186,7 +209,9 @@ def _operation_object(request: ReconstructedRequest, path_params: list[dict]) ->
         "x-recon-confidence": {
             "path": "certain",
             "methods": "observed-only",
-            "param-names": "synthesized" if path_params else "observed",
+            "param-names": "synthesized"
+            if any(p["description"] == _PARAM_DESCRIPTION for p in path_params)
+            else "observed",
             "param-types": "inferred",
             "body": _body_confidence(request),
         },
@@ -330,6 +355,14 @@ def build_openapi(
     websockets: list[str] = []
     nonstandard: list[str] = []
     security_schemes: dict[str, dict] = {}
+    # Operations on one path must agree on its parameter names (OpenAPI forbids two templated
+    # paths that differ only by names), so evidence is unioned per name-agnostic path first.
+    evidence_by_path: dict[str, list[dict]] = {}
+    for request in requests:
+        agnostic, _unused = _canonicalize_path(request.path)
+        evidence_by_path[agnostic] = merge_path_param_evidence(
+            evidence_by_path.get(agnostic, []), evidence_to_dicts(request.path_params)
+        )
     for request in requests:
         if not request.probeable:
             websockets.append(f"{request.method} {request.example_url or request.path}")
@@ -338,7 +371,10 @@ def build_openapi(
         if method not in _OPENAPI_METHODS:
             nonstandard.append(f"{request.method} {request.example_url or request.path}")
             continue
-        canon_path, path_params = _canonicalize_path(request.path)
+        agnostic, _unused = _canonicalize_path(request.path)
+        canon_path, path_params = _canonicalize_path(
+            request.path, evidence_from_dicts(evidence_by_path[agnostic])
+        )
         operation = _operation_object(request, path_params)
         for header_name, scheme in request.auth:
             key, obj = _security_scheme(header_name, scheme)
