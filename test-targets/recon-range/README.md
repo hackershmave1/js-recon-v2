@@ -118,7 +118,9 @@ ignores `X-Tenant-Id` and 401s unless the request carries an `Authorization: Bea
 by `POST /auth/login` (`admin` / `admin`). A Bearer token already names the operator tenant, so on
 that path no `X-Tenant-Id` is needed — this is the primary, correct way to read findings.
 
-`npm run score` performs that login for you:
+`npm run score` performs that login for you, and scores every finding the pipeline captured
+(`?include_hidden=true`): the workspace hides analytics/vendor hosts by default, and the planted
+Google Analytics / Stripe / Sentry calls must still count as found.
 
 ```bash
 npm run score -- --run <run_id>
@@ -138,7 +140,9 @@ UUID from §5 and the script falls back to the legacy `X-Tenant-Id` header:
 npm run score -- --run <run_id> --tenant <tenant_uuid>
 ```
 
-(Optional `--base http://localhost:8000` if the platform isn't on the default.) This fetches `GET /runs/{run_id}/findings` and diffs it against
+(Optional `--base http://localhost:8000` if the platform isn't on the default.) Scoring a `-nomap`
+build? Add `--nomap`: it skips only the three source-map coverage checks, which a build that
+ships no maps can never meet; every endpoint, param and secret check still applies. This fetches `GET /runs/{run_id}/findings` and diffs it against
 `answer-key.json`, printing a JSON breakdown followed by `PASS` or `FAIL` (and a non-zero exit code
 on `FAIL`).
 
@@ -167,20 +171,19 @@ design spec's grounded-constraints section), not to an aspirational ideal. Keep 
 reading a score:
 
 - **Blind spots are expected-missing, not bugs.** `known_blind_spots` in the answer key
-  (`bs-eventsource`, `bs-concat`, `bs-variable`, `bs-wrapper`, `bs-headers`, `bs-crosschunk`) are
+  (`bs-eventsource`, `bs-concat`, `bs-variable`, `bs-wrapper`, `bs-headers`) are
   planted specifically to prove documented limits: `EventSource` calls, concatenated/variable URLs,
   untaught custom HTTP wrappers, and request headers (auth/signature) are all invisible to the
   extractor by design. Their absence from `should_find` results is correct behavior, not something
   to chase.
-- **`bs-crosschunk` is the calibration target for the cross-module resolver.** `orders.js` builds
-  its request URL entirely from consts imported from another module (`base.js`), so the per-file
-  extractor sees `fetch(API_BASE + ORDERS_PATH)` — two unresolvable cross-module identifiers — and
-  counts the call `unattributed` rather than guessing (`expect: "unattributed"`). It is deliberately
-  *not* in `should_find` today. When the cross-module/cross-chunk resolver lands, this construct
-  should flip to a resolved `GET https://api.acme.com/api/v3/orders`, at which point it moves into
-  `should_find` (GREEN). Note the resolver must stay scoped to cross-module const operands: folding
-  `bs-concat`'s `"/api/v1/" + resource` (a *local* const) would drop `unattributed` below the
-  `min_unattributed: 2` floor and read as a regression.
+- **`bs-crosschunk` graduated from blind spot to `should_find`: it proves the cross-module resolver.**
+  `orders.js` builds its request URL entirely from consts imported from another module (`base.js`):
+  `fetch(API_BASE + ORDERS_PATH)`. The run-wide export index (analyze's pre-pass) maps the imported
+  names to `base.js`'s string consts — through the minified export aliases too (`import{A as a,O as o}`
+  in the no-map builds) — so the call resolves to `GET https://api.acme.com/api/v3/orders`, which is now
+  in `should_find`. The resolver must stay scoped to IMPORTED const operands: folding `bs-concat`'s
+  `"/api/v1/" + resource` (a *local* const) would drop `unattributed` below the `min_unattributed: 2`
+  floor and read as a regression.
 - **GitHub, Slack, and HMAC secret classes are informational, not gating.** Only Stripe (×2,
   including the one hidden in a preserved `/*! … */` legal comment) and AWS are *verified*
   Kingfisher rule classes in this repo; `secrets.must` only requires those. GitHub/Slack/HMAC

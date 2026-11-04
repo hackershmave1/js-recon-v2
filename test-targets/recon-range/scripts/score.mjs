@@ -1,6 +1,8 @@
 const splitOp = (v) => { const [m, ...rest] = v.split(" "); const path = rest.join(" ").split("?")[0]; return [m, path]; };
 
-export function scoreFindings(payload, key) {
+// `nomap`: score a -nomap build. Its chunks ship no source map by construction, so the three
+// source-map coverage checks below can never hold there and would FAIL a correct run.
+export function scoreFindings(payload, key, { nomap = false } = {}) {
   const findings = payload.findings || [];
   const cov = payload.coverage || {};
   const endpoints = findings.filter(f => f.type === "endpoint");
@@ -29,11 +31,11 @@ export function scoreFindings(payload, key) {
     .map(([p, n]) => `${p}>=${n} (got ${provCounts[p] || 0})`);
 
   const covFail = [];
-  if (!key.coverage_asserts.source_map_ok.includes(cov.source_map)) covFail.push(`source_map=${cov.source_map} not in ${key.coverage_asserts.source_map_ok.join("|")}`);
-  if (key.coverage_asserts.require_sources_recovered && !(cov.sources_recovered > 0)) covFail.push(`sources_recovered=${cov.sources_recovered}`);
+  if (!nomap && !key.coverage_asserts.source_map_ok.includes(cov.source_map)) covFail.push(`source_map=${cov.source_map} not in ${key.coverage_asserts.source_map_ok.join("|")}`);
+  if (!nomap && key.coverage_asserts.require_sources_recovered && !(cov.sources_recovered > 0)) covFail.push(`sources_recovered=${cov.sources_recovered}`);
   if ((cov.unattributed || 0) < key.coverage_asserts.min_unattributed) covFail.push(`unattributed=${cov.unattributed} < ${key.coverage_asserts.min_unattributed}`);
   const recovered = [...endpoints, ...params].some(f => (f.occurrences || []).some(o => o.source_path && o.source_path !== "input.js"));
-  if (!recovered) covFail.push("no recovered source_path (all input.js)");
+  if (!nomap && !recovered) covFail.push("no recovered source_path (all input.js)");
 
   const blindViolations = (key.known_blind_spots || []).filter(b => b.probe && endpoints.some(f => splitOp(f.value)[1] === b.probe)).map(b => b.id);
 

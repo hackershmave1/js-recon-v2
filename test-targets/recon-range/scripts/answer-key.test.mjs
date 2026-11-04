@@ -16,3 +16,10 @@ test("each should_find has method and (operation or host)", () => {
 test("secrets.must has positive counts", () => {
   for (const [p, n] of Object.entries(key.secrets.must)) assert.ok(n >= 1, `${p} must>=1`);
 });
+
+test("the resolved cross-module call is a should_find endpoint, not a blind spot", () => {
+  const ep = key.should_find.find(e => e.id === "bs-crosschunk");
+  assert.deepEqual([ep?.method, ep?.host, ep?.operation], ["GET", "api.acme.com", "/api/v3/orders"]);
+  assert.ok(!key.known_blind_spots.some(b => b.id === "bs-crosschunk"), "graduated: no longer a blind spot");
+});
+

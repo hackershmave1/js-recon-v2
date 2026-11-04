@@ -53,3 +53,21 @@ test("a resolved blind-spot probe is flagged (not a hard fail)", () => {
   assert.deepEqual(r.blindViolations, ["bs-wrapper"]);
   assert.equal(r.pass, true);
 });
+
+test("the CLI scores every captured finding, not the default (noise-hidden) view", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const cli = await readFile(new URL("./score-cli.mjs", import.meta.url), "utf8");
+  assert.match(cli, /\/findings\?include_hidden=true/);
+});
+
+test("--nomap skips only the source-map coverage checks", () => {
+  const noMap = { ...good, coverage: { ...good.coverage, source_map: "none", sources_recovered: 0 },
+    findings: good.findings.map(f => ({ ...f, occurrences: (f.occurrences || []).map(o => ({ ...o, source_path: "input.js" })) })) };
+  assert.equal(scoreFindings(noMap, key).pass, false);
+  const r = scoreFindings(noMap, key, { nomap: true });
+  assert.deepEqual(r.covFail, []);
+  assert.equal(r.pass, true);
+  const missing = { ...noMap, findings: noMap.findings.filter(f => f.value !== "GET /api/v1/profile") };
+  assert.deepEqual(scoreFindings(missing, key, { nomap: true }).missedEndpoints, ["ep-profile"]);
+});
+

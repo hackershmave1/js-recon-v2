@@ -3,10 +3,15 @@ import { scoreFindings } from "./score.mjs";
 
 const argv = process.argv.slice(2);
 const args = {};
-for (let i = 0; i < argv.length; i++) if (argv[i].startsWith("--")) args[argv[i].slice(2)] = argv[++i];
+const FLAGS = new Set(["nomap"]); // valueless switches
+for (let i = 0; i < argv.length; i++) {
+  if (!argv[i].startsWith("--")) continue;
+  const name = argv[i].slice(2);
+  args[name] = FLAGS.has(name) ? true : argv[++i];
+}
 
 const base = args.base || "http://localhost:8000";
-if (!args.run) { console.error("usage: score-cli --run <id> [--username admin] [--password admin] [--tenant <uuid>] [--base http://localhost:8000]"); process.exit(2); }
+if (!args.run) { console.error("usage: score-cli --run <id> [--nomap] [--username admin] [--password admin] [--tenant <uuid>] [--base http://localhost:8000]"); process.exit(2); }
 
 // Authenticate the way the SPA + extension do: mint a session token via POST /auth/login
 // and send it as `Authorization: Bearer`. The default stack ships auth ON (RECON_AUTH_SECRET
@@ -35,7 +40,10 @@ if (login.ok) {
 }
 
 const key = JSON.parse(await readFile(new URL("../answer-key.json", import.meta.url)));
-const res = await fetch(`${base}/runs/${args.run}/findings`, { headers });
+// include_hidden=true: score everything the pipeline CAPTURED. The default view hides findings on
+// analytics/vendor hosts (recon.findings.visibility), which would report the planted Google
+// Analytics / Stripe / Sentry calls as missed although they were found — a false FAIL on every run.
+const res = await fetch(`${base}/runs/${args.run}/findings?include_hidden=true`, { headers });
 // NOTE: set process.exitCode and fall off the end rather than process.exit() — after two
 // fetches (login + findings) undici holds pooled keep-alive sockets, and a hard process.exit()
 // races their teardown, crashing with a libuv assertion (wrong exit code) on Windows. Draining
@@ -44,7 +52,7 @@ if (!res.ok) {
   console.error(`findings fetch failed: ${res.status} ${res.statusText}`);
   process.exitCode = 2;
 } else {
-  const r = scoreFindings(await res.json(), key);
+  const r = scoreFindings(await res.json(), key, { nomap: args.nomap === true });
   console.log(JSON.stringify(r, null, 2));
   console.log(r.pass ? "PASS" : "FAIL");
   process.exitCode = r.pass ? 0 : 1;
