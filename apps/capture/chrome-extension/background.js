@@ -20,6 +20,7 @@ import { CaptureSession } from './modules/capture-session.js';
 import { PAGE_ACTIONS, admitMessage } from './modules/message-sender.js';
 import { restrictStorageAccess, publishCaptureState } from './modules/storage-access.js';
 import { replyOnce, dispatchReply } from './modules/message-reply.js';
+import { hookMatchPatterns } from './modules/hook-matches.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -1197,25 +1198,33 @@ class JSExtractor {
 
   // Register/unregister the opt-in main-world response-body hook (DEBT D45b2). A statically-declared
   // content script can't be toggled, so it's registered dynamically ONLY while captureResponseBodies
-  // is on — the default build ships zero main-world code.
+  // is on — the default build ships zero main-world code — and ONLY on the in-scope hosts
+  // (modules/hook-matches.js): it patches the page's own fetch/XHR, so it must never run on a site
+  // capture would ignore. Re-synced whenever the setting or the scope changes; an existing
+  // registration with other patterns (e.g. an older build's <all_urls>) is updated in place.
   async syncResponseBodyHook() {
-    const want = !!(this.settings && this.settings.captureResponseBodies === true);
+    const matches = hookMatchPatterns(this.settings);
     try {
       if (!chrome.scripting || !chrome.scripting.getRegisteredContentScripts) return;
       const existing = await chrome.scripting.getRegisteredContentScripts({ ids: ['recon-xhr-hook'] });
-      const has = Array.isArray(existing) && existing.length > 0;
-      if (want && !has) {
-        await chrome.scripting.registerContentScripts([{
-          id: 'recon-xhr-hook',
-          matches: ['<all_urls>'],
-          js: ['inject/xhr-hook.js'],
-          runAt: 'document_start',
-          world: 'MAIN',
-          allFrames: true
-        }]);
-      } else if (!want && has) {
-        await chrome.scripting.unregisterContentScripts({ ids: ['recon-xhr-hook'] });
+      const current = Array.isArray(existing) && existing.length > 0 ? existing[0] : null;
+      if (matches.length === 0) {
+        if (current) await chrome.scripting.unregisterContentScripts({ ids: ['recon-xhr-hook'] });
+        return;
       }
+      if (current && JSON.stringify(current.matches || []) === JSON.stringify(matches)) return;
+      if (current) {
+        await chrome.scripting.updateContentScripts([{ id: 'recon-xhr-hook', matches }]);
+        return;
+      }
+      await chrome.scripting.registerContentScripts([{
+        id: 'recon-xhr-hook',
+        matches,
+        js: ['inject/xhr-hook.js'],
+        runAt: 'document_start',
+        world: 'MAIN',
+        allFrames: true
+      }]);
     } catch (e) {
       // scripting API unavailable / register race — non-fatal (the feature just stays off).
     }
@@ -1399,6 +1408,8 @@ class JSExtractor {
     this.authNotified = false;
     this.batchUploader.setScope({ rootDomains, includeSubdomains });
     this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
+    // The new session's scope (and capture config) may move the response-body hook's hosts.
+    await this.syncResponseBodyHook();
 
     // A fresh session on an already-loaded page should still capture that page (parity with
     // startCapture) — webRequest won't refire for JS that loaded before the rotation.
