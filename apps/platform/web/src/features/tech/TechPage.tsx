@@ -4,16 +4,18 @@ import "./tech.css";
 // The per-host technology stack — the threat-model-grade surface (name · category ·
 // version · confidence · evidence). Version is "—" when not statically derivable
 // (Phase 1 honesty — T12).
-export function TechPage({ data }: { data: TechnologiesResponse }) {
+// runFinished=false: the run is still active, so detection (which runs at the end of analysis)
+// simply hasn't happened yet.
+export function TechPage({ data, runFinished = true }: { data: TechnologiesResponse; runFinished?: boolean }) {
   const hosts = Object.entries(data.hosts);
   if (data.detection_ran === false) {
     return (
       <div className="card">
         <h2 className="rp-title">Tech stack</h2>
         <p className="muted">
-          Not collected for this run. Technology detection reads the response headers and page
-          signals a crawl collects; extension captures don't send them yet, so this is unknown —
-          not "no technologies".
+          {runFinished
+            ? 'Not collected for this run. Technology detection reads the response headers and page signals a crawl collects; extension captures, uploads and single-URL runs don\'t provide them, so the stack is unknown — not "no technologies".'
+            : "Technology detection runs at the end of analysis — check back when this run finishes."}
         </p>
       </div>
     );

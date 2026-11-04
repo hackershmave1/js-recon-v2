@@ -36,4 +36,9 @@ describe("TechPage when detection did not run", () => {
     expect(screen.getByText(/Not collected for this run/)).toBeInTheDocument();
     expect(screen.queryByText(/No technologies detected/)).toBeNull();
   });
+
+  it("says detection is still to come while the run is active", () => {
+    render(<TechPage data={{ run_id: "r", count: 0, hosts: {}, detection_ran: false }} runFinished={false} />);
+    expect(screen.getByText(/runs at the end of analysis/)).toBeInTheDocument();
+  });
 });

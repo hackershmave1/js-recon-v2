@@ -621,8 +621,9 @@ reads keep only the resolved value, not the declarator node.
 `findings/techdetect_pass.run_fingerprint_pass` needs a `fingerprint-signal` blob (allowlisted response
 headers, script URLs, meta, cookies per host). Crawls (`fetch/fetch.py`) and server-side captures
 (`capture/stage.py`) write one; the extension ingest (`/api/save-files`) does not, so every extension
-run shows no tech stack whatever the site uses (QA: recon-range bundles axios -> nothing). The tiles now
-say "not collected" instead of a misleading 0 (`detection_ran`).
+run shows no tech stack whatever the site uses (QA: recon-range bundles axios -> nothing). Uploads and
+legacy single-URL runs lack the signal too. The UI now says "not collected" (or "awaiting analysis"
+while the run is active) instead of a misleading 0 (`detection_ran`).
 
 **Fix:** the extension already uploads each file's response `headers` and URL; build the same
 fingerprint-signal from the run's captured files at analyze time (allowlist the same headers), so the

@@ -100,4 +100,10 @@ describe("HostsPage", () => {
       screen.getByText("no resolved host: 2 API · 1 inferred API · 1 suspected call"),
     ).toBeInTheDocument();
   });
+
+  it("shows an unknown Tech count, not 0, when tech detection never ran", () => {
+    render(<HostsPage data={data} techUnknown />);
+    const row = screen.getByText("acme.io").closest("tr") as HTMLElement;
+    expect(within(row).getByTitle("technology detection did not run for this run")).toHaveTextContent("—");
+  });
 });

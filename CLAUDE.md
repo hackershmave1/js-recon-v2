@@ -9,9 +9,9 @@ change that alters these rules updates this file in the same PR.
 
 A static **JavaScript → API-recon security platform**: it reconstructs the backend
 API surface a JS bundle talks to (endpoints, params, request shapes), scans for
-secrets, and exports an OpenAPI spec of the reconstructed surface. (A consolidated
-recon report and an evidence-grounded threat model over that surface are planned —
-the workspace's "Threat Model" tab is marked SOON.) No active traffic against
+secrets, exports an OpenAPI spec of the reconstructed surface, and generates an LLM
+threat model over it (the workspace's "Threat Model" tab). (A consolidated recon
+report is planned.) No active traffic against
 targets — analysis is static; the fetch stage is SSRF-guarded (in-scope public
 hosts only).
 

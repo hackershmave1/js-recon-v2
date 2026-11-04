@@ -152,14 +152,17 @@ fingerprint dataset. A detection made only from a JS window-global (a bundled SP
 **suspected** with no version — static source carries no runtime value, so those are deliberately
 capped, never asserted as "certain".
 
+Detection needs the response headers and page signals a crawl collects. Extension captures, uploads
+and single-URL runs don't provide them yet (DEBT D77), so their Tech stack reads **not collected**
+(unknown) rather than 0; while a run is still active it reads **awaiting analysis**.
+
 ### API Spec (OpenAPI export)
 
 Exports the reconstructed surface as OpenAPI 3.0.3 (JSON or YAML) — the artifact you feed to Burp /
-Postman / a future threat model. It is security-enriched: `x-recon-risk` param tags,
+Postman / the Threat Model tab. It is security-enriched: `x-recon-risk` param tags,
 `components.securitySchemes` from observed request-auth headers, embedded GraphQL operations under
 `x-recon-graphql-operations`, and an `x-recon-confidence` marker. Responses and severity are absent
-by design — static reconstruction never observes a response, and severity is the (planned) threat
-model's job.
+by design — static reconstruction never observes a response, and severity is the Threat Model's job.
 
 ### GraphQL
 
