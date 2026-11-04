@@ -1,16 +1,42 @@
 // api.js — thin wrappers around the background service worker message API and a
 // couple of chrome.* helpers the popup needs. Keeps chrome.* calls out of the views.
 
+// The popup's ONE safety net (C7). The worker owns the real deadlines (every network call it
+// makes is bounded, and it answers before slow work like the stop-capture flush), so this only
+// fires if the worker never answers at all (killed mid-request, a bug). The outcome is then
+// UNKNOWN — the action may well have happened — so the app re-syncs from the worker's state
+// instead of showing a failure. newSession rotates and re-binds the session, so it gets longer.
+const NO_REPLY_MS = { newSession: 300000 };
+const DEFAULT_NO_REPLY_MS = 60000;
+let onNoReply = () => {};
+
+// The app registers what "re-sync" means (re-read status/files) once, on mount.
+export function setNoReplyHandler(handler) { onNoReply = typeof handler === 'function' ? handler : () => {}; }
+
+// Text for a failed reply: an unknown outcome must not read like a definite failure.
+export function replyError(res, fallback) {
+  if (res?.unknownOutcome) return 'No answer from the extension yet — status refreshed';
+  return res?.error || fallback;
+}
+
+// Every reply is `{ ok, error?, ...detail }` (the worker's message-reply envelope).
 export function send(action, extra = {}) {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (res) => { if (!settled) { settled = true; clearTimeout(timer); resolve(res); } };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      finish({ ok: false, error: 'no_reply', unknownOutcome: true });
+      onNoReply(action);
+    }, NO_REPLY_MS[action] || DEFAULT_NO_REPLY_MS);
     try {
       chrome.runtime.sendMessage({ action, ...extra }, (resp) => {
-        // swallow "receiving end does not exist" during worker spin-up
-        void chrome.runtime.lastError;
-        resolve(resp || {});
+        const lastError = chrome.runtime.lastError;  // read it, or Chrome logs "unchecked"
+        if (lastError) finish({ ok: false, error: lastError.message || 'no_receiver' });
+        else finish(resp || { ok: false, error: 'empty_reply' });
       });
     } catch (e) {
-      resolve({});
+      finish({ ok: false, error: e?.message || 'send_failed' });
     }
   });
 }

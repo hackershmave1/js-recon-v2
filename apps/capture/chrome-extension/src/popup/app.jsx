@@ -91,13 +91,15 @@ export function App() {
   }
 
   useEffect(() => {
+    // C7: if the worker never answers, the outcome is unknown — re-read its state, don't fail.
+    api.setNoReplyHandler(() => { showToast(api.replyError({ unknownOutcome: true }), 'warn'); refresh(); });
     api.getActiveTabHost().then(setActiveHost);
     refresh();
     // D46(c): load persisted past sessions so the history section renders on first open.
     api.getHistory().then((r) => { if (r?.history) setCaptureHistory(r.history); });
     // Seed analysis state on open so reopening the popup mid-run resumes the feed.
     api.getAnalysisProgress().then((res) => {
-      if (!res?.success || !res.job?.counts) return;
+      if (!res?.ok || !res.job?.counts) return;
       const c = res.job.counts;
       const inFlight = (c.queued || 0) + (c.analyzing || 0);
       if (inFlight > 0) setAnalysis({ status: 'running', counts: c, files: res.job.files || [] });
@@ -126,7 +128,7 @@ export function App() {
     let alive = true;
     const poll = async () => {
       const res = await api.getAnalysisProgress();
-      if (!alive || !res?.success || !res.job) return;
+      if (!alive || !res?.ok || !res.job) return;
       const counts = res.job.counts || {};
       const inFlight = (counts.queued || 0) + (counts.analyzing || 0);
       // Counts partition total, so nothing queued/analyzing => settled (this also resolves
@@ -148,7 +150,7 @@ export function App() {
     const sid = status?.sessionId;
     if (!sid) return;
     api.getSessionFindingsSummary(sid).then((res) => {
-      if (res?.success && res.summary?.status === 'complete') {
+      if (res?.ok && res.summary?.status === 'complete') {
         setFindingsSummary(res.summary);
       }
     });
@@ -229,7 +231,7 @@ export function App() {
   // worker once settings is the edit source of truth). Returns the raw result for the form.
   async function signIn(username, password) {
     const res = await api.login(username, password);
-    if (res?.success) {
+    if (res?.ok) {
       setSettings((prev) => ({
         ...(prev || {}),
         authToken: 'session', // truthy marker; the real token stays in the worker
@@ -244,7 +246,7 @@ export function App() {
       setForceLogin(false);   // leave the re-auth view once signed back in (D41)
       showToast(`Signed in${res.tenant?.name ? ` · ${res.tenant.name}` : ''}`);
     }
-    return res || { success: false };
+    return res || { ok: false };
   }
 
   async function signOut() {
@@ -287,7 +289,7 @@ export function App() {
     const { scope, captureConfig } = splitEffective(effective);
 
     const res = await api.newSession({ projectId: projectId || null, scope, captureConfig, overrideKeys });
-    if (res?.success) {
+    if (res?.ok) {
       // Mirror the applied scope locally so the read-only SCOPE bar updates.
       setSettings((prev) => ({
         ...(prev || {}),
@@ -301,7 +303,7 @@ export function App() {
       showToast(selected ? `New session · ${selected.name}` : 'New standalone session');
       // D46(c): reload history after rotation so the previous session appears immediately.
       api.getHistory().then((r) => { if (r?.history) setCaptureHistory(r.history); });
-    } else {
+    } else if (!res?.unknownOutcome) {
       showToast('Could not start session', 'error');
     }
     refresh();
@@ -309,10 +311,10 @@ export function App() {
 
   async function exportNow() {
     const res = await api.getExportData({ includeContent: settings?.exportIncludeContent === true });
-    if (res?.success) {
+    if (res?.ok) {
       api.downloadJson(res.exportData, res.filename || 'js-extraction.json');
       showToast(settings?.exportIncludeContent ? 'Export downloaded · with code' : 'Export downloaded');
-    } else {
+    } else if (!res?.unknownOutcome) {
       showToast(res?.error ? 'Export failed' : 'Nothing to export', res?.error ? 'error' : 'warn');
     }
   }
@@ -333,7 +335,7 @@ export function App() {
       setLlmStatusMsg('Saved · key encrypted on server');
       setLlmStatusOk(true);
     } else {
-      setLlmStatusMsg(res?.error || 'Save failed');
+      setLlmStatusMsg(api.replyError(res, 'Save failed'));
       setLlmStatusOk(false);
     }
   }
@@ -346,7 +348,7 @@ export function App() {
       setLlmStatusMsg(`Connected · ${res.provider} / ${res.model}`);
       setLlmStatusOk(true);
     } else {
-      setLlmStatusMsg(res?.error || 'Test failed');
+      setLlmStatusMsg(api.replyError(res, 'Test failed'));
       setLlmStatusOk(false);
     }
   }
@@ -366,12 +368,13 @@ export function App() {
     if (analysis.status === 'starting' || analysis.status === 'running') return;
     setAnalysis((a) => ({ ...a, status: 'starting' }));
     const res = await api.analyzeSession();
-    if (res?.success) {
+    if (res?.ok) {
       showToast(res.started ? 'Analysis started' : (res.message || 'Analysis already running'));
       setAnalysis((a) => ({ ...a, status: 'running' }));
       return;
     }
     setAnalysis((a) => ({ ...a, status: 'idle' }));
+    if (res?.unknownOutcome) return;  // re-synced by the no-reply handler; re-trying is safe
     // Analyze is blocked until captures finish uploading, so it can't run on a partial set (D43c).
     // An expired session will never drain without re-auth, so it reads differently from slow uploads.
     if (res?.reason === 'session_expired') {
@@ -534,18 +537,18 @@ export function App() {
     });
   const createProject = async (name, rootDomains) => {
     const cleanName = String(name || '').trim();
-    if (!cleanName) { showToast('Project name required', 'warn'); return { success: false }; }
+    if (!cleanName) { showToast('Project name required', 'warn'); return { ok: false }; }
     const res = await api.createProject({
       name: cleanName,
       defaults: { scope: { rootDomains: String(rootDomains || '').split(/[\s,]+/).filter(Boolean) } }
     });
-    if (res?.success && res.project) {
+    if (res?.ok && res.project) {
       setProjects((prev) => [res.project, ...prev]);
       setProjectId(res.project.id);
       setOverrides({});
       showToast(`Project created · ${res.project.name}`);
     } else {
-      showToast(res?.error ? `Create failed: ${res.error}` : 'Could not create project', 'error');
+      showToast(res?.unknownOutcome ? api.replyError(res) : (res?.error ? `Create failed: ${res.error}` : 'Could not create project'), res?.unknownOutcome ? 'warn' : 'error');
     }
     return res;
   };

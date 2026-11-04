@@ -34,6 +34,12 @@ aggressively. Preserve these when editing `background.js` / `modules/*`:
   respawn (keyed `sessionId:contentHash`);
 - keep uploads idempotent — the backend dedupes on `(session_id, content_hash)`;
 - keep the per-file cap aligned with the backend (10 MB) and register MV3 listeners synchronously.
+- popup<->worker replies have ONE shape, `{ ok, error?, ...detail }`, built only by
+  `modules/message-reply.js` (`ok` derived from the handler's own verdict, written last); the
+  popup reads `ok`, never `success`. The worker owns deadlines (every `workspace-client` timer
+  covers the body read; `stopCapture` answers before its flush); the popup's single ~60 s
+  safety net means "unknown outcome -> re-sync", not failure. `tests/test_popup_reply_contract.mjs`
+  pins it, including that every popup action has a worker handler.
 
 ## Conventions
 

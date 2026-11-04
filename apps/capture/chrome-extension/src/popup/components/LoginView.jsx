@@ -5,6 +5,7 @@
 // AuthSection form, now promoted to a first-class step in the funnel.
 import { useState } from 'preact/hooks';
 import { C, F } from '../theme.js';
+import { replyError } from '../api.js';
 import { SearchIcon, LinkIcon, PulseIcon, SpinnerIcon } from '../icons.jsx';
 
 const inputStyle = {
@@ -34,11 +35,11 @@ export function LoginView({ vm }) {
     setBusy(true); setError('');
     const res = await vm.signIn(username.trim(), password);
     setBusy(false);
-    if (res && res.success) { setUsername(''); setPassword(''); }
+    if (res && res.ok) { setUsername(''); setPassword(''); }
     else {
       setError(res?.status === 401 ? 'Invalid username or password'
         : res?.status === 503 ? 'Auth is not configured on the server'
-        : (res?.error || 'Sign in failed'));
+        : replyError(res, 'Sign in failed'));
     }
   };
 

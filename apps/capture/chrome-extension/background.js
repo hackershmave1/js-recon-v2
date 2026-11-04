@@ -19,6 +19,7 @@ import { prepareRequestBody, redactBody, capBody } from './modules/body-capture.
 import { CaptureSession } from './modules/capture-session.js';
 import { PAGE_ACTIONS, admitMessage } from './modules/message-sender.js';
 import { restrictStorageAccess, publishCaptureState } from './modules/storage-access.js';
+import { replyOnce, dispatchReply } from './modules/message-reply.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -282,8 +283,15 @@ class JSExtractor {
         // sendResponse channel open ONLY for actions that actually respond — a fire-and-
         // forget message (e.g. dynamicScriptDetected) returning true would leak the port
         // until GC and log "message port closed before a response was received".
-        this.ready.then(() => this.handleMessage(request, sender, sendResponse));
-        return !FIRE_AND_FORGET_ACTIONS.has(request && request.action);
+        if (FIRE_AND_FORGET_ACTIONS.has(request && request.action)) {
+          this.ready.then(() => this.handleMessage(request, sender, () => {}));
+          return false;
+        }
+        // C7: every popup reply goes through ONE envelope ({ ok, error?, ...detail }), exactly once,
+        // and a throwing/rejecting handler still answers instead of leaving the popup waiting.
+        const reply = replyOnce(sendResponse);
+        this.ready.then(() => dispatchReply(() => this.handleMessage(request, sender, reply), reply));
+        return true;
       }
     );
 
@@ -658,15 +666,6 @@ class JSExtractor {
       }
     }
 
-    this.notifyUI({
-      action: 'fileProcessed',
-      file: {
-        url: url,
-        size: contentByteLength,
-        hasSourceMap: fileObject.hasSourceMap,
-        dependencyCount: dependencies.length
-      }
-    });
   }
 
   extractMetadata(details, authContext = null) {
@@ -946,10 +945,6 @@ class JSExtractor {
     };
   }
 
-  notifyUI(message) {
-    chrome.runtime.sendMessage(message).catch(() => {});
-  }
-
   async fetchViaContentScript(tabId, frameId, url) {
     try {
       const response = await chrome.tabs.sendMessage(
@@ -989,33 +984,32 @@ class JSExtractor {
       getStatus: () => this.getStatus(sendResponse),
       updateSettings: (req) => this.updateSettings(req, sendResponse),
       getExportData: (req) => this.getExportData(req, sendResponse),
-      testConnection: async () => { try { sendResponse(await this.workspaceClient.testConnection()); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
-      analyzeSession: async () => { try { sendResponse(await this.workspaceClient.analyzeSession()); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
-      getAnalysisProgress: async () => { try { sendResponse(await this.workspaceClient.getAnalysisProgress()); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
+      testConnection: async () => sendResponse(await this.workspaceClient.testConnection()),
+      analyzeSession: async () => sendResponse(await this.workspaceClient.analyzeSession()),
+      getAnalysisProgress: async () => sendResponse(await this.workspaceClient.getAnalysisProgress()),
       getSessionFindingsSummary: async (req) => {
-        try {
-          const result = await this.workspaceClient.getSessionFindingsSummary(req.sessionId);
-          // D46(c): cache the summary so history can persist it before rotation.
-          this.session.noteFindingsSummary(req.sessionId, result);
-          sendResponse(result);
-        } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); }
+        const result = await this.workspaceClient.getSessionFindingsSummary(req.sessionId);
+        // D46(c): cache the summary so history can persist it before rotation.
+        this.session.noteFindingsSummary(req.sessionId, result);
+        sendResponse(result);
       },
       getHistory: async () => { await this.getHistory(sendResponse); },
       listProjects: () => this.listProjects(sendResponse),
-      createProject: async (req) => { try { sendResponse(await this.workspaceClient.createProject(req.project)); } catch (e) { sendResponse({ success: false, error: e?.message || 'unknown' }); } },
+      createProject: async (req) => sendResponse(await this.workspaceClient.createProject(req.project)),
       login: (req) => this.login(req, sendResponse),
       logout: () => this.logout(sendResponse),
       dynamicScriptDetected: (req) => this.handleDynamicScript(req, sender),
       inlineScriptDetected: (req) => this.handleInlineScript(req, sender),
       responseBodyObserved: (req) => this.handleResponseBody(req),
-      saveLlmConfig: async (req) => { try { sendResponse(await this.workspaceClient.saveLlmConfig(req.config || {})); } catch (e) { sendResponse({ ok: false, error: e?.message || 'unknown' }); } },
-      testLlmConfig: async () => { try { sendResponse(await this.workspaceClient.testLlmConfig()); } catch (e) { sendResponse({ ok: false, error: e?.message || 'unknown' }); } }
+      saveLlmConfig: async (req) => sendResponse(await this.workspaceClient.saveLlmConfig(req.config || {})),
+      testLlmConfig: async () => sendResponse(await this.workspaceClient.testLlmConfig())
     };
 
     const handler = handlers[request.action];
-    if (handler) {
-      handler(request);
-    }
+    // Returned so dispatchReply can await it (and answer a rejection). An unknown action is
+    // answered too — the popup must never wait on a message no handler will reply to.
+    if (!handler) return sendResponse({ ok: false, error: 'unknown_action' });
+    return handler(request);
   }
 
   handleDynamicScript(request, sender) {
@@ -1426,12 +1420,14 @@ class JSExtractor {
     this.session.pendingRequestBodies.clear();
     this.persistCaptureState(false);
     this.updateBadge();
-    await this.batchUploader.flushAll();
+    // Answer first: the flush can take minutes on a slow workspace, and the popup polls getStatus
+    // for the drain anyway (C7 — the worker owns deadlines; the popup never waits on a flush).
     sendResponse({
       success: true,
       fileCount: this.session.capturedFiles.size,
       uploader: this.batchUploader.getStats()
     });
+    await this.batchUploader.flushAll();
   }
 
   getFiles(sendResponse) {
