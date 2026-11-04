@@ -45,7 +45,7 @@ function makeSandbox({ isCapturing = false } = {}) {
       sendMessage(msg) { messages.push(msg); return Promise.resolve(); }
     },
     storage: {
-      local: {
+      session: {
         get(keys) {
           const result = {};
           const ks = typeof keys === 'string' ? [keys] : Object.keys(keys);
