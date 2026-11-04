@@ -373,6 +373,20 @@ def display_endpoint_value(value: str, path_params: list[dict[str, Any]] | None)
     return _unmask("/".join(segments) + sep + query, subs)
 
 
+def display_value(finding_type: str, value: str, attributes: dict[str, Any] | None) -> str:
+    """The one display form of a stored finding value (identity v3): endpoints show each
+    positional ``{id}`` under its observed name, and a path param shows its operation with its
+    own position named plus ``path:<name>`` instead of ``path:<position>``. Display-only."""
+    attrs = attributes or {}
+    if finding_type in ("endpoint", "endpoint_suspected"):
+        return display_endpoint_value(value, attrs.get("path_params"))
+    if finding_type == "param" and attrs.get("location") == "path" and "position" in attrs:
+        own = [{"position": attrs["position"], "names": attrs.get("names") or []}]
+        operation = display_endpoint_value(operation_of_param_value(value), own)
+        return f"{operation} path:{attrs.get('name') or 'id'}"
+    return value
+
+
 def _whole_placeholder(segment: str, *, holders: bool) -> bool:
     if _MASK_RE.fullmatch(segment):
         return True

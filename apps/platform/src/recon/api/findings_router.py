@@ -12,7 +12,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from recon.api.deps import get_tenant_id
-from recon.findings import queries
+from recon.findings import normalize, queries
 
 router = APIRouter(tags=["findings"])
 
@@ -72,6 +72,10 @@ def get_run_findings(
                 "finding_hash": finding.finding_hash,
                 "type": finding.type,
                 "value": finding.value,
+                # Identity v3 stores `{id}`; this is the form a reader should see (`{userId}`).
+                "display_value": normalize.display_value(
+                    finding.type, finding.value, finding.attributes
+                ),
                 "path": finding.path,
                 "severity": finding.severity,
                 # D49: 0-100 read-time priority (type + risk tags); `severity` is its label.

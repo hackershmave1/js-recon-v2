@@ -509,3 +509,21 @@ def test_v3_current_hash_translates_an_older_run_and_leaves_current_rows_alone()
     current = nz.finding_hash("endpoint", "GET /u/{id}")
     assert nz.current_finding_hash("endpoint", "GET /u/${userId}", v2) == current
     assert nz.current_finding_hash("endpoint", "GET /u/{id}", current) == current
+
+
+def test_v3_display_value_for_endpoints_path_params_and_others():
+    endpoint_attrs = {
+        "path_params": [{"position": 1, "names": ["e", "userId"], "integer_only": False}]
+    }
+    assert nz.display_value("endpoint", "GET /u/{id}", endpoint_attrs) == "GET /u/{userId}"
+    param_attrs = {"location": "path", "position": 1, "names": ["e", "userId"], "name": "userId"}
+    assert (
+        nz.display_value("param", "GET /u/{id} path:1", param_attrs)
+        == "GET /u/{userId} path:userId"
+    )
+    mangled = {"location": "path", "position": 1, "names": ["e"], "name": "id"}
+    assert nz.display_value("param", "GET /u/{id} path:1", mangled) == "GET /u/{id} path:id"
+    assert nz.display_value("param", "GET /u/{id} query:page", {"location": "query"}) == (
+        "GET /u/{id} query:page"
+    )
+    assert nz.display_value("secret", "aws:abc", None) == "aws:abc"

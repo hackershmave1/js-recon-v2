@@ -578,9 +578,7 @@ def diff_runs(tenant_id: str, run_id: str, base_run_id: str) -> DiffView | None:
                     path=fpath,
                     severity=label,
                     priority=score,
-                    display_value=normalize.display_endpoint_value(
-                        fvalue, (fattrs or {}).get("path_params")
-                    ),
+                    display_value=normalize.display_value(ftype, fvalue, fattrs),
                 )
             return out
 

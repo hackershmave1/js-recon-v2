@@ -21,6 +21,19 @@ const FACET_LABELS: Record<FacetKey, string> = {
   type: "Type", class: "Classification", triage: "Triage", host: "Host", risk: "Risk",
 };
 
+// Identity v3: show the reader's form of the value (`{userId}`, not the stored `{id}`).
+function shownValue(f: Finding): string {
+  return f.display_value ?? f.value ?? f.path ?? "(unnamed)";
+}
+
+// A path param's other observed names (`e` beside `userId`) — evidence the same value was
+// read under a minified name too.
+function alsoSeenAs(f: Finding): string[] {
+  const attrs = f.attributes as { location?: unknown; names?: unknown; name?: unknown };
+  if (attrs?.location !== "path" || !Array.isArray(attrs.names)) return [];
+  return attrs.names.filter((n): n is string => typeof n === "string" && n !== attrs.name);
+}
+
 // D49: risk tags (auth/admin/idor/flag) ride in `attributes.risk_tags` — pull them out defensively.
 function riskTags(f: Finding): string[] {
   const raw = (f.attributes as { risk_tags?: unknown })?.risk_tags;
@@ -42,7 +55,7 @@ function facetValues(f: Finding, key: FacetKey): string[] {
 
 function matchesQuery(f: Finding, q: string): boolean {
   if (!q) return true;
-  const hay = [f.value, f.path, f.spec_status?.matched_operation,
+  const hay = [f.display_value, f.value, f.path, f.spec_status?.matched_operation,
     ...f.occurrences.map((o) => o.source_path), ...f.occurrences.map((o) => o.host)]
     .filter(Boolean).join(" ").toLowerCase();
   return hay.includes(q.toLowerCase());
@@ -81,7 +94,7 @@ function findingsToCsv(rows: Finding[]): string {
   for (const f of rows) {
     const hosts = [...new Set(f.occurrences.map((o) => o.host).filter(Boolean))].join(" ");
     lines.push([
-      f.type, f.severity ?? "", f.priority ?? "", f.value ?? f.path ?? "", f.path ?? "",
+      f.type, f.severity ?? "", f.priority ?? "", shownValue(f), f.path ?? "",
       hosts, riskTags(f).join(" "), f.spec_status?.status ?? "unclassified", f.triage?.status ?? "untriaged",
     ].map(csvCell).join(","));
   }
@@ -324,7 +337,12 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                         )}
                         <span className={`fp-type fp-type-${f.type}`}>{typeLabel(f.type)}</span>
                         <span className={`chip chip-${cls}`}>{cls}</span>
-                        <span className="fp-val">{f.value ?? f.path ?? "(unnamed)"}</span>
+                        <span className="fp-val">{shownValue(f)}</span>
+                        {alsoSeenAs(f).length > 0 && (
+                          <span className="chip" title={`Also seen as: ${alsoSeenAs(f).join(", ")}`}>
+                            +{alsoSeenAs(f).length} name{alsoSeenAs(f).length > 1 ? "s" : ""}
+                          </span>
+                        )}
                         {host && <span className="fp-host">{host}</span>}
                         {riskTags(f).map((t) => (
                           <span key={t} className={`fp-risk fp-risk-${t}`}
