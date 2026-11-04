@@ -239,6 +239,17 @@ def test_local_const_operand_resolves_bs_concat():
     assert [(e.method, e.url) for e in r.endpoints] == [("GET", "/api/v1/widgets")]
 
 
+def test_a_literal_only_concatenation_resolves_with_no_const_in_the_file():
+    # QA (recon-range webpack-nomap): a minifier keeps `"/api/v1/"+"widgets"` as two literals.
+    # Folding used to need SOME const in scope, so the same call resolved in the Vite chunk
+    # (which had one) and fell to the unresolved lane in webpack's main.js (which had none).
+    r = extract('fetch("/api/v1/"+"widgets")')
+    assert r.unresolved == []
+    assert [(e.method, e.url) for e in r.endpoints] == [("GET", "/api/v1/widgets")]
+    still_unknown = extract('fetch("/api/v1/"+e)')  # a non-literal operand is never guessed
+    assert still_unknown.endpoints == []
+
+
 def test_local_const_base_plus_path_resolves():
     r = extract('const BASE = "https://api.acme.com"; fetch(BASE + "/api/v3/orders")')
     assert [(e.method, e.url) for e in r.endpoints] == [
