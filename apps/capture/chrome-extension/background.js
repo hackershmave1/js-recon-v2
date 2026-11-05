@@ -20,7 +20,7 @@ import { CaptureSession } from './modules/capture-session.js';
 import { PAGE_ACTIONS, admitMessage } from './modules/message-sender.js';
 import { restrictStorageAccess, publishCaptureState } from './modules/storage-access.js';
 import { replyOnce, dispatchReply } from './modules/message-reply.js';
-import { hookMatchPatterns } from './modules/hook-matches.js';
+import { hookMatchPatterns, hostInScope } from './modules/hook-matches.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -825,33 +825,11 @@ class JSExtractor {
   }
 
   isInScope(url) {
-    // No explicit scope defined for this session?
-    if (!this.settings.useDomainScope ||
-        this.settings.domainScopes.length === 0) {
-      // Fail CLOSED: capture NOTHING unless the operator has explicitly opted into
-      // wide-open capture. The old behaviour returned true here, which made capture
-      // silently follow whatever tab you were on — grabbing out-of-scope engagement
-      // data (e.g. docs.google.com) and even the workspace's own JS. "Capture every
-      // tab" is now an explicit, loudly-badged choice, not a silent default.
-      return this.settings.captureEverything === true;
-    }
-
+    // The one capture-scope host rule (modules/hook-matches.js), shared with the response-body
+    // hook's patterns so the two can never disagree. Fail CLOSED with no scope unless the operator
+    // explicitly chose "capture every tab" (which is loudly badged, never a silent default).
     try {
-      const urlObj = new URL(url);
-      const hostname = urlObj.hostname.toLowerCase();
-      
-      return this.settings.domainScopes.some(scope => {
-        const trimmed = scope.trim().toLowerCase();
-        if (!trimmed) return false;
-        
-        // Exact domain match
-        if (hostname === trimmed) return true;
-
-        // Subdomain match (gated by includeSubdomains; defaults true).
-        if (this.settings.includeSubdomains !== false && hostname.endsWith('.' + trimmed)) return true;
-
-        return false;
-      });
+      return hostInScope(this.settings, new URL(url).hostname);
     } catch (e) {
       return false;
     }
@@ -1202,7 +1180,16 @@ class JSExtractor {
   // (modules/hook-matches.js): it patches the page's own fetch/XHR, so it must never run on a site
   // capture would ignore. Re-synced whenever the setting or the scope changes; an existing
   // registration with other patterns (e.g. an older build's <all_urls>) is updated in place.
-  async syncResponseBodyHook() {
+  // Syncs run ONE AT A TIME, each recomputing from the settings current when it runs: the scope
+  // box fires an update per keystroke, and overlapping read-then-register/update/unregister steps
+  // raced ("Duplicate script ID" / updating an unregistered script), leaving the hook off for an
+  // in-scope host or on for a half-typed one.
+  syncResponseBodyHook() {
+    this.hookSync = (this.hookSync || Promise.resolve()).then(() => this.applyResponseBodyHook());
+    return this.hookSync;
+  }
+
+  async applyResponseBodyHook() {
     const matches = hookMatchPatterns(this.settings);
     try {
       if (!chrome.scripting || !chrome.scripting.getRegisteredContentScripts) return;
@@ -1212,7 +1199,9 @@ class JSExtractor {
         if (current) await chrome.scripting.unregisterContentScripts({ ids: ['recon-xhr-hook'] });
         return;
       }
-      if (current && JSON.stringify(current.matches || []) === JSON.stringify(matches)) return;
+      // Order-insensitive: Chrome doesn't promise to return patterns in the order registered.
+      const same = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+      if (current && same(current.matches || [], matches)) return;
       if (current) {
         await chrome.scripting.updateContentScripts([{ id: 'recon-xhr-hook', matches }]);
         return;
@@ -1226,7 +1215,9 @@ class JSExtractor {
         allFrames: true
       }]);
     } catch (e) {
-      // scripting API unavailable / register race — non-fatal (the feature just stays off).
+      // Non-fatal (the feature stays as it was), but never silent: a lost sync means the hook
+      // runs on the wrong hosts until the next settings change or worker start.
+      console.warn('response-body hook sync failed', e);
     }
   }
 
