@@ -65,7 +65,8 @@ assert.match(app, /api\.listProjects\(\)\.then\(\(res\) => \{[^}]*if \(res\?\.au
 assert.match(app, /expired: !!status\.authExpired \|\| forceLogin/);
 assert.match(app, /capture: status\.isCapturing \? \{ held: status\.uploader\?\.pendingQueueLength \|\| 0, stop: toggleCapture \} : null/, 'files still to upload, not every captured file');
 const signIn = app.slice(app.indexOf('  async function signIn('), app.indexOf('  async function signOut('));
-assert.match(signIn, /setForceLogin\(false\);[\s\S]*setStatus\(\(s\) => \(\{ \.\.\.s, authExpired: false \}\)\);/, 'sign-in leaves the gate at once, not on the next 2s poll');
+assert.match(signIn, /setForceLogin\(false\);[\s\S]*setStatus\(\(s\) => \(\{ \.\.\.s, authExpired: false, uploader: \{ \.\.\.\(s\.uploader \|\| \{\}\), authPaused: false \} \}\)\);\s*refresh\(\);/,
+  'sign-in leaves the gate and the expired banner at once, then re-reads the real status');
 const login_view = read('../src/popup/components/LoginView.jsx');
 assert.match(login_view, /vm\.expired &&/);
 assert.match(login_view, /vm\.capture &&[\s\S]*onClick=\{vm\.capture\.stop\}/, 'a running capture can be stopped from the sign-in screen');

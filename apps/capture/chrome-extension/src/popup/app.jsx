@@ -259,9 +259,11 @@ export function App() {
       api.listProjects().then((r) => { if (r && Array.isArray(r.projects)) setProjects(r.projects); });
       setView('home');
       setForceLogin(false);   // leave the re-auth view once signed back in (D41)
-      // The polled authExpired would hold the sign-in gate up to the next 2s refresh (an emptied
-      // "session expired" form right after "Signed in"); the fresh token isn't expired.
-      setStatus((s) => ({ ...s, authExpired: false }));
+      // The polled status (authExpired, the uploader's auth pause) would hold the sign-in gate and
+      // then Home's "session expired" banner up to the next 2s poll; the worker has already
+      // resumed uploads, so clear both now and re-read its real status.
+      setStatus((s) => ({ ...s, authExpired: false, uploader: { ...(s.uploader || {}), authPaused: false } }));
+      refresh();
       showToast(`Signed in${res.tenant?.name ? ` · ${res.tenant.name}` : ''}`);
     }
     return res || { ok: false };
