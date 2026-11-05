@@ -128,6 +128,12 @@ export function deleteSession(tenantId: string, sessionId: string): Promise<void
   return request(`/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }, tenantId);
 }
 
+// The packages this session treats as app code (#181): their files and findings stop being
+// hidden as third-party. Replaces the whole list.
+export function setAppPackages(tenantId: string, sessionId: string, packages: string[]): Promise<SessionDetail> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}`, json("PATCH", { app_packages: packages }), tenantId);
+}
+
 export function bulkDeleteSessions(tenantId: string, sessionIds: string[]): Promise<BulkDeleteResponse> {
   return request("/sessions/bulk-delete", json("POST", { session_ids: sessionIds }), tenantId);
 }
@@ -206,8 +212,10 @@ export function getSourcesIndexStatus(tenantId: string, runId: string): Promise<
 export function searchSources(
   tenantId: string, runId: string, query: string, client = "",
   scope: { folder?: string; path?: string; assetUrl?: string | null } = {},
+  includeThirdParty = false,
 ): Promise<SourceSearchResponse> {
   const params = new URLSearchParams({ q: query, client });
+  if (includeThirdParty) params.set("third_party", "1");
   if (scope.folder) params.set("folder", scope.folder);
   if (scope.path) params.set("path", scope.path);
   if (scope.path && scope.assetUrl) params.set("asset_url", scope.assetUrl);

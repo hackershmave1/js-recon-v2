@@ -15,7 +15,8 @@ export function SourceSearchResults({ response, searching, error, indexStatus = 
   const shown = response.count;
   const summary = `${shown < response.total ? `Showing ${shown} of ${response.total}` : `${response.total}`} `
     + `${response.total === 1 ? "match" : "matches"} · searched ${response.files_scanned} of ${response.files_total} files`
-    + (scopeLabel ? ` ${scopeLabel}` : "");
+    + (scopeLabel ? ` ${scopeLabel}` : "")
+    + (response.third_party_excluded ? ` · ${response.third_party_excluded} third-party excluded` : "");
   return (
     <div className="sv-search-wrap">
       <div className="sv-search-note">{searching ? "Searching…" : summary}</div>

@@ -296,7 +296,7 @@ describe("SourcesPage", () => {
       matches: [{ path: "input.js", kind: "upload", asset_url: null, line: 2, col: 0, snippet: "fetch('/x')", exact: true }],
     });
     await userEvent.type(screen.getByLabelText(/search across sources/i), "fetch");
-    await waitFor(() => expect(search).toHaveBeenCalledWith("t", "r", "fetch", expect.any(String), {}));
+    await waitFor(() => expect(search).toHaveBeenCalledWith("t", "r", "fetch", expect.any(String), {}, false));
     // a result hit (loc "input.js:2") replaces the tree; clicking it opens the file at the line
     const hit = await screen.findByText(/input\.js:2/);
     await userEvent.click(hit);
@@ -310,13 +310,13 @@ describe("SourcesPage", () => {
     await waitFor(() => expect(content).toHaveBeenCalled());
     vi.spyOn(api, "searchSources").mockResolvedValue({
       run_id: "r", count: 1, total: 1, files_scanned: 2, files_total: 2, unindexed: 0, partial: false,
-      matches: [{ path: "node_modules/lib/c.js", kind: "source", asset_url: "https://acme.io/app.js",
+      matches: [{ path: "lib/vendor/c.js", kind: "source", asset_url: "https://acme.io/app.js",
         line: 3, col: 0, snippet: "token", exact: true }],
     });
     await userEvent.type(screen.getByLabelText(/search across sources/i), "token");
     await userEvent.click(await screen.findByText(/c\.js:3/));
     // the RIGHT file: the original's path AND its owning bundle — not a fallback to app.js
-    await waitFor(() => expect(content).toHaveBeenLastCalledWith("t", "r", "node_modules/lib/c.js", "https://acme.io/app.js"));
+    await waitFor(() => expect(content).toHaveBeenLastCalledWith("t", "r", "lib/vendor/c.js", "https://acme.io/app.js"));
     await userEvent.clear(screen.getByLabelText(/search across sources/i));
     expect(await screen.findByText("from search")).toBeInTheDocument(); // now in the tree
   });
@@ -330,7 +330,7 @@ describe("SourcesPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "This file" }));
     await userEvent.type(screen.getByLabelText(/search across sources/i), "fetch");
     await waitFor(() => expect(search).toHaveBeenLastCalledWith("t", "r", "fetch", expect.any(String),
-      { path: "input.js", assetUrl: null }));
+      { path: "input.js", assetUrl: null }, false));
     expect(await screen.findByText(/searched 1 of 1 files in this file/)).toBeInTheDocument();
   });
 
@@ -349,7 +349,7 @@ describe("SourcesPage", () => {
     await userEvent.click(await screen.findByText(/b\.js:1/));
     await new Promise((r) => setTimeout(r, 450));
     expect(search.mock.calls.length).toBe(calls); // no re-search, scope still src/api
-    expect(search).toHaveBeenLastCalledWith("t", "r", "token", expect.any(String), { folder: "src/api" });
+    expect(search).toHaveBeenLastCalledWith("t", "r", "token", expect.any(String), { folder: "src/api" }, false);
   });
 
   it("switching scope re-runs an active search", async () => {
@@ -361,7 +361,38 @@ describe("SourcesPage", () => {
     await userEvent.type(screen.getByLabelText(/search across sources/i), "fetch");
     await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
     await userEvent.click(screen.getByRole("button", { name: "This file" }));
-    await waitFor(() => expect(search).toHaveBeenLastCalledWith("t", "r", "fetch", expect.any(String), { path: "input.js", assetUrl: null }));
+    await waitFor(() => expect(search).toHaveBeenLastCalledWith("t", "r", "fetch", expect.any(String), { path: "input.js", assetUrl: null }, false));
+  });
+
+  it("groups third-party files in one collapsed folder, and 'Treat as app code' moves them back", async () => {
+    const app: SourceFile = { path: "src/api.js", kind: "source", fetch_status: "ok", asset_url: "https://acme.io/app.js" };
+    const lib: SourceFile = { path: "node_modules/.pnpm/lodash-es@4.17.21/node_modules/lodash-es/_Set.js", kind: "source", fetch_status: "ok", asset_url: "https://acme.io/app.js" };
+    vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: 2, sources: [app, lib], session_id: "s1", app_packages: [] });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "src/api.js", content: CODE, truncated: false, formatted: true });
+    vi.spyOn(api, "getSourcesIndexStatus").mockResolvedValue({ indexed: 1, total: 1, indexing: false });
+    const patch = vi.spyOn(api, "setAppPackages").mockResolvedValue(undefined as never);
+    render(<SourcesPage data={null} tenantId="t" runId="r" jump={null} />);
+    expect(await screen.findByText("Third-party packages")).toBeInTheDocument();
+    expect(screen.queryByText("_Set.js")).toBeNull(); // collapsed by default
+    await userEvent.click(screen.getByText("Third-party packages"));
+    expect(screen.getByText("lodash-es 4.17.21")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Treat lodash-es as app code" }));
+    expect(patch).toHaveBeenCalledWith("t", "s1", ["lodash-es"]);
+    await waitFor(() => expect(screen.queryByText("Third-party packages")).toBeNull());
+    expect(screen.getByText(/lodash-es treated as app code/)).toBeInTheDocument(); // undo lives here
+  });
+
+  it("search leaves third-party out unless '+ third-party' is on", async () => {
+    mount([UPLOAD]);
+    await screen.findByText("fetch('/x')");
+    const search = vi.spyOn(api, "searchSources").mockResolvedValue({
+      run_id: "r", count: 0, total: 0, files_scanned: 3, files_total: 3, unindexed: 0, partial: false,
+      third_party_excluded: 416, matches: [],
+    });
+    await userEvent.type(screen.getByLabelText(/search across sources/i), "fetch");
+    expect(await screen.findByText(/416 third-party excluded/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "+ third-party" }));
+    await waitFor(() => expect(search).toHaveBeenLastCalledWith("t", "r", "fetch", expect.any(String), {}, true));
   });
 
   it("does not search for a too-short query (keeps the file tree)", async () => {
