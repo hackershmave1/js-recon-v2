@@ -205,8 +205,12 @@ export function getSourcesIndexStatus(tenantId: string, runId: string): Promise<
 // query (search-as-you-type) without ever cancelling another person's search on the same run.
 export function searchSources(
   tenantId: string, runId: string, query: string, client = "",
+  scope: { folder?: string; path?: string; assetUrl?: string | null } = {},
 ): Promise<SourceSearchResponse> {
   const params = new URLSearchParams({ q: query, client });
+  if (scope.folder) params.set("folder", scope.folder);
+  if (scope.path) params.set("path", scope.path);
+  if (scope.path && scope.assetUrl) params.set("asset_url", scope.assetUrl);
   return request(`/runs/${encodeURIComponent(runId)}/sources/search?${params}`, {}, tenantId);
 }
 

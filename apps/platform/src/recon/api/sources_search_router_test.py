@@ -14,8 +14,8 @@ from recon.probe.source_search import SearchOutcome, SourceMatch
 def test_reports_honest_totals_and_scopes_cancellation_to_the_client(monkeypatch):
     seen: dict = {}
 
-    def fake(tenant_id, run_id, q, *, client=""):
-        seen.update(run_id=run_id, q=q, client=client)
+    def fake(tenant_id, run_id, q, *, client="", scope=None):
+        seen.update(run_id=run_id, q=q, client=client, folder=scope.folder if scope else None)
         m = SourceMatch(
             path="a.js", kind="asset", asset_url=None, line=None, col=7, snippet="x", exact=False
         )
@@ -26,7 +26,7 @@ def test_reports_honest_totals_and_scopes_cancellation_to_the_client(monkeypatch
     monkeypatch.setattr(sources_router.source_search, "search", fake)
     r = TestClient(create_app()).get(
         "/runs/r1/sources/search",
-        params={"q": "token", "client": "page-1"},
+        params={"q": "token", "client": "page-1", "folder": "src/api"},
         headers={"X-Tenant-Id": str(uuid.uuid4())},
     )
     assert r.status_code == 200
@@ -51,7 +51,7 @@ def test_reports_honest_totals_and_scopes_cancellation_to_the_client(monkeypatch
         "snippet": "x",
         "exact": False,
     }
-    assert seen == {"run_id": "r1", "q": "token", "client": "page-1"}
+    assert seen == {"run_id": "r1", "q": "token", "client": "page-1", "folder": "src/api"}
 
 
 def test_absent_run_is_404(monkeypatch):
