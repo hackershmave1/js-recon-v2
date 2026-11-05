@@ -303,6 +303,24 @@ describe("SourcesPage", () => {
     expect((await screen.findAllByText("fetch('/x')")).length).toBeGreaterThan(0);
   });
 
+  it("opens a hit in an original the tree doesn't list, and adds it to the tree", async () => {
+    const asset: SourceFile = { path: "https://acme.io/app.js", kind: "asset", fetch_status: "ok", asset_url: null };
+    mount([asset], null);
+    const content = vi.mocked(api.getSourceContent);
+    await waitFor(() => expect(content).toHaveBeenCalled());
+    vi.spyOn(api, "searchSources").mockResolvedValue({
+      run_id: "r", count: 1, total: 1, files_scanned: 2, files_total: 2, unindexed: 0, partial: false,
+      matches: [{ path: "node_modules/lib/c.js", kind: "source", asset_url: "https://acme.io/app.js",
+        line: 3, col: 0, snippet: "token", exact: true }],
+    });
+    await userEvent.type(screen.getByLabelText(/search across sources/i), "token");
+    await userEvent.click(await screen.findByText(/c\.js:3/));
+    // the RIGHT file: the original's path AND its owning bundle — not a fallback to app.js
+    await waitFor(() => expect(content).toHaveBeenLastCalledWith("t", "r", "node_modules/lib/c.js", "https://acme.io/app.js"));
+    await userEvent.clear(screen.getByLabelText(/search across sources/i));
+    expect(await screen.findByText("from search")).toBeInTheDocument(); // now in the tree
+  });
+
   it("does not search for a too-short query (keeps the file tree)", async () => {
     mount([UPLOAD]);
     await screen.findByText("fetch('/x')");

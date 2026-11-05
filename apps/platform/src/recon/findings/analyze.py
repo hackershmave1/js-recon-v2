@@ -58,7 +58,7 @@ from recon.findings.kingfisher import RawSecret
 from recon.findings.located import LocatedText, ViewLoc
 from recon.findings.wrappers import WrapperRule
 from recon.observability import get_logger
-from recon.probe import formatted_text
+from recon.probe import formatted_text, recovered_store
 from recon.progress import heartbeat as progress
 from recon.queue import retry
 from recon.runs import assets as run_assets
@@ -668,6 +668,15 @@ def _analyze_blob(
         heartbeat=heartbeat,
         bundle=bundle,
     ) as units:
+        if not units.is_bundle:
+            # Keep the recovered originals this just rebuilt (they were discarded): the viewer and
+            # search read them instead of re-running source-map recovery (recon.probe.recovered_store).
+            recovered_store.store(
+                input_ref,
+                ((name, units.read_text(name)) for name in units.names),
+                partial=units.partial,
+                heartbeat=heartbeat,
+            )
         endpoints = _extract_endpoints(
             session,
             tenant_id=tenant_id,

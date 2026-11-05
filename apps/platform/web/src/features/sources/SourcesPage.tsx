@@ -284,6 +284,7 @@ const SourceTree = memo(function SourceTree({ rows, selectedPath, onSelect, onTo
           <span className="sv-node-name">{r.node.name}</span>
           {r.badge ? <span className="sv-node-badge">{r.badge}</span> : null}
           {file.fetch_status !== "ok" && <span className="sv-node-status">{file.fetch_status}</span>}
+          {file.from_search && <span className="sv-node-status">from search</span>}
         </button>
       );
     }
@@ -312,6 +313,9 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   const [files, setFiles] = useState<SourceFile[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [selPath, setSelPath] = useState<string | null>(null);
+  // The owning bundle of the selected original, when known: two bundles' maps can recover the
+  // same path, and a path-only pick would open the other bundle's bytes.
+  const [selAsset, setSelAsset] = useState<string | null>(null);
   const [content, setContent] = useState<SourceContent | null>(null);
   const [contentState, setContentState] = useState<"idle" | "loading" | "error">("idle");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -341,7 +345,7 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     });
   }, []);
   // Manually picking a file cancels a jump's line highlight.
-  const selectFile = useCallback((path: string) => { setSelPath(path); setFocus(null); }, []);
+  const selectFile = useCallback((path: string) => { setSelPath(path); setSelAsset(null); setFocus(null); }, []);
   // D52 full-text search across the run's sources (server grep). Debounced; while a query is
   // active the results replace the file tree, and clicking a hit opens the file at that line.
   const [searchQuery, setSearchQuery] = useState("");
@@ -355,7 +359,15 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   const indexRound = indexStatus == null || indexStatus.indexing ? "indexing" : `done:${indexStatus.indexed}`;
   const [searching, setSearching] = useState(false);
   const jumpToMatch = useCallback((m: SourceMatch) => {
+    // Search covers every recovered original, not just the ones the tree lists (they carry
+    // findings): open an unlisted one by its path AND owning bundle, and keep it in the tree.
+    if (m.kind === "source") {
+      setFiles((prev) => prev == null || prev.some((f) => f.path === m.path && f.asset_url === m.asset_url)
+        ? prev
+        : [...prev, { path: m.path, kind: "source", fetch_status: "ok", asset_url: m.asset_url, from_search: true }]);
+    }
     openForJump(m.path);
+    setSelAsset(m.kind === "source" ? m.asset_url : null);
     // A hit from a file analyzed before search indexing has no line: open the file at the top.
     setFocus(m.line != null ? { line: m.line, loc: null, approximate: false } : null);
   }, [openForJump]);
@@ -370,6 +382,7 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     const j = pendingJump.current;
     if (!j || !files) return;
     pendingJump.current = null;
+    setSelAsset(null);  // a finding jump picks by its own path; a prior search hit's bundle mustn't stick
     openForJump(resolveJumpPath(j, files));
     setFocus(j.line != null ? { line: j.line, loc: j.loc ?? null, approximate: !!j.approximate } : null);
   }, [jump, files, openForJump]);
@@ -383,6 +396,7 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     // passed at mount (this effect runs after the jump-stashing effect, before files load).
     setFiles(null);
     setSelPath(null);
+    setSelAsset(null);
     setListError(null);
     setCollapsed(new Set());
     setFocus(null);
@@ -415,7 +429,9 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
 
   // Resolve the shown file: the clicked one, else the first viewable, else the first.
   const selected = files
-    ? files.find((f) => f.path === selPath) ?? files.find((f) => f.fetch_status === "ok") ?? files[0] ?? null
+    ? files.find((f) => f.path === selPath && (selAsset == null || f.asset_url === selAsset))
+      ?? files.find((f) => f.path === selPath)
+      ?? files.find((f) => f.fetch_status === "ok") ?? files[0] ?? null
     : null;
 
   useEffect(() => {

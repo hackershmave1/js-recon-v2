@@ -43,6 +43,9 @@ BLOB_KINDS = frozenset(
         # A source blob's served (beautified) text, stored once beside its input blob under the
         # SAME digest (recon.probe.formatted_text) so the viewer and search never re-beautify.
         "formatted",
+        # Per bundle: the list of its source-map-recovered originals and their stored `formatted`
+        # copies (recon.probe.recovered_store), keyed by the bundle's input digest.
+        "originals",
     }
 )
 
@@ -112,10 +115,14 @@ def ensure_bucket() -> None:
         client.create_bucket(Bucket=bucket)
 
 
-def put_blob(tenant_id: str, run_id: str, kind: str, content: bytes) -> str:
-    """Store bytes under a content-addressed key and return the key (REQ-D2)."""
+def put_blob(
+    tenant_id: str, run_id: str, kind: str, content: bytes, *, check_bucket: bool = True
+) -> str:
+    """Store bytes under a content-addressed key and return the key (REQ-D2). A caller writing
+    many blobs in a row checks the bucket once itself (``check_bucket=False``)."""
     key = object_key(tenant_id, run_id, kind, content)
-    ensure_bucket()
+    if check_bucket:
+        ensure_bucket()
     _s3_client().put_object(Bucket=get_settings().s3_bucket, Key=key, Body=content)
     return key
 

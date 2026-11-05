@@ -27,6 +27,11 @@ def run(monkeypatch):
         return {p: f"{T}/{R}/input/{p}" for p in state["assets"]}
 
     monkeypatch.setattr(sources, "asset_keys", keys)
+    # No source maps unless a test adds them (state["maps"]: path -> map ref).
+    state["maps"] = {}
+    state["lists"] = set()
+    monkeypatch.setattr(source_index, "_map_refs", lambda _t, _r: dict(state["maps"]))
+    monkeypatch.setattr(source_index, "_stored_lists", lambda _t, _r: set(state["lists"]))
     monkeypatch.setattr(
         source_index.storage, "list_keys", lambda prefix: {f"{prefix}{d}" for d in state["stored"]}
     )
@@ -103,7 +108,7 @@ def test_an_unindexable_bundle_never_loops_the_job(run, redis, monkeypatch):
     assert _drain(redis) <= 2
     assert source_index.status(redis, T, R) == {"indexed": 1, "total": 2, "indexing": False}
     # Incomplete: retried within the hour, not marked "done" for a month (code review MED-1).
-    assert 0 < redis.ttl(f"indexed:{T}:{R}") <= 3600
+    assert 0 < redis.ttl(f"indexed:v2:{T}:{R}") <= 3600
 
 
 def test_slices_are_time_bounded_and_resume_from_a_cursor(run, redis, monkeypatch):
@@ -159,3 +164,53 @@ def test_a_redelivered_slice_stops_instead_of_forking_the_chain(run, redis):
     [(_msg_id, first)] = streams.read_batch(redis, QueueName.INDEX, "c", count=1, block_ms=None)
     assert source_index.handle(redis, first) in {"continued", "done"}
     assert source_index.handle(redis, first) == "superseded"  # the same message, again
+
+
+def test_a_mapped_bundles_originals_are_backfilled_once(run, redis, monkeypatch):
+    # Older runs: the job also recovers each mapped bundle's source map ONCE and stores its originals.
+    run["assets"].update({"app": "a()", "lib": "b()"})
+    run["maps"]["app"] = f"{T}/{R}/source_map/m1"
+    recovered = []
+
+    def originals(_t, _r, bundle_key, map_ref):
+        recovered.append((bundle_key.rsplit("/", 1)[1], map_ref))
+        run["lists"].add("app")
+
+    monkeypatch.setattr(source_index, "_index_originals", originals)
+    assert source_index.status(redis, T, R)["total"] == 3  # 2 bundles + 1 map
+    source_index.request_index(redis, T, R)
+    _drain(redis)
+    assert recovered == [("app", f"{T}/{R}/source_map/m1")]
+    assert source_index.status(redis, T, R) == {"indexed": 3, "total": 3, "indexing": False}
+
+
+def test_a_v1_done_marker_does_not_block_the_originals_backfill(run, redis):
+    # Code review H1: runs marked "indexed" by the bundles-only job must still get their originals.
+    run["assets"]["app"] = "a()"
+    run["stored"].add("app")
+    run["maps"]["app"] = f"{T}/{R}/source_map/m1"
+    redis.set(f"indexed:{T}:{R}", 1)  # the old marker
+    assert source_index.request_index(redis, T, R)["indexing"] is True
+
+
+def test_an_unrecoverable_map_is_tried_once_not_forever(run, redis, monkeypatch):
+    # Code review H2: an engine error records the bundle as tried, so the job completes.
+    from recon.findings import engines
+    from recon.probe import recovered_store
+
+    run["assets"]["app"] = "a()"
+    run["maps"]["app"] = f"{T}/{R}/source_map/m1"
+    monkeypatch.setattr(source_index.storage, "download_blob_to_path", lambda _k, _p: None)
+
+    def boom(*_a, **_k):
+        raise engines.EngineError("unparseable map")
+
+    monkeypatch.setattr(source_index.sourcemapper, "iter_recovered_files", boom)
+    tried = []
+    monkeypatch.setattr(
+        recovered_store, "store_failed", lambda key: tried.append(key) or run["lists"].add("app")
+    )
+    source_index.request_index(redis, T, R)
+    _drain(redis)
+    assert len(tried) == 1
+    assert source_index.status(redis, T, R)["indexing"] is False
