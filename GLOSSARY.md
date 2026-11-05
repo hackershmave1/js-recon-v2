@@ -28,3 +28,21 @@ hosts (those are different rules), "engagement scope".
 
 A capture session with no engagement binding ("Solo · standalone" in the popup). Logout and a
 different-tenant login always rotate to one.
+
+## App code
+
+The target's own code: every source file that isn't **third-party code**. A bundle with no source
+map can't be split, so its code is unclassified rather than assumed to be either.
+
+_Avoid_: "first-party" (ambiguous with first-party hosts), "core".
+
+## Third-party code
+
+Code from packages the target depends on, recognised by its package path (`node_modules`, pnpm's
+`.pnpm`, Yarn's `.yarn`) or by the source map's own ignore list. It is analyzed like app code but
+hidden by default; a researcher can treat a package as app code for a session (a private
+`@acme/*` package is the usual case). A third-party finding that points at an in-scope host stays
+visible.
+
+_Avoid_: "vendor" (already means analytics/CDN hosts in the noise filter), "dependency", "library
+code".
