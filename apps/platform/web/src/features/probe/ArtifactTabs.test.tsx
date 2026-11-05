@@ -62,6 +62,20 @@ describe("ArtifactTabs", () => {
     vi.useRealTimers();
   });
 
+  it("unmounting before the 'Copied' reset leaves no pending timer", async () => {
+    // The reset timer outlived the component: in CI it fired after jsdom teardown and crashed
+    // the run with "window is not defined" although every test had passed.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    const { unmount } = render(<ArtifactTabs artifacts={{ curl: "x" }} />);
+    await user.click(screen.getByRole("button", { name: /copy/i }));
+    expect(screen.getByText(/copied/i)).toBeTruthy();
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
   it("WS op shows only websocat tab", () => {
     render(<ArtifactTabs artifacts={{ websocat: "websocat ws://example.com" }} />);
     expect(screen.getByRole("tab", { name: "websocat" })).toBeTruthy();
