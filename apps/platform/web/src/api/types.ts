@@ -196,6 +196,10 @@ export interface SessionSummary {
   files: number | null; endpoints: number | null; secrets: number | null;
   coverage_pct: number | null; // attribution coverage %, null until analyze emits
 }
+// POST /sessions/bulk-delete: never all-or-nothing; `failed[].error` is an error class only.
+export interface BulkDeleteResponse {
+  deleted: string[]; not_found: string[]; failed: { id: string; error: string }[];
+}
 export interface SessionsListResponse { count: number; sessions: SessionSummary[]; }
 export interface SessionRunsResponse { session_id: string; count: number; runs: SessionRunRef[]; }
 // The widened session view returned by POST/PATCH /sessions (superset of SessionView).

@@ -23,6 +23,21 @@
   border: 1px solid rgba(255,77,94,0.3); border-radius: var(--r); padding: 10px 14px; margin-bottom: 16px; font-size: 13px;
 }
 .sx-empty { color: var(--dim); padding: 40px 4px; }
+/* ---------- bulk delete ---------- */
+.sx-bulk-delete {
+  display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border-radius: var(--r);
+  border: 1px solid rgba(255,107,138,0.4); background: rgba(255,107,138,0.08); color: var(--pink);
+  font-size: 12.5px; font-weight: 600;
+}
+.sx-bulk-delete:hover:not(:disabled) { background: rgba(255,107,138,0.14); }
+.sx-bulk-delete:disabled { opacity: 0.55; cursor: default; }
+.sx-bulk-status { color: var(--text-2); font-size: 13px; margin-bottom: 16px; }
+.sx-bulk-details { margin: 0 0 16px; font-size: 13px; color: var(--text-2); }
+.sx-bulk-list { margin: 0; padding-left: 18px; max-height: 220px; overflow-y: auto; overflow-wrap: anywhere; }
+.sx-bulk-list li { margin: 2px 0; }
+.sx-bulk-date, .sx-bulk-more { color: var(--dim); }
+.sx-bulk-more { margin-top: 4px; }
+.sx-bulk-warn { margin-top: 10px; color: var(--warn); }
 .sx-empty-title { font-family: var(--font-display); font-size: 16px; color: var(--text-2); margin-bottom: 6px; }
 .sx-empty .sx-new { margin-top: 16px; }
 
@@ -88,7 +103,8 @@
 .sx-cov-l { font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); margin-top: 7px; }
 
 /* ---------- kebab menu ---------- */
-.sx-card-actions { position: absolute; top: 16px; right: 16px; }
+.sx-card-actions { position: absolute; top: 16px; right: 16px; display: flex; align-items: center; gap: 8px; }
+.sx-select { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .sx-kebab {
   width: 26px; height: 26px; padding: 0; border-radius: 7px;
   border: 1px solid var(--raised); background: var(--surface); color: var(--muted);

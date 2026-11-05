@@ -91,6 +91,45 @@ describe("SessionsPage", () => {
     await waitFor(() => expect(screen.queryByText("acme.io")).not.toBeInTheDocument());
   });
 
+  it("bulk-deletes the selected sessions after one confirm and reports the outcome", async () => {
+    vi.spyOn(api, "listSessions")
+      .mockResolvedValueOnce({ count: 2, sessions: [DONE, NORUN] })
+      .mockResolvedValue({ count: 0, sessions: [] });
+    const bulk = vi.spyOn(api, "bulkDeleteSessions")
+      .mockResolvedValue({ deleted: ["s1", "s2"], not_found: [], failed: [] });
+    renderPage();
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select acme.io" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select shop.test" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete 2 sessions" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/acme\.io/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/shop\.test/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(bulk).toHaveBeenCalledWith("t1", ["s1", "s2"]);
+    expect(await screen.findByRole("status")).toHaveTextContent("Deleted 2 sessions");
+  });
+
+  it("keeps sessions that failed to delete selected and says so", async () => {
+    vi.spyOn(api, "listSessions").mockResolvedValue({ count: 2, sessions: [DONE, NORUN] });
+    vi.spyOn(api, "bulkDeleteSessions")
+      .mockResolvedValue({ deleted: ["s2"], not_found: [], failed: [{ id: "s1", error: "RuntimeError" }] });
+    renderPage();
+    await userEvent.click(await screen.findByRole("checkbox", { name: /select all/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete 2 sessions" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Deleted 1 session · 1 failed");
+    expect(screen.getByRole("checkbox", { name: "Select acme.io" })).toBeChecked();
+  });
+
+  it("warns that extension captures may reappear", async () => {
+    const CAPTURE = { ...NORUN, session_id: "s9", host: "cap.test", external_id: "ext-1" };
+    vi.spyOn(api, "listSessions").mockResolvedValue({ count: 1, sessions: [CAPTURE] });
+    renderPage();
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select cap.test" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete 1 session" }));
+    expect(within(screen.getByRole("dialog")).getByText(/1 is an extension capture/i)).toBeInTheDocument();
+  });
+
   it("surfaces a failed run's classified reason on the card (visible tip + accessible name)", async () => {
     vi.spyOn(api, "listSessions").mockResolvedValue({ count: 1, sessions: [FAILED] });
     renderPage();

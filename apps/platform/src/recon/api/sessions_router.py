@@ -13,6 +13,8 @@ re-run. Isolation is the database's (RLS): a session absent for this tenant is a
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from redis import Redis
@@ -21,7 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from recon.api.deps import get_actor, get_redis, get_tenant_id
 from recon.findings import queries as findings_queries
 from recon.runs import coordinator
-from recon.sessions import service
+from recon.sessions import bulk_delete, service
 
 router = APIRouter(tags=["sessions"])
 
@@ -139,6 +141,23 @@ def patch_session(
         if view is None:
             raise HTTPException(status_code=404, detail="session not found")
     return _session_view_dict(view)
+
+
+class BulkDeleteBody(BaseModel):
+    # UUID-typed so a malformed id rejects the WHOLE batch (422) before anything is deleted.
+    session_ids: list[uuid.UUID] = Field(min_length=1, max_length=bulk_delete.MAX_BATCH)
+
+
+# Sync `def` like the single delete: psycopg2 + boto3 block, so FastAPI runs it in its threadpool.
+@router.post("/sessions/bulk-delete")
+def bulk_delete_sessions(
+    body: BulkDeleteBody,
+    tenant_id: str = Depends(get_tenant_id),
+    actor: str | None = Depends(get_actor),
+) -> dict:
+    ids = list(dict.fromkeys(str(session_id) for session_id in body.session_ids))
+    result = bulk_delete.delete_sessions(tenant_id, ids, actor)
+    return {"deleted": result.deleted, "not_found": result.not_found, "failed": result.failed}
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
