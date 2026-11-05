@@ -14,10 +14,11 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
+from redis import Redis
 
-from recon.api.deps import get_tenant_id
+from recon.api.deps import get_redis, get_tenant_id
 from recon.observability import get_logger
-from recon.probe import source_search, sources
+from recon.probe import source_index, source_search, sources
 
 router = APIRouter(tags=["sources"])
 
@@ -106,6 +107,25 @@ async def search_run_sources(
             for m in outcome.matches
         ],
     }
+
+
+@router.get("/runs/{run_id}/sources/index-status")
+async def get_run_sources_index_status(
+    run_id: str,
+    tenant_id: str = Depends(get_tenant_id),
+    redis: Redis = Depends(get_redis),
+) -> dict:
+    """``{indexed, total, indexing}`` for the Sources page's poll (one object-store listing, never
+    a download). Calling it starts background indexing of an older run's bundles — at most one job
+    per run (recon.probe.source_index) — so search hits gain line numbers on their own."""
+    if await run_in_threadpool(sources.list_sources, tenant_id, run_id) is None:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    def request_and_report() -> dict:
+        source_index.request_index(redis, tenant_id, run_id)
+        return source_index.status(redis, tenant_id, run_id)
+
+    return await run_in_threadpool(request_and_report)
 
 
 @router.get("/runs/{run_id}/sources/content")

@@ -18,6 +18,8 @@ class QueueName(StrEnum):
     LLM = "llm"
     PROBE = "probe"
     REPORT = "report"
+    # Background indexing of an older run's sources (recon.probe.source_index): no run stage.
+    INDEX = "index"
 
 
 class RunStage(StrEnum):

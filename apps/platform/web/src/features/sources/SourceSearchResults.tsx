@@ -1,12 +1,12 @@
-import type { SourceMatch, SourceSearchResponse } from "../../api/types";
+import type { SourceMatch, SourceSearchResponse, SourcesIndexStatus } from "../../api/types";
 
 // D52: full-text search results, shown in place of the file tree while a query is active. The
 // summary says exactly what was searched: a capped list never reads as "all matches", a search the
 // time budget (or a newer query) cut short says so, and a run analyzed before search indexing says
 // its hits carry no line number (they were searched raw — clicking opens the file).
-export function SourceSearchResults({ response, searching, error, onJump }: {
+export function SourceSearchResults({ response, searching, error, indexStatus = null, onJump }: {
   response: SourceSearchResponse | null; searching: boolean; error: string | null;
-  onJump: (m: SourceMatch) => void;
+  indexStatus?: SourcesIndexStatus | null; onJump: (m: SourceMatch) => void;
 }) {
   if (error) return <div className="sv-search-note sv-search-error">{error}</div>;
   if (!response || (searching && response.matches.length === 0)) {
@@ -21,11 +21,16 @@ export function SourceSearchResults({ response, searching, error, onJump }: {
       {response.partial && (
         <div className="sv-search-note sv-search-warn">Search stopped early — refine the query for complete results.</div>
       )}
-      {response.unindexed > 0 && (
+      {response.unindexed > 0 && (indexStatus?.indexing ? (
+        <div className="sv-search-note">
+          Indexing older files in the background ({indexStatus.indexed} of {indexStatus.total} done) —
+          line numbers fill in as they finish.
+        </div>
+      ) : (
         <div className="sv-search-note">
           {response.unindexed} files analyzed before search indexing: their matches show no line number.
         </div>
-      )}
+      ))}
       {shown === 0 ? (
         <div className="sv-search-note">No matches.</div>
       ) : (

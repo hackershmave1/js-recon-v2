@@ -133,6 +133,18 @@ def put_blob_at(key: str, content: bytes) -> None:
     _s3_client().put_object(Bucket=get_settings().s3_bucket, Key=key, Body=content)
 
 
+def list_keys(prefix: str) -> set[str]:
+    """Every object key under ``prefix`` (paginated: a run can exceed one 1000-key page). Lets a
+    caller learn which derived blobs exist from ONE listing instead of a GET per key."""
+    client = _s3_client()
+    keys: set[str] = set()
+    for page in client.get_paginator("list_objects_v2").paginate(
+        Bucket=get_settings().s3_bucket, Prefix=prefix
+    ):
+        keys.update(obj["Key"] for obj in page.get("Contents") or [])
+    return keys
+
+
 def get_blob(key: str) -> bytes:
     """Fetch a blob's bytes by key."""
     obj = _s3_client().get_object(Bucket=get_settings().s3_bucket, Key=key)
