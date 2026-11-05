@@ -42,7 +42,9 @@ def store(input_key: str, content: SourceContent) -> None:
         "formatted": content.formatted,
     }
     try:
-        storage.put_blob_at(formatted_key(input_key), json.dumps(payload).encode("utf-8"))
+        storage.put_blob_at(
+            formatted_key(input_key), json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        )
     except Exception:
         _logger.warning("formatted_text.store_failed", input_key=input_key, exc_info=True)
 

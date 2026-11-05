@@ -346,11 +346,12 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResponse, setSearchResponse] = useState<SourceSearchResponse | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const searchClient = useMemo(() => Math.random().toString(36).slice(2), []);
   const [searching, setSearching] = useState(false);
   const jumpToMatch = useCallback((m: SourceMatch) => {
     openForJump(m.path);
     // A hit from a file analyzed before search indexing has no line: open the file at the top.
-    if (m.line != null) setFocus({ line: m.line, loc: null, approximate: false });
+    setFocus(m.line != null ? { line: m.line, loc: null, approximate: false } : null);
   }, [openForJump]);
   // Draggable + collapsible file rail (task: expand the code view).
   const { width: railWidth, collapsed: railCollapsed, toggleCollapsed: toggleRail, resizerProps } = useResizableRail();
@@ -393,17 +394,18 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   useEffect(() => {
     const term = searchQuery.trim();
     if (term.length < 2) { setSearchResponse(null); setSearchError(null); setSearching(false); return; }
+    setSearchError(null);
     let live = true;
     setSearching(true);
     const timer = setTimeout(() => {
-      searchSources(tenantId, runId, term)
+      searchSources(tenantId, runId, term, searchClient)
         .then((r) => { if (live) { setSearchResponse(r); setSearchError(null); } })
         // A failure is not "No matches": say so, so the operator retries instead of concluding.
         .catch(() => { if (live) { setSearchResponse(null); setSearchError("Search failed — try again"); } })
         .finally(() => { if (live) setSearching(false); });
     }, 300);
     return () => { live = false; clearTimeout(timer); };
-  }, [searchQuery, tenantId, runId]);
+  }, [searchQuery, tenantId, runId, searchClient]);
 
   // Resolve the shown file: the clicked one, else the first viewable, else the first.
   const selected = files

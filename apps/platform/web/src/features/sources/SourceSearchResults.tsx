@@ -17,7 +17,7 @@ export function SourceSearchResults({ response, searching, error, onJump }: {
     + `${response.total === 1 ? "match" : "matches"} · searched ${response.files_scanned} of ${response.files_total} files`;
   return (
     <div className="sv-search-wrap">
-      <div className="sv-search-note">{summary}</div>
+      <div className="sv-search-note">{searching ? "Searching…" : summary}</div>
       {response.partial && (
         <div className="sv-search-note sv-search-warn">Search stopped early — refine the query for complete results.</div>
       )}

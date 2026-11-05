@@ -295,7 +295,7 @@ describe("SourcesPage", () => {
       matches: [{ path: "input.js", kind: "upload", asset_url: null, line: 2, col: 0, snippet: "fetch('/x')", exact: true }],
     });
     await userEvent.type(screen.getByLabelText(/search across sources/i), "fetch");
-    await waitFor(() => expect(search).toHaveBeenCalledWith("t", "r", "fetch"));
+    await waitFor(() => expect(search).toHaveBeenCalledWith("t", "r", "fetch", expect.any(String)));
     // a result hit (loc "input.js:2") replaces the tree; clicking it opens the file at the line
     const hit = await screen.findByText(/input\.js:2/);
     await userEvent.click(hit);

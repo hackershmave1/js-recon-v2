@@ -164,3 +164,93 @@ def test_short_query_and_absent_run(run, monkeypatch):
     assert out is not None and out.matches == [] and out.files_scanned == 0
     monkeypatch.setattr(sources, "list_sources", lambda _t, _r: None)
     assert source_search.search("t", "r", "token") is None
+
+
+def test_the_budget_holds_inside_one_huge_file(run, monkeypatch):
+    # Code review H2: the budget used to be checked only between files.
+    run["files"]["min.js"] = "\n".join(["ab ab ab"] * 20000)
+    ticks = iter(range(10**6))
+    monkeypatch.setattr(source_search.time, "monotonic", lambda: next(ticks))
+    out = source_search.search("t", "r", "ab", budget_seconds=50)
+    assert out is not None and out.partial
+    assert out.files_scanned == 0
+
+
+def test_a_hung_read_does_not_outlive_the_budget(run, monkeypatch):
+    release = threading.Event()
+
+    def hang(_key, *, path):
+        release.wait(10)
+
+    monkeypatch.setattr(formatted_text, "load", hang)
+    run["files"]["a.js"] = "needle"
+    out = source_search.search("t", "r", "needle", budget_seconds=0.3)
+    release.set()
+    assert out is not None and out.partial
+
+
+def test_reads_are_windowed_not_all_held_at_once(run, monkeypatch):
+    # Code review H1: every file's text used to stay alive until the search ended.
+    live, peak = set(), [0]
+    lock = threading.Lock()
+    for i in range(60):
+        run["files"][f"f{i}.js"] = "x"
+
+    def load(key, *, path):
+        with lock:
+            live.add(path)
+            peak[0] = max(peak[0], len(live))
+        return SourceContent(path=path, content="x", truncated=False, formatted=True)
+
+    real_scan = source_search._scan
+
+    def scan(outcome, f, *a, **k):
+        real_scan(outcome, f, *a, **k)
+        with lock:
+            live.discard(f.path)
+
+    monkeypatch.setattr(formatted_text, "load", load)
+    monkeypatch.setattr(source_search, "_scan", scan)
+    source_search.search("t", "r", "needle")
+    assert peak[0] <= source_search._READERS * 2 + 1
+
+
+def test_files_total_counts_only_searchable_files(run, monkeypatch):
+    # A failed-fetch asset is in the tree but has no bytes: not "1 of 2 searched".
+    run["files"]["ok.js"] = "needle"
+    real = sources.list_sources
+    monkeypatch.setattr(
+        sources,
+        "list_sources",
+        lambda t, r: [
+            *real(t, r),
+            SourceFile(path="failed.js", kind="asset", fetch_status="failed"),
+        ],
+    )
+    out = source_search.search("t", "r", "needle")
+    assert out is not None
+    assert (out.files_scanned, out.files_total, out.partial) == (1, 1, False)
+
+
+def test_two_clients_on_one_run_do_not_cancel_each_other(run, monkeypatch):
+    run["recovered"]["one.js"] = "needle"
+    started, release = threading.Event(), threading.Event()
+    real = sources.get_source_content
+
+    def slow(*a, **k):
+        started.set()
+        release.wait(5)
+        return real(*a, **k)
+
+    monkeypatch.setattr(sources, "get_source_content", slow)
+    result: dict = {}
+    t = threading.Thread(
+        target=lambda: result.setdefault("a", source_search.search("t", "r", "needle", client="A"))
+    )
+    t.start()
+    started.wait(5)
+    monkeypatch.setattr(sources, "get_source_content", real)
+    source_search.search("t", "r", "needle", client="B")
+    release.set()
+    t.join(5)
+    assert result["a"].partial is False

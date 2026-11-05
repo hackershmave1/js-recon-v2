@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from collections import deque
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 
 from recon import storage
@@ -57,70 +60,114 @@ class SearchOutcome:
     partial: bool = False
 
 
-_inflight: dict[tuple[str, str], threading.Event] = {}
+# Keyed by the searching CLIENT (one Sources page), never just the run: two people (or tabs)
+# searching one run must not cancel each other — only a page's own superseded query is dropped.
+_inflight: dict[tuple[str, str, str], threading.Event] = {}
 _inflight_lock = threading.Lock()
 
 
-def _claim(tenant_id: str, run_id: str) -> threading.Event:
-    """Cancel any search still running for this run and register this one."""
+def _claim(key: tuple[str, str, str]) -> threading.Event:
+    """Cancel this client's previous search for the run, if still running, and register this one."""
     mine = threading.Event()
     with _inflight_lock:
-        previous = _inflight.get((tenant_id, run_id))
+        previous = _inflight.get(key)
         if previous is not None:
             previous.set()
-        _inflight[(tenant_id, run_id)] = mine
+        _inflight[key] = mine
     return mine
 
 
-def _release(tenant_id: str, run_id: str, mine: threading.Event) -> None:
+def _release(key: tuple[str, str, str], mine: threading.Event) -> None:
     with _inflight_lock:
-        if _inflight.get((tenant_id, run_id)) is mine:
-            del _inflight[(tenant_id, run_id)]
+        if _inflight.get(key) is mine:
+            del _inflight[key]
+
+
+class _Stop(Exception):
+    """The budget ran out or a newer query superseded this one, mid-file."""
 
 
 def search(
-    tenant_id: str, run_id: str, query: str, *, budget_seconds: float = BUDGET_SECONDS
+    tenant_id: str,
+    run_id: str,
+    query: str,
+    *,
+    client: str = "",
+    budget_seconds: float = BUDGET_SECONDS,
 ) -> SearchOutcome | None:
     """Search the run's sources for ``query`` (case-insensitive substring). ``None`` when the run is
-    absent/invisible (404); an empty outcome for a too-short query."""
+    absent/invisible (404); an empty outcome for a too-short query. ``client`` identifies the
+    searching page so its own superseded query is cancelled (and nobody else's)."""
     files = sources.list_sources(tenant_id, run_id)
     if files is None:
         return None
+    keys = sources.asset_keys(tenant_id, run_id)
+    # Only files that HAVE content count: a failed-fetch asset is listed in the tree but has no
+    # bytes, so "searched X of Y" must not read as incomplete because of it.
+    bundles = [f for f in files if f.kind != "source" and f.path in keys]
+    originals = [f for f in files if f.kind == "source"]
+    outcome = SearchOutcome(files_total=len(bundles) + len(originals))
     needle = (query or "").strip().lower()
-    outcome = SearchOutcome(files_total=len(files))
     if len(needle) < MIN_QUERY:
         return outcome
-    cancelled = _claim(tenant_id, run_id)
+    registry_key = (tenant_id, run_id, client)
+    cancelled = _claim(registry_key)
     deadline = time.monotonic() + budget_seconds
+
+    def check() -> None:
+        if cancelled.is_set() or time.monotonic() > deadline:
+            raise _Stop
+
     try:
-        keys = sources.asset_keys(tenant_id, run_id)
-        bundles = [f for f in files if f.kind != "source" and f.path in keys]
-        originals = [f for f in files if f.kind == "source"]
-        with ThreadPoolExecutor(max_workers=_READERS) as pool:
-            reads = [pool.submit(_read_bundle, keys[f.path], f.path) for f in bundles]
-            for f, read in zip(bundles, reads, strict=True):
-                if cancelled.is_set() or time.monotonic() > deadline:
-                    outcome.partial = True
-                    for pending in reads:
-                        pending.cancel()
-                    break
-                text, exact = read.result()
-                if text is None:
-                    continue
-                outcome.unindexed += 0 if exact else 1
-                _scan(outcome, f, text, needle, exact=exact)
-                outcome.files_scanned += 1
-        for f in originals if not outcome.partial else []:
-            if cancelled.is_set() or time.monotonic() > deadline:
-                outcome.partial = True
-                break
+        _scan_bundles(outcome, bundles, keys, needle, check, deadline)
+        for f in originals:
+            check()
             content = sources.get_source_content(tenant_id, run_id, f.path, f.asset_url)
             if content is not None:
-                _scan(outcome, f, content.content, needle, exact=True)
+                _scan(outcome, f, content.content, needle, exact=True, check=check)
+            outcome.files_scanned += 1
+    except _Stop:
+        outcome.partial = True
+    finally:
+        _release(registry_key, cancelled)
+    return outcome
+
+
+def _scan_bundles(
+    outcome: SearchOutcome,
+    bundles: list[sources.SourceFile],
+    keys: dict[str, str],
+    needle: str,
+    check: Callable[[], None],
+    deadline: float,
+) -> None:
+    """Read bundles in parallel through a small window: each file's text is dropped once scanned,
+    so a 211-file run never holds every (up to 12 MiB) copy at once."""
+    pool = ThreadPoolExecutor(max_workers=_READERS)
+    window: deque[tuple[sources.SourceFile, Future[tuple[str | None, bool]]]] = deque()
+    todo = iter(bundles)
+    try:
+        for f in todo:
+            window.append((f, pool.submit(_read_bundle, keys[f.path], f.path)))
+            if len(window) >= _READERS * 2:
+                break
+        while window:
+            f, read = window.popleft()
+            check()
+            try:
+                text, exact = read.result(timeout=max(0.0, deadline - time.monotonic()))
+            except FutureTimeout:
+                raise _Stop from None
+            nxt = next(todo, None)
+            if nxt is not None:
+                window.append((nxt, pool.submit(_read_bundle, keys[nxt.path], nxt.path)))
+            if text is not None:
+                outcome.unindexed += 0 if exact else 1
+                _scan(outcome, f, text, needle, exact=exact, check=check)
             outcome.files_scanned += 1
     finally:
-        _release(tenant_id, run_id, cancelled)
-    return outcome
+        # Never wait on a hung read: queued reads are dropped, a running one finishes in the background.
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _read_bundle(key: str, path: str) -> tuple[str | None, bool]:
@@ -135,13 +182,26 @@ def _read_bundle(key: str, path: str) -> tuple[str | None, bool]:
 
 
 def _scan(
-    outcome: SearchOutcome, f: sources.SourceFile, text: str, needle: str, *, exact: bool
+    outcome: SearchOutcome,
+    f: sources.SourceFile,
+    text: str,
+    needle: str,
+    *,
+    exact: bool,
+    check: Callable[[], None] = lambda: None,
 ) -> None:
     kept = 0
     # split("\n"), not splitlines(): the viewer numbers rows on "\n" only, so a "\r" or U+2028 inside
     # a line must not shift every later hit off its row.
     for line_no, line in enumerate(text.split("\n"), start=1):
+        if line_no % 256 == 0:
+            check()  # the budget/cancel bound holds inside one huge file too
         lowered = line.lower()
+        if kept >= MAX_PER_FILE or len(outcome.matches) >= MAX_MATCHES:
+            # Nothing more to show from here: count the rest in C, not hit by hit (a 2-char needle
+            # in a 12 MiB minified line is millions of hits).
+            outcome.total += lowered.count(needle)
+            continue
         col = lowered.find(needle)
         while col != -1:
             outcome.total += 1
@@ -158,6 +218,9 @@ def _scan(
                     )
                 )
                 kept += 1
+            elif kept >= MAX_PER_FILE or len(outcome.matches) >= MAX_MATCHES:
+                outcome.total += lowered.count(needle, col + len(needle))
+                break
             col = lowered.find(needle, col + len(needle))
 
 
