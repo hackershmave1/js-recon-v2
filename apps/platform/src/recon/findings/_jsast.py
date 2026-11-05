@@ -130,7 +130,9 @@ class HeaderRef:
 
 @dataclass(frozen=True)
 class RawEndpoint:
-    kind: str  # fetch | xhr | axios | jquery | websocket
+    kind: (
+        str  # fetch | xhr | axios | jquery | websocket | client (an unproven config-object client)
+    )
     method: str
     url: str
     params: tuple[RawParam, ...]

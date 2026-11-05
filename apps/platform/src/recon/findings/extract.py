@@ -639,6 +639,11 @@ def _dispatch_member(
         _axios_member(call, prop, result, env, base=base or "")
     elif obj in callees:  # taught wrapper — MUST be last so native/instance collisions win
         _axios_member(call, prop, result, env, base="", wrapper=obj)
+    elif _is_config_call(call, prop):
+        # `this.httpClient.request({method:"get", url})` on a client nothing else proves (injected
+        # via `Object.assign(this, deps)`): the config object is the evidence. After every known
+        # client so they keep their kind/base; before the collection guard, which only sees verbs.
+        _axios_from_config(_args(call)[0], call, result, env, kind="client")
     elif (
         prop in _GENERIC_METHODS and _receivers.kind_of(env.receivers, obj) == _receivers.COLLECTION
     ):
@@ -661,6 +666,33 @@ def _dispatch_member(
         # SUSPECTED custom client. STRICTLY last — every real sink, axios instance, and taught
         # wrapper above wins first; this only sees receivers nothing else claimed.
         _record_generic(call, prop, result)
+
+
+# Method names that send a request. The `{method, url}` object alone is also a route table
+# (`fastify.route`), a mock (`fetchMock.mock`), a log line (`logger.warn`) or plain data
+# (`observations.push`); the method name is what makes it a call out. Property names survive
+# minification (no property mangling), so this still works on minified bundles.
+_CONFIG_CALL_NAME = re.compile(r"request|fetch|ajax|http", re.IGNORECASE)
+
+
+def _is_config_call(call: Node, prop: str) -> bool:
+    """A client call made with one config object: a request-ish method name, and a first argument
+    holding a literal HTTP-verb `method` and a `url` (a shorthand `url` counts — it is still a
+    request site, just an unresolvable one). A forwarded `{method: e.method}` is a wrapper's own
+    body, not a call site."""
+    if not _CONFIG_CALL_NAME.search(prop):
+        return False
+    args = _args(call)
+    if not args or args[0].type != "object":
+        return False
+    method = _string_value(_object_pairs(args[0]).get("method"))
+    if method is None or method.upper() not in HTTP_METHODS:
+        return False
+    return any(
+        (child.type == "pair" and _text(child.child_by_field_name("key")).strip("\"'") == "url")
+        or (child.type == "shorthand_property_identifier" and _text(child) == "url")
+        for child in args[0].named_children
+    )
 
 
 def _client_call_allowed(obj: str, call: Node, env: BaseEnv) -> bool:
@@ -754,6 +786,12 @@ def _axios_member(
         _axios_from_config(args[0], call, result, env, base=base, wrapper=wrapper)
         return
     if prop.upper() not in HTTP_METHODS:
+        # A known instance/wrapper's own config method (`api.apiRequest({method, url})`) keeps
+        # its base and provenance; anything else on it is not a request.
+        if _is_config_call(call, prop):
+            _axios_from_config(
+                args[0], call, result, env, base=base, wrapper=wrapper, kind="client"
+            )
         return
     url = _resolve_url(args[0], env, base) if args else None
     if url is None:
@@ -787,23 +825,26 @@ def _axios_from_config(
     env: BaseEnv,
     base: str = "",
     wrapper: str | None = None,
+    kind: str = "axios",
 ) -> None:
     pairs = _object_pairs(config)
     url = _resolve_url(pairs.get("url"), env, base)
     if url is None:
         method = (_string_value(pairs.get("method")) or "GET").upper()
-        _record_unresolved(result, "axios", method, pairs.get("url"), call, wrapper=wrapper)
+        _record_unresolved(result, kind, method, pairs.get("url"), call, wrapper=wrapper)
         return
     method = (_string_value(pairs.get("method")) or "GET").upper()
     params = (
         _query_params(url)
         + _config_query_params(config)  # axios `params` -> query, not body
         + _body_params_from_value(pairs.get("data"))
+        # `body` is the fetch/Angular/ofetch name for the payload; axios configs never carry it.
+        + _body_params_from_value(pairs.get("body"))
     )
     headers = _auth_headers(pairs.get("headers"))
     result.endpoints.append(
         _endpoint(
-            "axios",
+            kind,
             method,
             url,
             params,
