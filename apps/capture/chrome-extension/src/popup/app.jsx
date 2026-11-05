@@ -116,8 +116,12 @@ export function App() {
     api.getHistory().then((r) => { if (r?.history) setCaptureHistory(r.history); });
     // Seed analysis state on open so reopening the popup mid-run resumes the feed.
     api.getAnalysisProgress().then(adoptAnalysisJob);
-    // Load engagements for the picker (cached in the worker; refreshed on open).
-    api.listProjects().then((res) => { if (res && Array.isArray(res.projects)) setProjects(res.projects); });
+    // Load engagements for the picker (cached in the worker; refreshed on open). Its 401 is the
+    // workspace's verdict on the session token, so a rejected token asks for sign-in right away.
+    api.listProjects().then((res) => {
+      if (res?.authRejected) setForceLogin(true);
+      if (res && Array.isArray(res.projects)) setProjects(res.projects);
+    });
     const id = setInterval(refresh, 2000);
     return () => { clearInterval(id); };
   }, []);
@@ -455,9 +459,14 @@ export function App() {
     setWsUrl: (v) => patchSettings({ workspaceUrl: v }),
     connState, latency, testConnection,
     signIn,
-    version: api.extensionVersion()
+    version: api.extensionVersion(),
+    expired: !!status.authExpired || forceLogin,
+    // A capture running when the token expired must stay stoppable from here: the sign-in screen
+    // has no other controls, and the workspace may be unreachable for a sign-in.
+    capture: status.isCapturing ? { files: status.fileCount || 0, stop: toggleCapture } : null
   };
-  if (!settings.authToken || forceLogin) {
+  // Expired (known locally, polled) or rejected (the workspace's 401) -> sign in before capturing.
+  if (!settings.authToken || forceLogin || status.authExpired) {
     return (
       <div class="pp" style={{
         width: '384px', background: C.card, border: `1px solid ${C.lineStrong}`,

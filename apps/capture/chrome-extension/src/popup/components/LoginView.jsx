@@ -58,6 +58,25 @@ export function LoginView({ vm }) {
       </div>
 
       <div style={{ padding: '16px 17px 20px' }}>
+        {vm.expired && (
+          <div role="status" style={{ color: C.amber, fontSize: '11.5px', marginBottom: '12px' }}>
+            Your session expired — sign in again to keep uploading.
+          </div>
+        )}
+        {vm.capture && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px',
+            background: C.panel, border: `1px solid ${C.line}`, borderRadius: '12px', padding: '10px 14px', marginBottom: '16px'
+          }}>
+            <span style={{ fontSize: '11.5px', color: C.textSoft }}>
+              Capture still running · {vm.capture.files} files held until you sign in
+            </span>
+            <button onClick={vm.capture.stop} style={{
+              flex: '0 0 auto', padding: '7px 11px', borderRadius: '9px', border: `1px solid ${C.pink}`,
+              background: C.control, color: C.pink, fontSize: '11.5px', fontWeight: 600, cursor: 'pointer'
+            }}>Stop capture</button>
+          </div>
+        )}
         {/* workspace URL + connection test — the URL must be set before login */}
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: '12px', padding: '14px', marginBottom: '16px' }}>
           <div style={{

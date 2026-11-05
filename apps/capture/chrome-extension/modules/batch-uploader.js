@@ -119,6 +119,11 @@ export class BatchUploader {
   // produce a byte-identical token, and a transient 403 can pause with a still-valid token — either
   // would otherwise latch the pause forever (a silent upload outage). The owner is the sole caller
   // and only calls this after installing a fresh token, so an unconditional clear is safe.
+  // Pause the drain BEFORE a request is wasted: the owner already knows the token is expired (a
+  // worker respawn with an 8h-old token). Unlike a 401 pause this fires no onAuthFailure — every
+  // respawn would otherwise send one doomed batch and post a fresh "session expired" notification.
+  pauseForAuth() { this.authPaused = true; }
+
   resumeUploads() {
     this.authPaused = false;
     if (this.pendingQueue.length > 0 && !this.isUploading) {
