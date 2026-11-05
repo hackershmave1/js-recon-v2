@@ -29,6 +29,7 @@ def run(monkeypatch):
         SourceFile(path="old/legacy.js", kind="source", fetch_status="ok", asset_url=OLD),
     ]
     monkeypatch.setattr(sources, "list_sources", lambda _t, _r: listing)
+    monkeypatch.setattr(sources, "app_packages", lambda _t, _r: [])
     monkeypatch.setattr(
         sources, "asset_keys", lambda _t, _r: {APP: "t/r/input/app", OLD: "t/r/input/old"}
     )

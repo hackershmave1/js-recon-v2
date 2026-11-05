@@ -14,9 +14,10 @@ re-run. Isolation is the database's (RLS): a session absent for this tenant is a
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 from redis import Redis
 from sqlalchemy.exc import IntegrityError
 
@@ -38,9 +39,17 @@ class CreateSessionBody(BaseModel):
     target: str | None = None
 
 
+# A package name or a whole scope: `lodash-es`, `@acme/api-client`, `@acme/*`.
+_PACKAGE_PATTERN = r"^\s*(@[a-z0-9._~-]+/)?([a-z0-9._~-]+|\*)\s*$"
+
+
 class PatchSessionBody(BaseModel):
     name: str | None = None
     archived: bool | None = None
+    # Packages treated as APP code in this session (#181): not hidden as third-party.
+    app_packages: (
+        list[Annotated[str, StringConstraints(pattern=_PACKAGE_PATTERN, max_length=214)]] | None
+    ) = Field(default=None, max_length=200)
 
 
 @router.post("/sessions", status_code=201)
@@ -126,7 +135,7 @@ def get_session_findings_summary(session_id: str, tenant_id: str = Depends(get_t
 def patch_session(
     session_id: str, body: PatchSessionBody, tenant_id: str = Depends(get_tenant_id)
 ) -> dict:
-    if body.name is None and body.archived is None:
+    if body.name is None and body.archived is None and body.app_packages is None:
         raise HTTPException(status_code=400, detail="nothing to update")
     view = None
     if body.name is not None:
@@ -138,6 +147,11 @@ def patch_session(
             raise HTTPException(status_code=404, detail="session not found")
     if body.archived is not None:
         view = service.set_session_archived(tenant_id, session_id, archived=body.archived)
+        if view is None:
+            raise HTTPException(status_code=404, detail="session not found")
+    if body.app_packages is not None:
+        packages = list(dict.fromkeys(p.strip() for p in body.app_packages))
+        view = service.set_app_packages(tenant_id, session_id, packages=packages)
         if view is None:
             raise HTTPException(status_code=404, detail="session not found")
     return _session_view_dict(view)

@@ -32,6 +32,7 @@ def run(monkeypatch):
         return out
 
     monkeypatch.setattr(sources, "list_sources", listing)
+    monkeypatch.setattr(sources, "app_packages", lambda _t, _r: [])
     monkeypatch.setattr(
         sources,
         "asset_keys",

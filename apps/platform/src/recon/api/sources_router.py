@@ -41,9 +41,14 @@ async def get_run_sources(run_id: str, tenant_id: str = Depends(get_tenant_id)) 
         source_count=len(files),
         elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
     )
+    session_id, packages = await run_in_threadpool(sources.run_session, tenant_id, run_id)
     return {
         "run_id": run_id,
         "count": len(files),
+        # The tree groups third-party files itself (web origin.ts mirrors recon.findings.origin)
+        # and "Treat as app code" PATCHes this session's app_packages.
+        "session_id": session_id,
+        "app_packages": packages,
         "sources": [
             {
                 "path": f.path,
@@ -64,6 +69,7 @@ async def search_run_sources(
     folder: str | None = None,
     path: str | None = None,
     asset_url: str | None = None,
+    third_party: bool = False,
     tenant_id: str = Depends(get_tenant_id),
 ) -> dict:
     """D52: run-scoped full-text search across the run's sources (recon.probe.source_search)."""
@@ -75,7 +81,9 @@ async def search_run_sources(
             run_id,
             q,
             client=client[:64],
-            scope=source_search.Scope(folder=folder, path=path, asset_url=asset_url),
+            scope=source_search.Scope(
+                folder=folder, path=path, asset_url=asset_url, include_third_party=third_party
+            ),
         )
     )
     if outcome is None:
@@ -103,6 +111,7 @@ async def search_run_sources(
         "files_total": outcome.files_total,
         "unindexed": outcome.unindexed,
         "partial": outcome.partial,
+        "third_party_excluded": outcome.third_party_excluded,
         "matches": [
             {
                 "path": m.path,

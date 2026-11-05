@@ -27,6 +27,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 
 from recon import storage
+from recon.findings import origin
 from recon.probe import formatted_text, recovered_store, sources
 
 MIN_QUERY = 2
@@ -61,6 +62,9 @@ class Scope:
     folder: str | None = None
     path: str | None = None
     asset_url: str | None = None
+    # Third-party code (GLOSSARY) is left out unless asked for: on a real capture it was 416 of
+    # 653 recovered originals (lodash-es, SDKs) — the noise a researcher searching the app hits.
+    include_third_party: bool = False
 
     def covers(self, f: sources.SourceFile) -> bool:
         if self.path:
@@ -89,6 +93,7 @@ class SearchOutcome:
     files_scanned: int = 0
     unindexed: int = 0
     partial: bool = False
+    third_party_excluded: int = 0  # third-party files left out of this search (not in files_total)
 
 
 # Keyed by the searching CLIENT (one Sources page), never just the run: two people (or tabs)
@@ -149,7 +154,16 @@ def search(
     stored = [(f, key) for f, key in stored if scope.covers(f)]
     listed = [f for f in listed if scope.covers(f)]
     bundles = [f for f in bundles if scope.covers(f)]
-    outcome = SearchOutcome(files_total=len(bundles) + len(stored) + len(listed))
+    excluded = 0
+    if not scope.include_third_party and (stored or listed):
+        packages = sources.app_packages(tenant_id, run_id)
+        kept_stored = [(f, key) for f, key in stored if not origin.is_third_party(f.path, packages)]
+        kept_listed = [f for f in listed if not origin.is_third_party(f.path, packages)]
+        excluded = len(stored) - len(kept_stored) + len(listed) - len(kept_listed)
+        stored, listed = kept_stored, kept_listed
+    outcome = SearchOutcome(
+        files_total=len(bundles) + len(stored) + len(listed), third_party_excluded=excluded
+    )
     needle = (query or "").strip().lower()
     if len(needle) < MIN_QUERY:
         return outcome
