@@ -20,7 +20,7 @@ export function BulkDeleteConfirm({ sessions, onConfirm, onCancel }: {
           <ul className="sx-bulk-list">
             {sessions.slice(0, SHOWN).map((s) => (
               <li key={s.session_id}>
-                {s.name ? `${s.name} · ` : ""}{s.host}
+                {s.name && s.name !== s.host ? `${s.name} · ` : ""}{s.host}
                 {s.created_at && <span className="sx-bulk-date"> · {s.created_at.slice(0, 10)}</span>}
               </li>
             ))}
