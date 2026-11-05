@@ -63,7 +63,7 @@ class Scope:
     asset_url: str | None = None
 
     def covers(self, f: sources.SourceFile) -> bool:
-        if self.path is not None:
+        if self.path:
             return f.path == self.path and (f.asset_url or None) == (self.asset_url or None)
         if self.folder:
             return "/".join(segments_of(f.path)).startswith(self.folder.strip("/") + "/")

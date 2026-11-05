@@ -104,3 +104,10 @@ def test_this_file_is_exact_path_and_bundle(run):
     assert out.matches == []  # same path under another bundle is a different file
     out = source_search.search("t", "r", "token", scope=Scope(path=APP))
     assert _paths(out) == [APP]
+
+
+def test_folder_match_is_by_whole_segments_and_empty_path_means_all():
+    f = SourceFile(path="src/apiV2/x.js", kind="source", fetch_status="ok", asset_url=APP)
+    assert not Scope(folder="src/api").covers(f)  # not a prefix of the segment "apiV2"
+    assert Scope(folder="/src/apiV2/").covers(f)  # client slashes tolerated
+    assert Scope(path="").covers(f)  # an empty ?path= is no file scope

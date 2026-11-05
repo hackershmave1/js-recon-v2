@@ -23,17 +23,17 @@ describe("SearchScopeChips", () => {
   it("offers All, This folder (named) and This file; picking one reports it", async () => {
     const onChange = vi.fn();
     render(<SearchScopeChips value="all" file={original} onChange={onChange} />);
-    expect(screen.getByRole("radio", { name: "All" })).toBeChecked();
-    await userEvent.click(screen.getByRole("radio", { name: /This folder/ }));
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: /This folder/ }));
     expect(onChange).toHaveBeenCalledWith("folder");
-    expect(screen.getByRole("radio", { name: /This folder/ })).toHaveAttribute("title", "node_modules/@statsig/client-core/src");
+    expect(screen.getByRole("button", { name: /This folder/ })).toHaveAttribute("title", "node_modules/@statsig/client-core/src");
   });
 
   it("disables This folder for a root-level file and both for no file", () => {
     const { rerender } = render(<SearchScopeChips value="all" file={rootFile} onChange={vi.fn()} />);
-    expect(screen.getByRole("radio", { name: /This folder/ })).toBeDisabled();
-    expect(screen.getByRole("radio", { name: "This file" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /This folder/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "This file" })).toBeEnabled();
     rerender(<SearchScopeChips value="all" file={null} onChange={vi.fn()} />);
-    expect(screen.getByRole("radio", { name: "This file" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "This file" })).toBeDisabled();
   });
 });

@@ -17,7 +17,8 @@ export function scopeFor(kind: ScopeKind, file: SourceFile | null): SearchScope 
   return folder ? { folder } : {};
 }
 
-// Scope chips under the Sources search box. Folder/file follow the file open in the viewer.
+// Scope chips under the Sources search box. Picking Folder/File takes the file open in the
+// viewer AT THAT MOMENT (the page freezes it); a chip that's active stays enabled.
 export function SearchScopeChips({ value, file, onChange }: {
   value: ScopeKind; file: SourceFile | null; onChange: (kind: ScopeKind) => void;
 }) {
@@ -28,10 +29,11 @@ export function SearchScopeChips({ value, file, onChange }: {
     { kind: "file", label: "This file", disabled: file == null, title: file?.path },
   ];
   return (
-    <div className="sv-scope" role="radiogroup" aria-label="Search scope">
+    <div className="sv-scope" role="group" aria-label="Search scope">
       {chips.map((c) => (
-        <button key={c.kind} type="button" role="radio" aria-checked={value === c.kind}
-          className={"sv-scope-chip" + (value === c.kind ? " on" : "")} disabled={c.disabled}
+        <button key={c.kind} type="button" aria-pressed={value === c.kind}
+          className={"sv-scope-chip" + (value === c.kind ? " on" : "")}
+          disabled={c.disabled && value !== c.kind}
           title={c.title} onClick={() => onChange(c.kind)}>
           {c.label}
         </button>

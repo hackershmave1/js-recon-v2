@@ -327,11 +327,41 @@ describe("SourcesPage", () => {
     const search = vi.spyOn(api, "searchSources").mockResolvedValue({
       run_id: "r", count: 0, total: 0, files_scanned: 1, files_total: 1, unindexed: 0, partial: false, matches: [],
     });
-    await userEvent.click(screen.getByRole("radio", { name: "This file" }));
+    await userEvent.click(screen.getByRole("button", { name: "This file" }));
     await userEvent.type(screen.getByLabelText(/search across sources/i), "fetch");
     await waitFor(() => expect(search).toHaveBeenLastCalledWith("t", "r", "fetch", expect.any(String),
       { path: "input.js", assetUrl: null }));
     expect(await screen.findByText(/searched 1 of 1 files in this file/)).toBeInTheDocument();
+  });
+
+  it("This folder stays frozen: opening a hit in a subfolder doesn't re-scope the search", async () => {
+    const original: SourceFile = { path: "src/api/a.js", kind: "source", fetch_status: "ok", asset_url: "https://acme.io/app.js" };
+    mount([original], null);
+    await waitFor(() => expect(api.getSourceContent).toHaveBeenCalled());
+    const search = vi.spyOn(api, "searchSources").mockResolvedValue({
+      run_id: "r", count: 1, total: 2, files_scanned: 2, files_total: 2, unindexed: 0, partial: false,
+      matches: [{ path: "src/api/v2/b.js", kind: "source", asset_url: "https://acme.io/app.js", line: 1, col: 0, snippet: "token", exact: true }],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "This folder" }));
+    await userEvent.type(screen.getByLabelText(/search across sources/i), "token");
+    expect(await screen.findByText(/searched 2 of 2 files in src\/api\//)).toBeInTheDocument();
+    const calls = search.mock.calls.length;
+    await userEvent.click(await screen.findByText(/b\.js:1/));
+    await new Promise((r) => setTimeout(r, 450));
+    expect(search.mock.calls.length).toBe(calls); // no re-search, scope still src/api
+    expect(search).toHaveBeenLastCalledWith("t", "r", "token", expect.any(String), { folder: "src/api" });
+  });
+
+  it("switching scope re-runs an active search", async () => {
+    mount([UPLOAD]);
+    await screen.findByText("fetch('/x')");
+    const search = vi.spyOn(api, "searchSources").mockResolvedValue({
+      run_id: "r", count: 0, total: 0, files_scanned: 1, files_total: 1, unindexed: 0, partial: false, matches: [],
+    });
+    await userEvent.type(screen.getByLabelText(/search across sources/i), "fetch");
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("button", { name: "This file" }));
+    await waitFor(() => expect(search).toHaveBeenLastCalledWith("t", "r", "fetch", expect.any(String), { path: "input.js", assetUrl: null }));
   });
 
   it("does not search for a too-short query (keeps the file tree)", async () => {
