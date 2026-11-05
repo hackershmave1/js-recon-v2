@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import "./confirmModal.css";
 
 // An in-app confirmation / prompt dialog. It replaces window.confirm and window.prompt,
@@ -9,6 +9,8 @@ import "./confirmModal.css";
 export interface ConfirmModalProps {
   title: string;
   message?: string;
+  // Structured content under the message (e.g. the list of sessions a bulk delete removes).
+  details?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
@@ -20,6 +22,7 @@ export interface ConfirmModalProps {
 export function ConfirmModal({
   title,
   message,
+  details,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
   danger = false,
@@ -55,6 +58,7 @@ export function ConfirmModal({
         onClick={(event) => event.stopPropagation()}>
         <h2 className="cfm-title">{title}</h2>
         {message && <p className="cfm-msg">{message}</p>}
+        {details}
         {input && (
           <label className="cfm-field">
             <span className="cfm-field-label">{input.label}</span>

@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BaseUrlRuleResult, DiffResponse, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
+  AssetsManifest, BaseUrlRule, BulkDeleteResponse, BaseUrlRuleResult, DiffResponse, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -126,6 +126,10 @@ export function archiveSession(tenantId: string, sessionId: string, archived: bo
 
 export function deleteSession(tenantId: string, sessionId: string): Promise<void> {
   return request(`/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }, tenantId);
+}
+
+export function bulkDeleteSessions(tenantId: string, sessionIds: string[]): Promise<BulkDeleteResponse> {
+  return request("/sessions/bulk-delete", json("POST", { session_ids: sessionIds }), tenantId);
 }
 
 // Re-run reproduces the session's latest run (crawl re-fetch / upload re-analyze) as a
