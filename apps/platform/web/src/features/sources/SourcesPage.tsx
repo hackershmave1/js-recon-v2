@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import { getSources, getSourceContent, searchSources, ApiError } from "../../api/apiClient";
 import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump, SourceMatch, SourceSearchResponse, ViewLoc } from "../../api/types";
 import { SourceSearchResults } from "./SourceSearchResults";
+import { useIndexStatus } from "./useIndexStatus";
 import { occJump } from "../../api/occurrenceSource";
 import { CodeViewer } from "./CodeViewer";
 import { beautify } from "./beautifyClient";
@@ -347,6 +348,11 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   const [searchResponse, setSearchResponse] = useState<SourceSearchResponse | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
   const searchClient = useMemo(() => Math.random().toString(36).slice(2), []);
+  const indexStatus = useIndexStatus(tenantId, runId);
+  // Re-run an active search ONCE, when background indexing finishes (its hits gain line numbers).
+  // Not on every progress tick: a re-run cancels the search in flight, and while the worker is busy
+  // indexing a search can outlast the 5s poll, so per-tick re-runs would never let one finish.
+  const indexRound = indexStatus == null || indexStatus.indexing ? "indexing" : `done:${indexStatus.indexed}`;
   const [searching, setSearching] = useState(false);
   const jumpToMatch = useCallback((m: SourceMatch) => {
     openForJump(m.path);
@@ -405,7 +411,7 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
         .finally(() => { if (live) setSearching(false); });
     }, 300);
     return () => { live = false; clearTimeout(timer); };
-  }, [searchQuery, tenantId, runId, searchClient]);
+  }, [searchQuery, tenantId, runId, searchClient, indexRound]);
 
   // Resolve the shown file: the clicked one, else the first viewable, else the first.
   const selected = files
@@ -529,7 +535,7 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
         </div>
         {searchQuery.trim().length >= 2 ? (
           <SourceSearchResults response={searchResponse} searching={searching} error={searchError}
-            onJump={jumpToMatch} />
+            indexStatus={indexStatus} onJump={jumpToMatch} />
         ) : (
           <SourceTree rows={rows} selectedPath={selected?.path ?? null} onSelect={selectFile} onToggle={toggleDir} />
         )}

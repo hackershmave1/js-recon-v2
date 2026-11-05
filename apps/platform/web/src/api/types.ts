@@ -162,6 +162,8 @@ export interface SourceMatch {
   path: string; kind: string; asset_url: string | null; line: number | null; col: number;
   snippet: string; exact: boolean;
 }
+// Background indexing of an older run's bundles: `indexed` of `total` have stored text.
+export interface SourcesIndexStatus { indexed: number; total: number; indexing: boolean; }
 // `total` counts every hit (matches is capped); `partial` = the time budget or a newer query cut it short.
 export interface SourceSearchResponse {
   run_id: string; count: number; total: number; files_scanned: number; files_total: number;

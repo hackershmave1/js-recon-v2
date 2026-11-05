@@ -35,6 +35,12 @@ describe("SourceSearchResults", () => {
     expect(screen.getByText("app.js")).toBeInTheDocument(); // no ":line"
   });
 
+  it("says older files are being indexed in the background, with progress", () => {
+    render(<SourceSearchResults response={resp({ unindexed: 91, matches: [hit({ line: null, exact: false })] })}
+      searching={false} error={null} indexStatus={{ indexed: 120, total: 211, indexing: true }} onJump={vi.fn()} />);
+    expect(screen.getByText(/Indexing older files in the background \(120 of 211 done\)/)).toBeInTheDocument();
+  });
+
   it("shows an error instead of 'No matches' when the search failed", () => {
     render(<SourceSearchResults response={null} searching={false} error="Search failed — try again" onJump={vi.fn()} />);
     expect(screen.getByText("Search failed — try again")).toBeInTheDocument();

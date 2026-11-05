@@ -42,6 +42,7 @@ const CODE = "const a = 1\nfetch('/x')\nconst b = 2\n";
 function mount(sources: SourceFile[], data: FindingsResponse | null = findings, jump: SourceJump | null = null) {
   vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: sources.length, sources });
   vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "input.js", content: CODE, truncated: false, formatted: true });
+  vi.spyOn(api, "getSourcesIndexStatus").mockResolvedValue({ indexed: 1, total: 1, indexing: false });
   return render(<SourcesPage data={data} tenantId="t" runId="r" jump={jump} />);
 }
 

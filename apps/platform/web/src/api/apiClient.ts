@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BulkDeleteResponse, BaseUrlRuleResult, DiffResponse, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
+  AssetsManifest, BaseUrlRule, BulkDeleteResponse, BaseUrlRuleResult, DiffResponse, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SourcesIndexStatus, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -196,6 +196,11 @@ export function getSources(tenantId: string, runId: string): Promise<SourcesResp
 }
 
 // D52: run-scoped full-text grep across the run's sources (bounded server-side).
+// Also STARTS background indexing of an older run (at most one job per run, server-side).
+export function getSourcesIndexStatus(tenantId: string, runId: string): Promise<SourcesIndexStatus> {
+  return request(`/runs/${encodeURIComponent(runId)}/sources/index-status`, {}, tenantId);
+}
+
 // `client` is this Sources page's own id: the server cancels that page's previous, superseded
 // query (search-as-you-type) without ever cancelling another person's search on the same run.
 export function searchSources(

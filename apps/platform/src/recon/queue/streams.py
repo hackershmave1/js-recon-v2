@@ -70,9 +70,10 @@ def read_batch(
     consumer: str,
     *,
     count: int = 10,
-    block_ms: int = 2000,
+    block_ms: int | None = 2000,
 ) -> list[tuple[str, dict[str, Any]]]:
-    """Claim up to ``count`` new messages for this consumer (adds to the PEL)."""
+    """Claim up to ``count`` new messages for this consumer (adds to the PEL). ``block_ms=None``
+    returns at once when nothing is waiting; NOTE ``0`` is Redis's BLOCK 0 = wait FOREVER."""
     try:
         result = redis.xreadgroup(
             GROUP, consumer, {queue_key(queue): ">"}, count=count, block=block_ms

@@ -23,6 +23,7 @@ from recon.domain import JobState, QueueName, RunStage, RunState
 from recon.fetch import fetch
 from recon.findings import analyze
 from recon.observability import bind_run, get_logger
+from recon.probe import source_index
 from recon.progress import heartbeat as progress
 from recon.queue import retry, streams
 from recon.runs import coordinator, failure, queries, service
@@ -35,7 +36,14 @@ SERVED_QUEUES: tuple[QueueName, ...] = (
     QueueName.DISCOVER,
     QueueName.FETCH,
     QueueName.ANALYZE,
+    # Background source indexing (recon.probe.source_index): LAST and one slice per pass, so a
+    # backlog of ~5s slices never holds up a run's stages (or the liveness touch).
+    QueueName.INDEX,
 )
+BATCH_FOR: dict[QueueName, int] = {QueueName.INDEX: 1}
+# An empty INDEX queue must not add a blocking read to every idle pass (stage pickup latency).
+# None = don't block at all; 0 would be Redis's BLOCK 0, which waits FOREVER and hangs the worker.
+BLOCK_MS_FOR: dict[QueueName, int | None] = {QueueName.INDEX: None}
 
 STUB_STEPS = 4
 STUB_STEP_DELAY_SECONDS = 0.0
@@ -259,6 +267,12 @@ def _process_and_record(redis: Redis, queue: QueueName, msg_id: str, message: di
     start = time.monotonic()
     outcome = "unknown"
     try:
+        if queue is QueueName.INDEX:
+            # Not a run stage (no job_id/stage): its own handler, which never raises, then ack —
+            # on BOTH the read and the stall-reclaim path, so it can't loop back forever.
+            outcome = source_index.handle(redis, message)
+            streams.ack(redis, queue, msg_id)
+            return outcome
         outcome = process_message(redis, queue, msg_id, message)
         return outcome
     except Exception:
@@ -362,15 +376,16 @@ def run_once(redis: Redis, consumer: str, *, batch: int = 10, block_ms: int = 10
     stall_ms = int(get_settings().heartbeat_stall_threshold_seconds * 1000)
     processed = 0
     for queue in SERVED_QUEUES:
+        count = BATCH_FOR.get(queue, batch)
         streams.ensure_group(redis, queue)
         streams.promote_due(redis, queue)
         for msg_id, message in streams.reclaim_stalled(
-            redis, queue, consumer, min_idle_ms=stall_ms, count=batch
+            redis, queue, consumer, min_idle_ms=stall_ms, count=count
         ):
             _process_and_record(redis, queue, msg_id, message)
             processed += 1
         for msg_id, message in streams.read_batch(
-            redis, queue, consumer, count=batch, block_ms=block_ms
+            redis, queue, consumer, count=count, block_ms=BLOCK_MS_FOR.get(queue, block_ms)
         ):
             _process_and_record(redis, queue, msg_id, message)
             processed += 1
