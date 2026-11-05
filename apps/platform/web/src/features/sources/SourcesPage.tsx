@@ -3,6 +3,7 @@ import { getSources, getSourceContent, searchSources, ApiError } from "../../api
 import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump, SourceMatch, SourceSearchResponse, ViewLoc } from "../../api/types";
 import { SourceSearchResults } from "./SourceSearchResults";
 import { useIndexStatus } from "./useIndexStatus";
+import { SearchScopeChips, scopeFor, type ScopeKind } from "./SearchScopeChips";
 import { occJump } from "../../api/occurrenceSource";
 import { CodeViewer } from "./CodeViewer";
 import { beautify } from "./beautifyClient";
@@ -351,6 +352,11 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResponse, setSearchResponse] = useState<SourceSearchResponse | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
+  // The scope follows the file open in the viewer; `selected` is derived further down, so the
+  // search effect reads the scope from a ref and re-runs on its key.
+  const [scopeKind, setScopeKind] = useState<ScopeKind>("all");
+  const searchScopeRef = useRef<ReturnType<typeof scopeFor>>({});
+  const scopeKey = scopeKind === "all" ? "all" : `${scopeKind}:${selPath ?? ""}:${selAsset ?? ""}`;
   const searchClient = useMemo(() => Math.random().toString(36).slice(2), []);
   const indexStatus = useIndexStatus(tenantId, runId);
   // Re-run an active search ONCE, when background indexing finishes (its hits gain line numbers).
@@ -401,6 +407,7 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     setCollapsed(new Set());
     setFocus(null);
     setSearchQuery("");
+    setScopeKind("all");
     setSearchResponse(null);
     let live = true;
     getSources(tenantId, runId)
@@ -418,14 +425,14 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     let live = true;
     setSearching(true);
     const timer = setTimeout(() => {
-      searchSources(tenantId, runId, term, searchClient)
+      searchSources(tenantId, runId, term, searchClient, searchScopeRef.current)
         .then((r) => { if (live) { setSearchResponse(r); setSearchError(null); } })
         // A failure is not "No matches": say so, so the operator retries instead of concluding.
         .catch(() => { if (live) { setSearchResponse(null); setSearchError("Search failed — try again"); } })
         .finally(() => { if (live) setSearching(false); });
     }, 300);
     return () => { live = false; clearTimeout(timer); };
-  }, [searchQuery, tenantId, runId, searchClient, indexRound]);
+  }, [searchQuery, tenantId, runId, searchClient, indexRound, scopeKey]);
 
   // Resolve the shown file: the clicked one, else the first viewable, else the first.
   const selected = files
@@ -433,6 +440,9 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
       ?? files.find((f) => f.path === selPath)
       ?? files.find((f) => f.fetch_status === "ok") ?? files[0] ?? null
     : null;
+  const searchScope = scopeFor(scopeKind, selected);
+  searchScopeRef.current = searchScope;
+  const scopeLabel = searchScope.path ? "in this file" : searchScope.folder ? `in ${searchScope.folder}/` : null;
 
   useEffect(() => {
     setContent(null);
@@ -549,9 +559,10 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
               aria-label="Clear search">×</button>
           )}
         </div>
+        <SearchScopeChips value={scopeKind} file={selected} onChange={setScopeKind} />
         {searchQuery.trim().length >= 2 ? (
           <SourceSearchResults response={searchResponse} searching={searching} error={searchError}
-            indexStatus={indexStatus} onJump={jumpToMatch} />
+            indexStatus={indexStatus} scopeLabel={scopeLabel} onJump={jumpToMatch} />
         ) : (
           <SourceTree rows={rows} selectedPath={selected?.path ?? null} onSelect={selectFile} onToggle={toggleDir} />
         )}

@@ -17,6 +17,7 @@ to stop at 120 files / 200 matches. Now:
 from __future__ import annotations
 
 import functools
+import re
 import threading
 import time
 from collections import deque
@@ -49,6 +50,35 @@ class SourceMatch:
     col: int
     snippet: str
     exact: bool
+
+
+@dataclass(frozen=True)
+class Scope:
+    """What to search: everything (default), one folder of the Sources tree and its subfolders
+    (``folder`` = the tree's segments joined by "/"), or one exact file (``path`` + the bundle it
+    was recovered from; ``asset_url=None`` for a bundle itself)."""
+
+    folder: str | None = None
+    path: str | None = None
+    asset_url: str | None = None
+
+    def covers(self, f: sources.SourceFile) -> bool:
+        if self.path is not None:
+            return f.path == self.path and (f.asset_url or None) == (self.asset_url or None)
+        if self.folder:
+            return "/".join(segments_of(f.path)).startswith(self.folder.strip("/") + "/")
+        return True
+
+
+_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+
+
+def segments_of(path: str) -> list[str]:
+    """The Sources tree's folder segments (web SourcesPage.tsx `segmentsOf`): scheme stripped,
+    empty segments dropped — so http:// and https:// assets of one host share a folder, as in the
+    tree. Shared test vectors keep the two in step."""
+    segments = [seg for seg in _SCHEME.sub("", path).split("/") if seg]
+    return segments or [path]
 
 
 @dataclass
@@ -94,6 +124,7 @@ def search(
     query: str,
     *,
     client: str = "",
+    scope: Scope | None = None,
     budget_seconds: float = BUDGET_SECONDS,
 ) -> SearchOutcome | None:
     """Search the run's sources for ``query`` (case-insensitive substring). ``None`` when the run is
@@ -105,6 +136,7 @@ def search(
     keys = sources.asset_keys(tenant_id, run_id)
     # Only files that HAVE content count: a failed-fetch asset is listed in the tree but has no
     # bytes, so "searched X of Y" must not read as incomplete because of it.
+    scope = scope or Scope()
     bundles = [f for f in files if f.kind != "source" and f.path in keys]
     # EVERY stored original (recon.probe.recovered_store), not only the few the tree lists because
     # they carry findings; a bundle whose originals aren't stored yet (a run analyzed before they
@@ -112,6 +144,11 @@ def search(
     stored = _stored_originals(tenant_id, run_id, bundles, keys)
     stored_bundles = {f.asset_url for f, _key in stored}
     listed = [f for f in files if f.kind == "source" and f.asset_url not in stored_bundles]
+    # Out-of-scope files are never read (a stored original's bundle must still be found above, so
+    # the scope filters files, not the bundles their originals hang off).
+    stored = [(f, key) for f, key in stored if scope.covers(f)]
+    listed = [f for f in listed if scope.covers(f)]
+    bundles = [f for f in bundles if scope.covers(f)]
     outcome = SearchOutcome(files_total=len(bundles) + len(stored) + len(listed))
     needle = (query or "").strip().lower()
     if len(needle) < MIN_QUERY:

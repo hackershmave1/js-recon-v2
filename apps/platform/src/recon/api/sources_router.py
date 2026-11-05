@@ -61,13 +61,22 @@ async def search_run_sources(
     run_id: str,
     q: str,
     client: str = "",
+    folder: str | None = None,
+    path: str | None = None,
+    asset_url: str | None = None,
     tenant_id: str = Depends(get_tenant_id),
 ) -> dict:
     """D52: run-scoped full-text search across the run's sources (recon.probe.source_search)."""
     started = time.perf_counter()
     # `client` (the Sources page's own id) scopes cancellation: only that page's older query stops.
     outcome = await run_in_threadpool(
-        lambda: source_search.search(tenant_id, run_id, q, client=client[:64])
+        lambda: source_search.search(
+            tenant_id,
+            run_id,
+            q,
+            client=client[:64],
+            scope=source_search.Scope(folder=folder, path=path, asset_url=asset_url),
+        )
     )
     if outcome is None:
         raise HTTPException(status_code=404, detail="run not found")

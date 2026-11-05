@@ -296,7 +296,7 @@ describe("SourcesPage", () => {
       matches: [{ path: "input.js", kind: "upload", asset_url: null, line: 2, col: 0, snippet: "fetch('/x')", exact: true }],
     });
     await userEvent.type(screen.getByLabelText(/search across sources/i), "fetch");
-    await waitFor(() => expect(search).toHaveBeenCalledWith("t", "r", "fetch", expect.any(String)));
+    await waitFor(() => expect(search).toHaveBeenCalledWith("t", "r", "fetch", expect.any(String), {}));
     // a result hit (loc "input.js:2") replaces the tree; clicking it opens the file at the line
     const hit = await screen.findByText(/input\.js:2/);
     await userEvent.click(hit);
@@ -319,6 +319,19 @@ describe("SourcesPage", () => {
     await waitFor(() => expect(content).toHaveBeenLastCalledWith("t", "r", "node_modules/lib/c.js", "https://acme.io/app.js"));
     await userEvent.clear(screen.getByLabelText(/search across sources/i));
     expect(await screen.findByText("from search")).toBeInTheDocument(); // now in the tree
+  });
+
+  it("This file scopes the search to the open file", async () => {
+    mount([UPLOAD]);
+    await screen.findByText("fetch('/x')");
+    const search = vi.spyOn(api, "searchSources").mockResolvedValue({
+      run_id: "r", count: 0, total: 0, files_scanned: 1, files_total: 1, unindexed: 0, partial: false, matches: [],
+    });
+    await userEvent.click(screen.getByRole("radio", { name: "This file" }));
+    await userEvent.type(screen.getByLabelText(/search across sources/i), "fetch");
+    await waitFor(() => expect(search).toHaveBeenLastCalledWith("t", "r", "fetch", expect.any(String),
+      { path: "input.js", assetUrl: null }));
+    expect(await screen.findByText(/searched 1 of 1 files in this file/)).toBeInTheDocument();
   });
 
   it("does not search for a too-short query (keeps the file tree)", async () => {

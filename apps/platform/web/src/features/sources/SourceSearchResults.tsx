@@ -4,9 +4,9 @@ import type { SourceMatch, SourceSearchResponse, SourcesIndexStatus } from "../.
 // summary says exactly what was searched: a capped list never reads as "all matches", a search the
 // time budget (or a newer query) cut short says so, and a run analyzed before search indexing says
 // its hits carry no line number (they were searched raw — clicking opens the file).
-export function SourceSearchResults({ response, searching, error, indexStatus = null, onJump }: {
+export function SourceSearchResults({ response, searching, error, indexStatus = null, scopeLabel = null, onJump }: {
   response: SourceSearchResponse | null; searching: boolean; error: string | null;
-  indexStatus?: SourcesIndexStatus | null; onJump: (m: SourceMatch) => void;
+  indexStatus?: SourcesIndexStatus | null; scopeLabel?: string | null; onJump: (m: SourceMatch) => void;
 }) {
   if (error) return <div className="sv-search-note sv-search-error">{error}</div>;
   if (!response || (searching && response.matches.length === 0)) {
@@ -14,7 +14,8 @@ export function SourceSearchResults({ response, searching, error, indexStatus = 
   }
   const shown = response.count;
   const summary = `${shown < response.total ? `Showing ${shown} of ${response.total}` : `${response.total}`} `
-    + `${response.total === 1 ? "match" : "matches"} · searched ${response.files_scanned} of ${response.files_total} files`;
+    + `${response.total === 1 ? "match" : "matches"} · searched ${response.files_scanned} of ${response.files_total} files`
+    + (scopeLabel ? ` ${scopeLabel}` : "");
   return (
     <div className="sv-search-wrap">
       <div className="sv-search-note">{searching ? "Searching…" : summary}</div>
