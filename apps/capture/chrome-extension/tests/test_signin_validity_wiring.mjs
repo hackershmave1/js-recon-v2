@@ -44,15 +44,17 @@ pass('listProjectsWithCache surfaces the live failure status (still falls back t
 // --- background wiring (background.js is not importable in Node) -----------------------------
 const bg = read('../background.js');
 const status = bg.slice(bg.indexOf('  getStatus(sendResponse) {'), bg.indexOf('  getStatus(sendResponse) {') + 2500);
-assert.match(status, /authMarker\(authToken, \{ trustLocalExpiry: !this\.settings\.localExpiryUntrusted \}\)/);
+assert.match(status, /authMarker\(authToken, \{ trustLocalExpiry: !this\.settings\?\.localExpiryUntrusted \}\)/, 'null-safe before settings load');
 assert.match(status, /authExpired: marker\.authExpired/, 'authExpired is a top-level status field, never a setting');
 const init = bg.slice(bg.indexOf('  async initialize() {'), bg.indexOf('this.session.restore()'));
-assert.match(init, /if \(authMarker\(this\.settings\.authToken, \{ trustLocalExpiry: !this\.settings\.localExpiryUntrusted \}\)\.authExpired\) \{\s*this\.batchUploader\.pauseForAuth\(\);/);
+assert.match(init, /if \(authMarker\(this\.settings\.authToken, \{ trustLocalExpiry: !this\.settings\.localExpiryUntrusted \}\)\.authExpired\) \{\s*this\.batchUploader\.pauseForAuth\(\);\s*await this\.notifyExpiredOncePerToken\(\);/);
+const notify = bg.slice(bg.indexOf('  async notifyExpiredOncePerToken() {'), bg.indexOf('  async login('));
+assert.match(notify, /if \(authNotifiedExp === exp\) return;[\s\S]*this\.handleAuthExpired\('expired'\);/, 'one notification per token across respawns');
 const login = bg.slice(bg.indexOf('  async login('), bg.indexOf('  async logout('));
 assert.match(login, /localExpiryUntrusted: authMarker\(result\.token\)\.authExpired/, 'a token expired on arrival means the clock is skewed: stop trusting the local read');
 const projects = bg.slice(bg.indexOf('  async listProjects(sendResponse) {'), bg.indexOf('  getExportData('));
-assert.match(projects, /const tokenAtSend = this\.settings\.authToken;/);
-assert.match(projects, /authRejected: status === 401 && !!tokenAtSend && this\.settings\.authToken === tokenAtSend/,
+assert.match(projects, /const tokenAtSend = this\.settings\?\.authToken;/);
+assert.match(projects, /authRejected: status === 401 && !!tokenAtSend && this\.settings\?\.authToken === tokenAtSend/,
   'only a 401 for the token still held (a 403 is a proxy, not our auth)');
 pass('background: marker + expired flag, pause on start, skew distrust, guarded 401 verdict');
 
@@ -61,7 +63,9 @@ const app = read('../src/popup/app.jsx');
 assert.match(app, /if \(!settings\.authToken \|\| forceLogin \|\| status\.authExpired\) \{/);
 assert.match(app, /api\.listProjects\(\)\.then\(\(res\) => \{[^}]*if \(res\?\.authRejected\) setForceLogin\(true\);/);
 assert.match(app, /expired: !!status\.authExpired \|\| forceLogin/);
-assert.match(app, /capture: status\.isCapturing \? \{ files: status\.fileCount \|\| 0, stop: toggleCapture \} : null/);
+assert.match(app, /capture: status\.isCapturing \? \{ held: status\.uploader\?\.pendingQueueLength \|\| 0, stop: toggleCapture \} : null/, 'files still to upload, not every captured file');
+const signIn = app.slice(app.indexOf('  async function signIn('), app.indexOf('  async function signOut('));
+assert.match(signIn, /setForceLogin\(false\);[\s\S]*setStatus\(\(s\) => \(\{ \.\.\.s, authExpired: false \}\)\);/, 'sign-in leaves the gate at once, not on the next 2s poll');
 const login_view = read('../src/popup/components/LoginView.jsx');
 assert.match(login_view, /vm\.expired &&/);
 assert.match(login_view, /vm\.capture &&[\s\S]*onClick=\{vm\.capture\.stop\}/, 'a running capture can be stopped from the sign-in screen');

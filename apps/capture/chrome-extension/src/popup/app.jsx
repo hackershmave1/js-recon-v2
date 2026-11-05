@@ -259,6 +259,9 @@ export function App() {
       api.listProjects().then((r) => { if (r && Array.isArray(r.projects)) setProjects(r.projects); });
       setView('home');
       setForceLogin(false);   // leave the re-auth view once signed back in (D41)
+      // The polled authExpired would hold the sign-in gate up to the next 2s refresh (an emptied
+      // "session expired" form right after "Signed in"); the fresh token isn't expired.
+      setStatus((s) => ({ ...s, authExpired: false }));
       showToast(`Signed in${res.tenant?.name ? ` · ${res.tenant.name}` : ''}`);
     }
     return res || { ok: false };
@@ -463,7 +466,7 @@ export function App() {
     expired: !!status.authExpired || forceLogin,
     // A capture running when the token expired must stay stoppable from here: the sign-in screen
     // has no other controls, and the workspace may be unreachable for a sign-in.
-    capture: status.isCapturing ? { files: status.fileCount || 0, stop: toggleCapture } : null
+    capture: status.isCapturing ? { held: status.uploader?.pendingQueueLength || 0, stop: toggleCapture } : null
   };
   // Expired (known locally, polled) or rejected (the workspace's 401) -> sign in before capturing.
   if (!settings.authToken || forceLogin || status.authExpired) {

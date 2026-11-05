@@ -69,7 +69,7 @@ export function LoginView({ vm }) {
             background: C.panel, border: `1px solid ${C.line}`, borderRadius: '12px', padding: '10px 14px', marginBottom: '16px'
           }}>
             <span style={{ fontSize: '11.5px', color: C.textSoft }}>
-              Capture still running · {vm.capture.files} files held until you sign in
+              Capture still running · {vm.capture.held} files waiting to upload until you sign in
             </span>
             <button onClick={vm.capture.stop} style={{
               flex: '0 0 auto', padding: '7px 11px', borderRadius: '9px', border: `1px solid ${C.pink}`,
