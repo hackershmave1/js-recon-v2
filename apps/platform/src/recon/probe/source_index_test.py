@@ -27,6 +27,11 @@ def run(monkeypatch):
         return {p: f"{T}/{R}/input/{p}" for p in state["assets"]}
 
     monkeypatch.setattr(sources, "asset_keys", keys)
+    # No source maps unless a test adds them (state["maps"]: path -> map ref).
+    state["maps"] = {}
+    state["lists"] = set()
+    monkeypatch.setattr(source_index, "_map_refs", lambda _t, _r: dict(state["maps"]))
+    monkeypatch.setattr(source_index, "_stored_lists", lambda _t, _r: set(state["lists"]))
     monkeypatch.setattr(
         source_index.storage, "list_keys", lambda prefix: {f"{prefix}{d}" for d in state["stored"]}
     )
@@ -159,3 +164,21 @@ def test_a_redelivered_slice_stops_instead_of_forking_the_chain(run, redis):
     [(_msg_id, first)] = streams.read_batch(redis, QueueName.INDEX, "c", count=1, block_ms=None)
     assert source_index.handle(redis, first) in {"continued", "done"}
     assert source_index.handle(redis, first) == "superseded"  # the same message, again
+
+
+def test_a_mapped_bundles_originals_are_backfilled_once(run, redis, monkeypatch):
+    # Older runs: the job also recovers each mapped bundle's source map ONCE and stores its originals.
+    run["assets"].update({"app": "a()", "lib": "b()"})
+    run["maps"]["app"] = f"{T}/{R}/source_map/m1"
+    recovered = []
+
+    def originals(_t, _r, bundle_key, map_ref):
+        recovered.append((bundle_key.rsplit("/", 1)[1], map_ref))
+        run["lists"].add("app")
+
+    monkeypatch.setattr(source_index, "_index_originals", originals)
+    assert source_index.status(redis, T, R)["total"] == 3  # 2 bundles + 1 map
+    source_index.request_index(redis, T, R)
+    _drain(redis)
+    assert recovered == [("app", f"{T}/{R}/source_map/m1")]
+    assert source_index.status(redis, T, R) == {"indexed": 3, "total": 3, "indexing": False}

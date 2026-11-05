@@ -39,7 +39,7 @@ from recon import storage
 from recon.db import models
 from recon.db.base import tenant_session
 from recon.findings import deobfuscate, engines, sourcemapper
-from recon.probe import formatted_text
+from recon.probe import formatted_text, recovered_store
 from recon.runs import assets as run_assets
 
 # Bound the served text so one request can't stream an unbounded decoded string.
@@ -234,6 +234,13 @@ def _recovered_content(
     the map is missing, unparseable, times out, or the binary is absent — a bad map
     must never 500 the whole Sources tab (design M3). ``EngineNotAvailable`` and
     ``EngineTimeout`` subclass ``EngineError``, so one ``except`` covers all."""
+    # Stored by analyze (or the background indexer): opened by identity, no source-map recovery
+    # (which also 404'd an original whose real name carries a content hash).
+    bundle_key = asset_keys(tenant_id, run_id).get(asset_url or _UPLOAD_PATH)
+    if bundle_key is not None:
+        stored = recovered_store.content(bundle_key, path)
+        if stored is not None:
+            return stored
     map_ref = _resolve_source_map_ref(tenant_id, run_id, asset_url)
     if map_ref is None:
         return None

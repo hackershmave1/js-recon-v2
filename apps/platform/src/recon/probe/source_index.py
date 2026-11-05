@@ -11,6 +11,8 @@ never be indexed; such a bundle simply stays unindexed — search still finds it
 
 from __future__ import annotations
 
+import os
+import tempfile
 import time
 import uuid
 from typing import Any
@@ -18,11 +20,13 @@ from typing import Any
 from redis import Redis
 
 from recon import storage
+from recon.config import get_settings
 from recon.domain import QueueName
-from recon.findings import deobfuscate
+from recon.findings import deobfuscate, sourcemapper
 from recon.observability import get_logger
-from recon.probe import formatted_text, sources
+from recon.probe import formatted_text, recovered_store, sources
 from recon.queue import streams
+from recon.runs import assets as run_assets
 
 _log = get_logger(__name__)
 
@@ -54,14 +58,33 @@ def _stored_digests(tenant_id: str, run_id: str) -> set[str]:
     return {key[len(prefix) :] for key in storage.list_keys(prefix)}
 
 
+def _stored_lists(tenant_id: str, run_id: str) -> set[str]:
+    """Digests of bundles whose recovered originals are stored (recon.probe.recovered_store)."""
+    prefix = f"{tenant_id}/{run_id}/originals/"
+    return {key[len(prefix) :] for key in storage.list_keys(prefix)}
+
+
+def _map_refs(tenant_id: str, run_id: str) -> dict[str, str]:
+    """Bundle path -> its source-map blob, for the bundles that have one (under RLS)."""
+    return {
+        row.url: row.source_map_ref
+        for row in run_assets.list_for_run(tenant_id, run_id)
+        if row.fetch_status == "ok" and row.input_ref and row.source_map_ref
+    }
+
+
 def status(redis: Redis, tenant_id: str, run_id: str) -> dict[str, Any]:
-    """``{indexed, total, indexing}`` from ONE object-store listing (never a download)."""
+    """``{indexed, total, indexing}`` from object-store LISTINGS (never a download). A unit is a
+    bundle's formatted text, plus — for a bundle with a source map — its stored originals."""
     bundles = _bundles(tenant_id, run_id)
     stored = _stored_digests(tenant_id, run_id) if bundles else set()
+    maps = _map_refs(tenant_id, run_id) if bundles else {}
+    lists = _stored_lists(tenant_id, run_id) if maps else set()
     indexed = sum(1 for _path, key in bundles if key.rsplit("/", 1)[1] in stored)
+    indexed += sum(1 for path, key in bundles if path in maps and key.rsplit("/", 1)[1] in lists)
     return {
         "indexed": indexed,
-        "total": len(bundles),
+        "total": len(bundles) + len(maps),
         "indexing": bool(redis.exists(_indexing_key(tenant_id, run_id))),
     }
 
@@ -137,11 +160,15 @@ def index_slice(tenant_id: str, run_id: str, cursor: int) -> int | None:
     when the end (or a deleted run) is reached. One bundle failing never stops the rest."""
     bundles = _bundles(tenant_id, run_id)
     stored = _stored_digests(tenant_id, run_id) if bundles else set()
+    maps = _map_refs(tenant_id, run_id) if bundles else {}
+    lists = _stored_lists(tenant_id, run_id) if maps else set()
     deadline = time.monotonic() + SLICE_SECONDS
     for position in range(cursor, len(bundles)):
         if position > cursor and time.monotonic() > deadline:
             return position
         path, key = bundles[position]
+        if path in maps and key.rsplit("/", 1)[1] not in lists:
+            _index_originals(tenant_id, run_id, key, maps[path])
         if key.rsplit("/", 1)[1] in stored:
             continue
         try:
@@ -158,3 +185,32 @@ def index_slice(tenant_id: str, run_id: str, cursor: int) -> int | None:
             return None
         formatted_text.store_served(key, text, formatted=formatted)
     return None
+
+
+def _index_originals(tenant_id: str, run_id: str, bundle_key: str, map_ref: str) -> None:
+    """Recover a bundle's source map ONCE (on the worker) and store its originals exactly as
+    analyze does: each beautified only if minified, within the same byte budgets. Best-effort —
+    a bad map or missing engine leaves the bundle's originals unstored (search falls back)."""
+    settings = get_settings()
+    try:
+        with tempfile.TemporaryDirectory(prefix="idx-") as workdir:
+            map_path = os.path.join(workdir, "bundle.map")
+            with open(map_path, "wb") as handle:
+                handle.write(storage.get_blob(map_ref))
+            files: list[tuple[str, str]] = []
+            total, partial = 0, False
+            for rel, raw in sourcemapper.iter_recovered_files(
+                map_path, max_recovered_bytes=settings.max_source_map_bytes
+            ):
+                text = deobfuscate.beautify_if_minified(raw.decode("utf-8", "replace"))
+                total += len(text.encode("utf-8"))
+                if total > 2 * settings.max_source_map_bytes:  # analyze's write budget
+                    partial = True
+                    break
+                files.append((rel, text))
+    except Exception:
+        _log.warning("source_index.originals_failed", run_id=run_id, map_ref=map_ref, exc_info=True)
+        return
+    if not sources.asset_keys(tenant_id, run_id):  # deleted meanwhile: keep its prefix clean
+        return
+    recovered_store.store(bundle_key, files, partial=partial)

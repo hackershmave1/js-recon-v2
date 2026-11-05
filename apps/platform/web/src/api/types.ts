@@ -154,7 +154,12 @@ export interface RequestsResponse { run_id: string; count: number; requests: Rec
 // `kind:"source"` is a source-map-recovered original (e.g. webpack:/…/social.js);
 // `asset_url` names the owning crawl asset for those (null for asset/upload, or for
 // a legacy run-level map). See recon.probe.sources for the join keys.
-export interface SourceFile { path: string; kind: "asset" | "upload" | "source"; fetch_status: string; asset_url: string | null; }
+// `from_search`: a recovered original the tree didn't list (no findings) that the user opened from a
+// search hit; added to the tree for the rest of the visit.
+export interface SourceFile {
+  path: string; kind: "asset" | "upload" | "source"; fetch_status: string; asset_url: string | null;
+  from_search?: boolean;
+}
 export interface SourcesResponse { run_id: string; count: number; sources: SourceFile[]; }
 // D52: a full-text search hit across a run's sources (file + line + snippet).
 // `line` is the viewer's row, or null when the file predates search indexing (searched raw).

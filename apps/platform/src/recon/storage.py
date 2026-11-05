@@ -43,6 +43,9 @@ BLOB_KINDS = frozenset(
         # A source blob's served (beautified) text, stored once beside its input blob under the
         # SAME digest (recon.probe.formatted_text) so the viewer and search never re-beautify.
         "formatted",
+        # Per bundle: the list of its source-map-recovered originals and their stored `formatted`
+        # copies (recon.probe.recovered_store), keyed by the bundle's input digest.
+        "originals",
     }
 )
 

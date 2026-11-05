@@ -16,6 +16,7 @@ to stop at 120 files / 200 matches. Now:
 
 from __future__ import annotations
 
+import functools
 import threading
 import time
 from collections import deque
@@ -25,7 +26,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 
 from recon import storage
-from recon.probe import formatted_text, sources
+from recon.probe import formatted_text, recovered_store, sources
 
 MIN_QUERY = 2
 MAX_MATCHES = 2000
@@ -105,8 +106,13 @@ def search(
     # Only files that HAVE content count: a failed-fetch asset is listed in the tree but has no
     # bytes, so "searched X of Y" must not read as incomplete because of it.
     bundles = [f for f in files if f.kind != "source" and f.path in keys]
-    originals = [f for f in files if f.kind == "source"]
-    outcome = SearchOutcome(files_total=len(bundles) + len(originals))
+    # EVERY stored original (recon.probe.recovered_store), not only the few the tree lists because
+    # they carry findings; a bundle whose originals aren't stored yet (a run analyzed before they
+    # were) still has its listed ones searched by recovering them, as before.
+    stored = _stored_originals(tenant_id, run_id, bundles, keys)
+    stored_bundles = {f.asset_url for f, _key in stored}
+    listed = [f for f in files if f.kind == "source" and f.asset_url not in stored_bundles]
+    outcome = SearchOutcome(files_total=len(bundles) + len(stored) + len(listed))
     needle = (query or "").strip().lower()
     if len(needle) < MIN_QUERY:
         return outcome
@@ -119,8 +125,12 @@ def search(
             raise _Stop
 
     try:
-        _scan_bundles(outcome, bundles, keys, needle, check, deadline)
-        for f in originals:
+        reads: list[tuple[sources.SourceFile, Callable[[], tuple[str | None, bool]]]] = [
+            (f, functools.partial(_read_bundle, keys[f.path], f.path)) for f in bundles
+        ]
+        reads += [(f, functools.partial(_read_original, key, f.path)) for f, key in stored]
+        _scan_windowed(outcome, reads, needle, check, deadline)
+        for f in listed:
             check()
             content = sources.get_source_content(tenant_id, run_id, f.path, f.asset_url)
             if content is not None:
@@ -133,22 +143,50 @@ def search(
     return outcome
 
 
-def _scan_bundles(
+def _stored_originals(
+    tenant_id: str, run_id: str, bundles: list[sources.SourceFile], keys: dict[str, str]
+) -> list[tuple[sources.SourceFile, str]]:
+    """``(file, stored key)`` for every stored original of the run's bundles: ONE listing finds
+    which bundles have a stored list, then one read per such bundle (12 of 211 on a real run)."""
+    prefix = f"{tenant_id}/{run_id}/originals/"
+    try:
+        have = {key[len(prefix) :] for key in storage.list_keys(prefix)}
+    except Exception:
+        return []
+    out: list[tuple[sources.SourceFile, str]] = []
+    for bundle in bundles:
+        bundle_key = keys[bundle.path]
+        if bundle_key.rsplit("/", 1)[1] not in have:
+            continue
+        manifest = recovered_store.load(bundle_key)
+        for entry in manifest.entries if manifest else []:
+            f = sources.SourceFile(
+                path=entry.path, kind="source", fetch_status="ok", asset_url=bundle.path
+            )
+            out.append((f, entry.key))
+    return out
+
+
+def _read_original(key: str, path: str) -> tuple[str | None, bool]:
+    stored = recovered_store.read(key, path=path)
+    return (stored.content, True) if stored is not None else (None, True)
+
+
+def _scan_windowed(
     outcome: SearchOutcome,
-    bundles: list[sources.SourceFile],
-    keys: dict[str, str],
+    reads: list[tuple[sources.SourceFile, Callable[[], tuple[str | None, bool]]]],
     needle: str,
     check: Callable[[], None],
     deadline: float,
 ) -> None:
-    """Read bundles in parallel through a small window: each file's text is dropped once scanned,
-    so a 211-file run never holds every (up to 12 MiB) copy at once."""
+    """Read files in parallel through a small window: each file's text is dropped once scanned,
+    so a run never holds every (up to 12 MiB) copy at once."""
     pool = ThreadPoolExecutor(max_workers=_READERS)
     window: deque[tuple[sources.SourceFile, Future[tuple[str | None, bool]]]] = deque()
-    todo = iter(bundles)
+    todo = iter(reads)
     try:
-        for f in todo:
-            window.append((f, pool.submit(_read_bundle, keys[f.path], f.path)))
+        for f, read_fn in todo:
+            window.append((f, pool.submit(read_fn)))
             if len(window) >= _READERS * 2:
                 break
         while window:
@@ -160,7 +198,7 @@ def _scan_bundles(
                 raise _Stop from None
             nxt = next(todo, None)
             if nxt is not None:
-                window.append((nxt, pool.submit(_read_bundle, keys[nxt.path], nxt.path)))
+                window.append((nxt[0], pool.submit(nxt[1])))
             if text is not None:
                 outcome.unindexed += 0 if exact else 1
                 _scan(outcome, f, text, needle, exact=exact, check=check)
