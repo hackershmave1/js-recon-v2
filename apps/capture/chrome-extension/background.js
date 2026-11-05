@@ -21,6 +21,7 @@ import { PAGE_ACTIONS, admitMessage } from './modules/message-sender.js';
 import { restrictStorageAccess, publishCaptureState } from './modules/storage-access.js';
 import { replyOnce, dispatchReply } from './modules/message-reply.js';
 import { hookMatchPatterns, hostInScope } from './modules/hook-matches.js';
+import { authMarker, tokenExpiry } from './modules/token-validity.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -155,6 +156,12 @@ class JSExtractor {
     // Re-apply the persisted Bearer token so a service-worker respawn keeps routing the
     // operator's captures into their tenant (the uploader holds it in memory, not storage).
     this.batchUploader.setAuthToken(this.settings.authToken);
+    // A token already known to be expired would only 401: hold the outbox until re-login instead
+    // of sending a doomed batch (and a fresh "session expired" notification) on every respawn.
+    if (authMarker(this.settings.authToken, { trustLocalExpiry: !this.settings.localExpiryUntrusted }).authExpired) {
+      this.batchUploader.pauseForAuth();
+      await this.notifyExpiredOncePerToken();
+    }
     // Re-apply a persisted scope so uploads keep tagging the session even if the
     // service worker recycled after a new session was started.
     if (this.settings.useDomainScope && Array.isArray(this.settings.domainScopes) && this.settings.domainScopes.length) {
@@ -1289,6 +1296,20 @@ class JSExtractor {
     } catch (e) { /* notifications API unavailable in this context */ }
   }
 
+  // A token that expired while the worker slept gets ONE "session expired" notification, not one per
+  // respawn (the in-memory authNotified guard dies with the worker) and not none (the up-front
+  // pause sends no doomed upload, so no 401 would ever fire it). Keyed by the token's exp in
+  // storage.session, so a new token that later expires notifies again.
+  async notifyExpiredOncePerToken() {
+    const exp = tokenExpiry(this.settings.authToken);
+    try {
+      const { authNotifiedExp } = await chrome.storage.session.get('authNotifiedExp');
+      if (authNotifiedExp === exp) return;
+      await chrome.storage.session.set({ authNotifiedExp: exp });
+    } catch (e) { /* storage.session unavailable: notify rather than stay silent */ }
+    this.handleAuthExpired('expired');
+  }
+
   // Central login: authenticate to the workspace and persist the session token + identity so
   // uploads/analyze route to this operator's tenant. The Bearer comes from a password login
   // (POST /auth/login).
@@ -1316,7 +1337,10 @@ class JSExtractor {
           authToken: result.token || '',
           authUser: result.user || username || '',
           authTenantName: (result.tenant && result.tenant.name) || '',
-          authTenantId: nextTenantId
+          authTenantId: nextTenantId,
+          // A token that reads as expired the moment it's issued means this machine's clock is
+          // off: stop trusting the local expiry read, or every popup open would demand sign-in.
+          localExpiryUntrusted: authMarker(result.token).authExpired
         });
         await chrome.storage.local.set(this.settings);
         this.batchUploader.setAuthToken(this.settings.authToken);
@@ -1476,10 +1500,15 @@ class JSExtractor {
     // Replace the raw Bearer token with a truthy-only marker: the popup gates on
     // settings.authToken being truthy (line 378 app.jsx) but never uses the value.
     // 'session' matches the marker the popup sets locally on login (app.jsx:207).
+    // A token known to be expired reads as signed out, so the popup asks for sign-in BEFORE a
+    // capture starts rather than after its first upload 401s. authExpired is computed here only,
+    // never stored in settings (settings are adopted once by the popup and persisted whole).
     const { authToken, ...restSettings } = this.settings || {};
-    const safeSettings = { ...restSettings, authToken: authToken ? 'session' : '' };
+    const marker = authMarker(authToken, { trustLocalExpiry: !this.settings?.localExpiryUntrusted });
+    const safeSettings = { ...restSettings, authToken: marker.authToken };
     sendResponse({
       isCapturing: this.isCapturing,
+      authExpired: marker.authExpired,
       sessionId: this.session.sessionId,
       fileCount: this.session.capturedFiles.size,
       mapsCount,
@@ -1521,11 +1550,18 @@ class JSExtractor {
   async listProjects(sendResponse) {
     // Live list refreshes the cache; a workspace blip falls back to the cached list so the
     // popup's engagement picker still renders. Never throws.
-    const { projects, source } = await listProjectsWithCache(
+    // The popup calls this on every open, so its 401 doubles as the server's verdict on the session
+    // token (the same tenant check uploads get). Only for the token still held: a reply that lands
+    // after a fresh sign-in must not bounce the operator back to the sign-in screen.
+    const tokenAtSend = this.settings?.authToken;
+    const { projects, source, status } = await listProjectsWithCache(
       () => this.workspaceClient.listProjects(),
       chrome.storage.local
     );
-    sendResponse({ success: true, projects, source });
+    sendResponse({
+      success: true, projects, source,
+      authRejected: status === 401 && !!tokenAtSend && this.settings?.authToken === tokenAtSend
+    });
   }
 
   getExportData(request, sendResponse) {

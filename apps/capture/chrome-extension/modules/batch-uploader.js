@@ -113,12 +113,18 @@ export class BatchUploader {
   setOnDrained(fn) { this.onDrained = typeof fn === 'function' ? fn : null; }
   setOnAuthFailure(fn) { this.onAuthFailure = typeof fn === 'function' ? fn : null; }
 
+  // Pause the drain BEFORE a request is wasted: the owner already knows the token is expired (a
+  // worker respawn with an 8h-old token). Unlike a 401 pause this fires no onAuthFailure — every
+  // respawn would otherwise send one doomed batch and post a fresh "session expired" notification.
+  pauseForAuth() { this.authPaused = true; }
+
   // Resume a drain paused by a 401/403 (DEBT D41). Called on a successful (re-)login. Clears the
   // pause UNCONDITIONALLY — deliberately NOT gated on a token change: auth.token.mint() stamps exp
   // at 1-second resolution over a fixed payload, so two logins within the same wall-clock second
   // produce a byte-identical token, and a transient 403 can pause with a still-valid token — either
   // would otherwise latch the pause forever (a silent upload outage). The owner is the sole caller
   // and only calls this after installing a fresh token, so an unconditional clear is safe.
+
   resumeUploads() {
     this.authPaused = false;
     if (this.pendingQueue.length > 0 && !this.isUploading) {

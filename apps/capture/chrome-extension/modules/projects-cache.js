@@ -21,20 +21,24 @@ export async function writeCache(storage, projects, now = Date.now()) {
 // Try the live fetch; on success refresh the cache and return source 'live'. On failure OR a
 // reachable-but-unsuccessful response, fall back to the last cached list ('cache'), or [] if
 // there is none ('empty'). Never throws — capture must not break when the workspace blips.
+// `status` is the live call's HTTP status when it failed — the caller reads a 401 as the
+// workspace rejecting the session token (the same check uploads get).
 export async function listProjectsWithCache(fetcher, storage, now = Date.now()) {
+  let status;
   try {
     const result = await fetcher();
     if (result && result.success && Array.isArray(result.projects)) {
       await writeCache(storage, result.projects, now);
       return { projects: result.projects, source: 'live' };
     }
+    status = result?.status;
   } catch (e) {
     // fall through to cache
   }
   try {
     const { projects } = await readCache(storage);
-    return { projects: projects || [], source: projects ? 'cache' : 'empty' };
+    return { projects: projects || [], source: projects ? 'cache' : 'empty', status };
   } catch (e) {
-    return { projects: [], source: 'empty' };   // storage itself failed — still never throw
+    return { projects: [], source: 'empty', status };   // storage itself failed — still never throw
   }
 }
