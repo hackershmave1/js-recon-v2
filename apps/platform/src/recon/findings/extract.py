@@ -39,6 +39,7 @@ from tree_sitter import Node
 
 from recon.findings import _receivers
 from recon.findings._base_env import _resolve_url, collect_base_env
+from recon.findings._config_calls import is_config_call
 from recon.findings._jsast import (
     _GENERIC_METHODS,
     _GLOBAL_OBJECTS,
@@ -640,6 +641,14 @@ def _dispatch_member(
     elif obj in callees:  # taught wrapper — MUST be last so native/instance collisions win
         _axios_member(call, prop, result, env, base="", wrapper=obj)
     elif (
+        is_config_call(prop, next(iter(_args(call)), None))
+        and _receivers.kind_of(env.receivers, obj) != _receivers.COLLECTION
+    ):
+        # `this.httpClient.request({method:"get", url})` on a client nothing else proves (injected
+        # via `Object.assign(this, deps)`): the config object is the evidence. After every known
+        # client so they keep their kind/base; a receiver the bundle shows is a Map/Set is not one.
+        _axios_from_config(_args(call)[0], call, result, env, kind="client")
+    elif (
         prop in _GENERIC_METHODS and _receivers.kind_of(env.receivers, obj) == _receivers.COLLECTION
     ):
         # The bundle shows this receiver is a Map/Set/... (created as one, or used with .has/.set/
@@ -754,6 +763,11 @@ def _axios_member(
         _axios_from_config(args[0], call, result, env, base=base, wrapper=wrapper)
         return
     if prop.upper() not in HTTP_METHODS:
+        # A known instance/wrapper's own config method (`api.apiRequest({method, url})`) keeps
+        # its base, provenance and kind (as its own `.request(config)` does); anything else on it
+        # is not a request.
+        if is_config_call(prop, next(iter(args), None)):
+            _axios_from_config(args[0], call, result, env, base=base, wrapper=wrapper)
         return
     url = _resolve_url(args[0], env, base) if args else None
     if url is None:
@@ -787,23 +801,26 @@ def _axios_from_config(
     env: BaseEnv,
     base: str = "",
     wrapper: str | None = None,
+    kind: str = "axios",
 ) -> None:
     pairs = _object_pairs(config)
     url = _resolve_url(pairs.get("url"), env, base)
     if url is None:
         method = (_string_value(pairs.get("method")) or "GET").upper()
-        _record_unresolved(result, "axios", method, pairs.get("url"), call, wrapper=wrapper)
+        _record_unresolved(result, kind, method, pairs.get("url"), call, wrapper=wrapper)
         return
     method = (_string_value(pairs.get("method")) or "GET").upper()
     params = (
         _query_params(url)
         + _config_query_params(config)  # axios `params` -> query, not body
         + _body_params_from_value(pairs.get("data"))
+        # `body` is the fetch/Angular/ofetch name for the payload; axios ignores it.
+        + (_body_params_from_value(pairs.get("body")) if kind != "axios" else [])
     )
     headers = _auth_headers(pairs.get("headers"))
     result.endpoints.append(
         _endpoint(
-            "axios",
+            kind,
             method,
             url,
             params,
