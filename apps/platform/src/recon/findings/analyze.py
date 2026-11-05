@@ -675,6 +675,7 @@ def _analyze_blob(
                 input_ref,
                 ((name, units.read_text(name)) for name in units.names),
                 partial=units.partial,
+                heartbeat=heartbeat,
             )
         endpoints = _extract_endpoints(
             session,

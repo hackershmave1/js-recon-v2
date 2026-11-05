@@ -18,7 +18,7 @@ Each entry keeps two names. ``path`` is the IDENTITY findings and the tree use
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -43,6 +43,13 @@ class Entry:
 class Manifest:
     entries: list[Entry]
     partial: bool  # recovery stopped at its byte budget: some originals were never rebuilt
+    failed: bool = False  # the map couldn't be recovered at all: tried, nothing stored
+
+
+# A run's lists never change after analyze writes them (re-analysis rewrites identical content),
+# and search reads every one per query: keep the recently used ones in memory.
+_CACHE_MAX = 512
+_cache: dict[str, Manifest] = {}
 
 
 def manifest_key(bundle_key: str) -> str:
@@ -50,15 +57,30 @@ def manifest_key(bundle_key: str) -> str:
     return f"{tenant}/{run}/originals/{digest}"
 
 
-def store(bundle_key: str, files: Iterable[tuple[str, str]], *, partial: bool) -> None:
-    """Store each ``(rel, served text)`` and the bundle's list. Best-effort: any failure is logged,
-    never raised — analyze must not fail over it, and the viewer falls back to recovering."""
+def store(
+    bundle_key: str,
+    files: Iterable[tuple[str, str]],
+    *,
+    partial: bool,
+    heartbeat: Callable[[], None] | None = None,
+) -> None:
+    """Store each ``(rel, served text)`` and the bundle's list. Best-effort: a storage failure is
+    logged, never raised — analyze must not fail over it, and the viewer falls back to recovering.
+    ``heartbeat`` runs before each file and OUTSIDE that swallow, so a long store renews the job's
+    lease and a pause/cancel (ControlInterrupt) still propagates."""
     from recon.probe.sources import _content_from_text
 
     tenant, run, _kind, _digest = bundle_key.split("/")
+    entries: list[dict[str, str]] = []
     try:
-        entries = []
-        for rel, text in files:
+        storage.ensure_bucket()
+    except Exception:
+        _logger.warning("recovered_store.store_failed", bundle_key=bundle_key, exc_info=True)
+        return
+    for rel, text in files:
+        if heartbeat is not None:
+            heartbeat()
+        try:
             path = normalize.normalize_source_path(rel)
             content = _content_from_text(path, text, formatted=True)
             payload = {
@@ -67,10 +89,27 @@ def store(bundle_key: str, files: Iterable[tuple[str, str]], *, partial: bool) -
                 "formatted": True,
             }
             key = storage.put_blob(
-                tenant, run, "formatted", json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                tenant,
+                run,
+                "formatted",
+                json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                check_bucket=False,
             )
-            entries.append({"path": path, "rel": rel, "key": key})
-        body = {"entries": entries, "partial": partial}
+        except Exception:
+            _logger.warning("recovered_store.store_failed", bundle_key=bundle_key, exc_info=True)
+            return
+        entries.append({"path": path, "rel": rel, "key": key})
+    _write_list(bundle_key, {"entries": entries, "partial": partial})
+
+
+def store_failed(bundle_key: str) -> None:
+    """Record that this bundle's map couldn't be recovered (unparseable, engine missing): the
+    backfill counts it as done instead of retrying (and re-downloading the map) forever."""
+    _write_list(bundle_key, {"entries": [], "partial": False, "failed": True})
+
+
+def _write_list(bundle_key: str, body: dict[str, object]) -> None:
+    try:
         storage.put_blob_at(
             manifest_key(bundle_key), json.dumps(body, ensure_ascii=False).encode("utf-8")
         )
@@ -80,14 +119,23 @@ def store(bundle_key: str, files: Iterable[tuple[str, str]], *, partial: bool) -
 
 def load(bundle_key: str) -> Manifest | None:
     """The bundle's list of stored originals, or ``None`` (not stored yet / unreadable)."""
+    key = manifest_key(bundle_key)
+    cached = _cache.get(key)
+    if cached is not None:
+        return cached
     try:
-        body = json.loads(storage.get_blob(manifest_key(bundle_key)))
-        return Manifest(
+        body = json.loads(storage.get_blob(key))
+        manifest = Manifest(
             entries=[Entry(path=e["path"], rel=e["rel"], key=e["key"]) for e in body["entries"]],
             partial=bool(body.get("partial", False)),
+            failed=bool(body.get("failed", False)),
         )
     except Exception:
         return None
+    if len(_cache) >= _CACHE_MAX:
+        _cache.pop(next(iter(_cache)))
+    _cache[key] = manifest
+    return manifest
 
 
 def content(bundle_key: str, path: str) -> SourceContent | None:

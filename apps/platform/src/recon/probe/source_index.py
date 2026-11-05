@@ -15,6 +15,7 @@ import os
 import tempfile
 import time
 import uuid
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from redis import Redis
@@ -22,7 +23,7 @@ from redis import Redis
 from recon import storage
 from recon.config import get_settings
 from recon.domain import QueueName
-from recon.findings import deobfuscate, sourcemapper
+from recon.findings import deobfuscate, engines, sourcemapper
 from recon.observability import get_logger
 from recon.probe import formatted_text, recovered_store, sources
 from recon.queue import streams
@@ -45,7 +46,9 @@ def _indexing_key(tenant_id: str, run_id: str) -> str:
 
 
 def _indexed_key(tenant_id: str, run_id: str) -> str:
-    return f"indexed:{tenant_id}:{run_id}"
+    # v2: "done" now also covers each mapped bundle's stored originals — a v1 marker (bundles
+    # only) must not keep a run from being backfilled for its remaining 30 days.
+    return f"indexed:v2:{tenant_id}:{run_id}"
 
 
 def _bundles(tenant_id: str, run_id: str) -> list[tuple[str, str]]:
@@ -123,8 +126,12 @@ def handle(redis: Redis, message: dict[str, Any]) -> str:
     # second, parallel chain.
     if _owner(redis, tenant_id, run_id) != token:
         return "superseded"
+
+    def renew() -> None:
+        redis.set(_indexing_key(tenant_id, run_id), uuid.uuid4().hex, ex=_INDEXING_TTL)
+
     try:
-        next_cursor = index_slice(tenant_id, run_id, cursor)
+        next_cursor = index_slice(tenant_id, run_id, cursor, renew=renew)
     except Exception:
         _log.error("source_index.failed", tenant_id=tenant_id, run_id=run_id, exc_info=True)
         redis.delete(_indexing_key(tenant_id, run_id))
@@ -155,7 +162,9 @@ def _owner(redis: Redis, tenant_id: str, run_id: str) -> str | None:
     return value.decode() if isinstance(value, bytes) else value
 
 
-def index_slice(tenant_id: str, run_id: str, cursor: int) -> int | None:
+def index_slice(
+    tenant_id: str, run_id: str, cursor: int, renew: Callable[[], None] | None = None
+) -> int | None:
     """Index bundles from ``cursor`` for about ``SLICE_SECONDS``; return where to resume, or None
     when the end (or a deleted run) is reached. One bundle failing never stops the rest."""
     bundles = _bundles(tenant_id, run_id)
@@ -168,7 +177,14 @@ def index_slice(tenant_id: str, run_id: str, cursor: int) -> int | None:
             return position
         path, key = bundles[position]
         if path in maps and key.rsplit("/", 1)[1] not in lists:
+            # A whole-map recovery can outlast the stall lease: take the job over first, so a
+            # reclaimed copy of this message finds a newer owner and stops; then end the slice
+            # here — at most ONE map per message.
+            if renew is not None:
+                renew()
             _index_originals(tenant_id, run_id, key, maps[path])
+            if key.rsplit("/", 1)[1] in stored:
+                return position + 1
         if key.rsplit("/", 1)[1] in stored:
             continue
         try:
@@ -192,25 +208,36 @@ def _index_originals(tenant_id: str, run_id: str, bundle_key: str, map_ref: str)
     analyze does: each beautified only if minified, within the same byte budgets. Best-effort —
     a bad map or missing engine leaves the bundle's originals unstored (search falls back)."""
     settings = get_settings()
+    budget = 2 * settings.max_source_map_bytes  # analyze's write budget
+    state = {"partial": False}
+
+    def served(map_path: str) -> Iterator[tuple[str, str]]:
+        written = 0
+        for rel, raw in sourcemapper.iter_recovered_files(
+            map_path, max_recovered_bytes=settings.max_source_map_bytes
+        ):
+            text = deobfuscate.beautify_if_minified(raw.decode("utf-8", "replace"))
+            written += len(text.encode("utf-8"))
+            if written > budget:
+                state["partial"] = True
+                return
+            yield rel, text
+
     try:
         with tempfile.TemporaryDirectory(prefix="idx-") as workdir:
+            # Streamed to disk, never read whole into RAM (a map can be 96 MiB; D37-L2).
             map_path = os.path.join(workdir, "bundle.map")
-            with open(map_path, "wb") as handle:
-                handle.write(storage.get_blob(map_ref))
-            files: list[tuple[str, str]] = []
-            total, partial = 0, False
-            for rel, raw in sourcemapper.iter_recovered_files(
-                map_path, max_recovered_bytes=settings.max_source_map_bytes
-            ):
-                text = deobfuscate.beautify_if_minified(raw.decode("utf-8", "replace"))
-                total += len(text.encode("utf-8"))
-                if total > 2 * settings.max_source_map_bytes:  # analyze's write budget
-                    partial = True
-                    break
-                files.append((rel, text))
+            storage.download_blob_to_path(map_ref, map_path)
+            if not sources.asset_keys(tenant_id, run_id):  # deleted meanwhile: keep it clean
+                return
+            files = list(served(map_path))
+    except engines.EngineError:
+        # Unparseable map / engine missing: record it as tried so the job doesn't retry (and
+        # re-download the map) every hour forever; search keeps the listed-only fallback.
+        _log.warning("source_index.originals_failed", run_id=run_id, map_ref=map_ref, exc_info=True)
+        recovered_store.store_failed(bundle_key)
+        return
     except Exception:
         _log.warning("source_index.originals_failed", run_id=run_id, map_ref=map_ref, exc_info=True)
         return
-    if not sources.asset_keys(tenant_id, run_id):  # deleted meanwhile: keep its prefix clean
-        return
-    recovered_store.store(bundle_key, files, partial=partial)
+    recovered_store.store(bundle_key, files, partial=state["partial"])

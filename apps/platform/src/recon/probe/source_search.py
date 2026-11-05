@@ -33,8 +33,8 @@ MAX_MATCHES = 2000
 MAX_PER_FILE = 200
 SNIPPET = 240
 BUDGET_SECONDS = 20.0
-# Object-store reads run in parallel (I/O bound, the GIL is released); recovered originals do not:
-# each one is a source-map subprocess, so they are read one at a time.
+# Object-store reads (bundles and stored originals) run in parallel: I/O bound, the GIL is released.
+# Only an unstored bundle's listed originals are recovered (a source-map subprocess), one at a time.
 _READERS = 8
 # A raw (unindexed) bundle can be one multi-megabyte line; never scan more than a response serves.
 _RAW_SCAN_BYTES = 12 * 1024 * 1024

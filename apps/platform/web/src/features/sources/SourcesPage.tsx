@@ -382,6 +382,7 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     const j = pendingJump.current;
     if (!j || !files) return;
     pendingJump.current = null;
+    setSelAsset(null);  // a finding jump picks by its own path; a prior search hit's bundle mustn't stick
     openForJump(resolveJumpPath(j, files));
     setFocus(j.line != null ? { line: j.line, loc: j.loc ?? null, approximate: !!j.approximate } : null);
   }, [jump, files, openForJump]);

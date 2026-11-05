@@ -16,7 +16,7 @@ BUNDLE = "t/r/input/b1"
 def blobs(monkeypatch):
     store: dict[str, bytes] = {}
 
-    def put(tenant, run, kind, content):
+    def put(tenant, run, kind, content, *, check_bucket=True):
         import hashlib
 
         key = f"{tenant}/{run}/{kind}/{hashlib.sha256(content).hexdigest()}"
@@ -33,6 +33,8 @@ def blobs(monkeypatch):
         recovered_store.storage, "put_blob_at", lambda k, c: store.__setitem__(k, c)
     )
     monkeypatch.setattr(recovered_store.storage, "get_blob", get)
+    monkeypatch.setattr(recovered_store.storage, "ensure_bucket", lambda: None)
+    monkeypatch.setattr(recovered_store, "_cache", {})
     return store
 
 
@@ -72,6 +74,7 @@ def test_a_failed_store_never_raises(monkeypatch):
         raise RuntimeError("object store down")
 
     monkeypatch.setattr(recovered_store.storage, "put_blob", boom)
+    monkeypatch.setattr(recovered_store.storage, "ensure_bucket", lambda: None)
     recovered_store.store(BUNDLE, [("a.js", "x")], partial=False)  # logged, not raised
 
 
@@ -79,3 +82,26 @@ def test_partial_recovery_is_recorded(blobs):
     recovered_store.store(BUNDLE, [("a.js", "x")], partial=True)
     manifest = recovered_store.load(BUNDLE)
     assert manifest is not None and manifest.partial is True
+
+
+def test_heartbeat_runs_per_file_and_a_control_interrupt_propagates(blobs):
+    # Code review M1: a long store renews the job's lease; pause/cancel must not be swallowed.
+    from recon.queue.retry import ControlInterrupt
+
+    beats = []
+    recovered_store.store(
+        BUNDLE, [("a.js", "x"), ("b.js", "y")], partial=False, heartbeat=lambda: beats.append(1)
+    )
+    assert len(beats) == 2
+
+    def stop():
+        raise ControlInterrupt("paused")
+
+    with pytest.raises(ControlInterrupt):
+        recovered_store.store(BUNDLE, [("a.js", "x")], partial=False, heartbeat=stop)
+
+
+def test_a_failed_map_is_recorded_as_tried(blobs):
+    recovered_store.store_failed(BUNDLE)
+    manifest = recovered_store.load(BUNDLE)
+    assert manifest is not None and manifest.failed and manifest.entries == []
