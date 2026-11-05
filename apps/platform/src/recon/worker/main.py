@@ -42,7 +42,8 @@ SERVED_QUEUES: tuple[QueueName, ...] = (
 )
 BATCH_FOR: dict[QueueName, int] = {QueueName.INDEX: 1}
 # An empty INDEX queue must not add a blocking read to every idle pass (stage pickup latency).
-BLOCK_MS_FOR: dict[QueueName, int] = {QueueName.INDEX: 0}
+# None = don't block at all; 0 would be Redis's BLOCK 0, which waits FOREVER and hangs the worker.
+BLOCK_MS_FOR: dict[QueueName, int | None] = {QueueName.INDEX: None}
 
 STUB_STEPS = 4
 STUB_STEP_DELAY_SECONDS = 0.0

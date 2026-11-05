@@ -54,7 +54,7 @@ def _drain(redis, limit=50):
     streams.ensure_group(redis, QueueName.INDEX)
     handled = 0
     for _ in range(limit):
-        batch = streams.read_batch(redis, QueueName.INDEX, "c", count=1, block_ms=0)
+        batch = streams.read_batch(redis, QueueName.INDEX, "c", count=1, block_ms=None)
         if not batch:
             return handled
         for msg_id, message in batch:
@@ -156,6 +156,6 @@ def test_a_redelivered_slice_stops_instead_of_forking_the_chain(run, redis):
     run["assets"].update({f"f{i}": "a()" for i in range(3)})
     source_index.request_index(redis, T, R)
     streams.ensure_group(redis, QueueName.INDEX)
-    [(_msg_id, first)] = streams.read_batch(redis, QueueName.INDEX, "c", count=1, block_ms=0)
+    [(_msg_id, first)] = streams.read_batch(redis, QueueName.INDEX, "c", count=1, block_ms=None)
     assert source_index.handle(redis, first) in {"continued", "done"}
     assert source_index.handle(redis, first) == "superseded"  # the same message, again

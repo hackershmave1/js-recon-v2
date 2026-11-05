@@ -23,6 +23,15 @@ def test_index_messages_go_to_the_index_handler_and_are_acked(monkeypatch):
     assert redis.xpending(streams.queue_key(QueueName.INDEX), streams.GROUP)["pending"] == 0
 
 
+def test_an_empty_index_queue_never_blocks_the_worker(monkeypatch):
+    # Redis BLOCK 0 waits forever (fakeredis doesn't model it): INDEX must read with no BLOCK.
+    calls = []
+    monkeypatch.setattr(main, "SERVED_QUEUES", (QueueName.INDEX,))
+    monkeypatch.setattr(streams, "read_batch", lambda *a, **k: calls.append(k["block_ms"]) or [])
+    main.run_once(fakeredis.FakeRedis(decode_responses=True), "c")
+    assert calls == [None]
+
+
 def test_index_is_served_last_one_message_at_a_time():
     # A backlog of index slices must not hold up a run's stages.
     assert main.SERVED_QUEUES[-1] is QueueName.INDEX
