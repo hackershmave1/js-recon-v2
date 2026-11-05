@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type ArtifactKind = "curl" | "http" | "websocat" | "python";
 
@@ -39,6 +39,13 @@ export function ArtifactTabs({ artifacts }: {
 
   const [activeKey, setActiveKey] = useState<ArtifactKind | null>(tabs[0]?.key ?? null);
   const [copied, setCopied] = useState(false);
+  // The "Copied" reset belongs to this component: cleared on unmount (or a re-copy), never fired
+  // into a torn-down tree.
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1200);
+    return () => clearTimeout(timer);
+  }, [copied]);
 
   if (tabs.length === 0) return <p className="muted pb-not-probeable">Not probeable from this surface.</p>;
 
@@ -47,7 +54,6 @@ export function ArtifactTabs({ artifacts }: {
   async function copy() {
     await navigator.clipboard.writeText(active.content);
     setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
   }
 
   return (
