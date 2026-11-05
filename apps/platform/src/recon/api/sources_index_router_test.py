@@ -20,12 +20,9 @@ def _client(monkeypatch, *, exists=True):
         sources_router.sources, "list_sources", lambda _t, _r: [] if exists else None
     )
     monkeypatch.setattr(
-        sources_router.source_index, "request_index", lambda *_a: calls.append("request") or True
-    )
-    monkeypatch.setattr(
         sources_router.source_index,
-        "status",
-        lambda *_a: {"indexed": 120, "total": 211, "indexing": True},
+        "request_index",
+        lambda *_a: calls.append("request") or {"indexed": 120, "total": 211, "indexing": True},
     )
     app = create_app()
     app.dependency_overrides[get_redis] = lambda: object()
@@ -44,3 +41,15 @@ def test_absent_run_is_404_and_starts_nothing(monkeypatch):
     client, calls = _client(monkeypatch, exists=False)
     assert client.get("/runs/r1/sources/index-status", headers=TENANT).status_code == 404
     assert calls == []
+
+
+def test_redis_or_storage_down_degrades_instead_of_500(monkeypatch):
+    client, _calls = _client(monkeypatch)
+
+    def down(*_a):
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(sources_router.source_index, "request_index", down)
+    r = client.get("/runs/r1/sources/index-status", headers=TENANT)
+    assert r.status_code == 200
+    assert r.json() == {"indexed": 0, "total": 0, "indexing": False}

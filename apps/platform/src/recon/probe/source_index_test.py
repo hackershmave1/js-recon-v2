@@ -80,13 +80,13 @@ def test_status_counts_from_one_listing_never_downloads(run, monkeypatch):
 def test_request_enqueues_once_and_the_job_indexes_every_missing_bundle(run, redis):
     run["assets"].update({f"f{i}": f"a();b({i})" for i in range(30)})
     run["stored"].add("f0")
-    assert source_index.request_index(redis, T, R) is True
-    assert source_index.request_index(redis, T, R) is False  # one job per run at a time
-    assert source_index.status(redis, T, R)["indexing"] is True
+    assert source_index.request_index(redis, T, R)["indexing"] is True
+    source_index.request_index(redis, T, R)  # a second open: still one job
+    assert redis.xlen(streams.queue_key(QueueName.INDEX)) == 1
     _drain(redis)
     assert sorted(run["puts"]) == sorted(f"f{i}" for i in range(1, 30))  # f0 was already stored
     assert source_index.status(redis, T, R) == {"indexed": 30, "total": 30, "indexing": False}
-    assert source_index.request_index(redis, T, R) is False  # nothing left to do
+    assert source_index.request_index(redis, T, R)["indexing"] is False  # nothing left to do
 
 
 def test_an_unindexable_bundle_never_loops_the_job(run, redis, monkeypatch):
@@ -102,6 +102,8 @@ def test_an_unindexable_bundle_never_loops_the_job(run, redis, monkeypatch):
     source_index.request_index(redis, T, R)
     assert _drain(redis) <= 2
     assert source_index.status(redis, T, R) == {"indexed": 1, "total": 2, "indexing": False}
+    # Incomplete: retried within the hour, not marked "done" for a month (code review MED-1).
+    assert 0 < redis.ttl(f"indexed:{T}:{R}") <= 3600
 
 
 def test_slices_are_time_bounded_and_resume_from_a_cursor(run, redis, monkeypatch):
@@ -130,7 +132,11 @@ def test_a_deleted_run_stops_writing(run, redis, monkeypatch):
 
 def test_a_bad_message_is_acked_not_retried_forever(redis, run):
     # Design review #3: a message the handler can't use must never raise into the worker loop.
-    assert source_index.handle(redis, {"tenant_id": "not-a-uuid", "run_id": R}) == "rejected"
+    assert (
+        source_index.handle(redis, {"tenant_id": "not-a-uuid", "run_id": R, "token": "x"})
+        == "rejected"
+    )
+    assert source_index.handle(redis, {"tenant_id": T, "run_id": R}) == "rejected"  # no token
     assert source_index.handle(redis, {}) == "rejected"
 
 
@@ -142,3 +148,14 @@ def test_an_unexpected_error_is_contained(redis, run, monkeypatch):
     source_index.request_index(redis, T, R)
     _drain(redis)  # no exception escapes
     assert source_index.status(redis, T, R)["indexing"] is False
+
+
+def test_a_redelivered_slice_stops_instead_of_forking_the_chain(run, redis):
+    # Code review LOW-3: a slice whose ack was lost is handed back by the stall reclaim; it must
+    # not enqueue a second successor next to the one it already enqueued.
+    run["assets"].update({f"f{i}": "a()" for i in range(3)})
+    source_index.request_index(redis, T, R)
+    streams.ensure_group(redis, QueueName.INDEX)
+    [(_msg_id, first)] = streams.read_batch(redis, QueueName.INDEX, "c", count=1, block_ms=0)
+    assert source_index.handle(redis, first) in {"continued", "done"}
+    assert source_index.handle(redis, first) == "superseded"  # the same message, again

@@ -31,6 +31,9 @@ SLICE_SECONDS = 5.0
 _INDEXING_TTL = 600
 # "Nothing left to index" — skips the listing on later opens; losing it only costs one listing.
 _INDEXED_TTL = 30 * 24 * 3600
+# A job that ENDED with bundles still unindexed (a write failed, e.g. an object-store blip): don't
+# re-run it on every open, but do retry within the hour rather than leave the run raw for a month.
+_RETRY_AFTER_TTL = 3600
 
 
 def _indexing_key(tenant_id: str, run_id: str) -> str:
@@ -63,20 +66,22 @@ def status(redis: Redis, tenant_id: str, run_id: str) -> dict[str, Any]:
     }
 
 
-def request_index(redis: Redis, tenant_id: str, run_id: str) -> bool:
-    """Start indexing this run if it has unindexed bundles and no job is running. Returns True
-    when a job was enqueued. Safe to call on every Sources open: at most one job per run."""
-    if redis.exists(_indexed_key(tenant_id, run_id)):
-        return False
+def request_index(redis: Redis, tenant_id: str, run_id: str) -> dict[str, Any]:
+    """Start indexing this run if it has unindexed bundles and no job is running (at most one job
+    per run: safe on every Sources open), and return its ``status`` — computed once, not twice."""
     current = status(redis, tenant_id, run_id)
-    if current["indexed"] >= current["total"]:
-        redis.set(_indexed_key(tenant_id, run_id), 1, ex=_INDEXED_TTL)
-        return False
-    if not redis.set(_indexing_key(tenant_id, run_id), 1, nx=True, ex=_INDEXING_TTL):
-        return False
-    streams.enqueue(redis, QueueName.INDEX, {"tenant_id": tenant_id, "run_id": run_id, "cursor": 0})
+    if redis.exists(_indexed_key(tenant_id, run_id)) or current["indexed"] >= current["total"]:
+        return current
+    token = uuid.uuid4().hex
+    if not redis.set(_indexing_key(tenant_id, run_id), token, nx=True, ex=_INDEXING_TTL):
+        return current
+    streams.enqueue(
+        redis,
+        QueueName.INDEX,
+        {"tenant_id": tenant_id, "run_id": run_id, "cursor": 0, "token": token},
+    )
     _log.info("source_index.requested", tenant_id=tenant_id, run_id=run_id, **current)
-    return True
+    return {**current, "indexing": True}
 
 
 def handle(redis: Redis, message: dict[str, Any]) -> str:
@@ -86,9 +91,15 @@ def handle(redis: Redis, message: dict[str, Any]) -> str:
         tenant_id = str(uuid.UUID(str(message["tenant_id"])))
         run_id = str(uuid.UUID(str(message["run_id"])))
         cursor = int(message.get("cursor", 0))
+        token = str(message["token"])
     except (KeyError, ValueError, TypeError):
         _log.warning("source_index.rejected", message=message)
         return "rejected"
+    # Only the chain that owns the run's job continues: a slice re-delivered by the stall reclaim
+    # (its ack lost, or it outran the lease) finds a newer token and stops instead of forking a
+    # second, parallel chain.
+    if _owner(redis, tenant_id, run_id) != token:
+        return "superseded"
     try:
         next_cursor = index_slice(tenant_id, run_id, cursor)
     except Exception:
@@ -97,14 +108,28 @@ def handle(redis: Redis, message: dict[str, Any]) -> str:
         return "failed"
     if next_cursor is None:
         redis.delete(_indexing_key(tenant_id, run_id))
-        redis.set(_indexed_key(tenant_id, run_id), 1, ex=_INDEXED_TTL)
-        _log.info("source_index.done", tenant_id=tenant_id, run_id=run_id)
-        return "done"
-    redis.expire(_indexing_key(tenant_id, run_id), _INDEXING_TTL)
+        # "Done" only when every bundle really has its copy: a store can fail silently (it is
+        # best-effort), and a 30-day marker would then leave the run raw-searched for a month.
+        final = status(redis, tenant_id, run_id)
+        complete = final["indexed"] >= final["total"]
+        redis.set(
+            _indexed_key(tenant_id, run_id), 1, ex=_INDEXED_TTL if complete else _RETRY_AFTER_TTL
+        )
+        _log.info("source_index.done", tenant_id=tenant_id, run_id=run_id, **final)
+        return "done" if complete else "incomplete"
+    successor = uuid.uuid4().hex
+    redis.set(_indexing_key(tenant_id, run_id), successor, ex=_INDEXING_TTL)
     streams.enqueue(
-        redis, QueueName.INDEX, {"tenant_id": tenant_id, "run_id": run_id, "cursor": next_cursor}
+        redis,
+        QueueName.INDEX,
+        {"tenant_id": tenant_id, "run_id": run_id, "cursor": next_cursor, "token": successor},
     )
     return "continued"
+
+
+def _owner(redis: Redis, tenant_id: str, run_id: str) -> str | None:
+    value = redis.get(_indexing_key(tenant_id, run_id))
+    return value.decode() if isinstance(value, bytes) else value
 
 
 def index_slice(tenant_id: str, run_id: str, cursor: int) -> int | None:
@@ -127,8 +152,9 @@ def index_slice(tenant_id: str, run_id: str, cursor: int) -> int | None:
             _log.warning("source_index.bundle_failed", run_id=run_id, path=path, exc_info=True)
             continue
         # The session may have been deleted while this beautified: writing now would put a blob
-        # back into a prefix its purge already swept.
+        # back into a prefix its purge already swept. (A delete landing between this check and
+        # the write can still orphan one blob — the same accepted window as D72.)
         if not sources.asset_keys(tenant_id, run_id):
             return None
-        formatted_text.store(key, sources._content_from_text(path, text, formatted=formatted))
+        formatted_text.store_served(key, text, formatted=formatted)
     return None

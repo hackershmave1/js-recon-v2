@@ -349,8 +349,10 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   const [searchError, setSearchError] = useState<string | null>(null);
   const searchClient = useMemo(() => Math.random().toString(36).slice(2), []);
   const indexStatus = useIndexStatus(tenantId, runId);
-  // Re-run an active search only when more bundles have been indexed (their hits gain lines).
-  const indexedCount = indexStatus?.indexed ?? 0;
+  // Re-run an active search ONCE, when background indexing finishes (its hits gain line numbers).
+  // Not on every progress tick: a re-run cancels the search in flight, and while the worker is busy
+  // indexing a search can outlast the 5s poll, so per-tick re-runs would never let one finish.
+  const indexRound = indexStatus == null || indexStatus.indexing ? "indexing" : `done:${indexStatus.indexed}`;
   const [searching, setSearching] = useState(false);
   const jumpToMatch = useCallback((m: SourceMatch) => {
     openForJump(m.path);
@@ -409,7 +411,7 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
         .finally(() => { if (live) setSearching(false); });
     }, 300);
     return () => { live = false; clearTimeout(timer); };
-  }, [searchQuery, tenantId, runId, searchClient, indexedCount]);
+  }, [searchQuery, tenantId, runId, searchClient, indexRound]);
 
   // Resolve the shown file: the clicked one, else the first viewable, else the first.
   const selected = files

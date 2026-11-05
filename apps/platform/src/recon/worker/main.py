@@ -41,6 +41,8 @@ SERVED_QUEUES: tuple[QueueName, ...] = (
     QueueName.INDEX,
 )
 BATCH_FOR: dict[QueueName, int] = {QueueName.INDEX: 1}
+# An empty INDEX queue must not add a blocking read to every idle pass (stage pickup latency).
+BLOCK_MS_FOR: dict[QueueName, int] = {QueueName.INDEX: 0}
 
 STUB_STEPS = 4
 STUB_STEP_DELAY_SECONDS = 0.0
@@ -382,7 +384,7 @@ def run_once(redis: Redis, consumer: str, *, batch: int = 10, block_ms: int = 10
             _process_and_record(redis, queue, msg_id, message)
             processed += 1
         for msg_id, message in streams.read_batch(
-            redis, queue, consumer, count=count, block_ms=block_ms
+            redis, queue, consumer, count=count, block_ms=BLOCK_MS_FOR.get(queue, block_ms)
         ):
             _process_and_record(redis, queue, msg_id, message)
             processed += 1

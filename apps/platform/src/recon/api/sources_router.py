@@ -121,11 +121,13 @@ async def get_run_sources_index_status(
     if await run_in_threadpool(sources.list_sources, tenant_id, run_id) is None:
         raise HTTPException(status_code=404, detail="run not found")
 
-    def request_and_report() -> dict:
-        source_index.request_index(redis, tenant_id, run_id)
-        return source_index.status(redis, tenant_id, run_id)
-
-    return await run_in_threadpool(request_and_report)
+    try:
+        return await run_in_threadpool(source_index.request_index, redis, tenant_id, run_id)
+    except Exception:
+        # Redis/object store unreachable: search still works (raw), so the poll degrades to
+        # "nothing to report" instead of a 500 on every Sources open.
+        _log.warning("sources.index_status_unavailable", run_id=run_id, exc_info=True)
+        return {"indexed": 0, "total": 0, "indexing": False}
 
 
 @router.get("/runs/{run_id}/sources/content")
