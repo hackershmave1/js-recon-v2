@@ -1,4 +1,4 @@
-"""Config-object client calls: `<any receiver>.<any method>({method: "<verb>", url})`.
+"""Config-object client calls: `<any receiver>.<request-ish name>({method: "<verb>", url})`.
 
 A real SPA routed ~88% of its API paths through `this.httpClient.request({method, url})` on a
 client injected via `Object.assign(this, deps)` — nothing proved the receiver an HTTP client, so
@@ -7,7 +7,12 @@ every call was dropped. The `{method: <HTTP verb literal>, url}` object is itsel
 
 from __future__ import annotations
 
-from recon.findings.extract import extract
+import time
+
+import pytest
+
+from recon.findings._config_calls import is_config_call
+from recon.findings.extract import _PARSER, extract
 
 _INJECTED = "class S{constructor(e){Object.assign(this,e)}%s}"
 
@@ -63,8 +68,15 @@ def test_needs_both_keys_and_a_real_verb():
     assert _eps('this.store.request({method:"fetchAll",url:"/api/x"})') == []
 
 
-def test_axios_request_config_is_not_double_emitted():
-    assert _eps('axios.request({url:"/api/x", method:"patch"})') == [("PATCH", "/api/x")]
+def test_known_clients_keep_their_kind():
+    # The new branch sits after every known client so they keep their kind (and JSON body).
+    for src in (
+        'axios.request({url:"/api/x", method:"patch"})',
+        'const api=axios.create({baseURL:""});api.request({url:"/api/x",method:"patch"})',
+    ):
+        assert [(e.kind, e.method, e.url) for e in extract(src).endpoints] == [
+            ("axios", "PATCH", "/api/x")
+        ], src
 
 
 def test_non_client_method_names_are_not_requests():
@@ -82,9 +94,8 @@ def test_non_client_method_names_are_not_requests():
 def test_known_instance_config_call_keeps_its_base():
     # Design review #2: an inferred instance's non-verb method used to be dropped with no trace.
     src = 'const api=T.create({baseURL:"https://h.io"});api.apiRequest({method:"get",url:"/v1/x"})'
-    [(method, url)] = _eps(src)
-    assert method == "GET"
-    assert url.endswith("/v1/x")
+    [ep] = extract(src).endpoints
+    assert (ep.kind, ep.method, ep.url) == ("axios", "GET", "https://h.io/v1/x")
 
 
 def test_unknown_client_kind_does_not_claim_a_json_body():
@@ -102,3 +113,71 @@ def test_shorthand_url_is_an_unresolved_row():
     result = extract('this.httpClient.request({method:"get",url})')
     assert result.endpoints == []
     assert [u.method for u in result.unresolved] == ["GET"]
+
+
+def test_name_must_be_a_request_name_not_a_substring():
+    # Code review MED-2: logging/telemetry/hook/scheduler names carry the same object.
+    for name in (
+        "logRequest",
+        "trackRequest",
+        "onRequest",
+        "mockRequest",
+        "interceptRequest",
+        "prefetch",
+        "refetchQueries",
+        "fetchMore",
+        "requestAnimationFrame",
+        "requestIdleCallback",
+        "httpsAgent",
+    ):
+        result = extract(f'this.x.{name}({{method:"POST",url:"/api/x",status:1}})')
+        assert (result.endpoints, result.unresolved, result.unattributed) == ([], [], 0), name
+    for name in ("request", "fetch", "ajax", "http", "apiRequest", "cxRequest", "sendRequest"):
+        assert _eps(f'this.x.{name}({{method:"GET",url:"/api/x"}})') == [("GET", "/api/x")], name
+
+
+def test_taught_wrapper_config_method_keeps_provenance():
+    from recon.findings.wrappers import WrapperRule
+
+    [ep] = extract(
+        'api.apiRequest({method:"get",url:"/api/x"})', [WrapperRule(callee="api")]
+    ).endpoints
+    assert (ep.method, ep.url, ep.wrapper) == ("GET", "/api/x", "api")
+
+
+def test_collection_receiver_is_not_a_client():
+    src = 'const m=new Map();m.set("a",1);m.fetch({method:"GET",url:"/api/x"})'
+    assert _eps(src) == []
+
+
+def test_axios_ignores_a_body_key():
+    [ep] = extract('axios({url:"/api/x",method:"post",body:{b:2}})').endpoints
+    assert ep.params == () or all(p.name != "b" for p in ep.params)
+
+
+def _nested_computed_keys(depth: int, filler: int = 2000) -> str:
+    # Each config's computed key nests the next request call: decoding keys in full at every level
+    # re-reads the whole remaining nest (O(n^2) bytes); `_text_if_short` keeps it linear. Built
+    # from repeated halves so building the input is itself linear.
+    head = 'a.request({method:"GET",['
+    tail = ']:"' + "y" * filler + '",url:"/x"})'
+    return head * depth + '"y"' + tail * depth
+
+
+@pytest.mark.dos_timing  # wall-clock guard: host-lane-only (see pyproject / DEBT D21)
+def test_config_call_check_stays_linear_on_nested_computed_keys():
+    # Code review MED-1, measured in isolation (the full extract walk has its own pre-existing
+    # cost on this shape): every call's check over a deep nest must not re-decode the nest.
+    calls = []
+    stack = [_PARSER.parse(_nested_computed_keys(3000).encode()).root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type == "call_expression":
+            calls.append(node)
+    start = time.perf_counter()
+    for call in calls:
+        fn = call.child_by_field_name("function")
+        is_config_call("request", call.child_by_field_name("arguments").named_children[0])
+        assert fn is not None
+    assert time.perf_counter() - start < 2.0
