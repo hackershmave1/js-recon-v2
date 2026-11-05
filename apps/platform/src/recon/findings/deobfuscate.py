@@ -55,6 +55,14 @@ def beautify(source: str) -> str | None:
     return out
 
 
+def served_text(source: str) -> tuple[str, bool]:
+    """A no-map bundle as it is served and located: ``(beautified, True)``, or ``(source, False)``
+    over the cap / on failure. The ONE definition analyze (findings' view locations) and the Sources
+    viewer share, so the two can never disagree about which text a line number points into."""
+    beautified = beautify(source)
+    return (beautified, True) if beautified is not None else (source, False)
+
+
 # A source is "minified" when a line runs absurdly long — a bundle (or a vendor lib
 # shipped minified in a source map's ``sourcesContent``) is one giant line. 500 matches
 # the web viewer's ``isMinified()`` so client and server agree which files get

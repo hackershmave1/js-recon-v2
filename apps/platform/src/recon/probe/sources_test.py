@@ -207,15 +207,3 @@ def test_no_map_bundle_soft_off_serves_raw(redis, authorized_session, monkeypatc
     assert content is not None
     assert content.content == minified.decode("utf-8")  # raw, unchanged
     assert len(content.content.splitlines()) == 1
-
-
-def test_search_numbers_rows_like_the_viewer_on_newlines_only(monkeypatch):
-    # "\r" and U+2028 are not row breaks in the viewer (split("\n")), so they must not shift hits.
-    files = [sources.SourceFile(path="input.js", kind="upload", fetch_status="ok")]
-    monkeypatch.setattr(sources, "list_sources", lambda *_a, **_k: files)
-    content = sources.SourceContent(
-        path="input.js", content="a\rb c\nneedle", truncated=False, formatted=True
-    )
-    monkeypatch.setattr(sources, "get_source_content", lambda *_a, **_k: content)
-    (match,) = sources.search_sources("t", "r", "needle")
-    assert match.line == 2

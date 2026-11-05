@@ -148,6 +148,9 @@ class LocatedText:
 
     def __init__(self, served: str, raw: str | None = None) -> None:
         self.served = served
+        # True only for a bundle the beautifier actually reformatted (``for_bundle``): what the
+        # Sources viewer reports as `formatted`, stored with the text by analyze.
+        self.formatted = False
         self._served = _TextIndex(served)
         self._raw = _TextIndex(raw) if raw is not None and raw != served else None
 
@@ -155,8 +158,10 @@ class LocatedText:
     def for_bundle(cls, raw: str) -> LocatedText:
         """A no-map bundle as the Sources tab serves it: beautified (the ONE beautify analyze
         runs for it), or raw when over the cap / on failure."""
-        beautified = deobfuscate.beautify(raw)
-        return cls(beautified, raw=raw) if beautified is not None else cls(raw)
+        served, formatted = deobfuscate.served_text(raw)
+        located = cls(served, raw=raw) if formatted else cls(raw)
+        located.formatted = formatted
+        return located
 
     def from_chars(self, start: int, end: int) -> ViewLoc | None:
         """A ``[start, end)`` char span in the served text."""

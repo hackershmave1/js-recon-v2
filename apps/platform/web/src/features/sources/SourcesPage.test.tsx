@@ -291,11 +291,11 @@ describe("SourcesPage", () => {
     mount([UPLOAD]);
     await screen.findByText("fetch('/x')"); // page ready
     const search = vi.spyOn(api, "searchSources").mockResolvedValue({
-      run_id: "r", count: 1,
-      matches: [{ path: "input.js", kind: "upload", asset_url: null, line: 2, snippet: "fetch('/x')" }],
+      run_id: "r", count: 1, total: 1, files_scanned: 1, files_total: 1, unindexed: 0, partial: false,
+      matches: [{ path: "input.js", kind: "upload", asset_url: null, line: 2, col: 0, snippet: "fetch('/x')", exact: true }],
     });
     await userEvent.type(screen.getByLabelText(/search across sources/i), "fetch");
-    await waitFor(() => expect(search).toHaveBeenCalledWith("t", "r", "fetch"));
+    await waitFor(() => expect(search).toHaveBeenCalledWith("t", "r", "fetch", expect.any(String)));
     // a result hit (loc "input.js:2") replaces the tree; clicking it opens the file at the line
     const hit = await screen.findByText(/input\.js:2/);
     await userEvent.click(hit);

@@ -112,6 +112,8 @@ button.sv-node.sel { background: var(--accent-soft); color: var(--accent); }
 .sv-search input { width: 100%; box-sizing: border-box; padding: 7px 26px 7px 10px; border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--field); color: var(--text); font-size: 12.5px; font-family: var(--font-mono); outline: none; }
 .sv-search-clear { position: absolute; right: 18px; top: 50%; transform: translateY(-50%); border: none; background: none; color: var(--faint); cursor: pointer; font-size: 16px; line-height: 1; }
 .sv-search-note { padding: 14px; color: var(--faint); font-size: 12.5px; }
+.sv-search-warn { color: var(--warn); }
+.sv-search-error { color: var(--danger); }
 .sv-search-results { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
 .sv-search-hit { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 7px 9px; border: none; border-radius: var(--r-sm); background: transparent; color: var(--text-2); cursor: pointer; text-align: left; }
 .sv-search-hit:hover { background: var(--surface); }

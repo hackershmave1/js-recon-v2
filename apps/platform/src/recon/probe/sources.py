@@ -39,6 +39,7 @@ from recon import storage
 from recon.db import models
 from recon.db.base import tenant_session
 from recon.findings import deobfuscate, engines, sourcemapper
+from recon.probe import formatted_text
 from recon.runs import assets as run_assets
 
 # Bound the served text so one request can't stream an unbounded decoded string.
@@ -81,71 +82,6 @@ class SourceContent:
     # which the client formats in its Web Worker. Distinguishing this from a heuristic like
     # "has a long line" is why the flag is authoritative rather than client-guessed.
     formatted: bool
-
-
-@dataclass(frozen=True)
-class SourceMatch:
-    path: str
-    kind: str
-    asset_url: str | None
-    line: int
-    snippet: str
-
-
-# D52 full-text search bounds. The current UI could only filter file NAMES, and CodeViewer's
-# windowing meant even the browser's Ctrl-F missed matches outside the viewport — so "grep the
-# whole target for X" was impossible in-tool. This is a run-scoped server grep, but reading (and,
-# for recovered originals, RE-DERIVING) every source per query is expensive, so it's firmly
-# bounded: a total file cap (raw assets sort first in list_sources, so the cheap blob reads are
-# scanned before the subprocess-recovered originals), a per-file cap, and a total-match cap.
-_SEARCH_MAX_FILES = 120
-_SEARCH_MAX_MATCHES = 200
-_SEARCH_MAX_PER_FILE = 20
-_SEARCH_SNIPPET = 240
-_SEARCH_MIN_QUERY = 2
-
-
-def search_sources(
-    tenant_id: str, run_id: str, query: str, *, max_matches: int = _SEARCH_MAX_MATCHES
-) -> list[SourceMatch] | None:
-    """Case-insensitive substring grep across a run's source files (D52).
-
-    Returns ``None`` if the run is absent/invisible (404), ``[]`` for a too-short query or no
-    hits. Bounded per the caps above; line numbers index the served (possibly beautified) text,
-    so a jump-to-line lands on the same content the viewer shows.
-    """
-    needle = (query or "").strip().lower()
-    if len(needle) < _SEARCH_MIN_QUERY:
-        files = list_sources(tenant_id, run_id)
-        return None if files is None else []
-    files = list_sources(tenant_id, run_id)
-    if files is None:
-        return None
-    out: list[SourceMatch] = []
-    for source in files[:_SEARCH_MAX_FILES]:
-        content = get_source_content(tenant_id, run_id, source.path, source.asset_url)
-        if content is None:
-            continue
-        per_file = 0
-        # split("\n"), not splitlines(): the viewer numbers rows on "\n" only, so a "\r" or
-        # U+2028 inside a line must not shift every later search hit off its row.
-        for line_no, line in enumerate(content.content.split("\n"), start=1):
-            if needle in line.lower():
-                out.append(
-                    SourceMatch(
-                        path=source.path,
-                        kind=source.kind,
-                        asset_url=source.asset_url,
-                        line=line_no,
-                        snippet=line.strip()[:_SEARCH_SNIPPET],
-                    )
-                )
-                per_file += 1
-                if per_file >= _SEARCH_MAX_PER_FILE or len(out) >= max_matches:
-                    break
-        if len(out) >= max_matches:
-            break
-    return out
 
 
 def list_sources(tenant_id: str, run_id: str) -> list[SourceFile] | None:
@@ -234,22 +170,23 @@ def get_source_content(
     its source map on demand."""
     key = _resolve_key(tenant_id, run_id, path)
     if key is not None:
+        # A raw bundle (upload/asset) is served as analyze located its findings: the stored
+        # formatted text (recon.probe.formatted_text), written by analyze. A run analyzed before
+        # that existed derives it once here — the SAME deobfuscate.served_text — and stores it.
+        stored = formatted_text.load(key, path=path)
+        if stored is not None:
+            return stored
         try:
             raw = storage.get_blob(key)
         except ClientError:
             return None  # key vanished from the object store — treat as not found
-        # A raw bundle (upload/asset) with no source-map recovery is beautified on
-        # demand so the served text matches analyze's beautified endpoint units and
-        # the finding marks align — the SAME deterministic deobfuscate.beautify, so no
-        # persisted blob. Over-cap/unavailable -> raw served (fail-soft). Recovered
-        # originals go through _recovered_content, beautified only if themselves minified.
-        text = raw.decode("utf-8", "replace")
-        beautified = deobfuscate.beautify(text)
         # `formatted` iff the server actually beautified (a <=1 MiB bundle) — an oversized
-        # bundle is served raw (beautified is None) and the client formats it (D35).
-        return _content_from_text(
-            path, beautified if beautified is not None else text, formatted=beautified is not None
-        )
+        # bundle is served raw and the client formats it (D35). Recovered originals go through
+        # _recovered_content, beautified only if themselves minified.
+        text, formatted = deobfuscate.served_text(raw.decode("utf-8", "replace"))
+        content = _content_from_text(path, text, formatted=formatted)
+        formatted_text.store(key, content)
+        return content
     # Not a stored asset/upload blob: try a source-map-recovered original.
     return _recovered_content(tenant_id, run_id, path, asset_url)
 
@@ -267,24 +204,27 @@ def _content_from_text(path: str, text: str, *, formatted: bool = False) -> Sour
 
 
 def _resolve_key(tenant_id: str, run_id: str, path: str) -> str | None:
-    """The object key for ``path`` in this run, resolved under RLS. Run-scoped:
-    the crawl match walks ``run_assets.list_for_run`` (already filtered to
-    ``run_id``), never a bare ``url == path`` — ``run_asset.url`` is unique only
-    per ``(run_id, url)``, so a bare match could serve another run's bytes."""
+    """The object key for ``path`` in this run, resolved under RLS (see ``asset_keys``)."""
+    return asset_keys(tenant_id, run_id).get(path)
+
+
+def asset_keys(tenant_id: str, run_id: str) -> dict[str, str]:
+    """Every stored bundle of this run: served path -> object key, resolved under RLS in ONE read
+    (search resolves all of them; resolving per file re-listed the run's assets every time).
+    Run-scoped: the crawl rows come from ``run_assets.list_for_run`` (already filtered to
+    ``run_id``), never a bare ``url == path`` — ``run_asset.url`` is unique only per
+    ``(run_id, url)``, so a bare match could serve another run's bytes."""
     asset_rows = run_assets.list_for_run(tenant_id, run_id)
     if asset_rows:
-        for row in asset_rows:
-            if row.url == path and row.fetch_status == "ok" and row.input_ref:
-                return row.input_ref
-        return None
+        return {
+            row.url: row.input_ref
+            for row in asset_rows
+            if row.fetch_status == "ok" and row.input_ref
+        }
     with tenant_session(tenant_id) as session:
         run = session.get(models.Run, run_id)
-        if run is None:
-            return None
-        input_ref = run.input_ref
-    if path == _UPLOAD_PATH and input_ref:
-        return input_ref
-    return None
+        input_ref = run.input_ref if run is not None else None
+    return {_UPLOAD_PATH: input_ref} if input_ref else {}
 
 
 def _recovered_content(

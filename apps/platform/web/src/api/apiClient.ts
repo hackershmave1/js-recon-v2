@@ -196,8 +196,13 @@ export function getSources(tenantId: string, runId: string): Promise<SourcesResp
 }
 
 // D52: run-scoped full-text grep across the run's sources (bounded server-side).
-export function searchSources(tenantId: string, runId: string, query: string): Promise<SourceSearchResponse> {
-  return request(`/runs/${encodeURIComponent(runId)}/sources/search?q=${encodeURIComponent(query)}`, {}, tenantId);
+// `client` is this Sources page's own id: the server cancels that page's previous, superseded
+// query (search-as-you-type) without ever cancelling another person's search on the same run.
+export function searchSources(
+  tenantId: string, runId: string, query: string, client = "",
+): Promise<SourceSearchResponse> {
+  const params = new URLSearchParams({ q: query, client });
+  return request(`/runs/${encodeURIComponent(runId)}/sources/search?${params}`, {}, tenantId);
 }
 
 // `assetUrl` disambiguates a source-map-recovered file (kind:"source") that shares
