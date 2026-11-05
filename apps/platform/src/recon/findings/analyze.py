@@ -58,6 +58,7 @@ from recon.findings.kingfisher import RawSecret
 from recon.findings.located import LocatedText, ViewLoc
 from recon.findings.wrappers import WrapperRule
 from recon.observability import get_logger
+from recon.probe import formatted_text
 from recon.progress import heartbeat as progress
 from recon.queue import retry
 from recon.runs import assets as run_assets
@@ -656,6 +657,9 @@ def _analyze_blob(
     # The bundle as the Sources tab serves it (beautified ONCE per blob): the bundle endpoint unit,
     # GraphQL, and the exact view location of every raw-lane sighting below all share it.
     bundle = LocatedText.for_bundle(source)
+    # Keep that one beautify: the Sources viewer and search read this stored text instead of
+    # re-beautifying per open/query, and it is exactly the text the view locations below point into.
+    formatted_text.store_served(input_ref, bundle.served, formatted=bundle.formatted)
     with _analysis_units(
         source_map_ref,
         source,

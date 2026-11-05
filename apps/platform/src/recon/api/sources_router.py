@@ -17,7 +17,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from recon.api.deps import get_tenant_id
 from recon.observability import get_logger
-from recon.probe import sources
+from recon.probe import source_search, sources
 
 router = APIRouter(tags=["sources"])
 
@@ -61,30 +61,44 @@ async def search_run_sources(
     q: str,
     tenant_id: str = Depends(get_tenant_id),
 ) -> dict:
-    """D52: run-scoped full-text grep across the run's sources (bounded in recon.probe.sources)."""
+    """D52: run-scoped full-text search across the run's sources (recon.probe.source_search)."""
     started = time.perf_counter()
-    matches = await run_in_threadpool(sources.search_sources, tenant_id, run_id, q)
-    if matches is None:
+    outcome = await run_in_threadpool(source_search.search, tenant_id, run_id, q)
+    if outcome is None:
         raise HTTPException(status_code=404, detail="run not found")
     _log.info(
         "sources.search",
         run_id=run_id,
         query_len=len(q or ""),
-        matches=len(matches),
+        matches=len(outcome.matches),
+        total=outcome.total,
+        files_scanned=outcome.files_scanned,
+        files_total=outcome.files_total,
+        unindexed=outcome.unindexed,
+        partial=outcome.partial,
         elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
     )
     return {
         "run_id": run_id,
-        "count": len(matches),
+        "count": len(outcome.matches),
+        # Every hit, even past the display caps; files_scanned < files_total only when partial
+        # (the time budget ran out, or a newer search for this run superseded this one).
+        "total": outcome.total,
+        "files_scanned": outcome.files_scanned,
+        "files_total": outcome.files_total,
+        "unindexed": outcome.unindexed,
+        "partial": outcome.partial,
         "matches": [
             {
                 "path": m.path,
                 "kind": m.kind,
                 "asset_url": m.asset_url,
                 "line": m.line,
+                "col": m.col,
+                "exact": m.exact,
                 "snippet": m.snippet,
             }
-            for m in matches
+            for m in outcome.matches
         ],
     }
 

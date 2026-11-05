@@ -40,6 +40,9 @@ BLOB_KINDS = frozenset(
         # Per-run tech-detection signal (allowlisted headers + script URLs + meta
         # markers + cookie NAMES, keyed by host). Never any secret or raw HTML.
         "fingerprint-signal",
+        # A source blob's served (beautified) text, stored once beside its input blob under the
+        # SAME digest (recon.probe.formatted_text) so the viewer and search never re-beautify.
+        "formatted",
     }
 )
 
@@ -115,6 +118,19 @@ def put_blob(tenant_id: str, run_id: str, kind: str, content: bytes) -> str:
     ensure_bucket()
     _s3_client().put_object(Bucket=get_settings().s3_bucket, Key=key, Body=content)
     return key
+
+
+def put_blob_at(key: str, content: bytes) -> None:
+    """Store bytes under an explicit, already-derived key ``{tenant}/{run}/{kind}/{digest}``.
+
+    For a blob keyed by ANOTHER blob's digest (a derived artifact, e.g. ``formatted``) rather than
+    its own content. The kind segment must still be a known kind, so the run-prefix purge and the
+    kind inventory stay complete."""
+    parts = key.split("/")
+    if len(parts) != 4 or parts[2] not in BLOB_KINDS:
+        raise ValueError(f"not a run-scoped blob key: {key!r}")
+    ensure_bucket()
+    _s3_client().put_object(Bucket=get_settings().s3_bucket, Key=key, Body=content)
 
 
 def get_blob(key: str) -> bytes:

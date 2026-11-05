@@ -157,8 +157,16 @@ export interface RequestsResponse { run_id: string; count: number; requests: Rec
 export interface SourceFile { path: string; kind: "asset" | "upload" | "source"; fetch_status: string; asset_url: string | null; }
 export interface SourcesResponse { run_id: string; count: number; sources: SourceFile[]; }
 // D52: a full-text search hit across a run's sources (file + line + snippet).
-export interface SourceMatch { path: string; kind: string; asset_url: string | null; line: number; snippet: string; }
-export interface SourceSearchResponse { run_id: string; count: number; matches: SourceMatch[]; }
+// `line` is the viewer's row, or null when the file predates search indexing (searched raw).
+export interface SourceMatch {
+  path: string; kind: string; asset_url: string | null; line: number | null; col: number;
+  snippet: string; exact: boolean;
+}
+// `total` counts every hit (matches is capped); `partial` = the time budget or a newer query cut it short.
+export interface SourceSearchResponse {
+  run_id: string; count: number; total: number; files_scanned: number; files_total: number;
+  unindexed: number; partial: boolean; matches: SourceMatch[];
+}
 // A finding occurrence's "jump to its source" request (Findings drawer -> Sources).
 // Any field may be null: an occurrence without a source_path/asset_url can still
 // carry a line, and a legacy occurrence resolves to the "input.js" bundle.
