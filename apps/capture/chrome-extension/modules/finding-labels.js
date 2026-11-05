@@ -3,7 +3,7 @@
 // the raw token `endpoint_unresolved` where the workspace says "suspected call"). Pure, so the
 // popup imports it and a Node test pins it. KEEP IN SYNC with the workspace's single source of
 // truth, apps/platform/web/src/api/findingLabels.ts (the extension is built separately and
-// cannot import it).
+// cannot import it). Enforced by apps/platform/src/recon/findings/type_tables_test.py.
 export const TYPE_LABELS = {
   endpoint: 'API',
   endpoint_suspected: 'inferred API',

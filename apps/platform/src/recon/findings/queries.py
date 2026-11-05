@@ -245,7 +245,9 @@ class SessionFindingsSummary:
 # suspected calls are leads, not endpoints); secrets = the precision `secret` lane only (the
 # opt-in ~50%-FP suspected lane is never in the headline). Anything else lands in "other".
 _ENDPOINT_TYPES: frozenset[str] = frozenset(t.value for t in TOTAL_ENDPOINT_TYPES)
-_SECRET_TYPES: frozenset[str] = frozenset({FindingType.SECRET.value})
+# Named for what it is: the HEADLINE secret count (precision lane only). Not the threat model's
+# `_SECRET_TYPES`, which deliberately includes the suspected lane — same idea, different set.
+_HEADLINE_SECRET_TYPES: frozenset[str] = frozenset({FindingType.SECRET.value})
 # Terminal states that constitute a "completed" run for the summary.
 # ``done`` = fully complete; ``partial`` = failed_partial (analyze finished even if some
 # assets failed). Both are terminal and represent a run the operator can read findings
@@ -304,7 +306,7 @@ def get_session_findings_summary(tenant_id: str, session_id: str) -> SessionFind
 
         total = sum(type_counts.values())
         endpoints = sum(type_counts.get(t, 0) for t in _ENDPOINT_TYPES)
-        secrets = sum(type_counts.get(t, 0) for t in _SECRET_TYPES)
+        secrets = sum(type_counts.get(t, 0) for t in _HEADLINE_SECRET_TYPES)
         internal_ips = type_counts.get(FindingType.INTERNAL_IP.value, 0)
         graphql_count = type_counts.get(FindingType.GRAPHQL.value, 0)
         other = total - endpoints - secrets - internal_ips - graphql_count
