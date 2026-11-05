@@ -98,8 +98,8 @@ describe("SessionsPage", () => {
     const bulk = vi.spyOn(api, "bulkDeleteSessions")
       .mockResolvedValue({ deleted: ["s1", "s2"], not_found: [], failed: [] });
     renderPage();
-    await userEvent.click(await screen.findByRole("checkbox", { name: "Select acme.io" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Select shop.test" }));
+    await userEvent.click(await screen.findByRole("checkbox", { name: /^Select acme\.io/ }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /^Select shop\.test/ }));
     await userEvent.click(screen.getByRole("button", { name: "Delete 2 sessions" }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText(/acme\.io/)).toBeInTheDocument();
@@ -118,14 +118,37 @@ describe("SessionsPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete 2 sessions" }));
     await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Deleted 1 session · 1 failed");
-    expect(screen.getByRole("checkbox", { name: "Select acme.io" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /^Select acme\.io/ })).toBeChecked();
+  });
+
+  it("locks the view controls while deleting and shows progress", async () => {
+    vi.spyOn(api, "listSessions").mockResolvedValue({ count: 1, sessions: [DONE] });
+    let finish: (v: { deleted: string[]; not_found: string[]; failed: never[] }) => void = () => {};
+    vi.spyOn(api, "bulkDeleteSessions").mockReturnValue(new Promise((r) => { finish = r; }));
+    renderPage();
+    await userEvent.click(await screen.findByRole("checkbox", { name: /^Select acme\.io/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete 1 session" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Deleting 0/1");
+    expect(screen.getByLabelText(/show archived/i)).toBeDisabled();
+    expect(screen.getByLabelText(/select all/i)).toBeDisabled();
+    finish({ deleted: ["s1"], not_found: [], failed: [] });
+    expect(await screen.findByText("Deleted 1 session")).toBeInTheDocument();
+  });
+
+  it("names checkboxes apart when two sessions share a host", async () => {
+    const TWIN = { ...DONE, session_id: "s7", name: "acme staging", created_at: "2026-09-02T00:00:00Z" };
+    vi.spyOn(api, "listSessions").mockResolvedValue({ count: 2, sessions: [DONE, TWIN] });
+    renderPage();
+    expect(await screen.findByRole("checkbox", { name: "Select acme.io (2026-08-01)" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select acme staging (2026-09-02)" })).toBeInTheDocument();
   });
 
   it("warns that extension captures may reappear", async () => {
     const CAPTURE = { ...NORUN, session_id: "s9", host: "cap.test", external_id: "ext-1" };
     vi.spyOn(api, "listSessions").mockResolvedValue({ count: 1, sessions: [CAPTURE] });
     renderPage();
-    await userEvent.click(await screen.findByRole("checkbox", { name: "Select cap.test" }));
+    await userEvent.click(await screen.findByRole("checkbox", { name: /^Select cap\.test/ }));
     await userEvent.click(screen.getByRole("button", { name: "Delete 1 session" }));
     expect(within(screen.getByRole("dialog")).getByText(/1 is an extension capture/i)).toBeInTheDocument();
   });

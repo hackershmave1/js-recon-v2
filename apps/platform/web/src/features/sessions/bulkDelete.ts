@@ -2,6 +2,7 @@
 // POST /sessions/bulk-delete in bounded batches. Every server-side delete purges its runs' stored
 // files synchronously, so one huge request could outlive a proxy timeout and lose the report of
 // what was deleted; batches keep each request short and give the page real progress to show.
+import { ApiError } from "../../api/apiClient";
 import type { BulkDeleteResponse } from "../../api/types";
 
 export const BATCH_SIZE = 25; // well under the server's 50-per-request cap
@@ -19,10 +20,16 @@ export async function deleteInBatches(
       merged.deleted.push(...r.deleted);
       merged.not_found.push(...r.not_found);
       merged.failed.push(...r.failed);
-    } catch {
+    } catch (e) {
       // The request itself failed (network, timeout): its outcome is unknown, so report the batch
-      // as failed — the list reload afterwards shows what actually survived.
+      // as failed — the list reload afterwards shows what actually survived. A 4xx (signed out,
+      // forbidden) would fail every later batch the same way: stop and report the rest as failed.
       merged.failed.push(...batch.map((id) => ({ id, error: "request_failed" })));
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500) {
+        merged.failed.push(...ids.slice(start + BATCH_SIZE).map((id) => ({ id, error: "not_attempted" })));
+        onProgress(ids.length);
+        break;
+      }
     }
     onProgress(Math.min(start + BATCH_SIZE, ids.length));
   }

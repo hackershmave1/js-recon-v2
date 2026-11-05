@@ -55,6 +55,14 @@ def test_a_malformed_id_rejects_the_batch_before_anything_is_deleted(monkeypatch
     assert calls == []
 
 
+def test_exactly_the_cap_is_accepted(monkeypatch):
+    ids = [str(uuid.uuid4()) for _ in range(bulk_delete.MAX_BATCH)]
+    client, calls = _client(monkeypatch, dict.fromkeys(ids, True))
+    r = client.post("/sessions/bulk-delete", headers=TENANT, json={"session_ids": ids})
+    assert r.status_code == 200
+    assert len(r.json()["deleted"]) == bulk_delete.MAX_BATCH
+
+
 def test_batch_size_is_bounded(monkeypatch):
     # One request stays well under a proxy timeout; the UI sends larger selections in batches.
     client, calls = _client(monkeypatch, {})

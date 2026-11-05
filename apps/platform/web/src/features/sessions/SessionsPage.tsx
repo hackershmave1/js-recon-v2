@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import {
-  listSessions, renameSession, archiveSession, deleteSession, rerunSession, bulkDeleteSessions,
-  ApiError,
+  listSessions, renameSession, archiveSession, deleteSession, rerunSession, ApiError,
 } from "../../api/apiClient";
 import type { SessionSummary } from "../../api/types";
 import { Icon } from "../../shell/icons";
@@ -10,7 +9,8 @@ import { ConfirmModal } from "../../shell/ConfirmModal";
 import { relativeTime } from "../../shell/relativeTime";
 import { useEngagementFilter } from "./engagementFilter";
 import { BulkDeleteConfirm } from "./BulkDeleteConfirm";
-import { deleteInBatches, outcomeText, plural, selectedVisibleIds } from "./bulkDelete";
+import { plural } from "./bulkDelete";
+import { useBulkDelete } from "./useBulkDelete";
 import "./sessions.css";
 
 // Map a run state to the pill/dot colour class. Colour encodes outcome, matching the
@@ -41,21 +41,16 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
   const [pending, setPending] = useState<
     { kind: "delete" | "rename"; s: SessionSummary } | null
   >(null);
-  // Multi-select for bulk delete. Only selected sessions the current view SHOWS are ever acted on
-  // (selectedVisibleIds), so switching engagement can't delete hidden ones.
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [bulkConfirm, setBulkConfirm] = useState(false);
-  const [bulkDeleting, setBulkDeleting] = useState<Set<string>>(new Set());
-  const [bulkStatus, setBulkStatus] = useState<string | null>(null);
 
+  // The bulk hook needs `visible` (derived below) while reload must prune its selection: a ref
+  // breaks the cycle.
+  const pruneSelectionRef = useRef<(present: ReadonlySet<string>) => void>(() => {});
   const reload = useCallback(() => {
     setError(null);
     listSessions(tenantId, { archived: showArchived })
       .then((r) => {
         setSessions(r.sessions);
-        // A selection never outlives its session (deleted elsewhere, or by this page).
-        const present = new Set(r.sessions.map((x) => x.session_id));
-        setSelected((prev) => new Set([...prev].filter((id) => present.has(id))));
+        pruneSelectionRef.current(new Set(r.sessions.map((x) => x.session_id)));
       })
       .catch((e) => setError(e instanceof ApiError ? e.message : "Failed to load sessions"));
   }, [tenantId, showArchived]);
@@ -75,6 +70,9 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
   const visible = (sessions ?? []).filter(
     (s) => engagementId === null || s.engagement_id === engagementId,
   );
+
+  const bulk = useBulkDelete(tenantId, visible, reload);
+  pruneSelectionRef.current = bulk.prune;
 
   async function withBusy(id: string, action: () => Promise<unknown>) {
     setBusyId(id);
@@ -111,33 +109,6 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
       setBusyId(null);
     }
   }
-  const bulkIds = selectedVisibleIds(selected, visible);
-  const allVisibleSelected = visible.length > 0 && bulkIds.length === visible.length;
-  function toggleSelected(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }
-  async function runBulkDelete() {
-    const ids = bulkIds;
-    setBulkConfirm(false);
-    setBulkDeleting(new Set(ids));
-    setBulkStatus(`Deleting 0/${ids.length}…`);
-    const result = await deleteInBatches(
-      ids,
-      (batch) => bulkDeleteSessions(tenantId, batch),
-      (done) => setBulkStatus(`Deleting ${done}/${ids.length}…`),
-    );
-    // Failed ones stay selected so a retry is one click; the rest leave the selection.
-    const failed = new Set(result.failed.map((f) => f.id));
-    setSelected((prev) => new Set([...prev].filter((id) => failed.has(id))));
-    setBulkDeleting(new Set());
-    setBulkStatus(outcomeText(result));
-    reload();  // whatever the outcome: the list shows what actually survived
-  }
-
   function open(s: SessionSummary) {
     if (s.latest_run) navigate(`/runs/${s.latest_run.run_id}`);
   }
@@ -153,30 +124,32 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
           {/* No "New Recon" CTA here: the global top-bar button is the single
               primary create action (ui-ux-pro-max: primary-action /
               navigation-consistency). The empty-state below keeps its own CTA. */}
+          {/* Both view controls lock while a bulk delete runs: changing the view mid-delete would
+              leave the old view's reload on screen and break "failed ones stay selected". */}
           {visible.length > 0 && (
             <label className="sx-arch">
-              <input type="checkbox" checked={allVisibleSelected}
-                onChange={() => setSelected(allVisibleSelected
-                  ? new Set() : new Set(visible.map((x) => x.session_id)))} />
+              <input type="checkbox" checked={bulk.allSelected} disabled={bulk.busy}
+                ref={(el) => { if (el) el.indeterminate = bulk.ids.length > 0 && !bulk.allSelected; }}
+                onChange={bulk.toggleAll} />
               Select all
             </label>
           )}
-          {bulkIds.length > 0 && (
-            <button type="button" className="sx-bulk-delete" disabled={bulkDeleting.size > 0}
-              onClick={() => setBulkConfirm(true)}>
-              <Icon name="trash" size={14} />Delete {plural(bulkIds.length, "session")}
+          {bulk.ids.length > 0 && (
+            <button type="button" className="sx-bulk-delete" disabled={bulk.busy}
+              onClick={bulk.openConfirm}>
+              <Icon name="trash" size={14} />Delete {plural(bulk.ids.length, "session")}
             </button>
           )}
           <label className="sx-arch">
-            <input type="checkbox" checked={showArchived}
-              onChange={(e) => { setShowArchived(e.target.checked); setSelected(new Set()); }} />
+            <input type="checkbox" checked={showArchived} disabled={bulk.busy}
+              onChange={(e) => { setShowArchived(e.target.checked); bulk.resetView(); }} />
             Show archived
           </label>
         </div>
       </div>
 
       {error && <div className="sx-error">{error}</div>}
-      {bulkStatus && <div className="sx-bulk-status" role="status">{bulkStatus}</div>}
+      {bulk.status && <div className="sx-bulk-status" role="status">{bulk.status}</div>}
       {sessions == null && !error && <div className="sx-empty">Loading sessions…</div>}
       {sessions != null && visible.length === 0 && !error && (
         sessions.length === 0 ? (
@@ -210,7 +183,7 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
           return (
             <div key={s.session_id}
               className={"sx-card status-" + cls
-                + (busyId === s.session_id || bulkDeleting.has(s.session_id) ? " is-busy" : "")}>
+                + (busyId === s.session_id || bulk.deleting.has(s.session_id) ? " is-busy" : "")}>
               <div className="sx-card-body" role="button" tabIndex={0}
                 aria-label={failReason ? `Open ${s.host} — run failed: ${failReason}` : `Open ${s.host}`}
                 onClick={() => open(s)}
@@ -257,8 +230,9 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
               <div className="sx-card-actions">
                 {/* A sibling of the role="button" body (never inside it: a click would also open
                     the run, and ARIA strips a button's descendants). */}
-                <input type="checkbox" className="sx-select" aria-label={`Select ${s.host}`}
-                  checked={selected.has(s.session_id)} onChange={() => toggleSelected(s.session_id)} />
+                <input type="checkbox" className="sx-select"
+                  aria-label={`Select ${s.name ?? s.host}${s.created_at ? ` (${s.created_at.slice(0, 10)})` : ""}`}
+                  checked={bulk.selected.has(s.session_id)} onChange={() => bulk.toggle(s.session_id)} />
                 <button type="button" className="sx-kebab" aria-label="Session actions"
                   aria-haspopup="menu" aria-expanded={menuFor === s.session_id}
                   onClick={() => setMenuFor(menuFor === s.session_id ? null : s.session_id)}>
@@ -301,11 +275,11 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
           onCancel={() => setPending(null)}
         />
       )}
-      {bulkConfirm && (
+      {bulk.confirmOpen && (
         <BulkDeleteConfirm
-          sessions={visible.filter((x) => selected.has(x.session_id))}
-          onConfirm={() => void runBulkDelete()}
-          onCancel={() => setBulkConfirm(false)}
+          sessions={visible.filter((x) => bulk.selected.has(x.session_id))}
+          onConfirm={() => void bulk.run()}
+          onCancel={bulk.closeConfirm}
         />
       )}
       {pending?.kind === "rename" && (

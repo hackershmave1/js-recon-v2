@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { ApiError } from "../../api/apiClient";
 import { deleteInBatches, selectedVisibleIds } from "./bulkDelete";
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => `s${i}`);
@@ -26,6 +27,15 @@ describe("deleteInBatches", () => {
     expect(result.failed.map((f) => f.id)).toEqual([...ids(25), "s27"]);
     expect(result.deleted).toEqual(["s25"]);
     expect(result.not_found).toEqual(["s26"]);
+  });
+});
+
+describe("deleteInBatches on a client error", () => {
+  it("stops after a 4xx (e.g. signed out) instead of sending every remaining batch", async () => {
+    const send = vi.fn().mockRejectedValue(new ApiError(401, "expired"));
+    const result = await deleteInBatches(ids(60), send, () => {});
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(result.failed).toHaveLength(60);
   });
 });
 

@@ -70,7 +70,7 @@
 .sx-status {
   font-size: 10.5px; font-weight: 700; text-transform: lowercase;
   color: var(--sc); background: color-mix(in srgb, var(--sc) 14%, transparent);
-  padding: 3px 9px; border-radius: var(--r-pill); margin-right: 26px;
+  padding: 3px 9px; border-radius: var(--r-pill); margin-right: 53px;
 }
 
 /* failure-reason tip (D27): a sibling of the clickable .sx-card-body (never nested in
