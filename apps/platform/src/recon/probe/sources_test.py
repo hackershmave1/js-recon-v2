@@ -17,7 +17,7 @@ from recon import storage
 from recon.db import models
 from recon.db.base import tenant_session
 from recon.findings import analyze, deobfuscate, engines, sourcemapper
-from recon.probe import sources
+from recon.probe import recovered_store, sources
 from recon.runs import service
 
 pytestmark = pytest.mark.integration
@@ -90,6 +90,13 @@ def test_recovered_content_with_bad_map_is_not_found_not_500(
         raise engines.EngineError("unparseable source map")
 
     monkeypatch.setattr(sourcemapper, "recover_one_file", boom)
+    # Analyze stored the original (recon.probe.recovered_store): it is served from that copy, so a
+    # map that later goes bad no longer matters.
+    stored = sources.get_source_content(tenant, run_id, "app/src/api.js")
+    assert stored is not None and 'fetch("/api/widgets/7")' in stored.content
+    # A run analyzed before originals were stored re-derives at view time: a bad map is then a
+    # 404 (None), never an escaping EngineError that 500s the tab.
+    monkeypatch.setattr(recovered_store, "content", lambda *_a: None)
     assert sources.get_source_content(tenant, run_id, "app/src/api.js") is None
 
 
