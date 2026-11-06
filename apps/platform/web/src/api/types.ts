@@ -102,7 +102,7 @@ export interface FindingsResponse {
   // analysis units (every source-map original, vendor libraries included).
   files?: number;
   // Findings captured but not shown by default, per reason (backend findings/visibility):
-  // "junk_or_dynamic" | "noise" | "off_scope". Optional for older servers.
+  // "junk_or_dynamic" | "noise" | "off_scope" | "third_party". Optional for older servers.
   hidden?: Record<string, number>;
 }
 // Per-asset fetch/analyze outcome (recon.domain.AssetStatus). "pending" until the
@@ -160,7 +160,11 @@ export interface SourceFile {
   path: string; kind: "asset" | "upload" | "source"; fetch_status: string; asset_url: string | null;
   from_search?: boolean;
 }
-export interface SourcesResponse { run_id: string; count: number; sources: SourceFile[]; }
+// `session_id` + `app_packages` (the packages the session treats as app code) let the tree group
+// third-party files itself and "Treat as app code" update the session. Optional for older servers.
+export interface SourcesResponse {
+  run_id: string; count: number; sources: SourceFile[]; session_id?: string | null; app_packages?: string[];
+}
 // D52: a full-text search hit across a run's sources (file + line + snippet).
 // `line` is the viewer's row, or null when the file predates search indexing (searched raw).
 export interface SourceMatch {
@@ -173,6 +177,7 @@ export interface SourcesIndexStatus { indexed: number; total: number; indexing: 
 export interface SourceSearchResponse {
   run_id: string; count: number; total: number; files_scanned: number; files_total: number;
   unindexed: number; partial: boolean; matches: SourceMatch[];
+  third_party_excluded?: number; // third-party files left out (not in files_total)
 }
 // A finding occurrence's "jump to its source" request (Findings drawer -> Sources).
 // Any field may be null: an occurrence without a source_path/asset_url can still

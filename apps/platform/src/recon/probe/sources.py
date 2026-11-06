@@ -208,6 +208,22 @@ def _resolve_key(tenant_id: str, run_id: str, path: str) -> str | None:
     return asset_keys(tenant_id, run_id).get(path)
 
 
+def app_packages(tenant_id: str, run_id: str) -> list[str]:
+    """The packages the run's session treats as app code (#181), under RLS."""
+    return run_session(tenant_id, run_id)[1]
+
+
+def run_session(tenant_id: str, run_id: str) -> tuple[str | None, list[str]]:
+    """The run's session id and the packages it treats as app code, under RLS."""
+    with tenant_session(tenant_id) as session:
+        run = session.get(models.Run, run_id)
+        if run is None or run.session_id is None:
+            return None, []
+        row = session.get(models.EngagementSession, run.session_id)
+        packages = [str(p) for p in (row.app_packages if row is not None else []) or []]
+        return str(run.session_id), packages
+
+
 def asset_keys(tenant_id: str, run_id: str) -> dict[str, str]:
     """Every stored bundle of this run: served path -> object key, resolved under RLS in ONE read
     (search resolves all of them; resolving per file re-listed the run's assets every time).

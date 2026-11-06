@@ -139,6 +139,11 @@ class EngagementSession(Base):
     scope_hosts: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
+    # Packages the researcher treats as APP code in this session ("@acme/*" or exact names):
+    # their files and findings are not hidden as third-party (recon.findings.visibility).
+    app_packages: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     authorization_ack: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )

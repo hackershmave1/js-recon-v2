@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { getSources, getSourceContent, searchSources, ApiError } from "../../api/apiClient";
+import { getSources, getSourceContent, searchSources, setAppPackages as saveAppPackages, ApiError } from "../../api/apiClient";
+import { THIRD_PARTY_ROOT, treeSegments } from "./origin";
 import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump, SourceMatch, SourceSearchResponse, ViewLoc } from "../../api/types";
 import { SourceSearchResults } from "./SourceSearchResults";
 import { useIndexStatus } from "./useIndexStatus";
@@ -65,7 +66,10 @@ function resolveJumpPath(j: SourceJump, files: SourceFile[]): string {
 // `count` is the finding total AT and UNDER this node (a file's own count; a
 // directory's aggregated descendants), precomputed once by annotateCounts so it
 // isn't recursively recomputed per-directory on every render (D25).
-interface TreeNode { name: string; children: Map<string, TreeNode>; file: SourceFile | null; count: number; }
+interface TreeNode {
+  name: string; children: Map<string, TreeNode>; file: SourceFile | null; count: number;
+  packageName?: string; // a third-party package folder (offers "Treat as app code")
+}
 
 function segmentsOf(path: string): string[] {
   const noScheme = path.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
@@ -73,14 +77,17 @@ function segmentsOf(path: string): string[] {
   return segs.length ? segs : [path];
 }
 
-function buildTree(files: SourceFile[]): TreeNode {
+function buildTree(files: SourceFile[], appPackages: readonly string[] = []): TreeNode {
   const root: TreeNode = { name: "", children: new Map(), file: null, count: 0 };
   for (const file of files) {
     let node = root;
-    const segs = segmentsOf(file.path);
+    // Third-party code (GLOSSARY) is grouped under one folder, by package, instead of being
+    // scattered through node_modules/.pnpm/... folders.
+    const { segs, packageName } = treeSegments(file.path, segmentsOf(file.path), appPackages);
     segs.forEach((seg, i) => {
       let child = node.children.get(seg);
       if (!child) { child = { name: seg, children: new Map(), file: null, count: 0 }; node.children.set(seg, child); }
+      if (packageName && i === 1) child.packageName = packageName;
       if (i === segs.length - 1) child.file = file;
       node = child;
     });
@@ -162,7 +169,8 @@ function flattenTree(root: TreeNode, collapsed: Set<string>, fileCounts: Map<str
   const out: FlatRow[] = [];
   const walk = (nodes: Map<string, TreeNode>, depth: number, parentKey: string) => {
     const entries = [...nodes.values()].sort((a, b) =>
-      (a.file ? 1 : 0) - (b.file ? 1 : 0) || a.name.localeCompare(b.name),
+      (a.name === THIRD_PARTY_ROOT ? 1 : 0) - (b.name === THIRD_PARTY_ROOT ? 1 : 0)  // always last
+      || (a.file ? 1 : 0) - (b.file ? 1 : 0) || a.name.localeCompare(b.name),
     );
     for (const node of entries) {
       const key = parentKey + "/" + node.name;
@@ -268,9 +276,10 @@ function WindowedTree({ rows, renderRow }: { rows: FlatRow[]; renderRow: (r: Fla
 // The file tree. Memoized so the run's per-asset SSE ticks — which re-render the
 // run layout — don't re-render (or re-flatten) the tree unless its inputs actually
 // change (D25). Small trees render in flow; large trees are windowed.
-const SourceTree = memo(function SourceTree({ rows, selectedPath, onSelect, onToggle }: {
+const SourceTree = memo(function SourceTree({ rows, selectedPath, onSelect, onToggle, onTreatAsApp }: {
   rows: FlatRow[]; selectedPath: string | null;
   onSelect: (path: string) => void; onToggle: (key: string) => void;
+  onTreatAsApp?: (packageName: string) => void;
 }) {
   const renderRow = (r: FlatRow) => {
     const pad = { paddingLeft: 8 + r.depth * 14 };
@@ -289,7 +298,7 @@ const SourceTree = memo(function SourceTree({ rows, selectedPath, onSelect, onTo
         </button>
       );
     }
-    return (
+    const dir = (
       <button type="button" key={r.key} className="sv-node sv-dir" style={pad}
         aria-expanded={!r.isCollapsed} onClick={() => onToggle(r.key)}>
         <span className={"sv-caret" + (r.isCollapsed ? "" : " open")} aria-hidden="true">▸</span>
@@ -300,6 +309,17 @@ const SourceTree = memo(function SourceTree({ rows, selectedPath, onSelect, onTo
             title={`${r.badge} finding${r.badge === 1 ? "" : "s"} in this folder`}>{r.badge}</span>
         )}
       </button>
+    );
+    const pkg = r.node.packageName;
+    if (!pkg || !onTreatAsApp) return dir;
+    // A sibling of the folder button (never nested: a button can't hold a button).
+    return (
+      <div key={r.key} className="sv-dirrow">
+        {dir}
+        <button type="button" className="sv-treat" aria-label={`Treat ${pkg} as app code`}
+          title="Treat this package as the app's own code (e.g. a private @acme package)"
+          onClick={() => onTreatAsApp(pkg)}>app code</button>
+      </div>
     );
   };
   if (rows.length <= WINDOW_THRESHOLD) {
@@ -319,7 +339,15 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   const [selAsset, setSelAsset] = useState<string | null>(null);
   const [content, setContent] = useState<SourceContent | null>(null);
   const [contentState, setContentState] = useState<"idle" | "loading" | "error">("idle");
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // The third-party folder starts collapsed: it is grouped out of the way, not deleted.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set([`/${THIRD_PARTY_ROOT}`]));
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [appPackages, setAppPackagesState] = useState<string[]>([]);
+  const [includeThirdParty, setIncludeThirdParty] = useState(false);
+  const [pkgSaving, setPkgSaving] = useState(false);
+  const [pkgError, setPkgError] = useState<string | null>(null);
+  const appPackagesRef = useRef<string[]>([]);
+  appPackagesRef.current = appPackages;
   // The jumped-to place: a line (search hit, "Jump to finding") and, for a finding jump, its
   // exact range (`loc`) or the flag that an old run's line is only approximate.
   const [focus, setFocus] = useState<{ line: number; loc: ViewLoc | null; approximate: boolean } | null>(null);
@@ -406,7 +434,8 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     setSelPath(null);
     setSelAsset(null);
     setListError(null);
-    setCollapsed(new Set());
+    setCollapsed(new Set([`/${THIRD_PARTY_ROOT}`]));
+    setIncludeThirdParty(false);
     setFocus(null);
     setSearchQuery("");
     setScopeKind("all");
@@ -414,7 +443,12 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     setSearchResponse(null);
     let live = true;
     getSources(tenantId, runId)
-      .then((r) => { if (live) setFiles(r.sources); })
+      .then((r) => {
+        if (!live) return;
+        setFiles(r.sources);
+        setSessionId(r.session_id ?? null);
+        setAppPackagesState(r.app_packages ?? []);
+      })
       .catch((e) => { if (live) setListError(e instanceof ApiError ? e.message : "Failed to load sources"); });
     return () => { live = false; };
   }, [tenantId, runId]);
@@ -428,14 +462,14 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
     let live = true;
     setSearching(true);
     const timer = setTimeout(() => {
-      searchSources(tenantId, runId, term, searchClient, searchScope)
+      searchSources(tenantId, runId, term, searchClient, searchScope, includeThirdParty)
         .then((r) => { if (live) { setSearchResponse(r); setSearchError(null); } })
         // A failure is not "No matches": say so, so the operator retries instead of concluding.
         .catch(() => { if (live) { setSearchResponse(null); setSearchError("Search failed — try again"); } })
         .finally(() => { if (live) setSearching(false); });
     }, 300);
     return () => { live = false; clearTimeout(timer); };
-  }, [searchQuery, tenantId, runId, searchClient, indexRound, scopeKey]);
+  }, [searchQuery, tenantId, runId, searchClient, indexRound, scopeKey, includeThirdParty]);
 
   // Resolve the shown file: the clicked one, else the first viewable, else the first.
   const selected = files
@@ -498,11 +532,39 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   // Rebuild + annotate the tree once per file/count change, then flatten it to a
   // windowable row list. Memoized (and the tree component is memoized) so a
   // per-asset SSE tick can't rebuild or re-render the whole tree (D25).
+  // "Treat as app code": saved on the session (the server stops hiding that package's findings
+  // as third-party); the tree regroups at once.
+  const changeAppPackages = async (change: (current: string[]) => string[]) => {
+    if (!sessionId || pkgSaving) return;  // one save at a time: no lost update from quick clicks
+    const next = change(appPackagesRef.current);
+    setPkgSaving(true);
+    setPkgError(null);
+    try {
+      await saveAppPackages(tenantId, sessionId, next);
+      setAppPackagesState(next);
+    } catch (e) {
+      setPkgError(e instanceof ApiError ? e.message : "Couldn't save — try again");
+    } finally {
+      setPkgSaving(false);
+    }
+  };
+  // Reveal the selected file: a jump or search hit can land inside a collapsed folder (the
+  // third-party folder starts collapsed), and a selected row that isn't drawn looks like nothing
+  // happened. Only on a new selection, so collapsing a folder by hand still works.
+  const selectedKey = selected ? `${selected.path}\u0000${selected.asset_url ?? ""}` : "";
+  useEffect(() => {
+    if (!selected) return;
+    const { segs } = treeSegments(selected.path, segmentsOf(selected.path), appPackagesRef.current);
+    const ancestors = segs.slice(0, -1).map((_, i) => "/" + segs.slice(0, i + 1).join("/"));
+    setCollapsed((prev) => (ancestors.some((k) => prev.has(k))
+      ? new Set([...prev].filter((k) => !ancestors.includes(k))) : prev));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey]);
   const tree = useMemo(() => measureSync("sources.tree-build", 50, () => {
-    const root = buildTree(files ?? []);
+    const root = buildTree(files ?? [], appPackages);
     annotateCounts(root, fileCounts);
     return root;
-  }), [files, fileCounts]);
+  }), [files, fileCounts, appPackages]);
   const rows = useMemo(() => flattenTree(tree, collapsed, fileCounts), [tree, collapsed, fileCounts]);
 
   // Pretty-print: auto-on for minified content, off for already-readable source.
@@ -561,12 +623,29 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
               aria-label="Clear search">×</button>
           )}
         </div>
-        <SearchScopeChips value={scopeKind} file={selected} onChange={pickScope} />
+        <div className="sv-scope-row">
+          <SearchScopeChips value={scopeKind} file={selected} onChange={pickScope} />
+          <button type="button" aria-pressed={includeThirdParty}
+            className={"sv-scope-chip" + (includeThirdParty ? " on" : "")}
+            onClick={() => setIncludeThirdParty((v) => !v)}>+ third-party</button>
+        </div>
+        {appPackages.length > 0 && (
+          <div className="sv-apppkgs">
+            {appPackages.map((p) => (
+              <span key={p} className="sv-apppkg">{p} treated as app code
+                <button type="button" aria-label={`Undo: treat ${p} as third-party again`}
+                  disabled={pkgSaving} onClick={() => void changeAppPackages((cur) => cur.filter((x) => x !== p))}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
+        {pkgError && <div className="sv-search-note sv-search-error" role="alert">{pkgError}</div>}
         {searchQuery.trim().length >= 2 ? (
           <SourceSearchResults response={searchResponse} searching={searching} error={searchError}
             indexStatus={indexStatus} scopeLabel={scopeLabel} onJump={jumpToMatch} />
         ) : (
-          <SourceTree rows={rows} selectedPath={selected?.path ?? null} onSelect={selectFile} onToggle={toggleDir} />
+          <SourceTree rows={rows} selectedPath={selected?.path ?? null} onSelect={selectFile} onToggle={toggleDir}
+            onTreatAsApp={sessionId && !pkgSaving ? (p) => void changeAppPackages((cur) => [...cur, p]) : undefined} />
         )}
       </aside>
 

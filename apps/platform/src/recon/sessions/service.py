@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -54,6 +54,7 @@ class SessionView:
     created_at: str | None
     engagement_id: str | None
     archived: bool
+    app_packages: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -294,6 +295,18 @@ def set_session_archived(tenant_id: str, session_id: str, *, archived: bool) -> 
         return _view(row)
 
 
+def set_app_packages(tenant_id: str, session_id: str, *, packages: list[str]) -> SessionView | None:
+    """Replace the packages this session treats as app code (#181). Read-time only: the
+    third-party hidden reason recomputes on the next read, nothing is re-analyzed."""
+    with tenant_session(tenant_id) as session:
+        row = session.get(EngagementSession, session_id)
+        if row is None:
+            return None
+        row.app_packages = list(packages)
+        session.flush()
+        return _view(row)
+
+
 def delete_session(tenant_id: str, session_id: str, *, actor: str | None = None) -> bool:
     """Hard-delete a session and (FK CASCADE) its runs/findings, then PURGE the object-storage
     blobs those runs owned (REQ-S4, D47). Returns False if the session is invisible to the
@@ -385,6 +398,7 @@ def _view(row: EngagementSession) -> SessionView:
         created_at=row.created_at.isoformat() if row.created_at else None,
         engagement_id=str(row.engagement_id) if row.engagement_id else None,
         archived=row.archived_at is not None,
+        app_packages=list(row.app_packages or []),
     )
 
 

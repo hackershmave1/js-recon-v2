@@ -40,6 +40,7 @@ def run(monkeypatch):
         SourceFile(path=OTHER, kind="asset", fetch_status="ok"),
     ]
     monkeypatch.setattr(sources, "list_sources", lambda _t, _r: listing)
+    monkeypatch.setattr(sources, "app_packages", lambda _t, _r: [])
     monkeypatch.setattr(
         sources, "asset_keys", lambda _t, _r: {APP: "t/r/input/app", OTHER: "t/r/input/other"}
     )
@@ -111,3 +112,28 @@ def test_folder_match_is_by_whole_segments_and_empty_path_means_all():
     assert not Scope(folder="src/api").covers(f)  # not a prefix of the segment "apiV2"
     assert Scope(folder="/src/apiV2/").covers(f)  # client slashes tolerated
     assert Scope(path="").covers(f)  # an empty ?path= is no file scope
+
+
+def test_third_party_files_are_excluded_by_default_and_counted(run, monkeypatch):
+    lib = "node_modules/.pnpm/lodash-es@4.17.21/node_modules/lodash-es/_Set.js"
+    monkeypatch.setattr(
+        recovered_store,
+        "load",
+        lambda key: (
+            Manifest(
+                entries=[Entry("src/api/a.js", "src/api/a.js", "ka"), Entry(lib, lib, "kl")],
+                partial=False,
+            )
+            if key == "t/r/input/app"
+            else None
+        ),
+    )
+    monkeypatch.setattr(sources, "app_packages", lambda _t, _r: [])
+    out = source_search.search("t", "r", "token")
+    assert lib not in _paths(out) and "src/api/a.js" in _paths(out)
+    assert out.third_party_excluded == 1
+    assert out.files_total == 3  # 2 bundles + 1 app original (the excluded one isn't "searchable")
+    out = source_search.search("t", "r", "token", scope=Scope(include_third_party=True))
+    assert lib in _paths(out) and out.third_party_excluded == 0
+    monkeypatch.setattr(sources, "app_packages", lambda _t, _r: ["lodash-es"])
+    assert lib in _paths(source_search.search("t", "r", "token"))  # treated as app code

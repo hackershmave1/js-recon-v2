@@ -5,6 +5,7 @@ const REASON_LABEL: Record<string, string> = {
   junk_or_dynamic: "junk",
   noise: "analytics",
   off_scope: "off-scope",
+  third_party: "third-party",
 };
 
 export function hiddenTotal(hidden: Record<string, number> | undefined): number {
