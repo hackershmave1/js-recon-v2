@@ -382,6 +382,20 @@ describe("SourcesPage", () => {
     expect(screen.getByText(/lodash-es treated as app code/)).toBeInTheDocument(); // undo lives here
   });
 
+  it("a failed 'app code' save says so instead of doing nothing", async () => {
+    const lib: SourceFile = { path: "node_modules/.pnpm/lodash-es@4.17.21/node_modules/lodash-es/_Set.js", kind: "source", fetch_status: "ok", asset_url: "https://acme.io/app.js" };
+    vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: 1, sources: [lib], session_id: "s1", app_packages: [] });
+    vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: lib.path, content: CODE, truncated: false, formatted: true });
+    vi.spyOn(api, "getSourcesIndexStatus").mockResolvedValue({ indexed: 1, total: 1, indexing: false });
+    vi.spyOn(api, "setAppPackages").mockRejectedValue(new api.ApiError(422, "invalid package name"));
+    render(<SourcesPage data={null} tenantId="t" runId="r" jump={null} />);
+    // the auto-opened (only) file sits inside the collapsed third-party folder: it is revealed
+    expect(await screen.findByText("_Set.js")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Treat lodash-es as app code" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("invalid package name");
+    expect(screen.getByText("Third-party packages")).toBeInTheDocument(); // nothing moved
+  });
+
   it("search leaves third-party out unless '+ third-party' is on", async () => {
     mount([UPLOAD]);
     await screen.findByText("fetch('/x')");

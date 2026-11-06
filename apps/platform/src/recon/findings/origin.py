@@ -15,7 +15,9 @@ from collections.abc import Iterable
 
 _SEGMENT = re.compile(r"(?:^|/)(node_modules|\.yarn|bower_components)/")
 # The package directory after the LAST package-manager folder: `@scope/name` or `name`.
-_PACKAGE = re.compile(r"(?:^|/)(?:node_modules|bower_components)/((?:@[^/]+/)?[^/.][^/]*)/")
+# A lookahead (not a consumed "/"), so a package nested inside another
+# (`node_modules/foo/node_modules/@bar/baz/…`) is still found: the innermost one owns the file.
+_PACKAGE = re.compile(r"(?:^|/)(?:node_modules|bower_components)/((?:@[^/]+/)?[^/.][^/]*)(?=/)")
 # pnpm's store folder: `<name with / as +>@<version>[_<peer>@<version>…]`.
 _PNPM = re.compile(r"(?:^|/)\.pnpm/((?:@[^/@]+\+)?[^/@]+)@([^/_]+)")
 

@@ -34,3 +34,12 @@ def test_rejects_entries_that_are_not_package_names(monkeypatch):
         "/sessions/s1", headers=TENANT, json={"app_packages": ["../../etc"]}
     )
     assert r.status_code == 422
+
+
+def test_accepts_legacy_uppercase_package_names(monkeypatch):
+    monkeypatch.setattr(sessions_router.service, "set_app_packages", lambda *a, **k: {})
+    monkeypatch.setattr(sessions_router, "_session_view_dict", lambda view: view)
+    r = TestClient(create_app()).patch(
+        "/sessions/s1", headers=TENANT, json={"app_packages": ["JSONStream", "@Acme/pkg"]}
+    )
+    assert r.status_code == 200

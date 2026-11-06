@@ -155,7 +155,9 @@ def search(
     listed = [f for f in listed if scope.covers(f)]
     bundles = [f for f in bundles if scope.covers(f)]
     excluded = 0
-    if not scope.include_third_party and (stored or listed):
+    # An explicit file scope is the researcher pointing at that file: search it even if it's
+    # third-party (the exclusion is a default, not a ban).
+    if not scope.include_third_party and not scope.path and (stored or listed):
         packages = sources.app_packages(tenant_id, run_id)
         kept_stored = [(f, key) for f, key in stored if not origin.is_third_party(f.path, packages)]
         kept_listed = [f for f in listed if not origin.is_third_party(f.path, packages)]

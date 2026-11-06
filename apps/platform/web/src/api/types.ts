@@ -102,7 +102,7 @@ export interface FindingsResponse {
   // analysis units (every source-map original, vendor libraries included).
   files?: number;
   // Findings captured but not shown by default, per reason (backend findings/visibility):
-  // "junk_or_dynamic" | "noise" | "off_scope". Optional for older servers.
+  // "junk_or_dynamic" | "noise" | "off_scope" | "third_party". Optional for older servers.
   hidden?: Record<string, number>;
 }
 // Per-asset fetch/analyze outcome (recon.domain.AssetStatus). "pending" until the

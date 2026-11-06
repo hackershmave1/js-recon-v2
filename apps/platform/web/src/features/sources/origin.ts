@@ -6,7 +6,8 @@
 export const THIRD_PARTY_ROOT = "Third-party packages";
 
 const SEGMENT = /(?:^|\/)(node_modules|\.yarn|bower_components)\//;
-const PACKAGE = /(?:^|\/)(?:node_modules|bower_components)\/((?:@[^/]+\/)?[^/.][^/]*)\//g;
+// A lookahead (not a consumed "/"): a package nested inside another is found, the innermost wins.
+const PACKAGE = /(?:^|\/)(?:node_modules|bower_components)\/((?:@[^/]+\/)?[^/.][^/]*)(?=\/)/g;
 const PNPM = /(?:^|\/)\.pnpm\/((?:@[^/@]+\+)?[^/@]+)@([^/_]+)/;
 
 export function packageOf(path: string): { name: string; version: string | null } | null {
@@ -37,8 +38,10 @@ export function treeSegments(path: string, segments: string[], appPackages: read
 } {
   if (!isThirdParty(path, appPackages)) return { segs: segments, packageName: null };
   const pkg = packageOf(path)!;
-  const marker = `/${pkg.name}/`;
-  const inside = path.slice(path.lastIndexOf(marker) + marker.length).split("/").filter(Boolean);
+  // Everything after the innermost package directory (not after the last occurrence of its NAME:
+  // `node_modules/foo/lib/foo/index.js` must stay `lib/foo/index.js`).
+  const last = [...path.matchAll(PACKAGE)].pop()!;
+  const inside = path.slice(last.index! + last[0].length).split("/").filter(Boolean);
   const label = pkg.version ? `${pkg.name} ${pkg.version}` : pkg.name;
   return { segs: [THIRD_PARTY_ROOT, label, ...inside], packageName: pkg.name };
 }

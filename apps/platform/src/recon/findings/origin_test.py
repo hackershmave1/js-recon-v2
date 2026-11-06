@@ -30,6 +30,7 @@ PNPM_PEER = (
         ("node_modules/@babel/runtime/helpers/esm/defineProperty.js", ("@babel/runtime", None)),
         (".yarn/cache/react-npm-18.2.0-abc.zip/node_modules/react/index.js", ("react", None)),
         ("bower_components/jquery/dist/jquery.js", ("jquery", None)),
+        ("node_modules/foo/node_modules/@bar/baz/x.js", ("@bar/baz", None)),  # nested install
     ],
 )
 def test_third_party_files_name_their_package(path, package):

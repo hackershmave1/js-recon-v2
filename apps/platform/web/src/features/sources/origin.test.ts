@@ -12,6 +12,7 @@ const THIRD: [string, string, string | null][] = [
   ["node_modules/@babel/runtime/helpers/esm/defineProperty.js", "@babel/runtime", null],
   [".yarn/cache/react-npm-18.2.0-abc.zip/node_modules/react/index.js", "react", null],
   ["bower_components/jquery/dist/jquery.js", "jquery", null],
+  ["node_modules/foo/node_modules/@bar/baz/x.js", "@bar/baz", null], // nested install
 ];
 const APP = [
   "packages/core-web/dist/logger/logger.service.js", "src/api/users.ts",
@@ -39,5 +40,9 @@ describe("origin (mirror of recon.findings.origin)", () => {
       packageName: "@statsig/client-core",
     });
     expect(treeSegments("src/a.js", ["src", "a.js"], []).segs).toEqual(["src", "a.js"]);
+    // the package name recurring inside the package must not collapse two files onto one node
+    expect(treeSegments("node_modules/foo/index.js", [], []).segs).toEqual([THIRD_PARTY_ROOT, "foo", "index.js"]);
+    expect(treeSegments("node_modules/foo/lib/foo/index.js", [], []).segs)
+      .toEqual([THIRD_PARTY_ROOT, "foo", "lib", "foo", "index.js"]);
   });
 });

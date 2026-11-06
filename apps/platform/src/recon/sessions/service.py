@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -54,6 +54,7 @@ class SessionView:
     created_at: str | None
     engagement_id: str | None
     archived: bool
+    app_packages: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -397,6 +398,7 @@ def _view(row: EngagementSession) -> SessionView:
         created_at=row.created_at.isoformat() if row.created_at else None,
         engagement_id=str(row.engagement_id) if row.engagement_id else None,
         archived=row.archived_at is not None,
+        app_packages=list(row.app_packages or []),
     )
 
 

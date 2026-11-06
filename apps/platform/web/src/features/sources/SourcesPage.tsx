@@ -344,6 +344,10 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [appPackages, setAppPackagesState] = useState<string[]>([]);
   const [includeThirdParty, setIncludeThirdParty] = useState(false);
+  const [pkgSaving, setPkgSaving] = useState(false);
+  const [pkgError, setPkgError] = useState<string | null>(null);
+  const appPackagesRef = useRef<string[]>([]);
+  appPackagesRef.current = appPackages;
   // The jumped-to place: a line (search hit, "Jump to finding") and, for a finding jump, its
   // exact range (`loc`) or the flag that an old run's line is only approximate.
   const [focus, setFocus] = useState<{ line: number; loc: ViewLoc | null; approximate: boolean } | null>(null);
@@ -530,11 +534,32 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   // per-asset SSE tick can't rebuild or re-render the whole tree (D25).
   // "Treat as app code": saved on the session (the server stops hiding that package's findings
   // as third-party); the tree regroups at once.
-  const changeAppPackages = async (next: string[]) => {
-    if (!sessionId) return;
-    await saveAppPackages(tenantId, sessionId, next);
-    setAppPackagesState(next);
+  const changeAppPackages = async (change: (current: string[]) => string[]) => {
+    if (!sessionId || pkgSaving) return;  // one save at a time: no lost update from quick clicks
+    const next = change(appPackagesRef.current);
+    setPkgSaving(true);
+    setPkgError(null);
+    try {
+      await saveAppPackages(tenantId, sessionId, next);
+      setAppPackagesState(next);
+    } catch (e) {
+      setPkgError(e instanceof ApiError ? e.message : "Couldn't save — try again");
+    } finally {
+      setPkgSaving(false);
+    }
   };
+  // Reveal the selected file: a jump or search hit can land inside a collapsed folder (the
+  // third-party folder starts collapsed), and a selected row that isn't drawn looks like nothing
+  // happened. Only on a new selection, so collapsing a folder by hand still works.
+  const selectedKey = selected ? `${selected.path}\u0000${selected.asset_url ?? ""}` : "";
+  useEffect(() => {
+    if (!selected) return;
+    const { segs } = treeSegments(selected.path, segmentsOf(selected.path), appPackagesRef.current);
+    const ancestors = segs.slice(0, -1).map((_, i) => "/" + segs.slice(0, i + 1).join("/"));
+    setCollapsed((prev) => (ancestors.some((k) => prev.has(k))
+      ? new Set([...prev].filter((k) => !ancestors.includes(k))) : prev));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey]);
   const tree = useMemo(() => measureSync("sources.tree-build", 50, () => {
     const root = buildTree(files ?? [], appPackages);
     annotateCounts(root, fileCounts);
@@ -609,17 +634,18 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
             {appPackages.map((p) => (
               <span key={p} className="sv-apppkg">{p} treated as app code
                 <button type="button" aria-label={`Undo: treat ${p} as third-party again`}
-                  onClick={() => void changeAppPackages(appPackages.filter((x) => x !== p))}>×</button>
+                  disabled={pkgSaving} onClick={() => void changeAppPackages((cur) => cur.filter((x) => x !== p))}>×</button>
               </span>
             ))}
           </div>
         )}
+        {pkgError && <div className="sv-search-note sv-search-error" role="alert">{pkgError}</div>}
         {searchQuery.trim().length >= 2 ? (
           <SourceSearchResults response={searchResponse} searching={searching} error={searchError}
             indexStatus={indexStatus} scopeLabel={scopeLabel} onJump={jumpToMatch} />
         ) : (
           <SourceTree rows={rows} selectedPath={selected?.path ?? null} onSelect={selectFile} onToggle={toggleDir}
-            onTreatAsApp={sessionId ? (p) => void changeAppPackages([...appPackages, p]) : undefined} />
+            onTreatAsApp={sessionId && !pkgSaving ? (p) => void changeAppPackages((cur) => [...cur, p]) : undefined} />
         )}
       </aside>
 

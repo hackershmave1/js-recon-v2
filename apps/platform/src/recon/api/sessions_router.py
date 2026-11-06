@@ -40,7 +40,7 @@ class CreateSessionBody(BaseModel):
 
 
 # A package name or a whole scope: `lodash-es`, `@acme/api-client`, `@acme/*`.
-_PACKAGE_PATTERN = r"^\s*(@[a-z0-9._~-]+/)?([a-z0-9._~-]+|\*)\s*$"
+_PACKAGE_PATTERN = r"^\s*(@[A-Za-z0-9._~-]+/)?([A-Za-z0-9._~-]+|\*)\s*$"
 
 
 class PatchSessionBody(BaseModel):
@@ -213,6 +213,7 @@ def _session_view_dict(view: service.SessionView) -> dict:
         "created_at": view.created_at,
         "engagement_id": view.engagement_id,
         "archived": view.archived,
+        "app_packages": view.app_packages,
     }
 
 
