@@ -625,9 +625,11 @@ generation vs serialization; models per domain).
 
 **Fix:** split one file per PR, starting with `threat_model/service.py`.
 
-### 2026-11-03 Hidden findings overlay — OPEN (D74)
+### 2026-11-03 Hidden findings overlay — RESOLVED (D74)
 
 #### D74 · The ApiSpec page's endpoint classification ignores the hidden-findings overlay [S]  ·  correctness
+
+> ✅ **RESOLVED** (2026-11-07). Narrower than recorded: the ApiSpec page's operations and the reloaded summary already read the shown findings (`reconstruct_run` and `list_findings`). The leak was the summary returned right after attaching a spec or saving a base-URL rule (`_run_scoped_summary`), which counted hidden endpoints, so the numbers shrank on reload. It now leaves hidden findings out; their verdicts are still stored, so "Show hidden" brings them back classified.
 
 `findings/visibility.hidden_finding_ids` drives every list and count of a run's findings, but
 `spec/service.py` (the ApiSpec page's shadow-API buckets) reads `endpoint` findings directly, so an

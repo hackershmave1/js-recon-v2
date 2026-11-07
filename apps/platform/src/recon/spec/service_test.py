@@ -15,7 +15,7 @@ from recon import storage
 from recon.db import models
 from recon.db.base import tenant_session
 from recon.domain import FindingType
-from recon.findings import store
+from recon.findings import queries, store
 from recon.sessions import service as sessions_service
 from recon.spec import service
 from recon.spec.ingest import SpecError
@@ -46,7 +46,7 @@ def _run(tenant: str, session_id: str) -> str:
         return str(run.id)
 
 
-def _seed_endpoint(tenant: str, run_id: str, value: str) -> str:
+def _seed_endpoint(tenant: str, run_id: str, value: str, host: str = "acme.io") -> str:
     """Record one ENDPOINT finding on `run_id` and return its `finding_hash`."""
     with tenant_session(tenant) as session:
         result = store.record_finding(
@@ -56,7 +56,7 @@ def _seed_endpoint(tenant: str, run_id: str, value: str) -> str:
             finding_type=FindingType.ENDPOINT,
             value=value,
             path="input.js",
-            occurrence=store.Occurrence(host="acme.io", raw_url="/x"),
+            occurrence=store.Occurrence(host=host, raw_url="/x"),
             attributes={"method": value.split(" ", 1)[0]},
             first_stage="analyzing",
         )
@@ -98,6 +98,32 @@ def test_attach_classifies_endpoint_findings():
         assert len(events) == 1
         assert events[0].payload["documented"] == 1
         assert events[0].payload["shadow"] == 1
+
+
+def test_summary_leaves_out_hidden_findings():
+    """D74: the summary shown right after attaching counts only SHOWN endpoints (the same ones
+    the reloaded page counts) — an analytics-vendor call the workspace hides is not a shadow
+    API. Its verdict is still stored, so "Show hidden" brings it back classified."""
+    tenant = sessions_service.create_tenant("spec-hidden")
+    session_view = sessions_service.create_session(
+        tenant, name="e", scope_hosts=["acme.io"], authorized_by="t"
+    )
+    run_id = _run(tenant, session_view.id)
+    _seed_endpoint(tenant, run_id, "GET /location/address/search")
+    noise_hash = _seed_endpoint(tenant, run_id, "POST /collect", host="www.google-analytics.com")
+
+    summary = service.attach_and_classify(tenant, run_id, OPENAPI_WITH_LOCATION)
+
+    assert summary is not None
+    assert (summary.documented, summary.shadow) == (1, 0)
+    assert summary == queries.list_findings(tenant, run_id).spec_summary  # what a reload shows
+    with tenant_session(tenant) as session:
+        stored = session.query(models.FindingSpecStatus).filter_by(finding_hash=noise_hash).one()
+        assert stored.status == "shadow"
+        event = (
+            session.query(models.RunEvent).filter_by(run_id=run_id, type="spec.classified").one()
+        )
+        assert event.payload["shadow"] == 0
 
 
 def test_reclassify_noop_without_session_spec():

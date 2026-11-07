@@ -5,9 +5,9 @@ material, e.g. for a later model reversing it from source), but only findings th
 a human are shown. This is a READ-TIME, REVERSIBLE overlay: nothing is deleted, and
 ``include_hidden`` brings everything back with no re-analysis. Every surface that lists or counts
 "the run's findings" (findings list, Sessions card, extension popup, hosts inventory, run diff,
-threat-model context, the OpenAPI download) goes through :func:`hidden_finding_ids`, so they agree.
-Not yet: the ApiSpec page's endpoint classification (``spec/service``) reads findings directly
-(DEBT D74). The GraphQL list needs no overlay — no rule here applies to it.
+threat-model context, the OpenAPI download, the spec summary) goes through
+:func:`hidden_finding_ids`, so they agree. The GraphQL list needs no overlay — no rule here applies
+to it.
 
 Reasons:
 - ``noise``: every attributed host is a known analytics / telemetry / vendor host
