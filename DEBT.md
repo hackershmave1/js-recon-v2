@@ -653,7 +653,8 @@ Related edges accepted for now:
   reads "3 of 500".
 - The 10 s quiet period has no maximum wait. Continuous browsing keeps postponing the automatic
   update; "Analyze now" forces one.
-- Observations sent while a pass is past its correlate read reach only the next pass.
+- End or Analyze during a running pass always schedules one more pass, even when the running
+  pass already covered everything: one redundant pass, traded for never losing late observations.
 
 #### D84 · A finding-identity bump during an open capture duplicates its findings [S]  ·  correctness
 

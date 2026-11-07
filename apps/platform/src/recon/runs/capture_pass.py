@@ -9,12 +9,13 @@ may be queued or running per run: ``can_start_pass`` checks for a live Job under
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from redis import Redis
-from sqlalchemy import exists, select
+from sqlalchemy import ColumnElement, and_, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from recon import storage
@@ -26,6 +27,10 @@ from recon.events.log import RecordedEvent, publish
 from recon.runs import assets, coordinator
 
 LIVE_JOB_STATES = (JobState.QUEUED.value, JobState.RUNNING.value)
+# A QUEUED job older than this was never delivered (a lost publish, or one a pause left behind) and
+# no longer counts as a live pass, so it can't hold a capture's "one pass at a time" forever. A
+# RUNNING job is bounded by its lease (the orphan reaper).
+QUEUED_JOB_STALE_AFTER = dt.timedelta(minutes=30)
 
 Pending = tuple[RecordedEvent, dict | None]  # (discover.assets event, job message) to publish
 
@@ -48,16 +53,24 @@ def has_job(session: Session, run_id: str) -> bool:
     return bool(session.scalar(select(exists(select(Job.id).where(Job.run_id == str(run_id))))))
 
 
-def live_job_exists(session: Session, run_id: str) -> bool:
-    return bool(
-        session.scalar(
-            select(
-                exists(
-                    select(Job.id).where(Job.run_id == str(run_id), Job.state.in_(LIVE_JOB_STATES))
-                )
-            )
+def live_job(run_id: ColumnElement | str) -> ColumnElement[bool]:
+    """SQL: the run has a pass queued (recently) or running."""
+    return exists(
+        select(Job.id).where(
+            Job.run_id == run_id,
+            or_(
+                Job.state == JobState.RUNNING.value,
+                and_(
+                    Job.state == JobState.QUEUED.value,
+                    Job.created_at > func.now() - QUEUED_JOB_STALE_AFTER,
+                ),
+            ),
         )
     )
+
+
+def live_job_exists(session: Session, run_id: str) -> bool:
+    return bool(session.scalar(select(live_job(str(run_id)))))
 
 
 def can_start_pass(session: Session, run: Run) -> bool:

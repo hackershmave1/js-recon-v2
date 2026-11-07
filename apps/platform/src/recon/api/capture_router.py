@@ -426,10 +426,13 @@ def _ended_capture_batch(
         owner = session.scalar(select(Run.session_id).where(Run.id == run_id))
         stored = set(
             session.execute(
-                select(RunAsset.url, RunAsset.input_ref).where(RunAsset.run_id == run_id)
+                select(RunAsset.url, RunAsset.input_ref).where(
+                    RunAsset.run_id == run_id, RunAsset.url.in_([url for url, _ in wanted])
+                )
             ).tuples()
         )
-    if str(owner) != str(session_id) or not wanted or None in parsed or wanted - stored:
+    # Invalid files don't decide it: the first attempt reported them failed and stored the rest.
+    if str(owner) != str(session_id) or not wanted or wanted - stored:
         raise HTTPException(status_code=409, detail="capture_ended")
     return {
         "success": True,
@@ -443,9 +446,9 @@ def _ended_capture_batch(
                 "url": f.get("url"),
                 "contentHash": f.get("contentHash"),
                 "stored": False,
-                "error": "already stored",
+                "error": "already stored" if ok is not None else "invalid or oversized file",
             }
-            for f in payload.files
+            for f, ok in zip(payload.files, parsed, strict=True)
         ],
     }
 

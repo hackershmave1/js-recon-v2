@@ -404,11 +404,17 @@ def _finalize_state(tenant_id: str, run_id: str) -> tuple[RunState, dict, bool]:
         for a in rows
     )
     with tenant_session(tenant_id) as session:
-        capture_open = (
-            session.scalar(select(Run.capture_external_id).where(Run.id == str(run_id))) is not None
-        )
-    if unanalyzed or capture_open:
-        return RunState.CAPTURING, completeness, unanalyzed
+        marker, scheduled, cancel = session.execute(
+            select(Run.capture_external_id, Run.reanalyze_after, Run.cancel_requested).where(
+                Run.id == str(run_id)
+            )
+        ).one()
+    if cancel:
+        return RunState.CANCELLED, completeness, False  # a cancel asked during the last stage
+    if unanalyzed or scheduled is not None or marker is not None:
+        # Rest: still open, or files/observations arrived during this pass (End or Analyze
+        # scheduled one more). The sweeper starts that pass instead of finishing now.
+        return RunState.CAPTURING, completeness, unanalyzed or scheduled is not None
     to_state = RunState.DONE if (fetch_ok and analyze_ok) else RunState.PARTIAL
     return to_state, completeness, False
 
@@ -417,5 +423,13 @@ def resume_run(redis: Redis, *, tenant_id: str, run_id: str, actor: str | None =
     """Resume a paused run and re-enqueue the stage it left off at. ``actor`` is
     the verified identity from the JWT (auth on) or None (auth off / dev mode)."""
     view, stage = service.resume(redis, tenant_id=tenant_id, run_id=run_id, actor=actor)
+    # The pause left the interrupted stage's job QUEUED (never claimed); this enqueue replaces it.
+    # Cancel it, or it reads as a live pass and holds a capture's next pass forever.
+    with tenant_session(tenant_id) as session:
+        session.execute(
+            update(Job)
+            .where(Job.run_id == str(run_id), Job.state == JobState.QUEUED.value)
+            .values(state=JobState.CANCELLED.value)
+        )
     enqueue_stage(redis, tenant_id=tenant_id, run_id=run_id, stage=stage)
     return view

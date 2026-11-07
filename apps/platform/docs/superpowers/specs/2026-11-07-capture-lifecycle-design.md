@@ -113,6 +113,13 @@ The worker loop already ticks about every 3 s when idle. Each tick:
 - Pause on a CAPTURING run is refused (409). A pause flag carried into CAPTURING is cleared at
   finalize, and one the worker can't honour drops its job instead of leaving the message unacked.
 - Start reuses an EMPTY open capture rather than ending (deleting) it.
+- A queued pass counts as live for 30 minutes at most, and Resume cancels the job a pause left
+  queued. So neither a lost publish nor a pause can hold "one pass at a time" forever.
+- End or Analyze during a running pass schedules one more pass (`reanalyze_after`). Finalize then
+  rests the run instead of finishing it, so late files and late observations both get analyzed.
+- A cancel requested during a pass's last stage cancels at finalize.
+- Batches lock the run with `FOR NO KEY UPDATE`, which still waits out End, so two concurrent
+  batches can't deadlock.
 - "Add to scope" requires sign-in: session scope also bounds a crawl re-run's egress.
 
 ### Read model
@@ -156,6 +163,11 @@ The worker loop already ticks about every 3 s when idle. Each tick:
   - End waits for uploads;
   - the scope clears at End;
   - restart resumes paused.
+- Sequencing: wait for End's response before the next Start, and never send End for a `runId`
+  other than the current capture. Start reuses an EMPTY open capture, so a late End for that same
+  run would delete it, and the new capture's batches would get `capture_ended`.
+- Treat `409 capture_ended` on a batch as final, not retryable: drop the batch and show that the
+  capture has ended.
 - Dedup per **capture**, not per session. Otherwise a Continue run would miss files captured
   earlier in the session.
 - Continue adopts the matched session's `external_id` and its engagement binding, which is

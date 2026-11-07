@@ -83,7 +83,9 @@ def accept_batch(session: Session, run_id: str, ext_session_id: str) -> bool:
     """In the batch's transaction, before its rows: is this still the session's open capture?
     The share lock waits out a concurrent End or Cancel, so a batch can never commit into a run
     that has just been sealed (where nothing would analyze it)."""
-    run = session.scalar(select(Run).where(Run.id == str(run_id)).with_for_update(read=True))
+    # FOR NO KEY UPDATE, not FOR SHARE: note_batch then updates this row, and two batches that
+    # both held a share lock would deadlock upgrading it. This still waits out End's FOR UPDATE.
+    run = session.scalar(select(Run).where(Run.id == str(run_id)).with_for_update(key_share=True))
     return (
         run is not None
         and run.capture_external_id == ext_session_id
@@ -141,7 +143,9 @@ def analyze(redis: Redis, tenant_id: str, run_id: str, *, observations: list[dic
     return {"started": True, "message": message, "runId": run_id}
 
 
-def end_capture(redis: Redis, tenant_id: str, run_id: str, *, observations: list[dict]) -> dict:
+def end_capture(
+    redis: Redis, tenant_id: str, run_id: str, *, observations: list[dict], _retry: bool = True
+) -> dict:
     """End: seal the capture and see it finished. Idempotent.
 
     - No files at all → the empty run is deleted: an empty capture leaves nothing behind.
@@ -153,7 +157,7 @@ def end_capture(redis: Redis, tenant_id: str, run_id: str, *, observations: list
     """
     prepared = capture_pass.prepare(tenant_id, run_id, observations)
     pending: capture_pass.Pending | None = None
-    finish = False
+    finish = retry = False
     with tenant_session(tenant_id) as session:
         run = capture_pass.locked(session, run_id)
         if run is None or sm.is_terminal(RunState(run.state)):
@@ -168,7 +172,7 @@ def end_capture(redis: Redis, tenant_id: str, run_id: str, *, observations: list
             log.info("capture.ended_empty", run_id=run_id)
             return {"ended": True, "runId": None}
         if prepared is None:
-            run.reanalyze_after = func.now()  # files landed after prepare(): the sweeper settles it
+            retry = _retry  # files landed after prepare(): take a fresh manifest and decide again
         elif capture_pass.can_start_pass(session, run):
             due = prepared.unanalyzed or prepared.new_observations or run.reanalyze_after
             if state != RunState.CAPTURING or due:
@@ -181,6 +185,8 @@ def end_capture(redis: Redis, tenant_id: str, run_id: str, *, observations: list
             )
             run.reanalyze_after = func.now()
             pending = (event, None)
+    if retry:
+        return end_capture(redis, tenant_id, run_id, observations=observations, _retry=False)
     capture_pass.publish_pending(redis, pending)
     if finish:
         # Same finalize as a pass: CAPTURING → DONE/PARTIAL now that the marker is gone.

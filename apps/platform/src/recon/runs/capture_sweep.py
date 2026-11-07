@@ -18,10 +18,10 @@ from __future__ import annotations
 import datetime as dt
 
 from redis import Redis
-from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy import func, or_, select
 
 from recon.db.base import admin_session, tenant_session
-from recon.db.models import Job, Run, RunAsset
+from recon.db.models import Run, RunAsset
 from recon.domain import RunStage, RunState
 from recon.observability import get_logger
 from recon.runs import capture_lifecycle, capture_pass, coordinator
@@ -37,9 +37,7 @@ def _settleable():
     return (
         Run.state == RunState.CAPTURING.value,
         or_(Run.reanalyze_after < func.now(), Run.capture_external_id.is_(None)),
-        ~exists(
-            select(Job.id).where(Job.run_id == Run.id, Job.state.in_(capture_pass.LIVE_JOB_STATES))
-        ),
+        ~capture_pass.live_job(Run.id),
     )
 
 
@@ -79,22 +77,35 @@ def sweep(redis: Redis) -> int:
 
 
 def _settle_resting(redis: Redis, tenant_id: str, run_id: str) -> int:
+    """Under the run-row lock (one worker at a time), with every check re-read after taking it: a
+    concurrent End or Analyze may have queued a pass a moment before.
+
+    - Scheduled (a quiet period passed, or End/Analyze asked during a pass) → one more pass, so
+      late files AND late observations get analyzed.
+    - Otherwise sealed → finished here. Otherwise (open, nothing scheduled) → nothing to do.
+    """
     prepared = capture_pass.prepare(tenant_id, run_id, [])
     pending: capture_pass.Pending | None = None
     finish = False
     with tenant_session(tenant_id) as session:
-        # Guarded claim: only the tick whose UPDATE matches acts (several workers may sweep).
-        claimed = session.execute(
-            update(Run).where(Run.id == run_id, *_settleable()).values(reanalyze_after=None)
-        )
-        if claimed.rowcount != 1:
-            return 0
         run = capture_pass.locked(session, run_id)
-        assert run is not None  # just claimed in this transaction
-        if prepared is not None and prepared.unanalyzed:
+        if (
+            run is None
+            or RunState(run.state) != RunState.CAPTURING
+            or capture_pass.live_job_exists(session, run_id)
+        ):
+            return 0
+        scheduled = bool(
+            session.scalar(select(Run.reanalyze_after < func.now()).where(Run.id == run_id))
+        )
+        sealed = run.capture_external_id is None
+        if not (scheduled or sealed):
+            return 0
+        if prepared is not None and (scheduled or prepared.unanalyzed):
             pending = capture_pass.begin_pass(session, tenant_id, run, prepared.found)
-        elif run.capture_external_id is None:
-            finish = True
+        else:
+            run.reanalyze_after = None
+            finish = sealed
     capture_pass.publish_pending(redis, pending)
     if finish:
         coordinator.advance(
