@@ -15,7 +15,7 @@ from recon import storage
 from recon.db import models
 from recon.db.base import tenant_session
 from recon.domain import FindingType
-from recon.findings import store
+from recon.findings import queries, store
 from recon.sessions import service as sessions_service
 from recon.spec import service
 from recon.spec.ingest import SpecError
@@ -116,6 +116,7 @@ def test_summary_leaves_out_hidden_findings():
 
     assert summary is not None
     assert (summary.documented, summary.shadow) == (1, 0)
+    assert summary == queries.list_findings(tenant, run_id).spec_summary  # what a reload shows
     with tenant_session(tenant) as session:
         stored = session.query(models.FindingSpecStatus).filter_by(finding_hash=noise_hash).one()
         assert stored.status == "shadow"

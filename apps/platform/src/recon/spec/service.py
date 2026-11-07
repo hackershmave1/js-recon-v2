@@ -22,7 +22,8 @@ The `SpecSummary` each entry point RETURNS, however, is scoped to the calling
 run's own endpoint findings, not the whole session (§5.4/§6.3: storage is
 session-scoped, but the summary + self-audit ratio surfaced to a caller are
 run-scoped) — `_run_scoped_summary` narrows `_classify_session`'s full
-session-wide verdict map down to that run's hashes after the upsert.
+session-wide verdict map down to that run's SHOWN hashes (hidden findings are
+classified and stored, but not counted) after the upsert.
 """
 
 from __future__ import annotations
