@@ -344,6 +344,8 @@ def advance(redis: Redis, *, tenant_id: str, run_id: str, completed: RunStage) -
     try:
         to_state, completeness, pass_due = _finalize_state(tenant_id, run_id)
         extra: dict = {"completeness": completeness}
+        if to_state == RunState.CAPTURING:
+            extra["pause_requested"] = False  # nothing runs while resting: a pause has no meaning
         if pass_due:
             # Due now, unless a batch already set its quiet-period deadline (keep that debounce).
             extra["reanalyze_after"] = func.coalesce(Run.reanalyze_after, func.now())

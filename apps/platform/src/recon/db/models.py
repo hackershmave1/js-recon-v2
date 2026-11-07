@@ -194,6 +194,11 @@ class Run(Base):
             "reanalyze_after",
             postgresql_where=text("reanalyze_after IS NOT NULL"),
         ),
+        Index(
+            "ix_run_open_capture",
+            "created_at",
+            postgresql_where=text("capture_external_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)

@@ -26,7 +26,7 @@ from recon.observability import bind_run, get_logger
 from recon.probe import source_index
 from recon.progress import heartbeat as progress
 from recon.queue import retry, streams
-from recon.runs import capture_lifecycle, coordinator, failure, queries, service
+from recon.runs import capture_sweep, coordinator, failure, queries, service
 from recon.runs import state_machine as sm
 
 log = get_logger("recon.worker")
@@ -81,6 +81,28 @@ def _enter_stage(redis: Redis, tenant_id: str, run_id: str, stage: RunStage, sta
         return False
 
 
+def _drop_unhonourable(tenant_id: str, run_id: str, job_id: str) -> None:
+    """A pause/cancel flag the run's state can't honour (a pause carried into a resting capture):
+    drop this job and the stale flag, and mark a pass due so a capture's files still get one.
+    Otherwise the job stays live forever, and no later pass could start (capture_pass)."""
+    from sqlalchemy import func, update
+
+    from recon.db.base import tenant_session
+    from recon.db.models import Job, Run
+
+    with tenant_session(tenant_id) as session:
+        session.execute(
+            update(Job)
+            .where(Job.id == job_id, Job.state.in_([JobState.QUEUED.value, JobState.RUNNING.value]))
+            .values(state=JobState.CANCELLED.value)
+        )
+        session.execute(
+            update(Run)
+            .where(Run.id == run_id, Run.state == RunState.CAPTURING.value)
+            .values(pause_requested=False, reanalyze_after=func.now())
+        )
+
+
 def _run_stage_work(
     redis: Redis, stage: RunStage, *, tenant_id: str, run_id: str, job_id: str
 ) -> None:
@@ -116,14 +138,21 @@ def process_message(redis: Redis, queue: QueueName, msg_id: str, message: dict) 
             # Held — drop this delivery; resume re-enqueues the right stage.
             streams.ack(redis, queue, msg_id)
             return "paused"
-        if flags.cancel_requested:
-            _to_cancelled(redis, tenant_id, run_id)
+        if flags.cancel_requested or flags.pause_requested:
+            # A control flag the run can't honour from its state (a pause carried into a resting
+            # capture) is dropped and acked. Raising here would leave the message unacked and
+            # retried forever, holding up the queue behind it.
+            try:
+                if flags.cancel_requested:
+                    _to_cancelled(redis, tenant_id, run_id)
+                else:
+                    _to_paused(redis, tenant_id, run_id, stage)
+            except (sm.InvalidTransition, service.TransitionConflict):
+                _drop_unhonourable(tenant_id, run_id, job_id)
+                streams.ack(redis, queue, msg_id)
+                return "skipped"
             streams.ack(redis, queue, msg_id)
-            return "cancelled"
-        if flags.pause_requested:
-            _to_paused(redis, tenant_id, run_id, stage)
-            streams.ack(redis, queue, msg_id)
-            return "paused"
+            return "cancelled" if flags.cancel_requested else "paused"
 
         # Idempotency gate: exactly one worker may hold a job (REQ tenets:
         # idempotent & resumable). A duplicate/redelivered message for an
@@ -133,6 +162,9 @@ def process_message(redis: Redis, queue: QueueName, msg_id: str, message: dict) 
             return "duplicate"
 
         if not _enter_stage(redis, tenant_id, run_id, stage, flags.state):
+            # Claimed but not run (e.g. a duplicate pass's later stage reaching a capture that
+            # already rests): finish the job, or the orphan reaper later FAILS the whole run.
+            progress.finish_job(tenant_id, job_id, JobState.CANCELLED)
             streams.ack(redis, queue, msg_id)
             return "skipped"
 
@@ -419,7 +451,10 @@ def serve_forever(consumer: str | None = None) -> None:  # pragma: no cover
 
                 Path(liveness_path).touch()
             reap_orphaned_jobs(redis)
-            capture_lifecycle.sweep(redis)
+            try:
+                capture_sweep.sweep(redis)
+            except Exception:  # noqa: BLE001 - a sweep failure must never stall job processing
+                log.exception("worker.capture_sweep_error")
             run_once(redis, consumer)
         except Exception:  # noqa: BLE001 - keep the loop alive
             log.exception("worker.loop_error")

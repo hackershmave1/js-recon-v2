@@ -89,15 +89,31 @@ After CORRELATING:
 The spec is reclassified on every pass. Run notifications and `ended_at` happen only at the
 terminal transition.
 
-### Sweeper (`worker/main.py`, beside `reap_orphaned_jobs`)
+### Sweeper (`runs/capture_sweep.py`, called from the worker loop in its own try)
 
 The worker loop already ticks about every 3 s when idle. Each tick:
-- Claims due passes with a guarded update: `SET reanalyze_after=NULL WHERE state='capturing' AND
-  reanalyze_after < now()`. Only the row-count winner inserts the DISCOVERING Job, and publishes
-  after commit.
+- Settles resting captures with no live Job that are due (`reanalyze_after` passed) or sealed
+  (marker NULL), through a guarded claim; only the row-count winner acts. Settling starts a pass
+  if a file is unanalyzed, finishes a sealed capture, and otherwise just clears the schedule. The
+  sealed case is the safety net for End racing a finalize. Each run is isolated, so one failing
+  run never stalls the tick.
 - Auto-ends idle captures: an open capture (QUEUED or CAPTURING) whose newest file is more than
   24 h old → the End path.
 - Stranded-job re-publish stays the existing follow-up (`coordinator.publish_stage_job` NOTE).
+
+### Invariants added after code review
+
+- Every terminal transition releases the capture marker and any scheduled pass
+  (`runs/service._apply_transition`), however the run ended: a failed pass, a cancel at a
+  checkpoint, or the orphan reaper.
+- Only one pass is queued or running per run. `capture_pass.can_start_pass` checks for a live Job
+  under the run-row lock, because a queued pass leaves the run in CAPTURING.
+- A batch with a `runId` re-checks, under a share lock in its own transaction, that its capture is
+  still open (`capture_lifecycle.accept_batch`). Otherwise it rolls back and gets `capture_ended`.
+- Pause on a CAPTURING run is refused (409). A pause flag carried into CAPTURING is cleared at
+  finalize, and one the worker can't honour drops its job instead of leaving the message unacked.
+- Start reuses an EMPTY open capture rather than ending (deleting) it.
+- "Add to scope" requires sign-in: session scope also bounds a crawl re-run's egress.
 
 ### Read model
 

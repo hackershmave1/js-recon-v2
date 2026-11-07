@@ -648,6 +648,13 @@ re-analysis costs nearly a full one. The single worker serves these between othe
 
 **Fix:** a stored per-run index merged per pass (with D82), and correlate over new observations only.
 
+Related edges accepted for now:
+- A pass's progress counts every file in the run (`analyze.py` total), so a pass over 3 new files
+  reads "3 of 500".
+- The 10 s quiet period has no maximum wait. Continuous browsing keeps postponing the automatic
+  update; "Analyze now" forces one.
+- Observations sent while a pass is past its correlate read reach only the next pass.
+
 #### D84 · A finding-identity bump during an open capture duplicates its findings [S]  ·  correctness
 
 A capture can now stay open across a deploy that bumps `FINDING_HASH_VERSION`

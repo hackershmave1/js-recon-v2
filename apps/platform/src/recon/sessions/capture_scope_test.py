@@ -55,3 +55,10 @@ def test_add_scope_entry_rejects_an_invalid_host(tenant):
     sid = _session(tenant, ["acme.io"], "ext-a")
     with pytest.raises(capture_scope.InvalidScopeEntry):
         capture_scope.add_scope_entry(tenant, sid, "*")
+
+
+def test_only_extension_sessions_can_be_continued(tenant):
+    sessions_service.create_session(
+        tenant, name="crawl", scope_hosts=["acme.io"], authorized_by="t"
+    )
+    assert capture_scope.sessions_for_scope(tenant, "acme.io") == []

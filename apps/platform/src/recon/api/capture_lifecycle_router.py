@@ -64,7 +64,14 @@ def capture_end(
 ) -> dict:
     ingest._enforce_origin_lock(origin, enabled=get_settings().capture_ingest_origin_lock)
     tenant_id, _ = ingest._resolve_ingest_tenant(authorization)
-    run_id = run_of_session(tenant_id, ext_session_id, body.runId)
+    if ingest._find_session_by_external_id(tenant_id, ext_session_id) is None:
+        raise HTTPException(status_code=404, detail="unknown capture session")
+    run_id = _capture_run(tenant_id, ext_session_id, body.runId)
+    if run_id is None:
+        if _run_exists(tenant_id, body.runId):
+            raise HTTPException(status_code=404, detail="unknown capture")
+        # Gone: an empty capture is deleted at End, so a retried End finds nothing, and succeeds.
+        return {"ended": True, "runId": None}
     observed = ingest._normalize_observations(body.observations)
     return capture_lifecycle.end_capture(get_redis(), tenant_id, run_id, observations=observed)
 
@@ -73,7 +80,7 @@ def capture_end(
 def capture_sessions_for_scope(
     scope: str, authorization: str | None = Header(default=None, alias="Authorization")
 ) -> dict:
-    """ "Continue acme.io": sessions whose scope holds ``scope``, with their largest capture.
+    """The popup's "Continue acme.io": sessions whose scope holds ``scope``, with their largest capture.
     Signed-in only: a session's external id is a write capability for its captures, so it is
     never listed to an anonymous caller of the shared capture tenant."""
     tenant_id, signed_in = ingest._resolve_ingest_tenant(authorization)
@@ -89,9 +96,13 @@ def add_to_scope(
     origin: str | None = Header(default=None, alias="Origin"),
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> dict:
-    """ "Add to scope" on the popup's new-site badge."""
+    """The popup's "Add to scope" on the new-site badge. Signed-in only: session scope also
+    bounds what a crawl re-run of the session may reach, so the shared anonymous capture tenant
+    must not be able to widen it."""
     ingest._enforce_origin_lock(origin, enabled=get_settings().capture_ingest_origin_lock)
-    tenant_id, _ = ingest._resolve_ingest_tenant(authorization)
+    tenant_id, signed_in = ingest._resolve_ingest_tenant(authorization)
+    if not signed_in:
+        raise HTTPException(status_code=401, detail="sign in to change a session's scope")
     session_id = ingest._find_session_by_external_id(tenant_id, ext_session_id)
     if session_id is None:
         raise HTTPException(status_code=404, detail="unknown capture session")
@@ -103,14 +114,34 @@ def add_to_scope(
 
 
 def run_of_session(tenant_id: str, ext_session_id: str, run_id: str | None) -> str:
-    """``run_id`` if it is a run of this extension session, else 404, so one session can never
-    end or analyze another's capture."""
+    """``run_id`` if it is a CAPTURE run of this extension session, else 404: one session can
+    never end or analyze another's capture, nor a crawl run that shares its session (an
+    extension manifest written onto a crawl would flip its PARTIAL to DONE)."""
+    run = _capture_run(tenant_id, ext_session_id, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="unknown capture")
+    return run
+
+
+def _capture_run(tenant_id: str, ext_session_id: str, run_id: str | None) -> str | None:
     session_id = ingest._find_session_by_external_id(tenant_id, ext_session_id)
     clean = ingest._safe_uuid(run_id)
     if session_id is None or clean is None:
-        raise HTTPException(status_code=404, detail="unknown capture")
+        return None
     with tenant_session(tenant_id) as session:
-        owner = session.scalar(select(Run.session_id).where(Run.id == clean))
-    if owner is None or str(owner) != str(session_id):
-        raise HTTPException(status_code=404, detail="unknown capture")
+        row = session.execute(
+            select(Run.session_id, Run.target, Run.input_ref, Run.crawl_mode).where(Run.id == clean)
+        ).first()
+    if row is None or str(row.session_id) != str(session_id):
+        return None
+    if row.target is not None or row.input_ref is not None or row.crawl_mode is not None:
+        return None  # a crawl or upload run, not a capture
     return clean
+
+
+def _run_exists(tenant_id: str, run_id: str | None) -> bool:
+    clean = ingest._safe_uuid(run_id)
+    if clean is None:
+        return False
+    with tenant_session(tenant_id) as session:
+        return session.scalar(select(Run.id).where(Run.id == clean)) is not None

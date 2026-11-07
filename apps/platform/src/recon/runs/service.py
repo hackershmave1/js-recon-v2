@@ -31,6 +31,11 @@ class TransitionConflict(Exception):
     """The run was not in the expected state — another actor moved it first."""
 
 
+class RunNotPausable(TransitionConflict):
+    """A capture resting between analysis passes has nothing running to pause; the extension's
+    Pause stops listening instead (capture lifecycle). The API maps it to 409."""
+
+
 @dataclass(frozen=True)
 class RunView:
     id: str
@@ -92,6 +97,11 @@ def _apply_transition(
         # `completed` arg + the discover.assets event + run_assets, and the worker
         # compares run.state, never run.stage.
         values["ended_at"] = _utcnow()
+        # A finished run is never an open capture: release the marker (and any scheduled pass)
+        # however it ended — a failed pass, a cancel at a checkpoint, the orphan reaper — or the
+        # session's next Start and batches would land in a dead run.
+        values["capture_external_id"] = None
+        values["reanalyze_after"] = None
     if run.started_at is None and to_state in sm.ACTIVE_STATES:
         values["started_at"] = _utcnow()
     if extra_values:
@@ -203,6 +213,8 @@ def request_pause(
             raise RunNotFound(run_id)
         if sm.is_terminal(RunState(run.state)):
             raise TransitionConflict("cannot pause a terminal run")
+        if RunState(run.state) == RunState.CAPTURING:
+            raise RunNotPausable("nothing is running: pause the capture from the extension")
         session.execute(update(Run).where(Run.id == run.id).values(pause_requested=True))
         session.refresh(run)
         events.append(

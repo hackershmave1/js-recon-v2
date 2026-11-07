@@ -11,7 +11,7 @@ from recon.db.base import tenant_session
 from recon.db.models import Job, Run
 from recon.discover import manifest as discovery
 from recon.domain import RunStage, RunState
-from recon.runs import assets, capture_lifecycle, service
+from recon.runs import assets, capture_lifecycle, capture_sweep, service
 
 pytestmark = pytest.mark.integration
 
@@ -43,6 +43,13 @@ def _add_files(tenant, run_id, n, *, start=0, analyzed=False):
 
 
 def _to_capturing(redis, tenant, run_id):
+    """The pass the test started ran to completion and the capture now rests."""
+    with tenant_session(tenant) as s:
+        s.execute(
+            update(Job)
+            .where(Job.run_id == run_id, Job.state.in_(["queued", "running"]))
+            .values(state="succeeded")
+        )
     for st in (
         RunState.DISCOVERING,
         RunState.FETCHING,
@@ -220,8 +227,8 @@ def test_sweeper_starts_due_passes_only(redis, authorized_session):
             .values(reanalyze_after=func.now() - text("interval '1 second'"))
         )
 
-    capture_lifecycle.sweep(redis)
-    capture_lifecycle.sweep(redis)  # a second tick must not start a second pass
+    capture_sweep.sweep(redis)
+    capture_sweep.sweep(redis)  # a second tick must not start a second pass
 
     assert _jobs(tenant, due) == 2
     assert _run(tenant, due).reanalyze_after is None
@@ -237,7 +244,7 @@ def test_sweeper_ends_a_capture_idle_for_a_day(redis, authorized_session):
             {"r": run_id},
         )
 
-    capture_lifecycle.sweep(redis)
+    capture_sweep.sweep(redis)
 
     assert _run(tenant, run_id).capture_external_id is None
     assert _jobs(tenant, run_id) == 1
@@ -248,7 +255,7 @@ def test_sweeper_leaves_an_active_capture_open(redis, authorized_session):
     run_id = capture_lifecycle.start_capture(redis, tenant, session_id, EXT)
     _add_files(tenant, run_id, 1)
 
-    capture_lifecycle.sweep(redis)
+    capture_sweep.sweep(redis)
 
     assert _run(tenant, run_id).capture_external_id == EXT
 

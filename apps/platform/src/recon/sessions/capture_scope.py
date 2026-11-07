@@ -21,6 +21,8 @@ from recon.db.models import EngagementSession, Run
 from recon.fetch import egress
 from recon.sessions import run_stats
 
+MAX_MATCHES = 10  # each match costs a run_stats scan; the popup lists a handful at most
+
 
 class InvalidScopeEntry(ValueError):
     """Not a usable host: the API maps it to 422."""
@@ -59,8 +61,11 @@ def sessions_for_scope(tenant_id: str, entry: str) -> list[ScopeMatch]:
             .where(
                 EngagementSession.scope_hosts.contains([host]),
                 EngagementSession.archived_at.is_(None),
+                # Only extension sessions can be continued: Continue adopts the external id.
+                EngagementSession.external_id.is_not(None),
             )
             .order_by(EngagementSession.created_at.desc())
+            .limit(MAX_MATCHES)
         ).all()
         matches = []
         for row in sessions:
@@ -102,7 +107,8 @@ def add_scope_entry(tenant_id: str, session_id: str, entry: str) -> list[str]:
     if host is None:
         raise InvalidScopeEntry(entry)
     with tenant_session(tenant_id) as db:
-        row = db.get(EngagementSession, session_id)
+        # Locked: two quick "Add to scope" clicks must both land (read-modify-write).
+        row = db.get(EngagementSession, session_id, with_for_update=True)
         if row is None:
             raise LookupError(session_id)
         scope = [str(h) for h in row.scope_hosts or []]

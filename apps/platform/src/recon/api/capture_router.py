@@ -405,27 +405,31 @@ def _valid_source_map(f: dict, max_bytes: int) -> tuple[bytes | None, bool]:
     return data, False
 
 
+class _CaptureEnded(Exception):
+    """Raised inside a batch's transaction when its capture closed meanwhile (rolls it back)."""
+
+
 def _ended_capture_batch(
     tenant_id: str, run_id: str, payload: SaveFilesIn, paired: bool, session_id: str
 ) -> dict:
-    """A batch for a capture that has ended. A retry of files already stored (the extension
-    re-sends a batch whose ack it never saw) is a harmless no-op; a batch with NEW files is a
-    non-retryable 409, never a new run (the stray one-file run of the old seal-on-analyze path)."""
+    """A batch for a capture that has ended. A retry of files already stored in it (the extension
+    re-sends a batch whose ack it never saw) is a harmless no-op; anything else is a non-retryable
+    409, never a new run (the stray one-file run of the old seal-on-analyze path). The answer is
+    the same 409 for another session's run, so a batch can't probe what a run holds."""
     max_bytes = get_settings().max_upload_bytes
+    parsed = [_valid_file(f, max_bytes) for f in payload.files]
     wanted = {
-        storage.object_key(tenant_id, run_id, "input", parsed[1])
-        for parsed in (_valid_file(f, max_bytes) for f in payload.files)
-        if parsed is not None
+        (url, storage.object_key(tenant_id, run_id, "input", data))
+        for url, data in (p for p in parsed if p is not None)
     }
     with tenant_session(tenant_id) as session:
+        owner = session.scalar(select(Run.session_id).where(Run.id == run_id))
         stored = set(
-            session.scalars(
-                select(RunAsset.input_ref).where(
-                    RunAsset.run_id == run_id, RunAsset.input_ref.in_(wanted)
-                )
-            ).all()
+            session.execute(
+                select(RunAsset.url, RunAsset.input_ref).where(RunAsset.run_id == run_id)
+            ).tuples()
         )
-    if wanted - stored:
+    if str(owner) != str(session_id) or not wanted or None in parsed or wanted - stored:
         raise HTTPException(status_code=409, detail="capture_ended")
     return {
         "success": True,
@@ -451,6 +455,8 @@ def _seed_fetched_assets(
     run_id: str,
     uploads: list[tuple[captured_versions.CapturedAsset, dict]],
     max_versions: int,
+    *,
+    open_capture_of: str | None = None,
 ) -> tuple[int, int]:
     """Seed this batch's stored files as ``run_asset`` rows in ONE transaction — every
     version of a re-captured url kept (``assets.add_captured_versions``) — and mark each file
@@ -460,6 +466,13 @@ def _seed_fetched_assets(
     ABSOLUTE value the slice-2 ``capture.received`` indicator reports (eventually-consistent
     under concurrent same-session batches; the UI reducer keeps the max)."""
     with tenant_session(tenant_id) as session:
+        # A named capture (runId) must still be open when its rows commit: End or Cancel may have
+        # sealed it while this batch was uploading blobs. Checked under a share lock in THIS
+        # transaction, so the batch either lands in an open capture or not at all.
+        if open_capture_of is not None and not capture_lifecycle.accept_batch(
+            session, run_id, open_capture_of
+        ):
+            raise _CaptureEnded(run_id)
         added = captured_versions.add_captured_versions(
             session,
             tenant_id=tenant_id,
@@ -610,9 +623,16 @@ def save_files(
 
     stored = added_versions = 0
     if uploads:
-        total, added_versions = _seed_fetched_assets(
-            tenant_id, run_id, uploads, settings.capture_max_versions_per_url
-        )
+        try:
+            total, added_versions = _seed_fetched_assets(
+                tenant_id,
+                run_id,
+                uploads,
+                settings.capture_max_versions_per_url,
+                open_capture_of=ext_session_id if explicit_run is not None else None,
+            )
+        except _CaptureEnded:
+            return _ended_capture_batch(tenant_id, run_id, payload, paired, session_id)
         stored = sum(1 for _, result in uploads if result["stored"])
         # Slice 2 — tell the run workspace captures are arriving, LIVE. The batch is
         # already durably stored+committed above, so this capture.received event is a

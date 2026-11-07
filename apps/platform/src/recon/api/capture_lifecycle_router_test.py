@@ -187,14 +187,65 @@ def test_lookup_requires_a_login(client):
     assert r.status_code == 401
 
 
-def test_add_to_scope(client):
+def test_add_to_scope(client, monkeypatch):
+    anonymous = client.post(f"/api/sessions/{uuid.uuid4()}/scope", json={"add": "beta.example"})
+    c, auth = _operator(monkeypatch)
     sid = str(uuid.uuid4())
-    _start(client, sid)
+    c.post(f"/api/sessions/{sid}/capture/start", json={"rootDomains": ["acme.io"]}, headers=auth)
 
-    r = client.post(f"/api/sessions/{sid}/scope", json={"add": "beta.example"})
-    bad = client.post(f"/api/sessions/{sid}/scope", json={"add": "*"})
-    unknown = client.post(f"/api/sessions/{uuid.uuid4()}/scope", json={"add": "beta.example"})
+    r = c.post(f"/api/sessions/{sid}/scope", json={"add": "beta.example"}, headers=auth)
+    bad = c.post(f"/api/sessions/{sid}/scope", json={"add": "*"}, headers=auth)
+    unknown = c.post(
+        f"/api/sessions/{uuid.uuid4()}/scope", json={"add": "beta.example"}, headers=auth
+    )
 
+    assert anonymous.status_code == 401
     assert r.status_code == 200 and r.json()["scope_hosts"] == ["acme.io", "beta.example"]
     assert bad.status_code == 422
     assert unknown.status_code == 404
+
+
+# --- review regressions ------------------------------------------------------------------------
+
+
+def test_repeating_end_of_an_empty_capture_is_fine(client):
+    sid = str(uuid.uuid4())
+    run_id = _start(client, sid)
+
+    first = client.post(f"/api/sessions/{sid}/capture/end", json={"runId": run_id})
+    again = client.post(f"/api/sessions/{sid}/capture/end", json={"runId": run_id})
+
+    assert first.status_code == 200 and again.status_code == 200
+    assert again.json()["ended"] is True
+
+
+def test_analyze_and_end_only_act_on_capture_runs(client, redis):
+    from recon.runs import service as runs_service
+
+    sid = str(uuid.uuid4())
+    _start(client, sid)
+    tenant = _tenant(client)
+    with tenant_session(tenant) as s:
+        session_id = str(s.scalar(select(Run.session_id).where(Run.capture_external_id == sid)))
+    crawl = runs_service.create_run(
+        redis,
+        tenant_id=tenant,
+        session_id=session_id,
+        target="https://acme.io",
+    )
+
+    analyze = client.post(f"/api/sessions/{sid}/analyze/start", json={"runId": crawl.id})
+    end = client.post(f"/api/sessions/{sid}/capture/end", json={"runId": crawl.id})
+
+    assert analyze.status_code == 404 and end.status_code == 404
+
+
+def test_a_late_batch_cannot_probe_another_sessions_run(client):
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    run_a = _start(client, a)
+    _save(client, a, run_a, _file("https://app.acme.io/a.js", "a()", a))
+    _start(client, b)
+
+    probe = _save(client, b, run_a, _file("https://app.acme.io/a.js", "a()", b))
+
+    assert probe.status_code == 409  # same answer whether or not the file is stored there
