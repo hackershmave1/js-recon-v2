@@ -39,7 +39,7 @@ from recon.db import models
 from recon.db.base import tenant_session
 from recon.domain import FindingType
 from recon.events.log import record_event
-from recon.findings import base_url, normalize, queries
+from recon.findings import base_url, normalize, queries, visibility
 from recon.spec.classify import Classification, SpecSummary, classify_operation, summarize
 from recon.spec.ingest import DocumentedOp, IngestedSpec, ingest_spec
 
@@ -303,13 +303,22 @@ def _run_scoped_summary(
     """Narrow `_classify_session`'s session-wide verdict map down to just
     `run_id`'s own endpoint findings, then bucket-count (§5.4/§6.3: storage is
     session-scoped, but the summary + self-audit ratio a caller sees are
-    run-scoped)."""
-    run_hashes = session.scalars(
-        select(models.Finding.finding_hash).where(
-            models.Finding.run_id == str(run_id),
-            models.Finding.type == FindingType.ENDPOINT.value,
-        )
-    ).all()
+    run-scoped).
+
+    Hidden findings (`visibility`) are left out of the counts, so this summary matches the one
+    the findings read shows on reload (D74). Their verdicts are still stored above: hiding is a
+    reversible read-time overlay, and "Show hidden" brings them back classified."""
+    hidden = visibility.hidden_finding_ids(session, run_id)
+    run_hashes = [
+        finding_hash
+        for finding_id, finding_hash in session.execute(
+            select(models.Finding.id, models.Finding.finding_hash).where(
+                models.Finding.run_id == str(run_id),
+                models.Finding.type == FindingType.ENDPOINT.value,
+            )
+        ).all()
+        if str(finding_id) not in hidden
+    ]
     return summarize(verdicts[h] for h in run_hashes if h in verdicts)
 
 
