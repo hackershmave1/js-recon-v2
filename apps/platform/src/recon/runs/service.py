@@ -226,7 +226,7 @@ def request_cancel(
     redis: Redis, *, tenant_id: str, run_id: str, actor: str | None = None
 ) -> RunView:
     """Signal a cancel (REQ-A4). Active runs cancel at the worker's next
-    checkpoint; queued/paused runs cancel immediately. ``actor`` is the verified
+    checkpoint; queued, paused and resting-capture runs cancel immediately. ``actor`` is the verified
     identity from the JWT (auth on) or None (auth off / dev mode)."""
     events: list[RecordedEvent] = []
     with tenant_session(tenant_id) as session:
@@ -246,8 +246,18 @@ def request_cancel(
                 payload={"actor": actor},
             )
         )
-        if RunState(run.state) in (RunState.QUEUED, RunState.PAUSED):
-            events.append(_apply_transition(session, run, RunState.CANCELLED, tenant_id=tenant_id))
+        if RunState(run.state) in (RunState.QUEUED, RunState.PAUSED, RunState.CAPTURING):
+            # Nothing is running, so cancel now. Close a capture too: a cancelled run must never
+            # take the extension's next batch (it gets capture_ended instead).
+            events.append(
+                _apply_transition(
+                    session,
+                    run,
+                    RunState.CANCELLED,
+                    tenant_id=tenant_id,
+                    extra_values={"capture_external_id": None, "reanalyze_after": None},
+                )
+            )
         snapshot = _snapshot(run)
     for event in events:
         publish(redis, event)

@@ -61,20 +61,20 @@ is load-bearing:
   - `CAPTURING → DONE | PARTIAL`: End with nothing new to analyze.
   - `CAPTURING → CANCELLED | FAILED`.
 - Terminal states keep no exits.
-- Migration 0035 extends `ck_run_state` and adds three columns:
-  - `run.reanalyze_after timestamptz NULL`, with a partial index where it is not null;
-  - `run.last_capture_at timestamptz NULL`;
-  - `run.capture_open boolean NOT NULL DEFAULT false`, the explicit capture discriminator once the
-    marker is cleared.
+- Migration 0035 extends `ck_run_state` and adds `run.reanalyze_after timestamptz NULL`, with a
+  partial index where it is not null.
+- The accumulator marker (`capture_external_id`) alone says a capture is open: an extension that
+  sends `runId` keeps it set through Analyze, and only End nulls it. The 24 h idle check uses the
+  newest `run_asset.created_at`, not a new column.
 
 ### Extension contract (old extensions keep today's behaviour)
 
 | Call | Behaviour |
 |---|---|
-| `POST /api/sessions/{ext}/capture/start` `{rootDomains, projectId}` | Gets or creates the session. Ends any open capture of that session (the End path). Creates the capture run with `capture_open=true` and returns `{sessionId, runId}`. |
-| `POST /api/save-files` with `metadata.runId` | Appends to that run only if it is the session's open capture. If the run is ended: a batch whose files are all already stored (url + sha) returns 200 `stored:false`, so retries are harmless; a batch with new files returns **409 `capture_ended`** (non-retryable). Without `runId` (an old extension), today's accumulator behaviour applies. Each stored batch sets `last_capture_at=now()` and, if the run already has a Job, `reanalyze_after=now()+10s`, in **the same transaction** as the asset rows. |
-| `POST /api/sessions/{ext}/analyze/start` `{runId?, observations}` | Locks the run row (`FOR UPDATE`), so one caller wins. With no Job: creates the pipeline Job and **leaves the capture open** (for a `capture_open` run). In `CAPTURING`: starts a pass. While a pass is running: sets `reanalyze_after=now()`. Observations are merged into one stored union every time, and every manifest carries its `requests_ref` forward. A run without `capture_open` (old extension) seals as today. |
-| `POST /api/sessions/{ext}/capture/end` `{runId, observations}` | Sets `capture_open=false` and merges the final observations. Then, depending on the run: in CAPTURING with unanalyzed files → final pass; in CAPTURING with none → DONE/PARTIAL; QUEUED with no Job → create the Job; mid-pass → its finalize decides. Idempotent. |
+| `POST /api/sessions/{ext}/capture/start` `{rootDomains, projectId}` | Gets or creates the session. Ends any open capture of that session (the End path). Creates the capture run (marker = the extension session id) and returns `{sessionId, runId}`. |
+| `POST /api/save-files` with `metadata.runId` | Appends to that run only if it is the session's open capture. If the run is ended: a batch whose files are all already stored (url + sha) returns 200 `stored:false`, so retries are harmless; a batch with new files returns **409 `capture_ended`** (non-retryable). Without `runId` (an old extension), today's accumulator behaviour applies. If the run already has a Job, each stored batch sets `reanalyze_after=now()+10s`, in **the same transaction** as the asset rows. |
+| `POST /api/sessions/{ext}/analyze/start` `{runId?, observations}` | Locks the run row (`FOR UPDATE`), so one caller wins. With a `runId`: with no Job, creates the pipeline Job and **leaves the capture open**. In `CAPTURING`: starts a pass. While a pass is running: sets `reanalyze_after=now()`. Observations are merged into one stored union every time, and every manifest carries its `requests_ref` forward. Without a `runId` (an older extension) it seals as today. |
+| `POST /api/sessions/{ext}/capture/end` `{runId, observations}` | Nulls the marker and merges the final observations. Ending an empty capture deletes its run. Otherwise, depending on the run: in CAPTURING with unanalyzed files → final pass; in CAPTURING with none → DONE/PARTIAL; QUEUED with no Job → create the Job; mid-pass → its finalize decides. Idempotent. |
 | `POST /api/sessions/{ext}/scope` `{add: "beta.example"}` | Adds a scope entry to the session ("Add to scope"). Normalized with `egress.normalize_scope_entry`. |
 | `GET /api/capture/sessions?scope=acme.io` | **Requires a login token** (session external ids are write capabilities). Matches the normalized scope entry exactly against `session.scope_hosts`. Returns `external_id`, `session_id`, `engagement_id`, the capture count, the last capture date, and the largest capture's file and visible-endpoint counts. |
 | `GET /api/sessions/{ext}/analyze/progress` | Unchanged shape. A capture in `CAPTURING` is non-terminal, so pending files read `queued`. |
@@ -83,7 +83,7 @@ is load-bearing:
 
 After CORRELATING:
 - files fetched but not analyzed → `CAPTURING` with `reanalyze_after=now()`;
-- else `capture_open` → `CAPTURING`;
+- else the capture is still open (marker set) → `CAPTURING`;
 - else DONE/PARTIAL as today.
 
 The spec is reclassified on every pass. Run notifications and `ended_at` happen only at the
@@ -95,19 +95,20 @@ The worker loop already ticks about every 3 s when idle. Each tick:
 - Claims due passes with a guarded update: `SET reanalyze_after=NULL WHERE state='capturing' AND
   reanalyze_after < now()`. Only the row-count winner inserts the DISCOVERING Job, and publishes
   after commit.
-- Auto-ends idle captures: `capture_open AND last_capture_at < now() - 24h` → the End path.
-- Re-publishes stranded jobs: a run that is QUEUED or CAPTURING with a Job that has no message.
+- Auto-ends idle captures: an open capture (QUEUED or CAPTURING) whose newest file is more than
+  24 h old → the End path.
+- Stranded-job re-publish stays the existing follow-up (`coordinator.publish_stage_job` NOTE).
 
 ### Read model
 
 - `findings/queries.py` popup summary: read `capturing` runs too.
 - `findings/queries.py` run diff: `capturing` counts as incomplete.
-- `runs/service.request_cancel`: cancels a CAPTURING run immediately.
+- `runs/service.request_cancel`: cancels a CAPTURING run immediately and closes it (marker nulled).
 - `GET /sessions/{id}/runs`: each run gains `files` and `endpoints` (shown findings, through
   `visible_type_counts`) for the 20 newest runs. Older runs get `null`.
 - Progress: a pass reports `total` = the files that pass will analyze, not every file in the run.
 
-### Known limits (DEBT entries)
+### Known limits (DEBT D82–D84)
 
 - An old file analyzed in an earlier pass does not re-resolve against exports from a file that
   arrived later. This is narrow, because static ESM imports load before their importers. The fix is

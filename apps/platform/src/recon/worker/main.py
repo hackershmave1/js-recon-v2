@@ -26,7 +26,7 @@ from recon.observability import bind_run, get_logger
 from recon.probe import source_index
 from recon.progress import heartbeat as progress
 from recon.queue import retry, streams
-from recon.runs import coordinator, failure, queries, service
+from recon.runs import capture_lifecycle, coordinator, failure, queries, service
 from recon.runs import state_machine as sm
 
 log = get_logger("recon.worker")
@@ -419,6 +419,7 @@ def serve_forever(consumer: str | None = None) -> None:  # pragma: no cover
 
                 Path(liveness_path).touch()
             reap_orphaned_jobs(redis)
+            capture_lifecycle.sweep(redis)
             run_once(redis, consumer)
         except Exception:  # noqa: BLE001 - keep the loop alive
             log.exception("worker.loop_error")

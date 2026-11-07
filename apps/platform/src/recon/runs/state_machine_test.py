@@ -82,3 +82,27 @@ def test_next_stage_covers_every_stage_exactly_once():
 def test_state_for_stage_maps_cleanly():
     for stage in STAGE_ORDER:
         assert sm.state_for_stage(stage) == RunState(stage.value)
+
+
+# --- capture lifecycle: the non-terminal CAPTURING rest state between analysis passes ---
+
+
+def test_capturing_is_neither_terminal_nor_active():
+    assert not sm.is_terminal(RunState.CAPTURING)
+    assert RunState.CAPTURING not in ACTIVE_STATES
+
+
+def test_a_pass_on_an_open_capture_rests_in_capturing():
+    assert sm.can_transition(RunState.CORRELATING, RunState.CAPTURING)
+
+
+def test_capturing_starts_the_next_pass_or_ends():
+    assert sm.can_transition(RunState.CAPTURING, RunState.DISCOVERING)
+    for end in (RunState.DONE, RunState.PARTIAL, RunState.CANCELLED, RunState.FAILED):
+        assert sm.can_transition(RunState.CAPTURING, end)
+
+
+def test_capturing_cannot_skip_into_a_later_stage_or_pause():
+    assert not sm.can_transition(RunState.CAPTURING, RunState.ANALYZING)
+    assert not sm.can_transition(RunState.CAPTURING, RunState.PAUSED)
+    assert not sm.can_transition(RunState.QUEUED, RunState.CAPTURING)

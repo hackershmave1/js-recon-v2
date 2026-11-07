@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from redis import Redis
-from sqlalchemy import desc, select, update
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.orm import Session
 
 from recon import storage
@@ -342,13 +342,17 @@ def advance(redis: Redis, *, tenant_id: str, run_id: str, completed: RunStage) -
         enqueue_stage(redis, tenant_id=tenant_id, run_id=run_id, stage=nxt)
         return
     try:
-        to_state, completeness = _finalize_state(tenant_id, run_id)
+        to_state, completeness, pass_due = _finalize_state(tenant_id, run_id)
+        extra: dict = {"completeness": completeness}
+        if pass_due:
+            # Due now, unless a batch already set its quiet-period deadline (keep that debounce).
+            extra["reanalyze_after"] = func.coalesce(Run.reanalyze_after, func.now())
         service.transition(
             redis,
             tenant_id=tenant_id,
             run_id=run_id,
             to_state=to_state,
-            extra_values={"completeness": completeness},
+            extra_values=extra,
         )
 
         # Fresh finalize only: a duplicate/concurrent delivery raises out of
@@ -371,8 +375,14 @@ def advance(redis: Redis, *, tenant_id: str, run_id: str, completed: RunStage) -
         pass
 
 
-def _finalize_state(tenant_id: str, run_id: str) -> tuple[RunState, dict]:
-    """DONE vs PARTIAL from per-asset status (REQ-D5).
+def _finalize_state(tenant_id: str, run_id: str) -> tuple[RunState, dict, bool]:
+    """DONE vs PARTIAL from per-asset status (REQ-D5) — or CAPTURING for a capture that isn't
+    over, with whether another analysis pass is due right away.
+
+    A capture rests in CAPTURING (non-terminal) while it is still open (its accumulator marker is
+    set: the extension hasn't pressed End), or while files that landed DURING this pass are still
+    unanalyzed — finishing then would report PARTIAL over files nobody tried to analyze. Only a
+    capture run can have such files: a crawl's assets are all known before ANALYZING.
 
     The discriminator for "is this a crawl run" is the presence of a
     discover.assets event, NOT the run_asset row count — a crawl that timed out
@@ -382,12 +392,23 @@ def _finalize_state(tenant_id: str, run_id: str) -> tuple[RunState, dict]:
     """
     found = discovery.read_latest(tenant_id, run_id)
     if found is None:
-        return RunState.DONE, {"fetch_ok": True, "analyze_ok": True}
+        return RunState.DONE, {"fetch_ok": True, "analyze_ok": True}, False
     rows = run_assets.list_for_run(tenant_id, run_id)
     fetch_ok = found.is_complete and all(a.fetch_status == AssetStatus.OK.value for a in rows)
     analyze_ok = fetch_ok and all(a.analyze_status == AssetStatus.OK.value for a in rows)
+    completeness = {"fetch_ok": fetch_ok, "analyze_ok": analyze_ok}
+    unanalyzed = any(
+        a.fetch_status == AssetStatus.OK.value and a.analyze_status == AssetStatus.PENDING.value
+        for a in rows
+    )
+    with tenant_session(tenant_id) as session:
+        capture_open = (
+            session.scalar(select(Run.capture_external_id).where(Run.id == str(run_id))) is not None
+        )
+    if unanalyzed or capture_open:
+        return RunState.CAPTURING, completeness, unanalyzed
     to_state = RunState.DONE if (fetch_ok and analyze_ok) else RunState.PARTIAL
-    return to_state, {"fetch_ok": fetch_ok, "analyze_ok": analyze_ok}
+    return to_state, completeness, False
 
 
 def resume_run(redis: Redis, *, tenant_id: str, run_id: str, actor: str | None = None) -> RunView:

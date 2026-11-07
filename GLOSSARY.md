@@ -5,19 +5,34 @@ decision settles one (see `docs/agents/domain.md`).
 
 ## Capture session
 
-One run of runtime JS capture in the browser extension, identified by a **capture session id**
-(`sessionId`). Everything captured under that id — files, dedup set, API-call observations,
-counters — belongs to it, and the platform binds the session to at most one **engagement**,
-immutably. So changing the engagement means starting a new capture session, and a tenant change
-starts a fresh, unbound (**standalone**) one. Owned by `CaptureSession`
+A researcher's ongoing runtime-JS capture of one target in the browser extension, identified by a
+**capture session id** (`sessionId`). It holds every **capture** of that target ("Continue" adds a
+capture to it). The platform binds it to at most one **engagement**, immutably, so changing the
+engagement means starting a new capture session, and a tenant change starts a fresh, unbound
+(**standalone**) one. Owned by `CaptureSession`
 (`apps/capture/chrome-extension/modules/capture-session.js`).
 
-_Avoid_: "capture" alone for the session (a capture is one file), "run" (that's the platform's
-analysis run the session's uploads accumulate into).
+_Avoid_: "run" for the session (a session holds many).
+
+## Capture
+
+One stretch of capturing inside a capture session, from **Start capture** to **End capture** (or
+the automatic end after a day without new files). It is exactly one platform run. "Analyze now"
+analyzes a capture without ending it: files that arrive later join the same capture, and its
+analysis updates. A capture that has been analyzed but not ended is **capturing**.
+
+_Avoid_: "capture" for a single uploaded file (say "captured file"), "round".
+
+## Capturing
+
+A capture between analysis passes: its findings can be read, and more files may still arrive. It
+is not finished. Only End (or the automatic end) finishes it, which the workspace shows once, as
+Done.
 
 ## Session scope
 
-The hosts a researcher declares as the target of one **capture session**: what counts as "in
+The hosts a researcher declares as the target of one **capture session**, set in the popup when a
+**capture** starts: what counts as "in
 scope" for that session's hosts, findings and sources. Each session owns its own scope; an
 **engagement** groups many sessions, each with its own scope, and has no scope of its own.
 

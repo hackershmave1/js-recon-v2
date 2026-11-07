@@ -52,6 +52,17 @@ def _build_allowed() -> dict[RunState, frozenset[RunState]]:
         RunState.FAILED,
     }
 
+    # Capture lifecycle: a pass over an open capture rests in CAPTURING instead of ending the
+    # run; the next pass starts from DISCOVERING, and End (or auto-end) finishes it.
+    allowed[RunState.CORRELATING].add(RunState.CAPTURING)
+    allowed[RunState.CAPTURING] |= {
+        RunState.DISCOVERING,
+        RunState.DONE,
+        RunState.PARTIAL,
+        RunState.CANCELLED,
+        RunState.FAILED,
+    }
+
     return {s: frozenset(tos) for s, tos in allowed.items()}
 
 

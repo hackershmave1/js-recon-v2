@@ -42,8 +42,15 @@ from recon.sessions import service as sessions_service
 
 log = get_logger("recon.threat_model")
 
+# Runs with readable findings: the terminal states plus a capture resting between passes.
 _TERMINAL_STATES = frozenset(
-    {RunState.DONE.value, RunState.PARTIAL.value, RunState.FAILED.value, RunState.CANCELLED.value}
+    {
+        RunState.DONE.value,
+        RunState.PARTIAL.value,
+        RunState.FAILED.value,
+        RunState.CANCELLED.value,
+        RunState.CAPTURING.value,
+    }
 )
 
 # Finding types that feed the threat model context.

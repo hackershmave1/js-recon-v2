@@ -32,6 +32,7 @@ from recon.fetch import egress
 from recon.findings.coverage import read_run_coverage
 from recon.findings.queries import files_collected, visible_type_counts
 from recon.observability import get_logger
+from recon.sessions import run_stats
 
 _logger = get_logger(__name__)
 
@@ -68,6 +69,9 @@ class RunRefView:
     # Classified failure (safe subset of run.error; only set on a FAILED run).
     failure_category: str | None = None
     failure_reason: str | None = None
+    # Run switcher counts (sessions.run_stats): None = not computed (an older run), not zero.
+    files: int | None = None
+    endpoints: int | None = None
 
 
 @dataclass(frozen=True)
@@ -270,7 +274,8 @@ def list_runs_for_session(tenant_id: str, session_id: str) -> list[RunRefView] |
         rows = session.scalars(
             select(Run).where(Run.session_id == str(session_id)).order_by(Run.created_at.desc())
         ).all()
-        return [_run_ref(run) for run in rows]
+        stats = run_stats.run_stats(session, rows)
+        return [_run_ref(run, stats.get(str(run.id))) for run in rows]
 
 
 def rename_session(tenant_id: str, session_id: str, *, name: str) -> SessionView | None:
@@ -402,8 +407,9 @@ def _view(row: EngagementSession) -> SessionView:
     )
 
 
-def _run_ref(run: Run) -> RunRefView:
+def _run_ref(run: Run, stats: tuple[int, int] | None = None) -> RunRefView:
     err = run.error or {}
+    files, endpoints = stats if stats is not None else (None, None)
     return RunRefView(
         run_id=str(run.id),
         state=run.state,
@@ -413,6 +419,8 @@ def _run_ref(run: Run) -> RunRefView:
         target=run.target,
         failure_category=err.get("category"),
         failure_reason=err.get("reason"),
+        files=files,
+        endpoints=endpoints,
     )
 
 

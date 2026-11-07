@@ -180,12 +180,19 @@ class Run(Base):
         # non-capture run and for a SEALED capture round (analyze/start nulls it in
         # the same tx that inserts the Job). NULLS DISTINCT → only open accumulators
         # bind, one per (tenant, ext sessionId), so concurrent first batches can't
-        # create duplicate runs. Added in migration 0011.
+        # create duplicate runs. Added in migration 0011. Capture lifecycle (0035): a
+        # capture started with an explicit runId stays OPEN through Analyze — only End
+        # (or the 24 h idle auto-end) nulls it; an older extension still seals on analyze.
         Index(
             "uq_run_tenant_capture_external_id",
             "tenant_id",
             "capture_external_id",
             unique=True,
+        ),
+        Index(
+            "ix_run_reanalyze_after",
+            "reanalyze_after",
+            postgresql_where=text("reanalyze_after IS NOT NULL"),
         ),
     )
 
@@ -233,6 +240,10 @@ class Run(Base):
     scan_suspected_secrets: Mapped[bool | None] = mapped_column(Boolean)
     # Capture-ingest open-accumulator marker (see __table_args__). Added in 0011.
     capture_external_id: Mapped[str | None] = mapped_column(Text)
+    # Capture lifecycle: when the next analysis pass of a CAPTURING run is due. Each batch that
+    # lands after the run's first Job pushes it ~10 s ahead (debounce); the worker's sweeper starts
+    # the pass once it has passed. NULL = nothing pending.
+    reanalyze_after: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[dt.datetime] = _now_col(nullable=False)
     started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))

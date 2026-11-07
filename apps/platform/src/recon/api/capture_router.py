@@ -47,13 +47,13 @@ from recon.api.deps import get_redis
 from recon.auth import token as auth_token
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
-from recon.db.models import EngagementSession, Job, Run, Tenant
+from recon.db.models import EngagementSession, Job, Run, RunAsset, Tenant
 from recon.discover import manifest as discovery
 from recon.domain import TERMINAL_STATES, AssetStatus, DiscoveryStatus, RunStage, RunState
 from recon.engagements import service as engagements_service
 from recon.events.log import emit, publish
 from recon.observability import get_logger
-from recon.runs import assets, captured_versions, coordinator
+from recon.runs import assets, capture_lifecycle, captured_versions, coordinator
 from recon.runs import service as runs_service
 from recon.sessions import service as sessions_service
 
@@ -87,6 +87,9 @@ class AnalyzeStartIn(BaseModel):
 
     options: dict[str, Any] = Field(default_factory=dict)
     observations: list[dict[str, Any]] = Field(default_factory=list)
+    # Capture lifecycle: the capture opened by capture/start. With it, Analyze does NOT end the
+    # capture (capture_lifecycle.analyze); without it (an older extension), it seals as before.
+    runId: str | None = None  # noqa: N815 - extension wire name
 
 
 @router.get("/health")
@@ -402,6 +405,47 @@ def _valid_source_map(f: dict, max_bytes: int) -> tuple[bytes | None, bool]:
     return data, False
 
 
+def _ended_capture_batch(
+    tenant_id: str, run_id: str, payload: SaveFilesIn, paired: bool, session_id: str
+) -> dict:
+    """A batch for a capture that has ended. A retry of files already stored (the extension
+    re-sends a batch whose ack it never saw) is a harmless no-op; a batch with NEW files is a
+    non-retryable 409, never a new run (the stray one-file run of the old seal-on-analyze path)."""
+    max_bytes = get_settings().max_upload_bytes
+    wanted = {
+        storage.object_key(tenant_id, run_id, "input", parsed[1])
+        for parsed in (_valid_file(f, max_bytes) for f in payload.files)
+        if parsed is not None
+    }
+    with tenant_session(tenant_id) as session:
+        stored = set(
+            session.scalars(
+                select(RunAsset.input_ref).where(
+                    RunAsset.run_id == run_id, RunAsset.input_ref.in_(wanted)
+                )
+            ).all()
+        )
+    if wanted - stored:
+        raise HTTPException(status_code=409, detail="capture_ended")
+    return {
+        "success": True,
+        "paired": paired,
+        "sessionId": session_id,
+        "runId": run_id,
+        "stored": 0,
+        "failed": 0,
+        "files": [
+            {
+                "url": f.get("url"),
+                "contentHash": f.get("contentHash"),
+                "stored": False,
+                "error": "already stored",
+            }
+            for f in payload.files
+        ],
+    }
+
+
 def _seed_fetched_assets(
     tenant_id: str,
     run_id: str,
@@ -423,6 +467,9 @@ def _seed_fetched_assets(
             files=[asset for asset, _ in uploads],
             max_versions=max_versions,
         )
+        # Same transaction as the rows: an analyzed capture's next pass is scheduled atomically
+        # with the files it must cover (a crash between two commits would strand them).
+        capture_lifecycle.note_batch(session, run_id)
     for url in added.versions:
         log.info("capture.asset_version_added", run_id=run_id, url=url)
     for asset, result in uploads:
@@ -472,7 +519,15 @@ def save_files(
         else []
     )
     session_id = _get_or_create_session(tenant_id, ext_session_id, engagement_id, root_domains)
-    run_id = _accumulating_run_id(tenant_id, session_id, ext_session_id, redis)
+    explicit_run = _safe_uuid(meta.get("runId"))
+    if explicit_run is not None:
+        # Capture lifecycle: the batch names its capture. Only the session's OPEN capture takes
+        # files; a late batch for an ended one never opens a stray run (see _ended_capture_batch).
+        if capture_lifecycle.find_open_run(tenant_id, ext_session_id) != explicit_run:
+            return _ended_capture_batch(tenant_id, explicit_run, payload, paired, session_id)
+        run_id = explicit_run
+    else:
+        run_id = _accumulating_run_id(tenant_id, session_id, ext_session_id, redis)
 
     file_results: list[dict] = []
     uploads: list[tuple[captured_versions.CapturedAsset, dict]] = []
@@ -714,6 +769,12 @@ def analyze_start(
     session_id = _find_session_by_external_id(tenant_id, ext_session_id)
     if session_id is None:
         raise HTTPException(status_code=404, detail="unknown capture session")
+    if body is not None and body.runId:
+        from recon.api.capture_lifecycle_router import run_of_session  # avoid an import cycle
+
+        run_id = run_of_session(tenant_id, ext_session_id, body.runId)
+        observed = _normalize_observations(body.observations) if body.observations else []
+        return capture_lifecycle.analyze(redis, tenant_id, run_id, observations=observed)
 
     run_id = _latest_run_id(tenant_id, session_id)
     if run_id is None:

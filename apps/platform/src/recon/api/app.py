@@ -91,9 +91,10 @@ def create_app() -> FastAPI:
     # state-changing POSTs are Origin-locked against cross-site writes
     # (capture_router._enforce_origin_lock). See api/capture_router.py.
     if settings.enable_capture_ingest:
-        from recon.api import capture_router
+        from recon.api import capture_lifecycle_router, capture_router
 
         app.include_router(capture_router.router)
+        app.include_router(capture_lifecycle_router.router)
         log.info("api.capture_ingest_enabled")
 
     # D53-a: count every HTTP request. Added first so it wraps ALL routes (Starlette
