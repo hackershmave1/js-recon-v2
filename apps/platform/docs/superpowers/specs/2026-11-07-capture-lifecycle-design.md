@@ -193,8 +193,13 @@ Corrections the build must keep:
   folds into `updateBadge`, so the dot survives the file counter and shows while paused.
 - **Worker-serialized** Start/End (a promise chain, like `hookSync`). Start is refused while ending,
   and it gets the 300 s popup timeout.
-- A capture paused for more than 24 h was already auto-ended by the server: on Resume it reads as
-  ended.
+- No local idle clock: Resume always resumes. If the platform's 24 h sweeper has already ended the
+  capture, the next batch's `409 capture_ended` closes it locally ("Capture ended").
+- `chrome.storage.session` is also cleared by an extension update or reload, so those pause a live
+  capture too (the same as a browser restart). The boot marker is readable by content scripts
+  (storage-access.js), so a hostile page could at worst force that pause.
+- A runId is stamped when a request is ADMITTED (dependencies inherit their parent's), and End waits
+  for queued + in-flight processing as well as uploads.
 
 ## Extension (original plan, superseded above)
 
