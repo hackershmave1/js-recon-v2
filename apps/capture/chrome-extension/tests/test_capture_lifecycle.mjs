@@ -12,7 +12,7 @@ function storage(seed = {}) {
   };
 }
 
-function harness({ local = storage(), session = storage(), api: apiOverrides = {}, stats } = {}) {
+function harness({ local = storage(), session = storage(), api: apiOverrides = {}, stats, processing } = {}) {
   let t = 1_000_000;
   const calls = [];
   const gates = [];
@@ -30,14 +30,18 @@ function harness({ local = storage(), session = storage(), api: apiOverrides = {
     async adopt(id, { binding }) { this.sessionId = id; calls.push(['adopt', id, binding]); },
     resetForCapture() { calls.push(['reset']); },
   };
+  const retries = [];
+  const proc = { n: processing || 0 };
   const lc = new CaptureLifecycle({
     local, session, api, captureSession: cs,
+    getProcessing: () => proc.n,
+    scheduleRetry: () => retries.push(t),
     uploader: { flushAll: async () => { calls.push(['flush']); }, getStats: () => uploaderStats },
     applyGate: async (g) => { gates.push(structuredClone(g)); },
     now: () => t,
     sleep: async () => {},
   });
-  return { lc, calls, gates, local, session, advance: (ms) => { t += ms; }, uploaderStats };
+  return { lc, calls, gates, local, session, advance: (ms) => { t += ms; }, uploaderStats, retries, proc };
 }
 
 // 1) New capture: fresh session, server run, gate opened on the scope.
@@ -133,6 +137,8 @@ function harness({ local = storage(), session = storage(), api: apiOverrides = {
   await first.lc.draining;
   const again = harness({ local, session: storage({ captureBootMarker: 1 }) });
   await again.lc.recover();
+  assert.ok(!again.calls.some((c) => c[0] === 'end'), 'recover() alone never ends: the outbox is not loaded yet');
+  again.lc.resumePendingEnd();  // background.js calls this after rehydrate()
   await again.lc.draining;
   await again.lc.chain;
   assert.ok(again.calls.some((c) => c[0] === 'end'), 'the respawned worker finished the End');
@@ -160,13 +166,14 @@ function harness({ local = storage(), session = storage(), api: apiOverrides = {
   assert.deepEqual(h.gates.at(-1), { scope: ['acme.io', 'beta.example'], capturing: true });
 }
 
-// 10) Resume after the platform's 24 h idle auto-end reads as ended.
+// 10) Resume never ends a capture on the local clock (the platform decides; its 409 closes it).
 {
   const h = harness();
-  await h.lc.start({ scope: 'acme.io', mode: 'new' });
+  const { runId } = await h.lc.start({ scope: 'acme.io', mode: 'new' });
   await h.lc.pause();
   h.advance(25 * 60 * 60 * 1000);
-  assert.equal((await h.lc.resume()).error, 'capture_ended');
+  assert.equal((await h.lc.resume()).ok, true, 'resumed: an overnight pause is not a dead capture');
+  await h.lc.endedRemotely(runId);  // ...unless the platform says so
   assert.equal(h.lc.snapshot().capture, null);
 }
 
@@ -202,5 +209,84 @@ assert.equal(badgeText({ capturing: true, files: 1500, newSites: 1 }), '99+•')
 assert.equal(badgeText({ capturing: false, files: 12, newSites: 1 }), '•');
 assert.equal(badgeText({ capturing: false, files: 12, newSites: 0 }), '');
 assert.equal(badgeText({ capturing: true, files: 1500, newSites: 0 }), '999+');
+
+// 14) End waits for captured requests still being processed, not just the upload queue.
+{
+  const h = harness({ processing: 2 });
+  await h.lc.start({ scope: 'acme.io', mode: 'new' });
+  await h.lc.end();
+  let spins = 0;
+  h.lc.sleep = async () => { spins += 1; if (spins === 3) h.proc.n = 0; };
+  await h.lc.draining;
+  await h.lc.chain;
+  assert.ok(spins >= 3, 'kept waiting while files were being processed');
+  assert.ok(h.calls.some((c) => c[0] === 'end'));
+}
+
+// 15) Past the drain deadline End does NOT end on a partial set: it stays ending and retries later.
+{
+  const h = harness({ stats: { pendingQueueLength: 5, isUploading: false, authPaused: false } });
+  await h.lc.start({ scope: 'acme.io', mode: 'new' });
+  h.lc.sleep = async () => h.advance(60 * 1000);
+  await h.lc.end();
+  await h.lc.draining;
+  assert.equal(h.lc.snapshot().capture.ending, true);
+  assert.ok(!h.calls.some((c) => c[0] === 'end'));
+  assert.equal(h.retries.length, 1, 'a retry is armed');
+}
+
+// 16) A failed capture/end (network) arms a retry instead of hanging in "Ending…".
+{
+  const h = harness({ api: { end: async () => ({ ok: false, error: 'unreachable' }) } });
+  await h.lc.start({ scope: 'acme.io', mode: 'new' });
+  await h.lc.end();
+  await h.lc.draining;
+  assert.equal(h.lc.snapshot().capture.ending, true);
+  assert.equal(h.retries.length, 1);
+}
+
+// 17) Logout with no lifecycle capture leaves the (legacy) gate alone.
+{
+  const h = harness();
+  await h.lc.forget();
+  assert.equal(h.gates.length, 0, 'no gate write without a capture');
+}
+
+// 18) A dismissed site stays dismissed for this capture.
+{
+  const h = harness();
+  await h.lc.start({ scope: 'acme.io', mode: 'new' });
+  h.lc.noteSite('beta.example');
+  await h.lc.dismissSite('beta.example');
+  assert.equal(h.lc.noteSite('cdn.beta.example'), false);
+  assert.deepEqual(h.lc.snapshot().capture.newSites, []);
+}
+
+// 19) The scope is normalized like every scope write (no gate entry that matches nothing).
+{
+  const h = harness();
+  await h.lc.start({ scope: 'https://www.Acme.io/login', mode: 'new' });
+  assert.deepEqual(h.gates.at(-1).scope, ['acme.io']);
+  assert.equal((await harness().lc.start({ scope: '  ', mode: 'new' })).error, 'no_scope');
+}
+
+// 20) Resume on a capture that isn't paused loses no time; a restart counts only up to the last file.
+{
+  const h = harness();
+  await h.lc.start({ scope: 'acme.io', mode: 'new' });
+  h.advance(10_000);
+  await h.lc.resume();
+  assert.equal(h.lc.snapshot().capture.elapsedMs, 10_000);
+
+  const local = storage();
+  const day = harness({ local });
+  await day.lc.start({ scope: 'acme.io', mode: 'new' });
+  day.advance(2 * 60_000);
+  day.lc.noteBatch();  // last captured file at +2 min (persisted: >= 1 min since the last write)
+  const night = harness({ local, session: storage() });
+  night.advance(12 * 60 * 60 * 1000);  // browser closed overnight
+  await night.lc.recover();
+  assert.equal(night.lc.snapshot().capture.elapsedMs, 2 * 60_000, 'closed hours are not counted');
+}
 
 console.log('test_capture_lifecycle: ok');

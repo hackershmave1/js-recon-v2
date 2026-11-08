@@ -98,7 +98,13 @@ class JSExtractor {
       // Runtime request observations to ship with analyze/start (DEBT D45b1).
       getObservations: () => this.session.observations,
       // Capture lifecycle: Analyze and progress name the capture in progress (set after construction).
-      getRunId: () => (this.capture && this.capture.state ? this.capture.state.runId : null),
+      getRunId: () => {
+        const c = this.capture;
+        if (!c) return null;
+        if (c.state) return c.state.runId;
+        const ended = c.lastEnded;
+        return ended && ended.sessionId === this.session.sessionId ? ended.runId : null;
+      },
     });
     // Durable stores (IndexedDB) that outlive the service worker: the upload outbox
     // (unsent files) and the dedup set (hash -> {url, capturedAt}). Separate DBs to
@@ -132,6 +138,8 @@ class JSExtractor {
       uploader: this.batchUploader,
       applyGate: (gate) => this.applyCaptureGate(gate),
       getObservations: () => this.session.observations,
+      getProcessing: () => this.session.processingQueue.length + (this.processingInFlight || 0),
+      scheduleRetry: () => { try { chrome.alarms.create('captureEndRetry', { delayInMinutes: 1 }); } catch (e) { /* no alarms here */ } },
     });
     // Resolves when initialize() completes; the bootstrap replaces this with the real
     // init promise. Listener handlers await it so a cold-woken worker finishes loading
@@ -197,7 +205,11 @@ class JSExtractor {
     // A capture in progress owns the gate: restored (paused after a browser restart, not after a
     // 30 s worker respawn), and a pending End resumes (modules/capture-lifecycle.js).
     this.batchUploader.setOnCaptureEnded((runId) => this.capture.endedRemotely(runId));
-    await this.capture.recover();
+    try {
+      await this.capture.recover();
+    } catch (e) {
+      console.warn('Capture state restore failed', e);  // never block the outbox wiring below
+    }
 
     // --- durability wiring (S2): back the uploader with the persistent outbox and
     // let it clear the flush alarm once fully drained.
@@ -230,6 +242,8 @@ class JSExtractor {
     // "has files" and "unknown" as reasons to keep the flush alarm armed (fail safe).
     const pendingUploads = await this.batchUploader.rehydrate();
     this.reconcileFlushAlarm(pendingUploads !== 0);
+    // Only now (outbox loaded) may a pending End drain and tell the platform.
+    this.capture.resumePendingEnd();
 
     console.log('JSExtractor initialized', {
       sessionId: this.session.sessionId,
@@ -334,6 +348,10 @@ class JSExtractor {
       // Cold-respawn safety net: if the worker was torn down with unsent uploads, this
       // wakes it (min period ~30s per chrome.alarms) to drain the outbox. During active
       // capture the stream of webRequest events + the 5s timer already handle draining.
+      if (alarm && alarm.name === 'captureEndRetry') {
+        this.ready.then(() => this.capture.resumePendingEnd()).catch(() => {});
+        return;
+      }
       if (alarm && alarm.name === 'flushOutbox') {
         this.ready.then(() => this.batchUploader.processBatch());
       }
@@ -402,7 +420,8 @@ class JSExtractor {
     this.session.processingQueue.push({
       metadata: fileMetadata,
       tabId: details.tabId,
-      frameId: details.frameId
+      frameId: details.frameId,
+      runId: this.capture.runIdForEnqueue()  // the capture listening when it was ADMITTED
     });
 
     this.scheduleQueueProcessing();
@@ -414,6 +433,7 @@ class JSExtractor {
     const batch = this.session.processingQueue.splice(0, 10);
     
     for (const item of batch) {
+      this.processingInFlight = (this.processingInFlight || 0) + 1;
       try {
         await this.processFile(item);
       } catch (error) {
@@ -423,6 +443,8 @@ class JSExtractor {
           item?.metadata?.url,
           error?.message || 'Unknown processing error'
         );
+      } finally {
+        this.processingInFlight -= 1;
       }
     }
 
@@ -645,8 +667,8 @@ class JSExtractor {
       needsServerProcessing: sourceMapData !== null || dependencies.length > 0
     };
 
-    // The capture listening NOW owns the file (a respawned outbox may hold an older capture's).
-    const runId = this.capture.runIdForEnqueue();
+    // The capture listening when the request was ADMITTED owns the file (stamped on the item).
+    const runId = item.runId || null;
     if (runId) {
       fileObject.runId = runId;
       this.capture.noteBatch();
@@ -696,6 +718,7 @@ class JSExtractor {
             timestamp: new Date().toISOString(),
             initiator: url
           },
+          runId: item.runId,  // a dependency belongs to its parent's capture
           tabId,
           frameId
         });
@@ -1016,7 +1039,10 @@ class JSExtractor {
 
   handleMessage(request, sender, sendResponse) {
     const handlers = {
-      startCapture: () => this.startCapture(sendResponse),
+      // While a lifecycle capture is active the worker owns it: the legacy controls map onto it
+      // (start → resume, stop → pause) instead of desynchronising the gate from its state.
+      startCapture: async () => (this.capture.state
+        ? sendResponse(await this.capture.resume()) : this.startCapture(sendResponse)),
       // Capture lifecycle (one capture = one platform run).
       captureLookup: async (req) => sendResponse(this.replyFrom(await this.capture.lookup(req.scope))),
       captureStart: async (req) => sendResponse(await this.capture.start({
@@ -1036,8 +1062,11 @@ class JSExtractor {
         this.updateBadge();
         sendResponse(res);
       },
-      newSession: (req) => this.newSession(req, sendResponse),
-      stopCapture: () => this.stopCapture(sendResponse),
+      // Rotating the session under a live capture would orphan its run: End it first.
+      newSession: (req) => (this.capture.state
+        ? sendResponse({ ok: false, error: 'capture_in_progress' }) : this.newSession(req, sendResponse)),
+      stopCapture: async () => (this.capture.state
+        ? sendResponse(await this.capture.pause()) : this.stopCapture(sendResponse)),
       getFiles: () => this.getFiles(sendResponse),
       clearFiles: async () => { await this.clearFiles(sendResponse); },
       getStatus: () => this.getStatus(sendResponse),
@@ -1089,6 +1118,7 @@ class JSExtractor {
         initiator: request.initiator || 'dynamic-script',
         method: 'GET'
       },
+      runId: this.capture.runIdForEnqueue(),
       tabId: tabId,
       frameId: frameId
     });
@@ -1129,6 +1159,7 @@ class JSExtractor {
     const frameId = Number.isInteger(senderFrameId) ? senderFrameId : 0;
 
     this.session.processingQueue.push({
+      runId: this.capture.runIdForEnqueue(),
       metadata: {
         url: syntheticUrl,
         timestamp: request.timestamp || new Date().toISOString(),
@@ -1611,6 +1642,13 @@ class JSExtractor {
     // is stored literally and matches no host = silent no-op capture (D40).
     if (Array.isArray(incoming.domainScopes)) {
       incoming.domainScopes = normalizeRootDomains(incoming.domainScopes);
+    }
+    // A capture in progress owns the gate's scope (applyCaptureGate is its only writer); a stale
+    // popup settings write must not change or wipe it mid-capture.
+    if (this.capture.state) {
+      delete incoming.domainScopes;
+      delete incoming.useDomainScope;
+      delete incoming.includeSubdomains;
     }
     this.settings = { ...this.settings, ...incoming };
     if (typeof this.settings.captureAuthContext !== 'boolean') {

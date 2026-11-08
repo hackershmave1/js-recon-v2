@@ -14,12 +14,13 @@
 //   is resumed by `recover()` (init) and `resumeAfterLogin()`.
 // - A capture the server ended (409 capture_ended on its batches) closes here via `endedRemotely`.
 import { apexForHost, takesSubdomains, isNoiseHost, inScope } from './capture-scope.js';
+import { normalizeRootDomains } from './normalize-scope.js';
 
 export const STATE_KEY = 'captureState';
 const BOOT_KEY = 'captureBootMarker';
 const DRAIN_DEADLINE_MS = 10 * 60 * 1000;
 const DRAIN_POLL_MS = 3000;
-const SERVER_IDLE_END_MS = 24 * 60 * 60 * 1000;  // the platform auto-ends an idle capture
+const ACTIVITY_PERSIST_MS = 60 * 1000;  // lastBatchAt is written at most this often
 const MAX_NEW_SITES = 20;
 const DOT = '•';
 
@@ -34,7 +35,10 @@ export function badgeText({ capturing, files, newSites }) {
 }
 
 export class CaptureLifecycle {
-  constructor({ local, session, api, captureSession, uploader, applyGate, getObservations, now, sleep }) {
+  constructor({
+    local, session, api, captureSession, uploader, applyGate, getObservations, getProcessing,
+    scheduleRetry, now, sleep,
+  }) {
     this.local = local;                    // chrome.storage.local-shaped
     this.sessionStorage = session;         // chrome.storage.session-shaped (boot marker)
     this.api = api;                        // CaptureApi
@@ -42,6 +46,10 @@ export class CaptureLifecycle {
     this.uploader = uploader;              // BatchUploader
     this.applyGate = applyGate;            // ({ scope, capturing }) => Promise — the capture gate
     this.getObservations = getObservations || (() => []);
+    // Captured requests not yet turned into upload-queue files (queued + in processFile).
+    this.getProcessing = getProcessing || (() => 0);
+    // Arms a later retry of a pending End (a chrome.alarm): the worker may stay alive for hours.
+    this.scheduleRetry = scheduleRetry || (() => {});
     this.now = now || (() => Date.now());
     this.sleep = sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.state = null;                     // the current capture, or null
@@ -86,14 +94,23 @@ export class CaptureLifecycle {
     const booted = (await this.sessionStorage.get(BOOT_KEY))[BOOT_KEY];
     if (!booted) {
       await this.sessionStorage.set({ [BOOT_KEY]: this.now() });
-      if (this.state && !this.state.paused && !this.state.ending) {
-        this.foldElapsed();
-        this.state.paused = true;  // browser restart: resume paused, scope intact
+      const s = this.state;
+      if (s && !s.paused && !s.ending) {
+        // Browser restart: resume paused, scope intact. Count time only up to the last captured
+        // file, not the hours the browser was closed.
+        s.elapsedMs += Math.max(0, Math.max(s.resumedAt, s.lastBatchAt || 0) - s.resumedAt);
+        s.paused = true;
         await this.persist();
       }
     }
     if (this.state) await this.applyGate({ scope: this.state.scope, capturing: this.isListening() });
-    if (this.state && this.state.ending) this.drainAndEnd();  // background; survives the popup
+  }
+
+  // Finish a pending End. Called once the outbox is loaded (end of initialize), after login, and
+  // by the retry alarm — never before the outbox is rehydrated, or End would post capture/end with
+  // this capture's unsent files still on disk (they'd then be refused).
+  resumePendingEnd() {
+    if (this.state && this.state.ending) this.drainAndEnd();
   }
 
   isListening() {
@@ -120,8 +137,13 @@ export class CaptureLifecycle {
   start({ scope, mode, match, binding }) {
     return this.serialize(async () => {
       if (this.state) return { ok: false, error: this.state.ending ? 'ending' : 'capture_in_progress' };
-      const entry = String(scope || '').trim().toLowerCase();
+      // Normalized like every other scope write (D40): a URL or `*.acme.io` must not become a
+      // gate entry that matches no host.
+      const entry = normalizeRootDomains([scope])[0];
       if (!entry) return { ok: false, error: 'no_scope' };
+      // NOTE: the session switch below is not rolled back if the platform then refuses the start:
+      // the next Start simply rotates/adopts again. The engagement's capture config is not
+      // re-applied here (Start is about scope and session, not per-engagement capture settings).
       if (mode === 'continue') {
         if (!match || !match.external_id) return { ok: false, error: 'no_match' };
         await this.captureSession.adopt(match.external_id, {
@@ -141,7 +163,7 @@ export class CaptureLifecycle {
       this.captureSession.resetForCapture();  // dedup per capture: a Continue re-sends its files
       this.state = {
         runId: res.data.runId, sessionId, scope: [entry], startedAt: this.now(), resumedAt: this.now(),
-        elapsedMs: 0, paused: false, ending: null, newSites: [], lastBatchAt: this.now(),
+        elapsedMs: 0, paused: false, ending: null, newSites: [], dismissedSites: [], lastBatchAt: this.now(),
       };
       this.lastEnded = null;
       await this.persist();
@@ -165,11 +187,9 @@ export class CaptureLifecycle {
     return this.serialize(async () => {
       const s = this.state;
       if (!s || s.ending) return { ok: false, error: 'no_capture' };
-      // The platform auto-ends a capture with no new files for a day; don't revive a dead one.
-      if (this.now() - (s.lastBatchAt || s.startedAt) > SERVER_IDLE_END_MS) {
-        await this.closeLocally('idle');
-        return { ok: false, error: 'capture_ended' };
-      }
+      if (!s.paused) return { ok: true };
+      // No local idle check: the platform measures idle from its last STORED file and ends the
+      // capture itself; if it has, the next batch's 409 capture_ended closes it here.
       s.paused = false;
       s.resumedAt = this.now();
       await this.persist();
@@ -178,8 +198,14 @@ export class CaptureLifecycle {
     });
   }
 
+  // A file was stamped for this capture. Persisted at most once a minute (MV3 kills the worker after
+  // ~30 s idle, and a browser restart's elapsed time is bounded by it).
   noteBatch() {
-    if (this.state) this.state.lastBatchAt = this.now();  // persisted with the next transition
+    const s = this.state;
+    if (!s) return;
+    const before = s.lastBatchAt || 0;
+    s.lastBatchAt = this.now();
+    if (s.lastBatchAt - before >= ACTIVITY_PERSIST_MS) this.persist().catch(() => {});
   }
 
   // End: close the gate and answer NOW; uploads drain and the platform is told in the background.
@@ -208,8 +234,10 @@ export class CaptureLifecycle {
         await this.uploader.flushAll();
         const st = this.uploader.getStats();
         if (st.authPaused) return;  // resumeAfterLogin() picks it up
-        if (!(st.pendingQueueLength > 0) && !st.isUploading) break;
-        if (this.now() > deadline) break;  // the server's sweeper will still end it
+        // Done only when nothing is left to become a file (captured requests still being
+        // processed) AND nothing is left to send.
+        if (this.getProcessing() === 0 && !(st.pendingQueueLength > 0) && !st.isUploading) break;
+        if (this.now() > deadline) { this.scheduleRetry(); return; }  // never end on a partial set
         await this.sleep(DRAIN_POLL_MS);
       }
       const s = this.state;
@@ -217,13 +245,15 @@ export class CaptureLifecycle {
       const res = await this.api.end(s.sessionId, { runId: s.runId, observations: this.getObservations() });
       if (res.ok || (res.status && res.status !== 401 && res.status < 500)) {
         await this.serialize(() => this.closeLocally('ended'));
+      } else if (res.status !== 401) {
+        this.scheduleRetry();  // network / 5xx: try again (a 401 waits for login)
       }
     })().finally(() => { this.draining = null; });
     return this.draining;
   }
 
   resumeAfterLogin() {
-    if (this.state && this.state.ending) this.drainAndEnd();
+    this.resumePendingEnd();
   }
 
   // The server ended this capture (409 capture_ended on its batches): close it here too.
@@ -236,10 +266,11 @@ export class CaptureLifecycle {
   // Logout / tenant change: forget the capture locally (the platform's 24 h sweeper ends it).
   forget() {
     return this.serialize(async () => {
+      const had = !!this.state;
       this.state = null;
       this.lastEnded = null;
       await this.persist();
-      await this.applyGate({ scope: [], capturing: false });
+      if (had) await this.applyGate({ scope: [], capturing: false });
     });
   }
 
@@ -261,7 +292,8 @@ export class CaptureLifecycle {
     if (!this.isListening() || captureEverything || !host) return false;
     if (isNoiseHost(host) || inScope(host, s.scope)) return false;
     const site = apexForHost(host);
-    if (!site || s.newSites.includes(site) || s.newSites.length >= MAX_NEW_SITES) return false;
+    if (!site || s.newSites.includes(site) || (s.dismissedSites || []).includes(site)) return false;
+    if (s.newSites.length >= MAX_NEW_SITES) return false;
     s.newSites.push(site);
     this.persist().catch(() => {});
     return true;
@@ -271,6 +303,7 @@ export class CaptureLifecycle {
     return this.serialize(async () => {
       if (!this.state) return { ok: false, error: 'no_capture' };
       this.state.newSites = this.state.newSites.filter((h) => h !== site);
+      this.state.dismissedSites = [...new Set([...(this.state.dismissedSites || []), site])];
       await this.persist();
       return { ok: true };
     });

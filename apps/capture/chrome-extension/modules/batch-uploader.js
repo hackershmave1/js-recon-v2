@@ -211,10 +211,14 @@ export class BatchUploader {
       this.onStatsChange(this.stats);
 
       if (error.captureEnded) {
+        // Routine (End elsewhere, 24 h auto-end, a cancel): not an error, not 'dropped' — the
+        // badge would otherwise turn orange for every later capture.
+        this.stats.failedBatches -= 1;
+        this.stats.lastError = null;
+        this.stats.endedFiles = (this.stats.endedFiles || 0) + batch.length;
         // The capture these files belong to has ended (End, the 24 h auto-end, a workspace cancel,
         // or another browser continuing the session). Not an error to show per batch: drop quietly
         // and tell the owner, who closes the capture if it is the current one.
-        this.stats.droppedFiles += batch.length;
         this.onStatsChange(this.stats);
         await this.forget(batch);
         if (this.onCaptureEnded) {

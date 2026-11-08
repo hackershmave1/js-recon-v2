@@ -91,6 +91,9 @@ async function run() {
     assert.equal(notifications.length, 0, 'no rejection notification for an ended capture');
     assert.equal(u.pendingQueue.length, 0, 'not re-queued');
     assert.equal(store._m.size, 0, 'and gone from the durable outbox');
+    assert.equal(u.stats.lastError, null, 'not an error (no orange badge)');
+    assert.equal(u.stats.droppedFiles || 0, 0, 'not counted as dropped');
+    assert.equal(u.stats.endedFiles, 1);
   }
 
   // 4) A file from before the capture lifecycle (no runId) keeps the old key and path.
