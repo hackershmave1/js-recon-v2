@@ -152,7 +152,56 @@ The worker loop already ticks about every 3 s when idle. Each tick:
   - the run header reads "Capturing · listening";
   - `sseClient` and `runNotify` are unchanged (a single terminal event at End).
 
-## Extension (PR 3)
+## Extension (PR 3a worker, PR 3b popup)
+
+Adversarial design review (2026-11-08) corrected the first plan. Decisions (researcher, 2026-11-08):
+- **"Capture every tab" overrides the scope** when on (Settings, behind its confirm); the new-site
+  badge is off while it is. The scope still names the session and drives in/out-of-scope labels.
+- **Continue across engagements:** a matching session in another engagement (or none) is offered,
+  labelled with its engagement. Choosing it switches the popup's engagement for that capture.
+- **Two PRs:** 3a = worker (state, uploads, End, restart, new-site, badge) with a one-line "capturing
+  into …" status; 3b = the popup screens from the journeys page.
+
+Corrections the build must keep:
+- **Restart ≠ worker cold start.** MV3 kills the worker after ~30 s idle, so "resume paused after a
+  browser restart" keys off a `chrome.storage.session` boot marker (wiped only by a browser restart
+  or an extension reload), checked in `initialize()` before capture is re-enabled.
+- **Scope apex** comes from a pure `apexForHost()`, not "last two labels". Shared suffixes on the
+  server's egress denylist (`github.io`, `co.uk`, `cloudfront.net`…) keep one more label. IPs and
+  single-label hosts use the exact host, with no "+ subdomains". A parity test pins the JS denylist
+  to `fetch/egress.py`.
+- **End is resumable and replies at once.** It persists `ending: runId`, closes the gate, replies
+  `{ok, ending: true}`, then drains uploads under its own worker deadline and calls `capture/end`.
+  `initialize()`/`login()` resume a pending End. Logout or a tenant change drops it, and the server's
+  24 h sweeper ends the capture.
+- **runId per file.** It is stamped at enqueue and persisted in the outbox entry. A batch is a
+  leading run of files sharing `(sessionId, runId)`. The outbox key is `sid:runId:hash` (falling back
+  to `sid:hash` for old entries). `409 capture_ended` drops quietly, and for the current capture it
+  closes the capture locally ("Capture ended"). No file is enqueued without a runId in the new flow.
+- **Dedup is cleared at Start** (`_clear()`), not re-keyed.
+- **The worker owns capture state.** `getStatus` exposes
+  `capture: {runId, sessionId, scope, elapsedMs, paused, ending, newSites, lastEnded}`. Every scope
+  change goes through a worker action, and the Settings scope editor is removed.
+- **Continue adopts the match's binding.** The engagement picker is locked while a capture is
+  active. Logout or a tenant change clears the capture.
+- **Analyze on the runId path** blocks only when uploads are paused for auth, not while files
+  upload (the server re-analyzes late files). `upToDate`/`runId` are passed through. Progress names
+  its run (`analyze/progress?runId=`), so a Continue capture never shows the previous one's
+  "done".
+- **New-site detection** extends `noteOutOfScopeScript`. It filters the server's noise list
+  (mirrored in JS with a parity test), persists per capture, and replaces the D44 chips. The flag
+  folds into `updateBadge`, so the dot survives the file counter and shows while paused.
+- **Worker-serialized** Start/End (a promise chain, like `hookSync`). Start is refused while ending,
+  and it gets the 300 s popup timeout.
+- No local idle clock: Resume always resumes. If the platform's 24 h sweeper has already ended the
+  capture, the next batch's `409 capture_ended` closes it locally ("Capture ended").
+- `chrome.storage.session` is also cleared by an extension update or reload, so those pause a live
+  capture too (the same as a browser restart). The boot marker is readable by content scripts
+  (storage-access.js), so a hostile page could at worst force that pause.
+- A runId is stamped when a request is ADMITTED (dependencies inherit their parent's), and End waits
+  for queued + in-flight processing as well as uploads.
+
+## Extension (original plan, superseded above)
 
 - Popup per the journeys:
   - scope-first idle card;

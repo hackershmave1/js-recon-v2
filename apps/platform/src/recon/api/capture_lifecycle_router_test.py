@@ -249,3 +249,18 @@ def test_a_late_batch_cannot_probe_another_sessions_run(client):
     probe = _save(client, b, run_a, _file("https://app.acme.io/a.js", "a()", b))
 
     assert probe.status_code == 409  # same answer whether or not the file is stored there
+
+
+def test_progress_names_its_run_and_can_be_asked_for_one(client):
+    sid = str(uuid.uuid4())
+    first = _start(client, sid)
+    _save(client, sid, first, _file("https://app.acme.io/a.js", "a()", sid))
+    client.post(f"/api/sessions/{sid}/analyze/start", json={"runId": first})
+    second = _start(client, sid)  # Continue: a new capture, not analyzed yet
+
+    latest = client.get(f"/api/sessions/{sid}/analyze/progress").json()
+    mine = client.get(f"/api/sessions/{sid}/analyze/progress", params={"runId": second}).json()
+
+    assert latest["runId"] == first  # the latest analyzed run, now named
+    assert mine["runId"] == second
+    assert mine["job"]["counts"]["total"] == 0  # idle: nothing analyzed for THIS capture yet

@@ -22,6 +22,8 @@ import { restrictStorageAccess, publishCaptureState } from './modules/storage-ac
 import { replyOnce, dispatchReply } from './modules/message-reply.js';
 import { hookMatchPatterns, hostInScope } from './modules/hook-matches.js';
 import { authMarker, tokenExpiry } from './modules/token-validity.js';
+import { CaptureApi } from './modules/capture-api.js';
+import { CaptureLifecycle, badgeText } from './modules/capture-lifecycle.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -94,7 +96,15 @@ class JSExtractor {
       getSessionId: () => this.session.sessionId,
       batchUploader: this.batchUploader,
       // Runtime request observations to ship with analyze/start (DEBT D45b1).
-      getObservations: () => this.session.observations
+      getObservations: () => this.session.observations,
+      // Capture lifecycle: Analyze and progress name the capture in progress (set after construction).
+      getRunId: () => {
+        const c = this.capture;
+        if (!c) return null;
+        if (c.state) return c.state.runId;
+        const ended = c.lastEnded;
+        return ended && ended.sessionId === this.session.sessionId ? ended.runId : null;
+      },
     });
     // Durable stores (IndexedDB) that outlive the service worker: the upload outbox
     // (unsent files) and the dedup set (hash -> {url, capturedAt}). Separate DBs to
@@ -114,6 +124,22 @@ class JSExtractor {
       authTracker: this.authTracker,
       getSettings: () => this.settings,
       observationCap: OBSERVATION_CAP
+    });
+    // The capture lifecycle (Start → End = one platform run): worker-owned state, see the module.
+    this.captureApi = new CaptureApi({
+      base: () => this.workspaceClient.resolveApiBase(),
+      headers: () => this.workspaceClient.authHeaders(),
+    });
+    this.capture = new CaptureLifecycle({
+      local: chrome.storage.local,
+      session: chrome.storage.session,
+      api: this.captureApi,
+      captureSession: this.session,
+      uploader: this.batchUploader,
+      applyGate: (gate) => this.applyCaptureGate(gate),
+      getObservations: () => this.session.observations,
+      getProcessing: () => this.session.processingQueue.length + (this.processingInFlight || 0),
+      scheduleRetry: () => { try { chrome.alarms.create('captureEndRetry', { delayInMinutes: 1 }); } catch (e) { /* no alarms here */ } },
     });
     // Resolves when initialize() completes; the bootstrap replaces this with the real
     // init promise. Listener handlers await it so a cold-woken worker finishes loading
@@ -176,6 +202,14 @@ class JSExtractor {
     this.isCapturing = this.settings.isCapturing || false;
     // storage.session is cleared on browser restart: re-publish the page-visible capture bit.
     await publishCaptureState(chrome.storage, this.isCapturing).catch(() => {});
+    // A capture in progress owns the gate: restored (paused after a browser restart, not after a
+    // 30 s worker respawn), and a pending End resumes (modules/capture-lifecycle.js).
+    this.batchUploader.setOnCaptureEnded((runId) => this.capture.endedRemotely(runId));
+    try {
+      await this.capture.recover();
+    } catch (e) {
+      console.warn('Capture state restore failed', e);  // never block the outbox wiring below
+    }
 
     // --- durability wiring (S2): back the uploader with the persistent outbox and
     // let it clear the flush alarm once fully drained.
@@ -208,6 +242,8 @@ class JSExtractor {
     // "has files" and "unknown" as reasons to keep the flush alarm armed (fail safe).
     const pendingUploads = await this.batchUploader.rehydrate();
     this.reconcileFlushAlarm(pendingUploads !== 0);
+    // Only now (outbox loaded) may a pending End drain and tell the platform.
+    this.capture.resumePendingEnd();
 
     console.log('JSExtractor initialized', {
       sessionId: this.session.sessionId,
@@ -312,6 +348,10 @@ class JSExtractor {
       // Cold-respawn safety net: if the worker was torn down with unsent uploads, this
       // wakes it (min period ~30s per chrome.alarms) to drain the outbox. During active
       // capture the stream of webRequest events + the 5s timer already handle draining.
+      if (alarm && alarm.name === 'captureEndRetry') {
+        this.ready.then(() => this.capture.resumePendingEnd()).catch(() => {});
+        return;
+      }
       if (alarm && alarm.name === 'flushOutbox') {
         this.ready.then(() => this.batchUploader.processBatch());
       }
@@ -380,7 +420,8 @@ class JSExtractor {
     this.session.processingQueue.push({
       metadata: fileMetadata,
       tabId: details.tabId,
-      frameId: details.frameId
+      frameId: details.frameId,
+      runId: this.capture.runIdForEnqueue()  // the capture listening when it was ADMITTED
     });
 
     this.scheduleQueueProcessing();
@@ -392,6 +433,7 @@ class JSExtractor {
     const batch = this.session.processingQueue.splice(0, 10);
     
     for (const item of batch) {
+      this.processingInFlight = (this.processingInFlight || 0) + 1;
       try {
         await this.processFile(item);
       } catch (error) {
@@ -401,6 +443,8 @@ class JSExtractor {
           item?.metadata?.url,
           error?.message || 'Unknown processing error'
         );
+      } finally {
+        this.processingInFlight -= 1;
       }
     }
 
@@ -623,6 +667,12 @@ class JSExtractor {
       needsServerProcessing: sourceMapData !== null || dependencies.length > 0
     };
 
+    // The capture listening when the request was ADMITTED owns the file (stamped on the item).
+    const runId = item.runId || null;
+    if (runId) {
+      fileObject.runId = runId;
+      this.capture.noteBatch();
+    }
     // Track both URL and content hash for version-aware deduplication (in-memory).
     this.session.capturedFiles.set(url, fileObject);
     this.updateBadge();
@@ -668,6 +718,7 @@ class JSExtractor {
             timestamp: new Date().toISOString(),
             initiator: url
           },
+          runId: item.runId,  // a dependency belongs to its parent's capture
           tabId,
           frameId
         });
@@ -856,6 +907,10 @@ class JSExtractor {
       if (matchesDenylist(url, this.settings.denyRules || [], this.settings.denyDefaultProfile !== false)) return;
       const host = new URL(url).hostname.toLowerCase();
       if (!host) return;
+      // Capture lifecycle: a site outside the capture's scope raises the "new site seen" badge.
+      if (this.capture.noteSite(host, { captureEverything: this.settings.captureEverything === true })) {
+        this.updateBadge();
+      }
       if (!this.session.outOfScopeHosts.has(host) && this.session.outOfScopeHosts.size >= 50) return;
       this.session.outOfScopeHosts.set(host, (this.session.outOfScopeHosts.get(host) || 0) + 1);
     } catch (e) { /* ignore malformed URL */ }
@@ -951,6 +1006,28 @@ class JSExtractor {
     }
   }
 
+  // The capture gate for the capture lifecycle: the scope the gate matches (settings.domainScopes,
+  // read by hook-matches/isInScope) and whether it listens. Only the worker writes it.
+  async applyCaptureGate({ scope, capturing }) {
+    const domainScopes = Array.isArray(scope) ? scope : [];
+    this.settings = {
+      ...this.settings,
+      domainScopes,
+      useDomainScope: domainScopes.length > 0,
+      includeSubdomains: true,
+    };
+    await chrome.storage.local.set({ domainScopes, useDomainScope: domainScopes.length > 0, includeSubdomains: true });
+    this.batchUploader.setScope(domainScopes.length ? { rootDomains: domainScopes, includeSubdomains: true } : null);
+    this.isCapturing = !!capturing;
+    await this.persistCaptureState(this.isCapturing);
+    this.syncResponseBodyHook();
+    this.updateBadge();
+  }
+
+  replyFrom(res) {
+    return res && res.ok ? { ok: true, ...(res.data || {}) } : { ok: false, status: res && res.status, error: res && res.error };
+  }
+
   async persistCaptureState(isCapturing) {
     try {
       await chrome.storage.local.set({ isCapturing });
@@ -962,9 +1039,34 @@ class JSExtractor {
 
   handleMessage(request, sender, sendResponse) {
     const handlers = {
-      startCapture: () => this.startCapture(sendResponse),
-      newSession: (req) => this.newSession(req, sendResponse),
-      stopCapture: () => this.stopCapture(sendResponse),
+      // While a lifecycle capture is active the worker owns it: the legacy controls map onto it
+      // (start → resume, stop → pause) instead of desynchronising the gate from its state.
+      startCapture: async () => (this.capture.state
+        ? sendResponse(await this.capture.resume()) : this.startCapture(sendResponse)),
+      // Capture lifecycle (one capture = one platform run).
+      captureLookup: async (req) => sendResponse(this.replyFrom(await this.capture.lookup(req.scope))),
+      captureStart: async (req) => sendResponse(await this.capture.start({
+        scope: req.scope, mode: req.mode, match: req.match,
+        binding: { projectId: req.projectId || null, captureConfig: {}, overrideKeys: [] },
+      })),
+      capturePause: async () => sendResponse(await this.capture.pause()),
+      captureResume: async () => sendResponse(await this.capture.resume()),
+      captureEnd: async () => sendResponse(await this.capture.end()),
+      captureAddScope: async (req) => {
+        const res = await this.capture.addToScope(req.host);
+        this.updateBadge();
+        sendResponse(res);
+      },
+      captureDismissSite: async (req) => {
+        const res = await this.capture.dismissSite(req.site);
+        this.updateBadge();
+        sendResponse(res);
+      },
+      // Rotating the session under a live capture would orphan its run: End it first.
+      newSession: (req) => (this.capture.state
+        ? sendResponse({ ok: false, error: 'capture_in_progress' }) : this.newSession(req, sendResponse)),
+      stopCapture: async () => (this.capture.state
+        ? sendResponse(await this.capture.pause()) : this.stopCapture(sendResponse)),
       getFiles: () => this.getFiles(sendResponse),
       clearFiles: async () => { await this.clearFiles(sendResponse); },
       getStatus: () => this.getStatus(sendResponse),
@@ -1016,6 +1118,7 @@ class JSExtractor {
         initiator: request.initiator || 'dynamic-script',
         method: 'GET'
       },
+      runId: this.capture.runIdForEnqueue(),
       tabId: tabId,
       frameId: frameId
     });
@@ -1056,6 +1159,7 @@ class JSExtractor {
     const frameId = Number.isInteger(senderFrameId) ? senderFrameId : 0;
 
     this.session.processingQueue.push({
+      runId: this.capture.runIdForEnqueue(),
       metadata: {
         url: syntheticUrl,
         timestamp: request.timestamp || new Date().toISOString(),
@@ -1267,12 +1371,13 @@ class JSExtractor {
   updateBadge() {
     try {
       if (!chrome.action || !chrome.action.setBadgeText) return;
-      if (!this.isCapturing) { chrome.action.setBadgeText({ text: '' }); return; }
+      const newSites = (this.capture.state && this.capture.state.newSites.length) || 0;
       const n = this.session.capturedFiles.size;
+      if (!this.isCapturing) { chrome.action.setBadgeText({ text: badgeText({ capturing: false, files: n, newSites }) }); return; }
       const up = this.batchUploader.getStats();
       const bad = !!up.lastError || (up.droppedFiles || 0) > 0 || up.paired === false ||
         up.authPaused === true || (this.session.processingStats.failedFiles || 0) > 0;
-      chrome.action.setBadgeText({ text: n > 999 ? '999+' : String(n) });
+      chrome.action.setBadgeText({ text: badgeText({ capturing: true, files: n, newSites }) });
       chrome.action.setBadgeBackgroundColor({ color: bad ? '#ff8a47' : '#4ea86b' });
     } catch (e) { /* action API unavailable in this context */ }
   }
@@ -1348,6 +1453,7 @@ class JSExtractor {
         // (DEBT D41). Unconditional by design — tokens can repeat within a second, so the resume
         // must NOT be gated on a token change. Re-arm the notification for a future expiry.
         this.batchUploader.resumeUploads();
+        this.capture.resumeAfterLogin();
         this.authNotified = false;
         sendResponse({ success: true, user: this.settings.authUser, tenant: result.tenant || null, role: result.role || '' });
         return;
@@ -1387,6 +1493,9 @@ class JSExtractor {
   // the state-clearing half of newSession; the outbox is intentionally left intact (unsent files
   // keep their own old per-file session id).
   async resetCaptureSession({ stopCapturing = false, dropOutbox = false } = {}) {
+    // One tenant's capture never continues under another's token: forget it here (the platform's
+    // 24 h idle sweeper ends it server-side).
+    await this.capture.forget();
     if (stopCapturing) {
       this.isCapturing = false;
       this.persistCaptureState(false);
@@ -1519,6 +1628,8 @@ class JSExtractor {
       uploader: uploaderStats,
       projectId: uploaderStats.projectId || null,
       standalone: !uploaderStats.projectId,
+      // The capture in progress (or the last one ended), owned by the worker; the popup reads it.
+      ...this.capture.snapshot(),
       settings: safeSettings
     });
   }
@@ -1531,6 +1642,13 @@ class JSExtractor {
     // is stored literally and matches no host = silent no-op capture (D40).
     if (Array.isArray(incoming.domainScopes)) {
       incoming.domainScopes = normalizeRootDomains(incoming.domainScopes);
+    }
+    // A capture in progress owns the gate's scope (applyCaptureGate is its only writer); a stale
+    // popup settings write must not change or wipe it mid-capture.
+    if (this.capture.state) {
+      delete incoming.domainScopes;
+      delete incoming.useDomainScope;
+      delete incoming.includeSubdomains;
     }
     this.settings = { ...this.settings, ...incoming };
     if (typeof this.settings.captureAuthContext !== 'boolean') {

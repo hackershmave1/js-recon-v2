@@ -50,6 +50,7 @@ export function buildHomeViewModel({
     clearOverride,
     createProject,
     stats: { js: status.fileCount || 0, maps: status.mapsCount || 0, secrets: status.secretCount || 0 },
+    captureLine: captureLine(status),
     captures,
     mutedCount,
     analysis,
@@ -72,4 +73,19 @@ export function buildHomeViewModel({
     exportNow,
     openWorkspace,
   };
+}
+
+// The capture lifecycle's state in one line (the worker owns it; getStatus carries it). A stand-in
+// until the scope-first screens land: it shows what the worker is doing, never a run ID.
+export function captureLine(status) {
+  const c = status && status.capture;
+  if (c) {
+    const scope = (c.scope || []).join(', ');
+    const sites = (c.newSites || []).length;
+    const state = c.ending ? 'Ending… finishing uploads' : c.paused ? 'Paused' : 'Capturing';
+    return `${state} · ${scope}${sites ? ` · ${sites} new site${sites === 1 ? '' : 's'} seen` : ''}`;
+  }
+  const ended = status && status.lastEnded;
+  if (ended) return `Capture ended · ${(ended.scope || []).join(', ')}`;
+  return null;
 }

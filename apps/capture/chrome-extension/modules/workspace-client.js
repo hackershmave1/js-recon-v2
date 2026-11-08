@@ -8,12 +8,14 @@ export class WorkspaceClient {
   //   getSettings()  -> the live settings object (for workspaceUrl)
   //   getSessionId() -> the current session id (for the analyze endpoints)
   //   batchUploader  -> used only for the bounded pre-analyze flush
-  constructor({ getSettings, getSessionId, batchUploader, getObservations } = {}) {
+  constructor({ getSettings, getSessionId, batchUploader, getObservations, getRunId } = {}) {
     this.getSettings = typeof getSettings === 'function' ? getSettings : () => ({});
     this.getSessionId = typeof getSessionId === 'function' ? getSessionId : () => '';
     this.batchUploader = batchUploader || null;
     // Runtime request observations to ship with analyze/start (DEBT D45b1); default none.
     this.getObservations = typeof getObservations === 'function' ? getObservations : () => [];
+    // The capture in progress (capture lifecycle), or null for the legacy session-wide flow.
+    this.getRunId = typeof getRunId === 'function' ? getRunId : () => null;
   }
 
   // Workspace API origin (no trailing slash) for non-ingestion calls (health, analyze).
@@ -123,7 +125,12 @@ export class WorkspaceClient {
       // genuinely-expired session (which will never drain without re-auth) reads differently from
       // uploads that are merely slow.
       const st = this.batchUploader.getStats();
-      if ((st.pendingQueueLength || 0) > 0 || st.isUploading) {
+      // During a capture the platform re-analyzes files that land after this pass on its own, so
+      // only an expired sign-in (uploads that will never drain) refuses Analyze there.
+      const blocked = this.getRunId()
+        ? st.authPaused
+        : (st.pendingQueueLength || 0) > 0 || st.isUploading;
+      if (blocked) {
         return {
           success: false,
           reason: st.authPaused ? 'session_expired' : 'pending_uploads',
@@ -139,14 +146,21 @@ export class WorkspaceClient {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
         // observations: runtime { method, url } calls that confirm endpoints (DEBT D45b1).
-        body: JSON.stringify({ options: {}, observations: this.getObservations() || [] }),
+        body: JSON.stringify({
+          options: {},
+          observations: this.getObservations() || [],
+          ...(this.getRunId() ? { runId: this.getRunId() } : {}),
+        }),
         signal: controller.signal
       });
       if (!resp.ok) {
         return { success: false, status: resp.status, error: `HTTP ${resp.status}` };
       }
       const data = await resp.json();
-      return { success: true, started: data.started !== false, message: data.message, job: data.job };
+      return {
+        success: true, started: data.started !== false, message: data.message, job: data.job,
+        upToDate: data.upToDate === true, runId: data.runId || null,
+      };
     } catch (error) {
       return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
     } finally {
@@ -156,7 +170,11 @@ export class WorkspaceClient {
 
   // Poll analysis progress for the current session (drives the popup's per-file feed).
   async getAnalysisProgress() {
-    const target = `${this.resolveApiBase()}/api/sessions/${encodeURIComponent(this.getSessionId())}/analyze/progress`;
+    // A capture asks for ITSELF: after a Continue, the session's latest analyzed run is the
+    // previous capture, whose "done" must not show as this one's.
+    const runId = this.getRunId();
+    const target = `${this.resolveApiBase()}/api/sessions/${encodeURIComponent(this.getSessionId())}/analyze/progress`
+      + (runId ? `?runId=${encodeURIComponent(runId)}` : '');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
@@ -165,7 +183,7 @@ export class WorkspaceClient {
         return { success: false, status: resp.status };
       }
       const data = await resp.json();
-      return { success: true, job: data.job || null };
+      return { success: true, job: data.job || null, runId: data.runId || null };
     } catch (error) {
       return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
     } finally {
