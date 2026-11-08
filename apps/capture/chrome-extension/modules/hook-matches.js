@@ -9,13 +9,16 @@
 // disagree (a stored pre-D40 entry like `*.acme.io` matches nothing for BOTH, not just one).
 // Pure (no chrome/DOM) so a Node test covers it.
 
-// No explicit scope -> fail CLOSED (nothing) unless the operator chose "capture every tab".
+// No explicit scope -> fail CLOSED (nothing). "Capture every tab" (Settings, behind a confirm)
+// OVERRIDES the scope (capture lifecycle decision, 2026-11-08): every capture now starts with a
+// scope, so honouring it only when none was set would make it silently dead.
 // Entries are used as stored (trimmed + lowercased), exactly as the capture gate always has.
 export function scopeRule(settings) {
   const s = settings || {};
   const list = Array.isArray(s.domainScopes) ? s.domainScopes : [];
+  if (s.captureEverything === true) return { everything: true, hosts: [], subdomains: false };
   if (!s.useDomainScope || list.length === 0) {
-    return { everything: s.captureEverything === true, hosts: [], subdomains: false };
+    return { everything: false, hosts: [], subdomains: false };
   }
   const hosts = list.map((e) => String(e || '').trim().toLowerCase()).filter(Boolean);
   return { everything: false, hosts, subdomains: s.includeSubdomains !== false };

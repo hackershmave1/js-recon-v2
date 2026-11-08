@@ -23,13 +23,13 @@ assert.deepEqual(hookMatchPatterns(on({ domainScopes: [] })), []);
 assert.deepEqual(hookMatchPatterns(on({ useDomainScope: false, domainScopes: ['acme.io'] })), []);
 pass('no scope (fail-closed) -> no hook');
 assert.deepEqual(hookMatchPatterns(on({ useDomainScope: false, domainScopes: [], captureEverything: true })), ['<all_urls>']);
-assert.deepEqual(hookMatchPatterns(on({ domainScopes: ['acme.io'], captureEverything: true })), ['*://acme.io/*', '*://*.acme.io/*']);
-pass('"capture every tab" -> every site only when no scope is set (as capture)');
+assert.deepEqual(hookMatchPatterns(on({ domainScopes: ['acme.io'], captureEverything: true })), ['<all_urls>']);
+pass('"capture every tab" overrides the scope (capture lifecycle decision)');
 assert.deepEqual(hookMatchPatterns(on({ domainScopes: ['10.0.0.5', 'localhost', 'dev_api.acme.io'] })),
   ['*://10.0.0.5/*', '*://localhost/*', '*://*.localhost/*', '*://dev_api.acme.io/*', '*://*.dev_api.acme.io/*']);
 pass('IPv4 (no subdomain pattern), localhost, underscore hosts');
 assert.deepEqual(hookMatchPatterns(on({ domainScopes: ['bad host', '[::1]', '*.legacy.io', 'acme.io'] })), ['*://acme.io/*', '*://*.acme.io/*']);
-assert.deepEqual(hookMatchPatterns(on({ domainScopes: ['', ' '], captureEverything: true })), []);
+assert.deepEqual(hookMatchPatterns(on({ domainScopes: ['', ' '] })), []);
 pass('entries that are not valid pattern hosts are skipped (and match nothing in capture either)');
 
 // --- the hook covers EXACTLY the hosts capture would (one rule, table-driven) -----------------

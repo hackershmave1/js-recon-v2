@@ -72,6 +72,24 @@ export class CaptureSession {
     this.uploader.setConfig(binding);
   }
 
+  // "Continue": take over an EXISTING session (its id and its engagement binding — the platform
+  // binds a session to one engagement, immutably) instead of minting a fresh one. Same orderings
+  // as startNew: drop stragglers, flush the old id's batches, then switch.
+  async adopt(sessionId, { binding, persistWith = {} } = {}) {
+    this.processingQueue = [];
+    await this.uploader.flushAll();
+    this.sessionId = await this.sessionStore.save(sessionId);
+    this._clear();
+    await this.storage.set({ ...persistWith, [BINDING_KEY]: binding });
+    this.uploader.setConfig(binding);
+  }
+
+  // A new capture in the SAME session (Continue, or Start right after a rotation): dedup is per
+  // capture, so files seen in an earlier capture are sent again and analyzed in this one.
+  resetForCapture() {
+    this._clear();
+  }
+
   // Logout / different-tenant login: a fresh, unbound session. History is not written, so one
   // tenant's session never lands in the list another tenant reads.
   async startStandalone({ dropOutbox = false } = {}) {
