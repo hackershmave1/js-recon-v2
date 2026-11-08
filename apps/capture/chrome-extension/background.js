@@ -96,7 +96,9 @@ class JSExtractor {
       getSessionId: () => this.session.sessionId,
       batchUploader: this.batchUploader,
       // Runtime request observations to ship with analyze/start (DEBT D45b1).
-      getObservations: () => this.session.observations
+      getObservations: () => this.session.observations,
+      // Capture lifecycle: Analyze and progress name the capture in progress (set after construction).
+      getRunId: () => (this.capture && this.capture.state ? this.capture.state.runId : null),
     });
     // Durable stores (IndexedDB) that outlive the service worker: the upload outbox
     // (unsent files) and the dedup set (hash -> {url, capturedAt}). Separate DBs to
