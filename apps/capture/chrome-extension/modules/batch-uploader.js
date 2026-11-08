@@ -58,8 +58,14 @@ export class BatchUploader {
   // different sessions occupies distinct entries — matching the backend dedupe
   // identity (session_id, content_hash). Keying by hash alone let a later session
   // overwrite an earlier session's still-unsent file.
+  // Capture lifecycle: a Continue capture reuses the session id, so the SAME file in two captures
+  // needs two entries (and forget() of one must not delete the other). Files from before the
+  // lifecycle (no runId) keep the old key, so an existing outbox stays readable.
   outboxKey(fileObject) {
-    return `${fileObject.sessionId || ''}:${fileObject.contentHash}`;
+    const sid = fileObject.sessionId || '';
+    return fileObject.runId
+      ? `${sid}:${fileObject.runId}:${fileObject.contentHash}`
+      : `${sid}:${fileObject.contentHash}`;
   }
 
   async enqueue(fileObject) {
@@ -93,6 +99,9 @@ export class BatchUploader {
   }
 
   setStore(store) { this.store = store || null; }
+  // Called once per batch the server refused because its capture has ended (409 capture_ended),
+  // with that capture's runId, so the owner can close the capture locally.
+  setOnCaptureEnded(fn) { this.onCaptureEnded = typeof fn === 'function' ? fn : null; }
   setOnStatsChange(fn) { this.onStatsChange = typeof fn === 'function' ? fn : () => {}; }
 
   // Drop ALL pending work — the in-memory queue AND the durable store — so one tenant's unsent
@@ -173,7 +182,17 @@ export class BatchUploader {
     clearTimeout(this.uploadTimer);
     this.uploadTimer = null;
 
-    const batch = this.pendingQueue.splice(0, this.batchSize);
+    // A batch names ONE capture (metadata.runId) and the server takes the session from its first
+    // file, so it is the leading run of files sharing (sessionId, runId) — never a mix. A mixed batch
+    // would be refused whole once the older capture ended, dropping the current capture's files.
+    const head = this.pendingQueue[0];
+    let size = 1;
+    while (size < this.batchSize && size < this.pendingQueue.length
+      && this.pendingQueue[size].sessionId === head.sessionId
+      && this.pendingQueue[size].runId === head.runId) {
+      size += 1;
+    }
+    const batch = this.pendingQueue.splice(0, size);
     // Snapshot the epoch this batch belongs to; if clearOutbox() bumps it while we're in flight
     // (a tenant switch), a transient failure below must DROP the batch, not re-queue it.
     const batchEpoch = this.epoch;
@@ -191,7 +210,17 @@ export class BatchUploader {
       this.stats.lastError = error.message;
       this.onStatsChange(this.stats);
 
-      if (error.retriable === false) {
+      if (error.captureEnded) {
+        // The capture these files belong to has ended (End, the 24 h auto-end, a workspace cancel,
+        // or another browser continuing the session). Not an error to show per batch: drop quietly
+        // and tell the owner, who closes the capture if it is the current one.
+        this.stats.droppedFiles += batch.length;
+        this.onStatsChange(this.stats);
+        await this.forget(batch);
+        if (this.onCaptureEnded) {
+          try { this.onCaptureEnded(batch[0].runId); } catch (e) { /* owner hook is best-effort */ }
+        }
+      } else if (error.retriable === false) {
         // Permanent failure (4xx other than 429): the same bytes will never be
         // accepted, so re-queueing loops forever (the original bug). Drop the
         // batch, record it, and let later batches keep flowing.
@@ -310,7 +339,9 @@ export class BatchUploader {
         // Explicit session scope (only honoured by save_files on session create).
         ...this.scopeMetadata(),
         // Project binding + resolved non-scope config snapshot (also create-only on the backend).
-        ...this.configMetadata()
+        ...this.configMetadata(),
+        // Capture lifecycle: the capture these files belong to (stamped per file at enqueue).
+        ...(files[0] && files[0].runId ? { runId: files[0].runId } : {})
       },
       files: files
     };
@@ -354,6 +385,10 @@ export class BatchUploader {
       // stay permanent — an invalid payload will never be accepted, so re-queueing loops forever.
       // Everything else (network failure, 5xx, 429) is transient and safe to retry.
       error.authExpired = response.status === 401 || response.status === 403;
+      // 409 capture_ended: the batch's capture is over (final, never retried).
+      if (response.status === 409) {
+        try { error.captureEnded = JSON.parse(errorText).detail === 'capture_ended'; } catch (e) { /* not JSON */ }
+      }
       error.retriable = !(response.status >= 400 && response.status < 500 && ![429, 401, 403].includes(response.status));
       throw error;
     }
