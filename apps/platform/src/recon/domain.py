@@ -59,6 +59,10 @@ class RunState(StrEnum):
     ANALYZING = "analyzing"
     CORRELATING = "correlating"
     PAUSED = "paused"
+    # A capture between analysis passes: its findings are readable, but the extension may still
+    # add files (Start → End). Deliberately NOT terminal — terminal-is-final is load-bearing (SSE
+    # replay, the web reducer, run notifications, REQ-D5 immutability) — and not active either.
+    CAPTURING = "capturing"
     DONE = "done"
     PARTIAL = "partial"
     FAILED = "failed"

@@ -251,8 +251,10 @@ _HEADLINE_SECRET_TYPES: frozenset[str] = frozenset({FindingType.SECRET.value})
 # Terminal states that constitute a "completed" run for the summary.
 # ``done`` = fully complete; ``partial`` = failed_partial (analyze finished even if some
 # assets failed). Both are terminal and represent a run the operator can read findings
-# from — the session summary should surface either rather than saying "no_run".
-_TERMINAL_RUN_STATES: frozenset[str] = frozenset({"done", "partial", "failed"})
+# from — the session summary should surface either rather than saying "no_run". ``capturing``
+# is not terminal, but a capture resting between analysis passes has readable findings, and
+# skipping it would show the session's PREVIOUS capture's numbers while this one is open.
+_TERMINAL_RUN_STATES: frozenset[str] = frozenset({"done", "partial", "failed", "capturing"})
 
 
 def visible_type_counts(
@@ -531,7 +533,8 @@ def list_findings(
         )
 
 
-_INCOMPLETE_STATES: frozenset[str] = frozenset({"partial", "failed", "cancelled"})
+# ``capturing``: a capture still open can gain findings, so a diff against it is provisional.
+_INCOMPLETE_STATES: frozenset[str] = frozenset({"partial", "failed", "cancelled", "capturing"})
 
 
 def diff_runs(tenant_id: str, run_id: str, base_run_id: str) -> DiffView | None:

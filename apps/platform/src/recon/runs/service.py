@@ -31,6 +31,11 @@ class TransitionConflict(Exception):
     """The run was not in the expected state — another actor moved it first."""
 
 
+class RunNotPausable(TransitionConflict):
+    """A capture resting between analysis passes has nothing running to pause; the extension's
+    Pause stops listening instead (capture lifecycle). The API maps it to 409."""
+
+
 @dataclass(frozen=True)
 class RunView:
     id: str
@@ -92,6 +97,11 @@ def _apply_transition(
         # `completed` arg + the discover.assets event + run_assets, and the worker
         # compares run.state, never run.stage.
         values["ended_at"] = _utcnow()
+        # A finished run is never an open capture: release the marker (and any scheduled pass)
+        # however it ended — a failed pass, a cancel at a checkpoint, the orphan reaper — or the
+        # session's next Start and batches would land in a dead run.
+        values["capture_external_id"] = None
+        values["reanalyze_after"] = None
     if run.started_at is None and to_state in sm.ACTIVE_STATES:
         values["started_at"] = _utcnow()
     if extra_values:
@@ -203,6 +213,8 @@ def request_pause(
             raise RunNotFound(run_id)
         if sm.is_terminal(RunState(run.state)):
             raise TransitionConflict("cannot pause a terminal run")
+        if RunState(run.state) == RunState.CAPTURING:
+            raise RunNotPausable("nothing is running: pause the capture from the extension")
         session.execute(update(Run).where(Run.id == run.id).values(pause_requested=True))
         session.refresh(run)
         events.append(
@@ -226,7 +238,7 @@ def request_cancel(
     redis: Redis, *, tenant_id: str, run_id: str, actor: str | None = None
 ) -> RunView:
     """Signal a cancel (REQ-A4). Active runs cancel at the worker's next
-    checkpoint; queued/paused runs cancel immediately. ``actor`` is the verified
+    checkpoint; queued, paused and resting-capture runs cancel immediately. ``actor`` is the verified
     identity from the JWT (auth on) or None (auth off / dev mode)."""
     events: list[RecordedEvent] = []
     with tenant_session(tenant_id) as session:
@@ -246,8 +258,18 @@ def request_cancel(
                 payload={"actor": actor},
             )
         )
-        if RunState(run.state) in (RunState.QUEUED, RunState.PAUSED):
-            events.append(_apply_transition(session, run, RunState.CANCELLED, tenant_id=tenant_id))
+        if RunState(run.state) in (RunState.QUEUED, RunState.PAUSED, RunState.CAPTURING):
+            # Nothing is running, so cancel now. Close a capture too: a cancelled run must never
+            # take the extension's next batch (it gets capture_ended instead).
+            events.append(
+                _apply_transition(
+                    session,
+                    run,
+                    RunState.CANCELLED,
+                    tenant_id=tenant_id,
+                    extra_values={"capture_external_id": None, "reanalyze_after": None},
+                )
+            )
         snapshot = _snapshot(run)
     for event in events:
         publish(redis, event)

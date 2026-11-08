@@ -625,6 +625,45 @@ generation vs serialization; models per domain).
 
 **Fix:** split one file per PR, starting with `threat_model/service.py`.
 
+### 2026-11-07 Capture lifecycle — OPEN (D82, D83, D84)
+
+Known limits of analyzing one capture in passes (design:
+`apps/platform/docs/superpowers/specs/2026-11-07-capture-lifecycle-design.md`).
+
+#### D82 · An earlier pass's file doesn't re-resolve against a later file's exports [M]  ·  recall
+
+Each pass rebuilds the cross-module index over every file, so NEW files resolve against old ones.
+But a file analyzed in an earlier pass is skipped (`findings/analyze.py`, terminal
+`analyze_status`), so it never re-resolves against exports from a file that arrived later, and a
+stale unresolved endpoint can stay. This is narrow: static ESM imports load before their importers.
+
+**Fix:** store the cross-module index per run and re-resolve only the unresolved sinks of earlier
+files when a pass adds exports.
+
+#### D83 · Each pass re-reads every file for the cross-module index [M]  ·  performance
+
+A pass analyzes only new files, but its pre-pass reads every file of the capture (and re-recovers
+every source map, D28), and correlate re-scans all request bodies. On a large capture, each
+re-analysis costs nearly a full one. The single worker serves these between other runs.
+
+**Fix:** a stored per-run index merged per pass (with D82), and correlate over new observations only.
+
+Related edges accepted for now:
+- A pass's progress counts every file in the run (`analyze.py` total), so a pass over 3 new files
+  reads "3 of 500".
+- The 10 s quiet period has no maximum wait. Continuous browsing keeps postponing the automatic
+  update; "Analyze now" forces one.
+- End or Analyze during a running pass always schedules one more pass, even when the running
+  pass already covered everything: one redundant pass, traded for never losing late observations.
+
+#### D84 · A finding-identity bump during an open capture duplicates its findings [S]  ·  correctness
+
+A capture can now stay open across a deploy that bumps `FINDING_HASH_VERSION`
+(`findings/normalize.py`), so findings recorded before and after it carry different hashes.
+The 24 h idle auto-end bounds the window.
+
+**Fix:** end open captures (final pass) as part of an identity-version deploy, or re-key on the bump.
+
 ### 2026-11-03 Hidden findings overlay — RESOLVED (D74)
 
 #### D74 · The ApiSpec page's endpoint classification ignores the hidden-findings overlay [S]  ·  correctness
