@@ -56,4 +56,13 @@ describe("RunPipeline", () => {
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
     expect(screen.getByText("Discover").closest("li")!.className).toContain("is-pending");
   });
+
+  it("shows a resting capture as analyzed and still listening, with no progress bar", () => {
+    render(<RunPipeline state="capturing" stage="correlating" pct={null} done={0} total={0} etaSeconds={null} />);
+    for (const label of ["Discover", "Fetch", "Ingest", "Analyze", "Correlate"]) {
+      expect(screen.getByText(label).closest("li")!.className).toContain("is-complete");
+    }
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.getByText(/capturing/i)).toBeInTheDocument();
+  });
 });

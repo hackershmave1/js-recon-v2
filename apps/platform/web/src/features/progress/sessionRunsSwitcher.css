@@ -1,38 +1,94 @@
 .srs {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+  display: grid;
+  gap: 6px;
   margin: 10px 0 2px;
+  max-width: 560px;
 }
 .srs-label {
   font-size: 12px;
   color: var(--dim);
 }
 .srs-list {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  display: grid;
   list-style: none;
   margin: 0;
   padding: 0;
-}
-.srs-run {
-  display: inline-block;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  padding: 3px 9px;
-  border-radius: var(--r-pill);
   border: 1px solid var(--border);
+  border-radius: 9px;
   background: var(--surface);
+  overflow: hidden;
+}
+.srs-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.srs-row:last-child { border-bottom: 0; }
+.srs-row.is-current { background: var(--accent-soft); }
+.srs-when {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-2);
 }
-a.srs-run:hover {
-  border-color: var(--accent-line);
-  color: var(--text);
+a.srs-when:hover { color: var(--text); }
+.srs-row.is-current .srs-when { color: var(--accent); }
+.srs-live {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--accent);
 }
-.srs-run.is-current {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
+.srs-count {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  grid-column: 3;
+}
+.srs-copy {
+  grid-column: 4;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-2, var(--surface));
+  position: relative;
+  cursor: pointer;
+}
+.srs-copy::before,
+.srs-copy::after {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 9px;
+  border: 1.5px solid var(--dim);
+  border-radius: 2px;
+}
+.srs-copy::before { left: 5px; top: 4px; }
+.srs-copy::after { left: 8px; top: 7px; background: var(--surface-2, var(--surface)); }
+.srs-copy:hover,
+.srs-copy:focus-visible { border-color: var(--accent-line); }
+.srs-copy:hover::before,
+.srs-copy:hover::after { border-color: var(--accent); }
+.srs-bar {
+  grid-column: 1 / -1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.srs-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.srs-copied {
+  font-size: 11.5px;
   color: var(--accent);
 }

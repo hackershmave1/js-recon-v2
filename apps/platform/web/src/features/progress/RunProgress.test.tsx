@@ -298,4 +298,53 @@ describe("RunProgress", () => {
     await waitFor(() => expect(screen.getByText("discovering")).toBeInTheDocument());
     expect(screen.queryByText("Receiving from extension")).not.toBeInTheDocument();
   });
+
+  it("refreshes findings each time a capture comes to rest, and keeps listening", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "capturing", stage: "correlating", done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    const findings = vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onOpen?.();
+      h.onEvent({ id: "1", event: "run.transition", data: '{"to":"capturing"}' });
+      h.onEvent({ id: "2", event: "run.transition", data: '{"to":"discovering"}' });
+    });
+    renderRun(<><RunProgress /><StateProbe /></>);
+    await waitFor(() => expect(screen.getByTestId("state")).toHaveTextContent("discovering"));
+    await waitFor(() => expect(findings.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("shows files arriving into a resting capture", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "capturing", stage: "correlating", done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onOpen?.();
+      h.onEvent({ id: "1", event: "capture.received", data: JSON.stringify({ stored: 2, total: 7, last_host: "app.acme.io", ts: Math.floor(Date.now() / 1000) }) });
+    });
+    renderRun(<RunProgress />);
+    expect(await screen.findByText(/receiving from extension/i)).toBeInTheDocument();
+  });
+
+  it("does not claim a resting capture is receiving when the last file was long ago", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "capturing", stage: "correlating", done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onOpen?.();
+      h.onEvent({ id: "1", event: "capture.received", data: JSON.stringify({ stored: 2, total: 7, last_host: "app.acme.io", ts: Math.floor(Date.now() / 1000) - 600 }) });
+    });
+    renderRun(<RunProgress />);
+    await waitFor(() => expect(screen.getByText(/capturing/i, { selector: ".rp-outcome b" })).toBeInTheDocument());
+    expect(screen.queryByText(/receiving from extension/i)).toBeNull();
+  });
+
+  it("never lets a stale 'capturing' snapshot pull a new pass back to rest", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "capturing", stage: "correlating", done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onEvent({ id: "1", event: "run.transition", data: '{"to":"analyzing"}' });
+      h.onOpen?.();  // its snapshot ("capturing", from before this pass) resolves afterwards
+    });
+    renderRun(<StateProbe />);
+    await waitFor(() => expect(api.getStatus).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByTestId("state")).toHaveTextContent("analyzing");
+  });
 });

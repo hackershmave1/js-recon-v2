@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { TERMINAL_STATES, type AssetsManifest } from "../../api/types";
 import { useRunData } from "./runData";
 import { RunControls } from "./RunControls";
@@ -37,6 +37,8 @@ function summarizeFetch(m: AssetsManifest | null): FetchSummary | null {
 // stage pipeline + a crawl's fetch outcome + the activity log. It reads the shared
 // run stream from context (RunDataProvider owns the SSE/fetch engine), so it holds
 // no fetching of its own and lives on the Overview page.
+const RECEIVING_WINDOW_SECONDS = 30;
+
 export function RunProgress() {
   const {
     runId, sessionId, state, stage, pct, done, total, eta, error, assets, events,
@@ -47,6 +49,15 @@ export function RunProgress() {
   // run here is a de-facto empty result, not the full success "5 of 5" implies (M2).
   const emptyCrawl = assets != null && assets.domain != null && assets.assets.length === 0;
   const [showRerun, setShowRerun] = useState(false);
+  // A resting capture is only "receiving" while files actually arrive: the banner replays the
+  // last capture.received event, so without a freshness window it would claim so forever.
+  const [nowSeconds, setNowSeconds] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    if (state !== "capturing") return;
+    const tick = window.setInterval(() => setNowSeconds(Date.now() / 1000), 5000);
+    return () => window.clearInterval(tick);
+  }, [state]);
+  const receivingNow = !!captureStatus && nowSeconds - captureStatus.ts < RECEIVING_WINDOW_SECONDS;
 
   return (
     <>
@@ -86,7 +97,7 @@ export function RunProgress() {
           It clears once the run advances (analyze/start → the worker's discovering
           transition). Only lights up for captures re-homed into the operator tenant
           (paired) — the per-run SSE stream is tenant-gated. */}
-      {captureStatus && state === "queued" && (
+      {captureStatus && (state === "queued" || (state === "capturing" && receivingNow)) && (
         <p className="rp-capture" role="status" aria-live="polite">
           <span className="rp-capture-dot" aria-hidden="true" />
           <span className="rp-capture-text">Receiving from extension</span>

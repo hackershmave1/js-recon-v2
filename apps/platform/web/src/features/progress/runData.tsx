@@ -23,7 +23,10 @@ function supersedes(next: string, current: string): boolean {
   if (current === "…") return true;                                 // initial seed
   if (TERMINAL_STATES.has(current)) return false;                   // terminal is absorbing
   if (TERMINAL_STATES.has(next) || next === "paused") return true;  // must always surface
-  if (current === "paused") return true;                            // resume -> active stage
+  // A pass comes to rest from CORRELATING; from an EARLIER stage, "capturing" is a stale
+  // snapshot of the previous pass (the next one already started), so it must not win.
+  if (next === "capturing") return !(current in STATE_RANK) || current === "correlating" || current === "queued";
+  if (current === "paused" || current === "capturing") return true; // resume / next pass
   const rn = STATE_RANK[next];
   const rc = STATE_RANK[current];
   if (rn === undefined || rc === undefined) return true;            // never block the unmodelled
@@ -270,7 +273,9 @@ function useRunStream(runId: string): RunData {
                 // findings/coverage/sources until a manual reload. Idempotent: the
                 // monotonic guard rejects a replayed terminal, so applyState is already
                 // false above and this never double-fires.
-                if (TERMINAL_STATES.has(to)) void refresh();
+                // A capture resting after a pass ("capturing") has fresh findings too, but
+                // keeps the stream open: more passes follow until End.
+                if (TERMINAL_STATES.has(to) || to === "capturing") void refresh();
               }
             }
           } catch { /* non-JSON payload */ }

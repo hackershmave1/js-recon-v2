@@ -208,6 +208,10 @@ export interface SessionRunRef {
   // runs / pre-classification snapshots. Surfaced on the card via the body's aria-label
   // + an aria-hidden hover/focus tip (D27).
   failure_category?: string | null; failure_reason?: string | null;
+  // Run switcher counts (GET /sessions/{id}/runs, newest 20 runs): the same files/endpoints the
+  // Sessions card shows. null = not computed (an older run), never a faked zero. Optional for
+  // older servers.
+  files?: number | null; endpoints?: number | null;
 }
 export interface SessionSummary {
   session_id: string; external_id?: string | null; name: string | null; host: string; scope_hosts: string[];
@@ -292,6 +296,9 @@ export interface DiffResponse {
 }
 
 export const TERMINAL_STATES = new Set(["done", "partial", "failed", "cancelled"]);
+// Runs whose findings are readable: finished, or a capture resting between analysis passes
+// ("capturing": analyzed, still open to new files from the extension, Done only at End).
+export const READABLE_STATES = new Set([...TERMINAL_STATES, "capturing"]);
 export const TRIAGE_STATUSES = ["open", "confirmed", "dismissed"] as const;
 
 // Threat model (session-scoped, LLM-generated).

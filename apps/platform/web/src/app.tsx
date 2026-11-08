@@ -19,7 +19,7 @@ import { DiscoveryEmpty } from "./features/discovery/DiscoveryEmpty";
 import { Shell } from "./shell/Shell";
 import { ErrorBoundary } from "./shell/ErrorBoundary";
 import { useTenant } from "./tenant/TenantContext";
-import { TERMINAL_STATES, type SourceJump } from "./api/types";
+import { READABLE_STATES, type SourceJump } from "./api/types";
 
 // The run workspace is a layout route: the SSE/findings engine is provided once here
 // (keyed by run id so a run switch remounts it fresh — the monotonic-guard refs must
@@ -97,7 +97,7 @@ export function OverviewRoute() {
   // "Compare" button can navigate to the diff page. Runs are ordered newest-first by
   // the API; we want the first run whose id < current run's id (simpler than date sort).
   useEffect(() => {
-    if (!tenantId || !sessionId || !id || !TERMINAL_STATES.has(state)) return;
+    if (!tenantId || !sessionId || !id || !READABLE_STATES.has(state)) return;
     getSessionRuns(tenantId, sessionId).then((r) => {
       const terminal = new Set(["done", "partial"]);
       const idx = r.runs.findIndex((run) => run.run_id === id);
@@ -113,7 +113,7 @@ export function OverviewRoute() {
           data={findings}
           technologies={technologies}
           hosts={hosts}
-          runFinished={TERMINAL_STATES.has(state)}
+          runFinished={READABLE_STATES.has(state)}
           prevRunId={prevRunId}
           onCompare={prevRunId ? () => navigate(`/runs/${id}/diff?base=${prevRunId}`) : undefined}
         />
@@ -174,7 +174,7 @@ export function TechRoute() {
   const { technologies, loaded, state } = useRunData();
   if (!loaded) return <NotReady title="Loading…" body="Fetching this run's technologies." />;
   if (!technologies) return <NotReady title="No tech stack yet" body="Technologies appear here once analysis has run." />;
-  return <TechPage data={technologies} runFinished={TERMINAL_STATES.has(state)} />;
+  return <TechPage data={technologies} runFinished={READABLE_STATES.has(state)} />;
 }
 
 // GraphQL findings ride the same findings payload as the Findings page, so this reads
@@ -211,8 +211,8 @@ export function ApiSpecRoute() {
   const { findings, state, loaded } = useRunData();
   const { id } = useParams();
   if (!loaded) return <NotReady title="Loading…" body="Fetching this run's status." />;
-  if (!TERMINAL_STATES.has(state)) {
-    return <NotReady title="API spec pending" body="The reconstructed API surface is available once the run completes." />;
+  if (!READABLE_STATES.has(state)) {
+    return <NotReady title="API spec pending" body="The reconstructed API surface is available once the run has been analyzed." />;
   }
   return <ApiSpecPage data={findings} runId={id!} />;
 }
@@ -221,8 +221,8 @@ export function ProbeRoute() {
   const { state, loaded } = useRunData();
   const { id } = useParams();
   if (!loaded) return <NotReady title="Loading…" body="Fetching this run's status." />;
-  if (!TERMINAL_STATES.has(state)) {
-    return <NotReady title="Manual probe pending" body="Reconstructed requests are probeable once the run completes." />;
+  if (!READABLE_STATES.has(state)) {
+    return <NotReady title="Manual probe pending" body="Reconstructed requests are probeable once the run has been analyzed." />;
   }
   return <ProbePanel runId={id!} />;
 }

@@ -20,7 +20,7 @@ function stageIndex(key: string | null): number {
 }
 
 function nodeStatuses(state: string, stage: string | null): NodeStatus[] {
-  if (state === "done") return STAGES.map(() => "complete");
+  if (state === "done" || state === "capturing") return STAGES.map(() => "complete");
   if (state === "queued") return STAGES.map(() => "pending");
   if (state === "paused") {
     const i = stageIndex(stage);
@@ -63,7 +63,7 @@ export function RunPipeline(
 ) {
   const statuses = nodeStatuses(state, stage);
   const isTerminal = TERMINAL.has(state);
-  const active = !isTerminal && state !== "queued";
+  const active = !isTerminal && state !== "queued" && state !== "capturing";
   // failed / cancelled read as danger; partial (some assets succeeded) as warn.
   const stopTone = state === "partial" ? "is-warn" : "is-fail";
   const currentLabel = STAGES[stageIndex(state)]?.label ?? null;
@@ -107,6 +107,12 @@ export function RunPipeline(
         </div>
       )}
 
+      {state === "capturing" && (
+        <p className="rp-outcome">
+          <b>Capturing</b> · analysis up to date · new files from the extension update it until you
+          end the capture
+        </p>
+      )}
       {state === "done" && !emptyCrawl && (
         <p className="rp-outcome"><b>{STAGES.length} of {STAGES.length}</b> stages complete</p>
       )}
