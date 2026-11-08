@@ -13,13 +13,25 @@
 // - End replies at once (the popup's 60 s safety net) and drains in the background. A pending End
 //   is resumed by `recover()` (init) and `resumeAfterLogin()`.
 // - A capture the server ended (409 capture_ended on its batches) closes here via `endedRemotely`.
-import { apexForHost, takesSubdomains } from './capture-scope.js';
+import { apexForHost, takesSubdomains, isNoiseHost, inScope } from './capture-scope.js';
 
 export const STATE_KEY = 'captureState';
 const BOOT_KEY = 'captureBootMarker';
 const DRAIN_DEADLINE_MS = 10 * 60 * 1000;
 const DRAIN_POLL_MS = 3000;
 const SERVER_IDLE_END_MS = 24 * 60 * 60 * 1000;  // the platform auto-ends an idle capture
+const MAX_NEW_SITES = 20;
+const DOT = '•';
+
+// The toolbar badge: the capture's file count, plus a dot while a "new site seen" is unanswered.
+// The dot survives the count (one writer: updateBadge) and stays while paused, so it's noticed with
+// the popup closed. Chrome fits about four characters.
+export function badgeText({ capturing, files, newSites }) {
+  const dot = newSites > 0 ? DOT : '';
+  if (!capturing) return dot;
+  if (dot) return (files > 99 ? '99+' : String(files)) + dot;
+  return files > 999 ? '999+' : String(files);
+}
 
 export class CaptureLifecycle {
   constructor({ local, session, api, captureSession, uploader, applyGate, getObservations, now, sleep }) {
@@ -238,6 +250,30 @@ export class CaptureLifecycle {
     this.state = null;
     await this.persist();
     await this.applyGate({ scope: [], capturing: false });
+  }
+
+  // A script loaded from outside the scope (background.noteOutOfScopeScript). Noted once per site
+  // (registrable domain) for the popup's "New site seen" badge, unless it's a known tracker/CDN, the
+  // capture isn't listening, or "capture every tab" is on (everything is in). Returns whether a new
+  // site was added (the caller refreshes the toolbar badge).
+  noteSite(host, { captureEverything = false } = {}) {
+    const s = this.state;
+    if (!this.isListening() || captureEverything || !host) return false;
+    if (isNoiseHost(host) || inScope(host, s.scope)) return false;
+    const site = apexForHost(host);
+    if (!site || s.newSites.includes(site) || s.newSites.length >= MAX_NEW_SITES) return false;
+    s.newSites.push(site);
+    this.persist().catch(() => {});
+    return true;
+  }
+
+  dismissSite(site) {
+    return this.serialize(async () => {
+      if (!this.state) return { ok: false, error: 'no_capture' };
+      this.state.newSites = this.state.newSites.filter((h) => h !== site);
+      await this.persist();
+      return { ok: true };
+    });
   }
 
   addToScope(host) {

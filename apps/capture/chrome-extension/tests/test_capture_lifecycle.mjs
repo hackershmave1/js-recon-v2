@@ -1,7 +1,7 @@
 // The worker-owned capture lifecycle: start/continue, pause/resume, a resumable End that answers
 // first, browser-restart detection, and a capture the server ended.
 import assert from 'node:assert/strict';
-import { CaptureLifecycle, STATE_KEY } from '../modules/capture-lifecycle.js';
+import { CaptureLifecycle, STATE_KEY, badgeText } from '../modules/capture-lifecycle.js';
 
 function storage(seed = {}) {
   const m = { ...seed };
@@ -177,5 +177,30 @@ function harness({ local = storage(), session = storage(), api: apiOverrides = {
   assert.deepEqual(r, { ok: false, error: 'session_expired' });
   assert.equal(h.lc.snapshot().capture, null);
 }
+
+// 12) New sites: a script from another registrable domain is noted once (by apex); in-scope hosts,
+// known trackers/CDNs, and anything while paused or with "capture every tab" on are not.
+{
+  const h = harness();
+  await h.lc.start({ scope: 'acme.io', mode: 'new' });
+  assert.equal(h.lc.noteSite('cdn.beta.example'), true);
+  assert.equal(h.lc.noteSite('www.beta.example'), false, 'same site, already noted');
+  assert.equal(h.lc.noteSite('api.acme.io'), false, 'in scope');
+  assert.equal(h.lc.noteSite('www.google-analytics.com'), false, 'known tracker');
+  assert.equal(h.lc.noteSite('gamma.example', { captureEverything: true }), false, 'every tab: no badge');
+  assert.deepEqual(h.lc.snapshot().capture.newSites, ['beta.example']);
+  await h.lc.dismissSite('beta.example');
+  assert.deepEqual(h.lc.snapshot().capture.newSites, []);
+  await h.lc.pause();
+  assert.equal(h.lc.noteSite('delta.example'), false, 'nothing is noted while paused');
+}
+
+// 13) Badge: the file count, plus a dot while a new site is unanswered — paused too.
+assert.equal(badgeText({ capturing: true, files: 12, newSites: 0 }), '12');
+assert.equal(badgeText({ capturing: true, files: 12, newSites: 1 }), '12•');
+assert.equal(badgeText({ capturing: true, files: 1500, newSites: 1 }), '99+•');
+assert.equal(badgeText({ capturing: false, files: 12, newSites: 1 }), '•');
+assert.equal(badgeText({ capturing: false, files: 12, newSites: 0 }), '');
+assert.equal(badgeText({ capturing: true, files: 1500, newSites: 0 }), '999+');
 
 console.log('test_capture_lifecycle: ok');

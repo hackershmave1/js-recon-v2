@@ -133,6 +133,14 @@ export function HomeView({ vm }) {
         </div>
       )}
 
+      {/* capture lifecycle (worker-owned): one line until the scope-first screens land */}
+      {vm.captureLine && (
+        <div role="status" style={{
+          margin: '13px 17px 0', padding: '8px 12px', borderRadius: '10px', background: C.inset,
+          border: `1px solid ${C.lineStrong}`, fontFamily: F.mono, fontSize: '11.5px', color: C.lime
+        }}>{vm.captureLine}</div>
+      )}
+
       {/* capture target card */}
       <div style={{ padding: '15px 17px' }}>
         <div style={{

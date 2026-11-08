@@ -23,7 +23,7 @@ import { replyOnce, dispatchReply } from './modules/message-reply.js';
 import { hookMatchPatterns, hostInScope } from './modules/hook-matches.js';
 import { authMarker, tokenExpiry } from './modules/token-validity.js';
 import { CaptureApi } from './modules/capture-api.js';
-import { CaptureLifecycle } from './modules/capture-lifecycle.js';
+import { CaptureLifecycle, badgeText } from './modules/capture-lifecycle.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -884,6 +884,10 @@ class JSExtractor {
       if (matchesDenylist(url, this.settings.denyRules || [], this.settings.denyDefaultProfile !== false)) return;
       const host = new URL(url).hostname.toLowerCase();
       if (!host) return;
+      // Capture lifecycle: a site outside the capture's scope raises the "new site seen" badge.
+      if (this.capture.noteSite(host, { captureEverything: this.settings.captureEverything === true })) {
+        this.updateBadge();
+      }
       if (!this.session.outOfScopeHosts.has(host) && this.session.outOfScopeHosts.size >= 50) return;
       this.session.outOfScopeHosts.set(host, (this.session.outOfScopeHosts.get(host) || 0) + 1);
     } catch (e) { /* ignore malformed URL */ }
@@ -1022,7 +1026,16 @@ class JSExtractor {
       capturePause: async () => sendResponse(await this.capture.pause()),
       captureResume: async () => sendResponse(await this.capture.resume()),
       captureEnd: async () => sendResponse(await this.capture.end()),
-      captureAddScope: async (req) => sendResponse(await this.capture.addToScope(req.host)),
+      captureAddScope: async (req) => {
+        const res = await this.capture.addToScope(req.host);
+        this.updateBadge();
+        sendResponse(res);
+      },
+      captureDismissSite: async (req) => {
+        const res = await this.capture.dismissSite(req.site);
+        this.updateBadge();
+        sendResponse(res);
+      },
       newSession: (req) => this.newSession(req, sendResponse),
       stopCapture: () => this.stopCapture(sendResponse),
       getFiles: () => this.getFiles(sendResponse),
@@ -1327,12 +1340,13 @@ class JSExtractor {
   updateBadge() {
     try {
       if (!chrome.action || !chrome.action.setBadgeText) return;
-      if (!this.isCapturing) { chrome.action.setBadgeText({ text: '' }); return; }
+      const newSites = (this.capture.state && this.capture.state.newSites.length) || 0;
       const n = this.session.capturedFiles.size;
+      if (!this.isCapturing) { chrome.action.setBadgeText({ text: badgeText({ capturing: false, files: n, newSites }) }); return; }
       const up = this.batchUploader.getStats();
       const bad = !!up.lastError || (up.droppedFiles || 0) > 0 || up.paired === false ||
         up.authPaused === true || (this.session.processingStats.failedFiles || 0) > 0;
-      chrome.action.setBadgeText({ text: n > 999 ? '999+' : String(n) });
+      chrome.action.setBadgeText({ text: badgeText({ capturing: true, files: n, newSites }) });
       chrome.action.setBadgeBackgroundColor({ color: bad ? '#ff8a47' : '#4ea86b' });
     } catch (e) { /* action API unavailable in this context */ }
   }
