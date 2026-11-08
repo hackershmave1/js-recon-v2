@@ -45,6 +45,7 @@ const BASE: RunData = {
   captureStatus: null, technologies: null, hosts: null, events: [],
   failureCategory: null, failureReason: null, failureHost: null,
   handleControlResult: () => {}, refreshFindings: vi.fn(),
+  analyzedOnce: true, findingsVersion: 0,
 };
 
 function renderHeader(partial: Partial<RunData> = {}, onOpenTuning?: () => void) {

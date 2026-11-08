@@ -54,6 +54,7 @@ export function RunProgress() {
   const [nowSeconds, setNowSeconds] = useState(() => Date.now() / 1000);
   useEffect(() => {
     if (state !== "capturing") return;
+    setNowSeconds(Date.now() / 1000);
     const tick = window.setInterval(() => setNowSeconds(Date.now() / 1000), 5000);
     return () => window.clearInterval(tick);
   }, [state]);
@@ -89,7 +90,7 @@ export function RunProgress() {
         </div>
       </div>
 
-      <SessionRunsSwitcher runId={runId} sessionId={sessionId} />
+      <SessionRunsSwitcher runId={runId} sessionId={sessionId} runState={state} />
 
       {/* A capture run sits QUEUED while /save-files accumulates batches; show the live
           "receiving" banner during that window — gated on the CONFIRMED "queued" snapshot

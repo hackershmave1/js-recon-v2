@@ -19,7 +19,7 @@ import { DiscoveryEmpty } from "./features/discovery/DiscoveryEmpty";
 import { Shell } from "./shell/Shell";
 import { ErrorBoundary } from "./shell/ErrorBoundary";
 import { useTenant } from "./tenant/TenantContext";
-import { READABLE_STATES, type SourceJump } from "./api/types";
+import { READABLE_STATES, TERMINAL_STATES, type SourceJump } from "./api/types";
 
 // The run workspace is a layout route: the SSE/findings engine is provided once here
 // (keyed by run id so a run switch remounts it fresh — the monotonic-guard refs must
@@ -97,7 +97,9 @@ export function OverviewRoute() {
   // "Compare" button can navigate to the diff page. Runs are ordered newest-first by
   // the API; we want the first run whose id < current run's id (simpler than date sort).
   useEffect(() => {
-    if (!tenantId || !sessionId || !id || !READABLE_STATES.has(state)) return;
+    // Only a FINISHED run is compared: an open capture would list not-yet-captured findings
+    // as "gone".
+    if (!tenantId || !sessionId || !id || !TERMINAL_STATES.has(state)) return;
     getSessionRuns(tenantId, sessionId).then((r) => {
       const terminal = new Set(["done", "partial"]);
       const idx = r.runs.findIndex((run) => run.run_id === id);
@@ -208,20 +210,20 @@ export function ThreatModelRoute() {
 }
 
 export function ApiSpecRoute() {
-  const { findings, state, loaded } = useRunData();
+  const { findings, state, loaded, analyzedOnce } = useRunData();
   const { id } = useParams();
   if (!loaded) return <NotReady title="Loading…" body="Fetching this run's status." />;
-  if (!READABLE_STATES.has(state)) {
+  if (!READABLE_STATES.has(state) && !analyzedOnce) {
     return <NotReady title="API spec pending" body="The reconstructed API surface is available once the run has been analyzed." />;
   }
   return <ApiSpecPage data={findings} runId={id!} />;
 }
 
 export function ProbeRoute() {
-  const { state, loaded } = useRunData();
+  const { state, loaded, analyzedOnce } = useRunData();
   const { id } = useParams();
   if (!loaded) return <NotReady title="Loading…" body="Fetching this run's status." />;
-  if (!READABLE_STATES.has(state)) {
+  if (!READABLE_STATES.has(state) && !analyzedOnce) {
     return <NotReady title="Manual probe pending" body="Reconstructed requests are probeable once the run has been analyzed." />;
   }
   return <ProbePanel runId={id!} />;

@@ -53,7 +53,7 @@ export function RunHeader({ onOpenTuning }: { onOpenTuning?: () => void }) {
       <div className="rh-identity">
         <span className="rh-host">{domain ?? "Current run"}</span>
         <span className="rh-meta">
-          <span className={stateChipClass(state)}>{state}</span>
+          <span className={stateChipClass(state)}>{state === "capturing" ? "capturing · listening" : state}</span>
           <span className="rh-runid">{shortId}</span>
           {files != null && <span className="rh-files">{files} file{files === 1 ? "" : "s"}</span>}
         </span>

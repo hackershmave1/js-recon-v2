@@ -89,4 +89,42 @@ describe("SessionRunsSwitcher", () => {
     mount("r", null);
     expect(spy).not.toHaveBeenCalled();
   });
+
+  it("refetches when this run comes to rest or finishes, and trusts the live state", async () => {
+    const spy = mockRuns([runRef("run-b", "capturing", 3), runRef("run-a", "done", 7)]);
+    const view = render(
+      <TenantProvider><MemoryRouter>
+        <SessionRunsSwitcher runId="run-b" sessionId="sess" runState="analyzing" />
+      </MemoryRouter></TenantProvider>,
+    );
+    await screen.findByText("3 endpoints");
+    spy.mockResolvedValue({ session_id: "sess", count: 2, runs: [runRef("run-b", "done", 5), runRef("run-a", "done", 7)] });
+    view.rerender(
+      <TenantProvider><MemoryRouter>
+        <SessionRunsSwitcher runId="run-b" sessionId="sess" runState="done" />
+      </MemoryRouter></TenantProvider>,
+    );
+    expect(await screen.findByText("5 endpoints")).toBeInTheDocument();
+    expect(screen.queryByText(/^capturing$/)).toBeNull();
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("names every capture uniquely and draws no meter when nothing was found", async () => {
+    mockRuns([runRef("run-b", "done", 0), runRef("run-a", "done", 0)]);
+    mount("run-b", "sess");
+    await screen.findAllByText("0 endpoints");
+    expect(screen.queryByRole("meter")).toBeNull();
+    const names = screen.getAllByRole("button", { name: /copy run id/i }).map((b) => b.getAttribute("aria-label"));
+    expect(new Set(names).size).toBe(2);
+    expect(names[0]).toMatch(/capture 2/i);  // newest first
+  });
+
+  it("shows the run ID when the browser blocks copying", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    mockRuns([runRef("run-aaaa1111", "done", 5), runRef("run-bbbb2222", "done", 9)]);
+    mount("run-bbbb2222", "sess");
+    await screen.findByText("5 endpoints");
+    await userEvent.click(screen.getAllByRole("button", { name: /copy run id/i })[0]);
+    expect(await screen.findByRole("status")).toHaveTextContent("run-aaaa1111");
+  });
 });

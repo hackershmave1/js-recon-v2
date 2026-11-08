@@ -251,6 +251,7 @@ describe("RunProgress", () => {
       .mockResolvedValue({ run_id: "r", count: 3, coverage: null, spec: null, findings: [] });        // terminal: results
     vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
       h.onOpen?.();                                                             // initial refresh -> 0 findings
+      await new Promise((r) => setTimeout(r, 20));                              // ...lands while the run is active
       h.onEvent({ id: "1", event: "run.transition", data: '{"to":"done"}' });  // live terminal, stream then ends
     });
     renderRun(<><RunProgress /><CountProbe /></>);
@@ -304,12 +305,14 @@ describe("RunProgress", () => {
     const findings = vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
     vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
       h.onOpen?.();
+      await new Promise((r) => setTimeout(r, 20));  // the open refresh lands mid-pass
       h.onEvent({ id: "1", event: "run.transition", data: '{"to":"capturing"}' });
+      await new Promise((r) => setTimeout(r, 20));
       h.onEvent({ id: "2", event: "run.transition", data: '{"to":"discovering"}' });
     });
     renderRun(<><RunProgress /><StateProbe /></>);
     await waitFor(() => expect(screen.getByTestId("state")).toHaveTextContent("discovering"));
-    await waitFor(() => expect(findings.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(findings).toHaveBeenCalledTimes(2));  // open + the pass coming to rest
   });
 
   it("shows files arriving into a resting capture", async () => {
@@ -346,5 +349,43 @@ describe("RunProgress", () => {
     await waitFor(() => expect(api.getStatus).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.getByTestId("state")).toHaveTextContent("analyzing");
+  });
+
+  it("a slow snapshot taken mid-pass cannot drag a resting capture back to an active stage", async () => {
+    const snap = (state: string) => ({ run_id: "r", state, stage: state, done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    let release: (v: unknown) => void = () => {};
+    const slow = new Promise((r) => { release = r; });
+    vi.spyOn(api, "getStatus")
+      .mockImplementationOnce(async () => { await slow; return snap("analyzing"); })  // taken mid-pass
+      .mockResolvedValue(snap("capturing"));
+    vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onOpen?.();
+      await new Promise((r) => setTimeout(r, 5));
+      h.onEvent({ id: "1", event: "run.transition", data: '{"to":"correlating"}' });
+      h.onEvent({ id: "2", event: "run.transition", data: '{"to":"capturing"}' });
+      release(null);  // the mid-pass snapshot lands only now
+    });
+    renderRun(<StateProbe />);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(screen.getByTestId("state")).toHaveTextContent("capturing");
+  });
+
+  it("replaying many past passes on open refreshes once or twice, not once per pass", async () => {
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r", state: "capturing", stage: "correlating", done: 0, total: 0, pct: null, eta_seconds: null, heartbeat_at: null, stalled: false, pause_requested: false, cancel_requested: false });
+    const findings = vi.spyOn(api, "getFindings").mockResolvedValue({ run_id: "r", count: 0, coverage: null, spec: null, findings: [] });
+    vi.spyOn(sse, "streamRunEvents").mockImplementation(async (_r, _t, h) => {
+      h.onOpen?.();
+      let id = 0;
+      for (let pass = 0; pass < 6; pass++) {  // the stream replays every past pass from the start
+        for (const to of ["discovering", "fetching", "ingesting", "analyzing", "correlating", "capturing"]) {
+          h.onEvent({ id: String(++id), event: "run.transition", data: JSON.stringify({ to }) });
+        }
+      }
+    });
+    renderRun(<StateProbe />);
+    await waitFor(() => expect(screen.getByTestId("state")).toHaveTextContent("capturing"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(findings.mock.calls.length).toBeLessThanOrEqual(2);
   });
 });
