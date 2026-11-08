@@ -40,11 +40,14 @@ export function RunControls(
   // until the worker checkpoints. Show it as pending (disabled) rather than a fresh
   // "Pause" that invites a redundant click — this is what survives a reload (A1).
   const paused = state === "paused";
+  // A capture resting between analyses has nothing running to pause (the server refuses it);
+  // pausing a capture is the extension's Pause, which stops listening.
+  const resting = state === "capturing";
   return (
     <div>
       {paused
         ? <button type="button" onClick={() => act(resumeRun)} disabled={busy}>Resume</button>
-        : (
+        : !resting && (
           <button type="button" onClick={() => act(pauseRun)} disabled={busy || pauseRequested}>
             {pauseRequested ? "Pausing…" : "Pause"}
           </button>

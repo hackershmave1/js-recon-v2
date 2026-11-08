@@ -3,7 +3,7 @@ import { useTenant } from "../../tenant/TenantContext";
 import { streamRunEvents, type SseEvent } from "../../api/sseClient";
 import { getAssets, getFindings, getHosts, getStatus, getTechnologies, ApiError } from "../../api/apiClient";
 import {
-  TERMINAL_STATES, type AssetsManifest, type FindingsResponse, type HostsResponse,
+  READABLE_STATES, TERMINAL_STATES, type AssetsManifest, type FindingsResponse, type HostsResponse,
   type RunControlResult, type TechnologiesResponse,
 } from "../../api/types";
 
@@ -23,7 +23,10 @@ function supersedes(next: string, current: string): boolean {
   if (current === "…") return true;                                 // initial seed
   if (TERMINAL_STATES.has(current)) return false;                   // terminal is absorbing
   if (TERMINAL_STATES.has(next) || next === "paused") return true;  // must always surface
-  if (current === "paused") return true;                            // resume -> active stage
+  // A pass comes to rest from CORRELATING; from an EARLIER stage, "capturing" is a stale
+  // snapshot of the previous pass (the next one already started), so it must not win.
+  if (next === "capturing") return !(current in STATE_RANK) || current === "correlating" || current === "queued";
+  if (current === "paused" || current === "capturing") return true; // resume / next pass
   const rn = STATE_RANK[next];
   const rc = STATE_RANK[current];
   if (rn === undefined || rc === undefined) return true;            // never block the unmodelled
@@ -77,6 +80,13 @@ export interface RunData {
   failureReason: string | null;
   failureHost: string | null;
   handleControlResult: (res: RunControlResult) => void;
+  // True once the run has had readable findings (finished, or a capture resting after a pass),
+  // and stays true while a capture's next pass runs, so pages over analyzed data (API spec,
+  // probe) stay mounted instead of flipping to "pending" on every pass.
+  analyzedOnce: boolean;
+  // Bumps every time findings are re-read. Pages that fetch their own derived data (the
+  // reconstructed requests) add it to their effect deps to refetch in place.
+  findingsVersion: number;
   // REQ-TU4: call after a tuning lever applies to refresh findings + coverage in place.
   refreshFindings: () => Promise<void>;
 }
@@ -123,6 +133,13 @@ function useRunStream(runId: string): RunData {
   const [failureCategory, setFailureCategory] = useState<string | null>(null);
   const [failureReason, setFailureReason] = useState<string | null>(null);
   const [failureHost, setFailureHost] = useState<string | null>(null);
+  const [analyzedOnce, setAnalyzedOnce] = useState(false);
+  const [findingsVersion, setFindingsVersion] = useState(0);
+  // Bumped on every accepted live run.transition. A status snapshot is only trusted if no live
+  // transition landed while it was in flight: the stream (replay + tail) is ordered and
+  // authoritative, a snapshot fetched before the latest transition is not (a slow findings read
+  // can hold it for seconds, longer than a small capture pass).
+  const transitionSeqRef = useRef(0);
   // stateRef mirrors `state` at accept-time so the guard compares against the
   // running value even within a synchronous burst of replayed SSE events (where
   // `state` hasn't re-rendered yet). liveProgressRef flips once job.progress has
@@ -134,16 +151,25 @@ function useRunStream(runId: string): RunData {
   // burst. `stage` is pinned to the last ACTIVE stage (state value == stage key)
   // so a terminal/paused render still shows where the run stopped. Returns whether
   // the write was accepted.
-  const applyState = useCallback((s: string): boolean => {
-    if (!supersedes(s, stateRef.current)) return false;
+  // `force` (checkTerminal, run when nothing is streaming) trusts the server's current state over
+  // the ordering guard, except that terminal stays absorbing.
+  const applyState = useCallback((s: string, force = false): boolean => {
+    const current = stateRef.current;
+    if (force ? TERMINAL_STATES.has(current) && !TERMINAL_STATES.has(s) : !supersedes(s, current)) {
+      return false;
+    }
     stateRef.current = s;
     setState(s);
     if (ACTIVE_STAGES.has(s)) setStage(s);
+    if (READABLE_STATES.has(s)) setAnalyzedOnce(true);
     return true;
   }, []);
   const refreshFindings = useCallback(async () => {
     if (!tenantId) return;
-    try { setFindings(await getFindings(tenantId, runId)); } catch { /* best-effort */ }
+    try {
+      setFindings(await getFindings(tenantId, runId));
+      setFindingsVersion((v) => v + 1);
+    } catch { /* best-effort */ }
   }, [tenantId, runId]);
 
   // A control POST returns the authoritative state + flags; lift them so gating
@@ -159,15 +185,19 @@ function useRunStream(runId: string): RunData {
     const controller = new AbortController();
     const refresh = async () => {
       try {
+        const seq = transitionSeqRef.current;
         const [s, f] = await Promise.all([getStatus(tenantId, runId), getFindings(tenantId, runId)]);
         if (controller.signal.aborted) return;
         const prev = stateRef.current;
-        applyState(s.state);
+        // A live transition landed while this was in flight: the snapshot is older than what we
+        // show, so only its findings (re-read again by the trailing refresh) are kept.
+        const overtaken = transitionSeqRef.current !== seq;
+        if (!overtaken) applyState(s.state);
         // Apply the snapshot's stage/flags/numbers only when it isn't a stale
         // regression (a late QUEUED snapshot would otherwise regress `stage` or
         // re-zero the bar); leave the numbers to the live stream once job.progress
         // has taken over (Bug 1 / Bug 3).
-        if (!isStaleSnapshot(s.state, prev)) {
+        if (!overtaken && !isStaleSnapshot(s.state, prev)) {
           if (s.stage) setStage(s.stage); // never overwrite the pinned stage with a terminal null
           setPauseRequested(s.pause_requested); setCancelRequested(s.cancel_requested);
           setFailureCategory(s.failure_category ?? null);
@@ -178,6 +208,7 @@ function useRunStream(runId: string): RunData {
           }
         }
         setFindings(f);
+        setFindingsVersion((v) => v + 1);
         setSessionId(s.session_id ?? null);
         setLoaded(true);
         // The assets manifest powers the crawl fetch-outcome line; it is secondary,
@@ -204,9 +235,29 @@ function useRunStream(runId: string): RunData {
         setLoaded(true);
       }
     };
+    // At most one refresh in flight, plus ONE trailing re-run if more were asked for meanwhile.
+    // The stream replays every past transition on open, so a capture with N passes would
+    // otherwise fire N full refreshes (5 requests each) whose responses race each other.
+    let inFlight = false;
+    let again = false;
+    let scheduled = false;
+    const requestRefresh = () => {
+      if (scheduled) return;
+      scheduled = true;
+      setTimeout(() => {
+        scheduled = false;
+        if (inFlight) { again = true; return; }
+        inFlight = true;
+        void (async () => {
+          try {
+            do { again = false; await refresh(); } while (again && !controller.signal.aborted);
+          } finally { inFlight = false; }
+        })();
+      }, 0);
+    };
     streamRunEvents(runId, tenantId, {
       signal: controller.signal,
-      onOpen: () => { void refresh(); },
+      onOpen: () => { requestRefresh(); },
       onEvent: (e) => {
         setEvents((prev) => [...prev, e]);
         // Reflect control intent + non-terminal state live (A2): SSE carries named
@@ -257,6 +308,7 @@ function useRunStream(runId: string): RunData {
             if (typeof to === "string") {
               const wasState = stateRef.current;
               if (applyState(to)) {
+                transitionSeqRef.current += 1;
                 setPauseRequested(false);
                 // New stage starting: clear the prior stage's job numbers so the bar
                 // doesn't flash the old "N of N" before the new job.progress lands.
@@ -270,7 +322,9 @@ function useRunStream(runId: string): RunData {
                 // findings/coverage/sources until a manual reload. Idempotent: the
                 // monotonic guard rejects a replayed terminal, so applyState is already
                 // false above and this never double-fires.
-                if (TERMINAL_STATES.has(to)) void refresh();
+                // A capture resting after a pass ("capturing") has fresh findings too, but
+                // keeps the stream open: more passes follow until End.
+                if (TERMINAL_STATES.has(to) || to === "capturing") requestRefresh();
               }
             }
           } catch { /* non-JSON payload */ }
@@ -280,9 +334,9 @@ function useRunStream(runId: string): RunData {
         try {
           const s = await getStatus(tenantId, runId);
           if (controller.signal.aborted) return true;
-          applyState(s.state);
+          applyState(s.state, true);  // nothing is streaming now: the server's state is current
           setPauseRequested(s.pause_requested); setCancelRequested(s.cancel_requested);
-          if (TERMINAL_STATES.has(s.state)) { void refresh(); return true; }
+          if (TERMINAL_STATES.has(s.state)) { requestRefresh(); return true; }
           return false;
         } catch (e) {
           if (controller.signal.aborted) return true;
@@ -290,7 +344,7 @@ function useRunStream(runId: string): RunData {
           return true;
         }
       },
-      onFallback: () => { void refresh(); },
+      onFallback: () => { requestRefresh(); },
     });
     return () => controller.abort();
   }, [tenantId, runId, applyState]);
@@ -299,6 +353,7 @@ function useRunStream(runId: string): RunData {
     runId, sessionId, state, stage, pct, done, total, eta, error, assets, events, findings, loaded,
     pauseRequested, cancelRequested, captureStatus, technologies, hosts,
     failureCategory, failureReason, failureHost, handleControlResult, refreshFindings,
+    analyzedOnce, findingsVersion,
   };
 }
 

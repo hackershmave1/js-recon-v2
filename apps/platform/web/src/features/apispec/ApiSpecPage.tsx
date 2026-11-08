@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useRunDataOptional } from "../progress/runData";
 import { useTenant } from "../../tenant/TenantContext";
 import { getRequests, ApiError } from "../../api/apiClient";
 import type {
@@ -134,6 +135,7 @@ export function ApiSpecPage({ data, runId }: { data: FindingsResponse | null; ru
   const [query, setQuery] = useState("");
   const [drawer, setDrawer] = useState<Finding | null>(null);
   const { width: railWidth, collapsed: railCollapsed, toggleCollapsed: toggleRail, resizerProps } = useResizableRail("apispec");
+  const findingsVersion = useRunDataOptional()?.findingsVersion ?? 0;
 
   useEffect(() => {
     if (!tenantId) return;
@@ -142,7 +144,9 @@ export function ApiSpecPage({ data, runId }: { data: FindingsResponse | null; ru
       .then((d) => { if (live) setRequests(d); })
       .catch((e) => { if (live) setError(e instanceof ApiError ? e.message : "Failed to load operations"); });
     return () => { live = false; };
-  }, [tenantId, runId]);
+    // findingsVersion: a capture's next pass re-reads findings; refetch in place so the
+    // selected operation, search and drawer survive.
+  }, [tenantId, runId, findingsVersion]);
 
   const ops = useMemo(
     () => (requests ? toOps(requests.requests, data?.findings ?? []) : []),

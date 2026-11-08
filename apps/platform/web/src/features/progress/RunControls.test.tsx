@@ -111,4 +111,10 @@ describe("RunControls", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /cancel/i })).toBeDisabled());
     resolve({ run_id: "r", state: "paused", pause_requested: true });
   });
+
+  it("offers no Pause for a capture resting between analyses (pause lives in the extension)", () => {
+    ui("capturing");
+    expect(screen.queryByRole("button", { name: /pause/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+  });
 });

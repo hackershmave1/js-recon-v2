@@ -20,10 +20,10 @@ const STATUS_CLASS: Record<string, string> = {
   done: "ok", partial: "warn", paused: "warn",
   failed: "bad", cancelled: "muted", queued: "muted",
   running: "run", discovering: "run", fetching: "run",
-  ingesting: "run", analyzing: "run", correlating: "run",
+  ingesting: "run", analyzing: "run", correlating: "run", capturing: "run",
 };
 const ACTIVE_STATES = new Set([
-  "running", "discovering", "fetching", "ingesting", "analyzing", "correlating",
+  "running", "discovering", "fetching", "ingesting", "analyzing", "correlating", "capturing",
 ]);
 
 // A null stat means "no run yet" or "analyze hasn't emitted" — render "—", never a 0

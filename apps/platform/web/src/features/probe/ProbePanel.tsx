@@ -18,6 +18,7 @@ function hostOf(raw: string | null | undefined): string | null {
 export function ProbePanel({ runId }: { runId: string }) {
   const { tenantId } = useTenant();
   const runData = useRunDataOptional();
+  const findingsVersion = runData?.findingsVersion ?? 0;
   const [searchParams, setSearchParams] = useSearchParams();
 
   // In-scope discovered hosts, crawl target first — best-effort from run context.
@@ -56,7 +57,8 @@ export function ProbePanel({ runId }: { runId: string }) {
       .then((d) => { if (live) { setData(d); setError(null); } })
       .catch((e) => { if (live) setError(e instanceof ApiError ? e.message : "Failed to load requests"); });
     return () => { live = false; };
-  }, [tenantId, runId, effectiveHost]);
+    // findingsVersion: refetch in place after a capture's pass (host + triage state survive).
+  }, [tenantId, runId, effectiveHost, findingsVersion]);
 
   const requests = useMemo(() => data?.requests ?? [], [data]);
 
