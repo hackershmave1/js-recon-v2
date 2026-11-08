@@ -886,6 +886,22 @@ def _latest_analyzed_run(tenant_id: str, session_id: str) -> tuple[str, str] | N
         return (str(row[0]), row[1]) if row is not None else None
 
 
+def _analyzed_capture(tenant_id: str, session_id: str, run_id: str) -> tuple[str, str] | None:
+    """``run_id`` with its state if it is this session's run and has been analyzed (has a Job)."""
+    clean = _safe_uuid(run_id)
+    if clean is None:
+        return None
+    with tenant_session(tenant_id) as session:
+        row = session.execute(
+            select(Run.id, Run.state).where(
+                Run.id == clean,
+                Run.session_id == str(session_id),
+                exists(select(Job.id).where(Job.run_id == Run.id)),
+            )
+        ).first()
+        return (str(row[0]), row[1]) if row is not None else None
+
+
 def _asset_progress_status(row: assets.AssetRow, *, run_analyzing: bool, run_terminal: bool) -> str:
     """Map a capture asset to the popup's per-file vocabulary. Captured assets are
     pre-fetch_ok, so the signal is analyze_status; a fetch failure still surfaces.
@@ -921,16 +937,29 @@ def _idle_job() -> dict:
 @router.get("/sessions/{ext_session_id}/analyze/progress")
 def analyze_progress(
     ext_session_id: str,
+    runId: str | None = None,  # noqa: N803 - extension wire name
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> dict:
+    """The popup's analysis feed. With ``runId`` (the capture lifecycle) it reports THAT capture,
+    so after a Continue it never shows the previous capture's "done". Without it, the session's
+    latest analyzed run, as before. The response names the run it describes."""
     tenant_id, _ = _resolve_ingest_tenant(authorization)
     session_id = _find_session_by_external_id(tenant_id, ext_session_id)
     if session_id is None:
         raise HTTPException(status_code=404, detail="unknown capture session")
 
-    latest = _latest_analyzed_run(tenant_id, session_id)
+    latest = (
+        _analyzed_capture(tenant_id, session_id, runId)
+        if runId
+        else _latest_analyzed_run(tenant_id, session_id)
+    )
     if latest is None:
-        return {"success": True, "sessionId": session_id, "job": _idle_job()}
+        return {
+            "success": True,
+            "sessionId": session_id,
+            "runId": _safe_uuid(runId),
+            "job": _idle_job(),
+        }
     run_id, state = latest
     run_state = RunState(state)
     run_analyzing = run_state == RunState.ANALYZING
@@ -949,7 +978,12 @@ def analyze_progress(
         status = _asset_progress_status(row, run_analyzing=run_analyzing, run_terminal=run_terminal)
         counts[status] += 1
         files.append({"url": row.url, "status": status})
-    return {"success": True, "sessionId": session_id, "job": {"counts": counts, "files": files}}
+    return {
+        "success": True,
+        "sessionId": session_id,
+        "runId": run_id,
+        "job": {"counts": counts, "files": files},
+    }
 
 
 # --------------------------------------------------------------------------- #
