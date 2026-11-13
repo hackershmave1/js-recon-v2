@@ -289,4 +289,37 @@ assert.equal(badgeText({ capturing: true, files: 1500, newSites: 0 }), '999+');
   assert.equal(night.lc.snapshot().capture.elapsedMs, 2 * 60_000, 'closed hours are not counted');
 }
 
+// 21) The popup's header: the snapshot says how the capture began (new / continue + its number in
+// the session) and whether a browser restart paused it; Resume clears that.
+{
+  const h = harness();
+  await h.lc.start({ scope: 'acme.io', mode: 'continue', match: { external_id: 'ext-old', engagement_id: null, captures: 4 } });
+  assert.equal(h.lc.snapshot().capture.mode, 'continue');
+  assert.equal(h.lc.snapshot().capture.ordinal, 5);
+
+  const local = storage();
+  const before = harness({ local });
+  await before.lc.start({ scope: 'acme.io', mode: 'new' });
+  assert.equal(before.lc.snapshot().capture.mode, 'new');
+  assert.equal(before.lc.snapshot().capture.ordinal, 1);
+  const after = harness({ local, session: storage() });
+  await after.lc.recover();
+  assert.equal(after.lc.snapshot().capture.pausedByRestart, true);
+  await after.lc.resume();
+  assert.equal(after.lc.snapshot().capture.pausedByRestart, false);
+}
+
+// 22) "Done" on the Capture-ended banner forgets it (persisted), and only it.
+{
+  const h = harness();
+  await h.lc.start({ scope: 'acme.io', mode: 'new' });
+  await h.lc.end();
+  await h.lc.draining;
+  await h.lc.chain;
+  assert.ok(h.lc.snapshot().lastEnded);
+  assert.deepEqual(await h.lc.dismissEnded(), { ok: true });
+  assert.equal(h.lc.snapshot().lastEnded, null);
+  assert.equal(h.local._m[STATE_KEY].lastEnded, null);
+}
+
 console.log('test_capture_lifecycle: ok');
