@@ -74,7 +74,7 @@ export function LoginView({ vm }) {
             <button onClick={vm.capture.stop} style={{
               flex: '0 0 auto', padding: '7px 11px', borderRadius: '9px', border: `1px solid ${C.pink}`,
               background: C.control, color: C.pink, fontSize: '11.5px', fontWeight: 600, cursor: 'pointer'
-            }}>Stop capture</button>
+            }}>Pause capture</button>
           </div>
         )}
         {/* workspace URL + connection test — the URL must be set before login */}

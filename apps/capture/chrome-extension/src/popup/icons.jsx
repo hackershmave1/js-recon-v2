@@ -54,6 +54,12 @@ export const PauseIcon = ({ size = 15 }) => (
   </svg>
 );
 
+export const StopIcon = () => (
+  <svg width="100%" height="100%" viewBox="0 0 24 24" fill="currentColor">
+    <rect x="5" y="5" width="14" height="14" rx="2" />
+  </svg>
+);
+
 export const PlayIcon = () => (
   <svg width="100%" height="100%" viewBox="0 0 24 24" fill="currentColor">
     <path d="M6 4l14 8-14 8V4z" />

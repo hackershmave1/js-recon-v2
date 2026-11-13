@@ -27,19 +27,33 @@ platform.
    the build step (`npm run watch` rebuilds on change).
 3. Load it: open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and
    select `apps/capture/chrome-extension`.
-4. **Sign in, then pick an engagement.** A signed-out popup opens straight to a **sign-in screen**
-   (the gate) — set the **Workspace URL** there if it isn't the default `http://localhost:8000` (it
-   is the single source of truth for uploads, health, and analyze), then sign in with your platform
-   username/password (dev default `admin`/`admin`; the default stack ships auth **on**). Once signed
-   in you land on **Home**, where an always-visible **Engagement** selector routes captures into a
-   chosen engagement (project) — or **Solo · standalone** for an independent session. Capture won't
-   start until you're signed in; the current engagement shows on the capture card, and switching
-   engagement starts a fresh session (the platform binds a session to one engagement for its life).
+4. **Sign in, set a scope, start a capture.** A signed-out popup opens straight to a **sign-in
+   screen** (the gate) — set the **Workspace URL** there if it isn't the default
+   `http://localhost:8000` (it is the single source of truth for uploads, health, and analyze), then
+   sign in with your platform username/password (dev default `admin`/`admin`; the default stack
+   ships auth **on**). Once signed in you land on **Home** with no scope and a disabled **Start**:
+   - **Scope first.** One click uses the current tab's site (its registrable domain plus all
+     subdomains), or type a domain. Nothing is captured until a scope is set, and the scope clears
+     when the capture ends. It is chosen per capture; there is no scope setting.
+   - **Capture into.** If a session already holds that scope, **Continue** it (pre-selected; it
+     shows the session's capture count, last date and largest capture, and keeps that session's
+     engagement) or start a **New session** with an optional engagement (or **Solo · standalone**).
+   - **Start capture.** One capture is one run on the platform, from Start to End. The header shows
+     the scope, the elapsed time and the file count, with **Pause / Resume** and **End capture**.
+   - **Analyze** never ends the capture: files that arrive later join it and the platform
+     re-analyzes them on its own once uploads go quiet.
+   - JavaScript from a site outside the scope raises a **New site seen** banner (and a dot on the
+     toolbar icon): add the site to the scope, or end this capture and start one for that site.
+   - **End capture** needs no confirmation. It waits for queued uploads, the platform runs the
+     final analysis, and the popup shows a "Capture ended" banner that links to the workspace.
+     A browser restart brings a capture back **paused**; one left idle for 24 h ends itself.
+
+   "Capture every tab" (Settings, behind a confirmation) ignores the scope while it is on.
 
 ## How it works
 
-With the extension signed in and an engagement (or Solo) selected, browse an authenticated app with
-capture on → the service worker
+With the extension signed in and a capture started, browse an authenticated app → the service
+worker
 intercepts script responses (`webRequest` + a `document_start` content script), hashes and
 de-dupes them, fetches any `//# sourceMappingURL` maps, and batches everything to
 `POST /api/save-files`. Analysis is decoupled: bulk uploads are a fast store, and the popup's

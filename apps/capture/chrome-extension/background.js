@@ -955,7 +955,9 @@ class JSExtractor {
       useDomainScope: result.useDomainScope || false,
       // Fail-closed default: with no scope AND this off, isInScope captures nothing.
       captureEverything: result.captureEverything === true,
-      performAnalysisOnUpload: result.performAnalysisOnUpload === true,
+      // "Analyze on upload" is retired (the platform re-analyzes a capture's late files itself) and
+      // has no toggle any more, so a value stored by an older popup must not stay on forever.
+      performAnalysisOnUpload: false,
       captureSourceMaps: result.captureSourceMaps !== false,
       // Response-body capture is OPT-IN (posture: it collects response DATA) — default OFF (D45b2).
       captureResponseBodies: result.captureResponseBodies === true,
@@ -1024,11 +1026,22 @@ class JSExtractor {
     this.updateBadge();
   }
 
+  // Start/Resume opened the gate: re-scan the open tab so scripts it already loaded are captured
+  // without a reload (the path the legacy startCapture had).
+  async listenAndRescan(transition) {
+    const res = await transition();
+    if (res && res.ok && this.isCapturing) this.rescanActiveTab();
+    return res;
+  }
+
   replyFrom(res) {
     return res && res.ok ? { ok: true, ...(res.data || {}) } : { ok: false, status: res && res.status, error: res && res.error };
   }
 
   async persistCaptureState(isCapturing) {
+    // Settings are written back whole (updateSettings, login): keep their copy of the bit current,
+    // or a later settings write would re-persist the value read at boot.
+    this.settings = { ...this.settings, isCapturing };
     try {
       await chrome.storage.local.set({ isCapturing });
       await publishCaptureState(chrome.storage, isCapturing); // what content scripts read
@@ -1042,15 +1055,15 @@ class JSExtractor {
       // While a lifecycle capture is active the worker owns it: the legacy controls map onto it
       // (start → resume, stop → pause) instead of desynchronising the gate from its state.
       startCapture: async () => (this.capture.state
-        ? sendResponse(await this.capture.resume()) : this.startCapture(sendResponse)),
+        ? sendResponse(await this.listenAndRescan(() => this.capture.resume())) : this.startCapture(sendResponse)),
       // Capture lifecycle (one capture = one platform run).
       captureLookup: async (req) => sendResponse(this.replyFrom(await this.capture.lookup(req.scope))),
-      captureStart: async (req) => sendResponse(await this.capture.start({
+      captureStart: async (req) => sendResponse(await this.listenAndRescan(() => this.capture.start({
         scope: req.scope, mode: req.mode, match: req.match,
         binding: { projectId: req.projectId || null, captureConfig: {}, overrideKeys: [] },
-      })),
+      }))),
       capturePause: async () => sendResponse(await this.capture.pause()),
-      captureResume: async () => sendResponse(await this.capture.resume()),
+      captureResume: async () => sendResponse(await this.listenAndRescan(() => this.capture.resume())),
       captureEnd: async () => sendResponse(await this.capture.end()),
       captureAddScope: async (req) => {
         const res = await this.capture.addToScope(req.host);
@@ -1062,6 +1075,7 @@ class JSExtractor {
         this.updateBadge();
         sendResponse(res);
       },
+      captureDismissEnded: async () => sendResponse(await this.capture.dismissEnded()),
       // Rotating the session under a live capture would orphan its run: End it first.
       newSession: (req) => (this.capture.state
         ? sendResponse({ ok: false, error: 'capture_in_progress' }) : this.newSession(req, sendResponse)),
