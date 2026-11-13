@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   capturePhase, suggestScope, typedScope, scopeLabel, formatElapsed, continueOptions,
   defaultChoice, liveSubtitle, endedBanner, startErrorText, analyzeLabel,
+  analyzeOutcome, progressStatus, startEngagement, engagementName,
 } from '../src/popup/viewmodels/captureVm.js';
 
 // --- which screen ---
@@ -92,5 +93,36 @@ assert.equal(analyzeLabel({ status: 'starting' }, 5), 'Starting analysis…');
 assert.equal(analyzeLabel({ status: 'running', counts: { completed: 64, total: 152 } }, 152), 'Analyzing… 64/152');
 assert.equal(analyzeLabel({ status: 'running', updating: true, counts: { completed: 1, total: 3 } }, 155), 'Updating with new files… 1/3');
 assert.equal(analyzeLabel({ status: 'done', counts: { completed: 152 } }, 152), 'Analyzed ✓ · 152 done');
+
+// "paused by restart" is not said once End was pressed (the capture is ending, not paused).
+assert.equal(
+  liveSubtitle({ mode: 'new', scope: ['acme.io'], elapsedMs: 1000, paused: true, pausedByRestart: true, ending: true }, 2),
+  'New session · 0:01 · 2 files');
+
+// --- what an Analyze reply means: a 200 that started nothing is NOT a finished analysis ---
+assert.equal(analyzeOutcome({ ok: true, started: true }).status, 'running');
+assert.deepEqual(analyzeOutcome({ ok: true, started: false, message: 'no captured files to analyze' }),
+  { status: 'idle', toast: 'no captured files to analyze', tone: 'warn' });
+assert.deepEqual(analyzeOutcome({ ok: true, started: false, upToDate: true }),
+  { status: 'adopt', toast: 'Already up to date', tone: 'ok' });
+assert.equal(analyzeOutcome({ ok: false, reason: 'session_expired' }).tone, 'error');
+assert.match(analyzeOutcome({ ok: false, reason: 'pending_uploads', pending: 3 }).toast, /^3 captures still uploading/);
+assert.equal(analyzeOutcome({ ok: false, unknownOutcome: true }).toast, '', 'unknown outcome: the app re-syncs, no failure toast');
+assert.equal(analyzeOutcome({ ok: false, error: 'timeout' }).toast, 'Analyze timed out');
+
+assert.equal(progressStatus({ queued: 1, completed: 5 }), 'running');
+assert.equal(progressStatus({ analyzing: 2 }), 'running');
+assert.equal(progressStatus({ completed: 5 }), 'done');
+assert.equal(progressStatus({ failed: 1 }), 'done');
+assert.equal(progressStatus({ queued: 0, analyzing: 0, completed: 0, failed: 0, total: 0 }), 'idle', 'never "Analyzed ✓ · 0"');
+assert.equal(progressStatus(null), 'idle');
+
+// --- the engagement a New session starts in ---
+assert.deepEqual(startEngagement(null, [], false), { projectId: null, wait: false });
+assert.deepEqual(startEngagement('eng-1', projects, true), { projectId: 'eng-1', wait: false });
+assert.deepEqual(startEngagement('eng-1', [], false), { projectId: null, wait: true }, 'list not loaded: wait, never Solo');
+assert.deepEqual(startEngagement('gone', projects, true), { projectId: null, wait: false }, 'a deleted engagement cannot block Start');
+assert.equal(engagementName('gone', projects), 'Another engagement');
+assert.equal(engagementName(null, projects), 'Solo · standalone');
 
 console.log('test_capture_vm: ok');

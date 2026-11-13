@@ -1039,6 +1039,9 @@ class JSExtractor {
   }
 
   async persistCaptureState(isCapturing) {
+    // Settings are written back whole (updateSettings, login): keep their copy of the bit current,
+    // or a later settings write would re-persist the value read at boot.
+    this.settings = { ...this.settings, isCapturing };
     try {
       await chrome.storage.local.set({ isCapturing });
       await publishCaptureState(chrome.storage, isCapturing); // what content scripts read

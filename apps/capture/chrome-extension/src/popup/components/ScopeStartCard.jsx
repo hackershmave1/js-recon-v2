@@ -22,10 +22,10 @@ function Option({ on, title, line, best, tag, onPick }) {
         border: `1.5px solid ${on ? C.lime : C.faint}`, display: 'flex', alignItems: 'center', justifyContent: 'center'
       }}>{on && <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: C.lime }} />}</span>
       <span style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: C.text }}>
+        <span style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, color: C.text, overflowWrap: 'anywhere' }}>
           {title}{tag && <span style={{ color: C.muted, fontWeight: 400 }}> · {tag}</span>}
         </span>
-        <span style={{ display: 'block', fontFamily: F.mono, fontSize: '10.5px', color: C.faint, marginTop: '2px' }}>
+        <span style={{ display: 'block', fontFamily: F.mono, fontSize: '10.5px', color: C.faint, marginTop: '2px', overflowWrap: 'anywhere' }}>
           {line}{best && <span> · <span style={{ color: C.lime }}>{best}</span></span>}
         </span>
       </span>
@@ -71,7 +71,8 @@ export function ScopeStartCard({ vm }) {
           {!draft && (f.suggestion ? (
             <button onClick={f.useTabScope} style={{
               display: 'block', textAlign: 'left', width: '100%', border: '1px dashed rgba(205,235,69,0.55)',
-              borderRadius: '10px', padding: '9px 11px', background: 'none', color: C.lime, cursor: 'pointer', fontSize: '12px', fontWeight: 600
+              borderRadius: '10px', padding: '9px 11px', background: 'none', color: C.lime, cursor: 'pointer', fontSize: '12px', fontWeight: 600,
+              overflowWrap: 'anywhere'
             }}>
               Use {f.suggestion.host} as scope
               <span style={{ display: 'block', color: C.faint, fontWeight: 400, fontSize: '10.5px' }}>
@@ -86,7 +87,7 @@ export function ScopeStartCard({ vm }) {
           ))}
 
           {!draft && (
-            <form onSubmit={(e) => { e.preventDefault(); f.setTypedScope(typed); setTyped(''); }} style={{ display: 'flex', gap: '7px' }}>
+            <form onSubmit={(e) => { e.preventDefault(); if (f.setTypedScope(typed)) setTyped(''); }} style={{ display: 'flex', gap: '7px' }}>
               <input value={typed} onInput={(e) => setTyped(e.target.value)} aria-label="Scope domain"
                      placeholder="or type a domain, e.g. acme.io" style={{
                        flex: 1, minWidth: 0, background: C.inset, border: `1px solid ${C.lineStrong}`, borderRadius: '9px',

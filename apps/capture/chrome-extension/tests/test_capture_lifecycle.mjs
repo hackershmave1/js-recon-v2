@@ -305,8 +305,18 @@ assert.equal(badgeText({ capturing: true, files: 1500, newSites: 0 }), '999+');
   const after = harness({ local, session: storage() });
   await after.lc.recover();
   assert.equal(after.lc.snapshot().capture.pausedByRestart, true);
+  assert.equal(after.lc.snapshot().capture.mode, 'new', 'how it began survives a restart');
+  assert.equal(after.lc.snapshot().capture.ordinal, 1);
   await after.lc.resume();
   assert.equal(after.lc.snapshot().capture.pausedByRestart, false);
+}
+
+// 21b) Worker start with NO capture closes the gate: a "capturing" bit left in storage by the old
+// toggle must not keep capturing with no run (the popup can no longer stop that).
+{
+  const h = harness();
+  await h.lc.recover();
+  assert.deepEqual(h.gates, [{ scope: [], capturing: false }]);
 }
 
 // 22) "Done" on the Capture-ended banner forgets it (persisted), and only it.

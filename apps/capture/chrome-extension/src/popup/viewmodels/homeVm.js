@@ -1,6 +1,6 @@
 // homeVm.js — builds the HomeView view-model from App state + actions.
 // Pure function: no hooks, no side-effects. App calls this on every render.
-import { scopeLabel, liveSubtitle, endedBanner } from './captureVm.js';
+import { scopeLabel, liveSubtitle, endedBanner, engagementName } from './captureVm.js';
 
 export function buildHomeViewModel({
   // status (the worker's getStatus, incl. `capture` / `lastEnded`) + the live-ticking elapsed time
@@ -14,7 +14,7 @@ export function buildHomeViewModel({
   // D46: findings summary card — null until analysis is done and summary loaded
   findingsSummary,
   // engagement picker (a NEW session's engagement; locked once a capture runs)
-  projects, projectId, activeProjectName,
+  projects, projectId,
   // settings slices the vm needs
   settings,
   // actions
@@ -38,7 +38,9 @@ export function buildHomeViewModel({
     everyTab: settings.captureEverything === true,
     projects,
     projectId,
-    activeProjectName,
+    // The engagement the capture is bound to (the worker's binding), named even when the popup
+    // can't resolve it — never shown as Solo when it is not.
+    activeProjectName: engagementName(status.projectId, projects),
     selectProject,
     createProject,
     stats: { js: files, maps: status.mapsCount || 0, secrets: status.secretCount || 0 },

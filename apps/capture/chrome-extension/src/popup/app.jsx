@@ -7,11 +7,11 @@ import { HomeView } from './components/HomeView.jsx';
 import { SettingsView } from './components/SettingsView.jsx';
 import { LoginView } from './components/LoginView.jsx';
 import * as api from './api.js';
-import { reconcileActiveProject, activeProjectName } from '../../modules/active-engagement.js';
 import { deriveDelivery } from '../../modules/delivery-health.js';
 import { buildHomeViewModel } from './viewmodels/homeVm.js';
 import { buildSettingsViewModel } from './viewmodels/settingsVm.js';
 import { useCaptureFlow } from './useCaptureFlow.js';
+import { analyzeOutcome, progressStatus } from './viewmodels/captureVm.js';
 
 const IDLE_ANALYSIS = { status: 'idle', counts: null, files: [] };
 
@@ -68,6 +68,8 @@ export function App() {
   // The engagement list (cached in the worker) and the one picked for a NEW session (null => Solo).
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useState(null);
+  // Whether the engagement list has answered (an unknown staged id then means "gone", not "loading").
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const toastTimer = useRef(null);
   const seededProjectRef = useRef(false);
   // LLM provider config state (threat-model generation)
@@ -88,10 +90,21 @@ export function App() {
   // resumes for a run already in flight or shows a finished one.
   function adoptAnalysisJob(res) {
     if (!res?.ok || !res.job?.counts) return;
-    const c = res.job.counts;
-    const inFlight = (c.queued || 0) + (c.analyzing || 0);
-    if (inFlight > 0) setAnalysis({ status: 'running', counts: c, files: res.job.files || [] });
-    else if ((c.completed || 0) > 0 || (c.failed || 0) > 0) setAnalysis({ status: 'done', counts: c, files: res.job.files || [] });
+    const state = progressStatus(res.job.counts);
+    if (state !== 'idle') setAnalysis({ status: state, counts: res.job.counts, files: res.job.files || [] });
+  }
+
+  // The findings card belongs to THIS capture. The session's "latest finished run" can still be an
+  // earlier capture while this one's pass is correlating, so a summary for another run is ignored
+  // (the watch poll asks again).
+  function loadFindingsSummary() {
+    const cap = status.capture;
+    if (!cap) return;
+    api.getSessionFindingsSummary(cap.sessionId).then((res) => {
+      if (res?.ok && res.summary?.status === 'complete' && res.summary.run_id === cap.runId) {
+        setFindingsSummary(res.summary);
+      }
+    });
   }
 
   async function refresh() {
@@ -117,7 +130,7 @@ export function App() {
     // workspace's verdict on the session token, so a rejected token asks for sign-in right away.
     api.listProjects().then((res) => {
       if (res?.authRejected) setForceLogin(true);
-      if (res && Array.isArray(res.projects)) setProjects(res.projects);
+      if (res && Array.isArray(res.projects)) { setProjects(res.projects); setProjectsLoaded(true); }
     });
     const id = setInterval(refresh, 2000);
     const clock = setInterval(() => setNow(Date.now()), 1000);
@@ -155,35 +168,30 @@ export function App() {
       const res = await api.getAnalysisProgress();
       if (!alive || !res?.ok || !res.job) return;
       const counts = res.job.counts || {};
-      const inFlight = (counts.queued || 0) + (counts.analyzing || 0);
+      const state = progressStatus(counts);
       if (watching) {
-        if (inFlight > 0) setAnalysis({ status: 'running', updating: true, counts, files: res.job.files || [] });
+        if (state === 'running') setAnalysis({ status: 'running', updating: true, counts, files: res.job.files || [] });
+        else if (!findingsSummary) loadFindingsSummary();  // not ready at "done" (still correlating)
         return;
       }
-      // Counts partition total, so nothing queued/analyzing => settled (this also resolves
-      // a genuinely empty session, total===0, instead of polling forever).
-      const done = inFlight === 0;
-      setAnalysis((a) => ({ status: done ? 'done' : 'running', updating: a.updating, counts, files: res.job.files || [] }));
-      if (done) showToast(analysis.updating ? 'Analysis updated with the new files' : `Analysis complete · ${counts.completed || 0} analyzed`);
+      // Counts partition total, so nothing queued/analyzing => settled; a capture with no
+      // analysis at all settles to idle, never "Analyzed ✓ · 0".
+      setAnalysis((a) => ({ status: state, updating: a.updating, counts, files: res.job.files || [] }));
+      if (state === 'done') {
+        showToast(analysis.updating ? 'Analysis updated with the new files' : `Analysis complete · ${counts.completed || 0} analyzed`);
+      }
     };
     poll();
     const id = setInterval(poll, watching ? 5000 : 1500);
     return () => { alive = false; clearInterval(id); };
-  }, [analysis.status, captureRunId]);
+  }, [analysis.status, captureRunId, !!findingsSummary]);
 
   // D46: fetch the findings summary once analysis settles to 'done' and a session id is known.
   // Runs whenever analysis.status transitions to 'done'; clears on a new session (status changes
   // back to 'idle'). A failed fetch is silent — the card simply stays hidden.
   useEffect(() => {
-    if (analysis.status !== 'done') return;
-    const sid = status.capture?.sessionId;
-    if (!sid) return;
-    api.getSessionFindingsSummary(sid).then((res) => {
-      if (res?.ok && res.summary?.status === 'complete') {
-        setFindingsSummary(res.summary);
-      }
-    });
-  }, [analysis.status, status.capture?.sessionId]);
+    if (analysis.status === 'done') loadFindingsSummary();
+  }, [analysis.status, captureRunId]);
 
   // toast holds { msg, tone }; tone ∈ ok|warn|error drives colour/icon (ui.jsx). Failures linger
   // longer than the 2.2s success flash so an error can actually be read (D42).
@@ -200,7 +208,7 @@ export function App() {
 
   // ---- capture flow (worker-owned capture; scope → Continue/New → Start, Pause/Resume/End) ----
   const flow = useCaptureFlow({
-    status, activeHost, projects, projectId, showToast, refresh,
+    status, ready: !!settings, activeHost, projects, projectsLoaded, projectId, showToast, refresh,
     onSessionExpired: () => setForceLogin(true),
     onCaptureStarted: () => { setAnalysis(IDLE_ANALYSIS); setFindingsSummary(null); },
   });
@@ -221,7 +229,8 @@ export function App() {
       // Engagements are tenant-scoped: re-fetch under the new identity (a prior tenant's list
       // would be wrong). Land on Home so the funnel is sign-in -> pick engagement -> capture.
       setProjectId(null);
-      api.listProjects().then((r) => { if (r && Array.isArray(r.projects)) setProjects(r.projects); });
+      flow.clearScope();  // a scope chosen under the previous sign-in is not this one's
+      api.listProjects().then((r) => { if (r && Array.isArray(r.projects)) { setProjects(r.projects); setProjectsLoaded(true); } });
       setView('home');
       setForceLogin(false);   // leave the re-auth view once signed back in (D41)
       // The polled status (authExpired, the uploader's auth pause) would hold the sign-in gate and
@@ -240,7 +249,9 @@ export function App() {
     await api.logout();
     setSettings((prev) => ({ ...(prev || {}), authToken: '', authUser: '', authTenantName: '' }));
     setProjects([]);
+    setProjectsLoaded(false);
     setProjectId(null);
+    flow.clearScope();
     showToast('Signed out');
   }
 
@@ -305,21 +316,15 @@ export function App() {
     if (analysis.status === 'starting' || analysis.status === 'running') return;
     setAnalysis((a) => ({ ...a, status: 'starting' }));
     const res = await api.analyzeSession();
-    if (res?.ok) {
-      showToast(res.upToDate ? 'Already up to date' : res.started ? 'Analysis started' : (res.message || 'Analysis already running'));
-      setAnalysis((a) => ({ ...a, status: 'running', updating: false }));
-      return;
-    }
-    setAnalysis((a) => ({ ...a, status: 'idle' }));
-    if (res?.unknownOutcome) return;  // the no-reply handler re-reads the job and resumes the feed
-    // During a capture only an expired sign-in refuses Analyze (its uploads will never drain
-    // without re-auth); late files are picked up by the platform's own re-analysis.
-    if (res?.reason === 'session_expired') {
-      showToast('Session expired — sign in to finish uploading', 'error');
-    } else if (res?.reason === 'pending_uploads') {
-      showToast(`${res.pending || 'Some'} captures still uploading — try again shortly`, 'warn');
+    // A 200 that started nothing (no stored files yet) is not a finished analysis; "up to date"
+    // adopts the capture's existing result instead of announcing a second completion.
+    const outcome = analyzeOutcome(res);
+    if (outcome.toast) showToast(outcome.toast, outcome.tone);
+    if (outcome.status === 'adopt') {
+      setAnalysis(IDLE_ANALYSIS);
+      api.getAnalysisProgress().then(adoptAnalysisJob);
     } else {
-      showToast(res?.error === 'timeout' ? 'Analyze timed out' : 'Analyze failed', 'error');
+      setAnalysis((a) => ({ ...a, status: outcome.status, updating: false }));
     }
   }
 
@@ -428,7 +433,6 @@ export function App() {
 
   // The engagement the current session is ACTUALLY bound to (worker getStatus), reconciled
   // against the fetched list so a deleted / different-tenant id renders as Solo, not a phantom.
-  const activeProjectId = reconcileActiveProject(status.projectId, projects);
 
   // Real delivery health from the worker's uploader + processing stats — the D42 fix for a popup
   // that hid "captured nothing" / "never uploaded". A manual connection test still overrides
@@ -475,7 +479,6 @@ export function App() {
     analysis, canAnalyze: (status.fileCount || 0) > 0,
     findingsSummary,
     projects, projectId,
-    activeProjectName: activeProjectName(activeProjectId, projects),
     settings,
     reauth: () => setForceLogin(true),
     openSettings: () => setView('settings'),

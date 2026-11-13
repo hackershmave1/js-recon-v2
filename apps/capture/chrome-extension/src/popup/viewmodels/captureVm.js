@@ -80,7 +80,7 @@ export function liveSubtitle(capture, files) {
   const parts = [];
   if (c.mode === 'continue') parts.push(`Continuing ${(c.scope || [])[0] || 'session'}${c.ordinal ? ` · capture ${c.ordinal}` : ''}`);
   else if (c.mode === 'new') parts.push('New session');
-  if (c.paused && c.pausedByRestart) parts.push('paused by restart');
+  if (c.paused && c.pausedByRestart && !c.ending) parts.push('paused by restart');
   parts.push(formatElapsed(c.elapsedMs), plural(files || 0, 'file'));
   return parts.join(' · ');
 }
@@ -101,6 +101,39 @@ export function startErrorText(res) {
   if (error === 'capture_in_progress') return 'A capture is already running';
   if (error === 'no_scope') return 'Set a scope to start';
   return 'Could not start the capture';
+}
+
+// What the Analyze reply means for the feed. The platform answers 200 even when it started
+// nothing (no stored files yet), which must not read as a finished analysis.
+export function analyzeOutcome(res) {
+  if (res && res.ok && res.upToDate) return { status: 'adopt', toast: 'Already up to date', tone: 'ok' };
+  if (res && res.ok && res.started) return { status: 'running', toast: 'Analysis started', tone: 'ok' };
+  if (res && res.ok) return { status: 'idle', toast: res.message || 'Nothing to analyze yet', tone: 'warn' };
+  if (res && res.unknownOutcome) return { status: 'idle', toast: '', tone: 'ok' };  // the app re-syncs
+  if (res && res.reason === 'session_expired') {
+    return { status: 'idle', toast: 'Session expired — sign in to finish uploading', tone: 'error' };
+  }
+  if (res && res.reason === 'pending_uploads') {
+    return { status: 'idle', toast: `${res.pending || 'Some'} captures still uploading — try again shortly`, tone: 'warn' };
+  }
+  return { status: 'idle', toast: res && res.error === 'timeout' ? 'Analyze timed out' : 'Analyze failed', tone: 'error' };
+}
+
+// A progress read as a feed state: running while anything is queued/analyzing, done once files
+// were analyzed, idle when the capture has no analysis at all (never "Analyzed ✓ · 0").
+export function progressStatus(counts) {
+  const c = counts || {};
+  if ((c.queued || 0) + (c.analyzing || 0) > 0) return 'running';
+  return (c.completed || 0) + (c.failed || 0) > 0 ? 'done' : 'idle';
+}
+
+// The engagement a NEW session starts in: the staged pick, unless it is not a known engagement
+// (deleted, or another tenant's). `wait` while the list has not loaded, so a real pick is never
+// silently started as Solo.
+export function startEngagement(projectId, projects, projectsLoaded) {
+  if (!projectId) return { projectId: null, wait: false };
+  if ((projects || []).some((p) => p.id === projectId)) return { projectId, wait: false };
+  return { projectId: null, wait: !projectsLoaded };
 }
 
 export function analyzeLabel(analysis, scripts) {

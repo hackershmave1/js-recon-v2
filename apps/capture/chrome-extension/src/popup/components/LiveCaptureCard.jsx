@@ -91,7 +91,9 @@ export function LiveCaptureCard({ vm }) {
 export function NewSiteBanner({ vm }) {
   const f = vm.flow;
   const [site, ...more] = vm.newSites;
-  if (!site || f.phase === 'ending') return null;
+  // With "Capture every tab" on everything is captured, so the question is moot (and its wording
+  // would be untrue) until it is turned off again.
+  if (!site || f.phase === 'ending' || vm.everyTab) return null;
   return (
     <Banner tone="blue" title={`New site seen: ${site}`}>
       <p style={bannerText}>

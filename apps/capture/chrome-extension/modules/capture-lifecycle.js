@@ -107,6 +107,10 @@ export class CaptureLifecycle {
       }
     }
     if (this.state) await this.applyGate({ scope: this.state.scope, capturing: this.isListening() });
+    // No capture means nothing listens. A "capturing" bit left in storage (the pre-lifecycle
+    // toggle, or a stale settings write) would otherwise capture with no run to stamp, and the
+    // popup has no control for that state any more.
+    else await this.applyGate({ scope: [], capturing: false });
   }
 
   // Finish a pending End. Called once the outbox is loaded (end of initialize), after login, and
