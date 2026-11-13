@@ -63,7 +63,8 @@ const app = read('../src/popup/app.jsx');
 assert.match(app, /if \(!settings\.authToken \|\| forceLogin \|\| status\.authExpired\) \{/);
 assert.match(app, /api\.listProjects\(\)\.then\(\(res\) => \{[^}]*if \(res\?\.authRejected\) setForceLogin\(true\);/);
 assert.match(app, /expired: !!status\.authExpired \|\| forceLogin/);
-assert.match(app, /capture: status\.isCapturing \? \{ held: status\.uploader\?\.pendingQueueLength \|\| 0, stop: toggleCapture \} : null/, 'files still to upload, not every captured file');
+assert.match(app, /capture: status\.isCapturing\s*\? \{ held: status\.uploader\?\.pendingQueueLength \|\| 0, stop: async \(\) => \{ await api\.capturePause\(\); refresh\(\); \} \}\s*: null/,
+  'files still to upload, not every captured file; the sign-in screen pauses the capture');
 const signIn = app.slice(app.indexOf('  async function signIn('), app.indexOf('  async function signOut('));
 assert.match(signIn, /setForceLogin\(false\);[\s\S]*setStatus\(\(s\) => \(\{ \.\.\.s, authExpired: false, uploader: \{ \.\.\.\(s\.uploader \|\| \{\}\), authPaused: false \} \}\)\);\s*refresh\(\);/,
   'sign-in leaves the gate and the expired banner at once, then re-reads the real status');

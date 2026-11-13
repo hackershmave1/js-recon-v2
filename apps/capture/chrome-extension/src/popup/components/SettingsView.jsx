@@ -2,6 +2,7 @@
 // Sections: Connection, Capture rules, Noise denylist, About. Mirrors the
 // "RECON Capture" prototype SETTINGS view. Sign-IN lives in LoginView (the gate); Settings only
 // shows the signed-in account summary, since it is reachable only when already signed in.
+import { useState } from 'preact/hooks';
 import { C, F, TAG_COLOR } from '../theme.js';
 import { Switch } from './ui.jsx';
 import {
@@ -115,6 +116,9 @@ const CONN = {
 
 export function SettingsView({ vm }) {
   const conn = CONN[vm.connState] || CONN.ok;
+  // Turning "Capture every tab" ON takes an explicit in-app confirm (D44): it uploads JS from
+  // unrelated sites into the engagement, and window.confirm is suppressed in the popup.
+  const [confirmEvery, setConfirmEvery] = useState(false);
   return (
     <div>
       {/* header */}
@@ -162,16 +166,38 @@ export function SettingsView({ vm }) {
         {/* CAPTURE RULES */}
         <SectionHeader icon={<GlobeIcon />}>CAPTURE RULES</SectionHeader>
         <Card>
-          <Label>Standalone default scope <span style={{ color: C.faint }}>(used when no project is selected)</span></Label>
-          <input value={vm.defScope} onInput={(e) => vm.setDefScope(e.target.value)} placeholder="root domains (e.g. target.com)"
-                 style={{ ...inputStyle, color: C.lime, marginBottom: '13px' }} />
-          <button onClick={vm.toggleSubdomains} style={{
-            width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 0 13px',
+          {/* The scope is chosen per capture on Home (it clears at End); it is not a setting. */}
+          <button onClick={() => (vm.captureEverything ? vm.setCaptureEverything(false) : setConfirmEvery(true))} style={{
+            width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '0 0 13px',
             border: 'none', background: 'none', cursor: 'pointer'
           }}>
-            <span style={{ flex: 1, textAlign: 'left', fontSize: '12.5px', color: C.textSoft }}>Include subdomains by default</span>
-            <Switch on={vm.includeSubdomains} />
+            <span style={{ flex: 1, textAlign: 'left' }}>
+              <span style={{ display: 'block', fontSize: '12.5px', color: C.text, fontWeight: 600 }}>Capture every tab</span>
+              <span style={{ display: 'block', fontSize: '10.5px', color: C.faint }}>Ignores the capture's scope while on · new-site alerts are off</span>
+            </span>
+            <Switch on={vm.captureEverything} />
           </button>
+          {confirmEvery && (
+            <div style={{
+              background: 'rgba(255,138,71,0.08)', border: `1px solid ${C.orange}`,
+              borderRadius: '10px', padding: '11px 12px', marginBottom: '13px'
+            }}>
+              <div style={{ fontSize: '11.5px', color: C.orange, fontWeight: 700, marginBottom: '4px' }}>Capture every tab?</div>
+              <div style={{ fontSize: '10.5px', color: C.faint, marginBottom: '9px', lineHeight: 1.5 }}>
+                Ignores scope and uploads JS from every tab — including unrelated sites and other tenants — into the capture's engagement.
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => { vm.setCaptureEverything(true); setConfirmEvery(false); }} style={{
+                  flex: 1, padding: '8px', borderRadius: '8px', border: 'none', background: C.orange,
+                  color: C.onLime, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700
+                }}>Enable anyway</button>
+                <button onClick={() => setConfirmEvery(false)} style={{
+                  flex: 1, padding: '8px', borderRadius: '8px', border: `1px solid ${C.lineHover}`,
+                  background: C.control, color: C.muted, cursor: 'pointer', fontSize: '11.5px', fontWeight: 600
+                }}>Cancel</button>
+              </div>
+            </div>
+          )}
           <Label mb={8}>Out-of-scope assets</Label>
           <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
             {[{ k: 'tag', l: 'Tag' }, { k: 'mute', l: 'Mute' }, { k: 'exclude', l: 'Exclude' }].map((o) => {
