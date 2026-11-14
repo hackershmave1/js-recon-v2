@@ -664,6 +664,22 @@ The 24 h idle auto-end bounds the window.
 
 **Fix:** end open captures (final pass) as part of an identity-version deploy, or re-key on the bump.
 
+### 2026-11-13 Capture popup screens — OPEN (D85)
+
+#### D85 · Worker code the popup no longer calls [S]  ·  dead code
+
+The scope-first popup (PR 3b) drives the capture only through the lifecycle actions. The worker
+still answers the actions it replaced: `startCapture`, `stopCapture`, `newSession`, `getHistory`
+(`background.js` `handleMessage`), with `modules/capture-history.js` and the session-rotation
+history behind `getHistory`. Nothing in the extension sends them now. They were left in place so
+the popup change stayed a popup change; several structural tests pin their source
+(`test_initial_scan`, `test_hook_matches`, `test_background_engagement_wiring`,
+`test_capture_history`, `test_popup_reply_contract`).
+
+**Fix:** delete the four handlers, `capture-history.js` and the tests that only pin them, in one
+worker-only PR, after checking nothing outside the popup (the content script, the workspace) sends
+those actions.
+
 ### 2026-11-03 Hidden findings overlay — RESOLVED (D74)
 
 #### D74 · The ApiSpec page's endpoint classification ignores the hidden-findings overlay [S]  ·  correctness

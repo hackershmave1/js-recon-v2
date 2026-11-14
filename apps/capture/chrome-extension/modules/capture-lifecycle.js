@@ -75,6 +75,8 @@ export class CaptureLifecycle {
         runId: s.runId, sessionId: s.sessionId, scope: s.scope, paused: s.paused, ending: !!s.ending,
         elapsedMs: s.elapsedMs + (s.paused || s.ending ? 0 : this.now() - s.resumedAt),
         newSites: s.newSites,
+        // For the popup's header only: how the capture began and what paused it.
+        mode: s.mode || null, ordinal: s.ordinal || null, pausedByRestart: !!s.pausedByRestart,
       },
       lastEnded: this.lastEnded,
     };
@@ -100,10 +102,15 @@ export class CaptureLifecycle {
         // file, not the hours the browser was closed.
         s.elapsedMs += Math.max(0, Math.max(s.resumedAt, s.lastBatchAt || 0) - s.resumedAt);
         s.paused = true;
+        s.pausedByRestart = true;
         await this.persist();
       }
     }
     if (this.state) await this.applyGate({ scope: this.state.scope, capturing: this.isListening() });
+    // No capture means nothing listens. A "capturing" bit left in storage (the pre-lifecycle
+    // toggle, or a stale settings write) would otherwise capture with no run to stamp, and the
+    // popup has no control for that state any more.
+    else await this.applyGate({ scope: [], capturing: false });
   }
 
   // Finish a pending End. Called once the outbox is loaded (end of initialize), after login, and
@@ -164,6 +171,10 @@ export class CaptureLifecycle {
       this.state = {
         runId: res.data.runId, sessionId, scope: [entry], startedAt: this.now(), resumedAt: this.now(),
         elapsedMs: 0, paused: false, ending: null, newSites: [], dismissedSites: [], lastBatchAt: this.now(),
+        // Shown in the popup header ("Continuing acme.io · capture 5"). The number counts the
+        // session's captures at the lookup, so reusing an empty open capture can read one high.
+        mode: mode === 'continue' ? 'continue' : 'new',
+        ordinal: mode === 'continue' ? (Number(match.captures) || 0) + 1 : 1,
       };
       this.lastEnded = null;
       await this.persist();
@@ -191,6 +202,7 @@ export class CaptureLifecycle {
       // No local idle check: the platform measures idle from its last STORED file and ends the
       // capture itself; if it has, the next batch's 409 capture_ended closes it here.
       s.paused = false;
+      s.pausedByRestart = false;
       s.resumedAt = this.now();
       await this.persist();
       await this.applyGate({ scope: s.scope, capturing: true });
@@ -297,6 +309,15 @@ export class CaptureLifecycle {
     s.newSites.push(site);
     this.persist().catch(() => {});
     return true;
+  }
+
+  // "Done" on the popup's "Capture ended" banner.
+  dismissEnded() {
+    return this.serialize(async () => {
+      this.lastEnded = null;
+      await this.persist();
+      return { ok: true };
+    });
   }
 
   dismissSite(site) {

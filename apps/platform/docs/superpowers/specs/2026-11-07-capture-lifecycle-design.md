@@ -201,6 +201,24 @@ Corrections the build must keep:
 - A runId is stamped when a request is ADMITTED (dependencies inherit their parent's), and End waits
   for queued + in-flight processing as well as uploads.
 
+### Popup as built (PR 3b)
+
+The popup follows the journeys page, with these differences from its mock-ups:
+- **New site seen** says the site's scripts are *not* being captured. The banner is raised by a
+  script the scope gate refused, so the mock-up's "being captured into this capture for now" was
+  untrue. It also has a third answer, "don't ask again" (`captureDismissSite`).
+- **Capture ended** shows no file or finding counts: the final analysis may still be running, and
+  the session's latest finished run can be an earlier capture. It links to the workspace instead.
+- A **typed scope** is normalized but kept as typed (`app.acme.io` stays that host and its
+  subdomains); only the one-click tab scope collapses to the registrable domain.
+- The header's "capture N" counts the session's captures at the Continue lookup.
+- After Analyze, the popup keeps a slow watch (5 s) on the capture's progress and follows the
+  automatic re-analysis; it shows "Updating with new files…" once that pass is queued, not a
+  countdown to it.
+- Worker additions the screens needed: `mode` / `ordinal` / `pausedByRestart` in the capture
+  snapshot, `captureDismissEnded`, a re-scan of the open tab on Start and Resume, and "Analyze on
+  upload" read as off.
+
 ## Extension (original plan, superseded above)
 
 - Popup per the journeys:

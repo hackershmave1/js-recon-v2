@@ -40,14 +40,21 @@ aggressively. Preserve these when editing `background.js` / `modules/*`:
   covers the body read; `stopCapture` answers before its flush); the popup's single ~60 s
   safety net means "unknown outcome -> re-sync", not failure. `tests/test_popup_reply_contract.mjs`
   pins it, including that every popup action has a worker handler.
+- the **worker owns the capture** (`modules/capture-lifecycle.js`; one capture = one platform run,
+  Start → End). The popup only reads `getStatus().capture` / `lastEnded` and asks for transitions
+  (`captureStart`, `capturePause`, `captureResume`, `captureEnd`, `captureAddScope`, …); every
+  scope change goes through a worker action, never a settings write. The popup's screens are pure
+  functions of that status (`src/popup/viewmodels/captureVm.js`), and it never shows a run ID.
 
 ## Conventions
 
 Match the existing style; prefer small, verifiable changes over broad rewrites. The popup is Preact
 + esbuild. It is a **funnel**: signed-out → a first-class sign-in **gate** (`LoginView`, workspace
-URL + credentials); signed-in → **Home** with an always-visible **Engagement** selector (the
-session's engagement/project binding, or Solo · standalone) + capture. Settings keep the signed-in
-**Account** summary, Connection, Capture Rules, and Noise Denylist. The workspace URL is the single
+URL + credentials); signed-in → **Home**, which is scope-first: no scope and a disabled Start, then
+"Capture into" (Continue a session that holds the scope, or a New session with an optional
+engagement), then the live capture card (Pause / Resume / End). Settings keep the signed-in
+**Account** summary, Connection, Capture Rules (incl. "Capture every tab" behind its confirm), and
+Noise Denylist. There is no scope setting: the scope belongs to one capture. The workspace URL is the single
 source of truth for uploads, health, and analyze.
 
 Two load-bearing rules the funnel added (don't regress): the sign-in gate must key off REAL

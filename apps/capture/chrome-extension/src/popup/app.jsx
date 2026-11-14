@@ -7,11 +7,13 @@ import { HomeView } from './components/HomeView.jsx';
 import { SettingsView } from './components/SettingsView.jsx';
 import { LoginView } from './components/LoginView.jsx';
 import * as api from './api.js';
-import { resolveEffectiveConfig, splitEffective, configFromSettings } from '../../modules/project-config.js';
-import { reconcileActiveProject, activeProjectName } from '../../modules/active-engagement.js';
 import { deriveDelivery } from '../../modules/delivery-health.js';
 import { buildHomeViewModel } from './viewmodels/homeVm.js';
 import { buildSettingsViewModel } from './viewmodels/settingsVm.js';
+import { useCaptureFlow } from './useCaptureFlow.js';
+import { analyzeOutcome, progressStatus } from './viewmodels/captureVm.js';
+
+const IDLE_ANALYSIS = { status: 'idle', counts: null, files: [] };
 
 const NOISE = new Set(['lib', 'cms', 'tracker']);
 
@@ -44,6 +46,9 @@ function ruleTag(pattern) {
 export function App() {
   const [view, setView] = useState('home');
   const [status, setStatus] = useState({ isCapturing: false, fileCount: 0, mapsCount: 0, secretCount: 0 });
+  // When `status` was read, and a 1 s clock: the capture timer ticks between the 2 s status polls.
+  const [statusAt, setStatusAt] = useState(Date.now());
+  const [now, setNow] = useState(Date.now());
   const [files, setFiles] = useState([]);
   const [settings, setSettings] = useState(null);
   const [activeHost, setActiveHost] = useState('');
@@ -57,16 +62,14 @@ export function App() {
   const [newRule, setNewRule] = useState('');
   // Decoupled analysis: status of the on-demand backend job + its per-file progress,
   // which drives the captures feed's ingested→analyzing→analyzed lifecycle.
-  const [analysis, setAnalysis] = useState({ status: 'idle', counts: null, files: [] });
+  const [analysis, setAnalysis] = useState(IDLE_ANALYSIS);
   // D46: findings summary card — null until fetched after analysis completes.
   const [findingsSummary, setFindingsSummary] = useState(null);
-  // D46(c): persisted past session summaries (loaded once on mount, refreshed after rotation).
-  const [captureHistory, setCaptureHistory] = useState([]);
-  // Project-scoped capture: cached engagement list, the chosen project (null => Standalone),
-  // and the sparse per-session override doc the New-Session editor builds.
+  // The engagement list (cached in the worker) and the one picked for a NEW session (null => Solo).
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useState(null);
-  const [overrides, setOverrides] = useState({});
+  // Whether the engagement list has answered (an unknown staged id then means "gone", not "loading").
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const toastTimer = useRef(null);
   const seededProjectRef = useRef(false);
   // LLM provider config state (threat-model generation)
@@ -87,15 +90,26 @@ export function App() {
   // resumes for a run already in flight or shows a finished one.
   function adoptAnalysisJob(res) {
     if (!res?.ok || !res.job?.counts) return;
-    const c = res.job.counts;
-    const inFlight = (c.queued || 0) + (c.analyzing || 0);
-    if (inFlight > 0) setAnalysis({ status: 'running', counts: c, files: res.job.files || [] });
-    else if ((c.completed || 0) > 0 || (c.failed || 0) > 0) setAnalysis({ status: 'done', counts: c, files: res.job.files || [] });
+    const state = progressStatus(res.job.counts);
+    if (state !== 'idle') setAnalysis({ status: state, counts: res.job.counts, files: res.job.files || [] });
+  }
+
+  // The findings card belongs to THIS capture. The session's "latest finished run" can still be an
+  // earlier capture while this one's pass is correlating, so a summary for another run is ignored
+  // (the watch poll asks again).
+  function loadFindingsSummary() {
+    const cap = status.capture;
+    if (!cap) return;
+    api.getSessionFindingsSummary(cap.sessionId).then((res) => {
+      if (res?.ok && res.summary?.status === 'complete' && res.summary.run_id === cap.runId) {
+        setFindingsSummary(res.summary);
+      }
+    });
   }
 
   async function refresh() {
     const [st, fl] = await Promise.all([api.getStatus(), api.getFiles()]);
-    if (st && typeof st.isCapturing === 'boolean') setStatus(st);
+    if (st && typeof st.isCapturing === 'boolean') { setStatus(st); setStatusAt(Date.now()); }
     if (st?.settings) adoptSettings(st.settings);
     if (fl?.files) setFiles(fl.files);
   }
@@ -112,19 +126,25 @@ export function App() {
     });
     api.getActiveTabHost().then(setActiveHost);
     refresh();
-    // D46(c): load persisted past sessions so the history section renders on first open.
-    api.getHistory().then((r) => { if (r?.history) setCaptureHistory(r.history); });
-    // Seed analysis state on open so reopening the popup mid-run resumes the feed.
-    api.getAnalysisProgress().then(adoptAnalysisJob);
     // Load engagements for the picker (cached in the worker; refreshed on open). Its 401 is the
     // workspace's verdict on the session token, so a rejected token asks for sign-in right away.
     api.listProjects().then((res) => {
       if (res?.authRejected) setForceLogin(true);
-      if (res && Array.isArray(res.projects)) setProjects(res.projects);
+      if (res && Array.isArray(res.projects)) { setProjects(res.projects); setProjectsLoaded(true); }
     });
     const id = setInterval(refresh, 2000);
-    return () => { clearInterval(id); };
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => { clearInterval(id); clearInterval(clock); };
   }, []);
+
+  // The analysis feed belongs to ONE capture: reset it when the capture changes (Start, End, a
+  // Continue), then adopt that capture's job so reopening the popup mid-run resumes the feed.
+  const captureRunId = status.capture?.runId || null;
+  useEffect(() => {
+    setAnalysis(IDLE_ANALYSIS);
+    setFindingsSummary(null);
+    if (captureRunId) api.getAnalysisProgress().then(adoptAnalysisJob);
+  }, [captureRunId]);
 
   // Seed the staged engagement pick from the session's REAL binding (worker getStatus) once it's
   // known, so the picker shows the active engagement instead of defaulting to Solo. Adopt-once
@@ -136,40 +156,42 @@ export function App() {
     }
   }, [status.projectId]);
 
-  // While an analysis job is running, poll per-file progress and stop when nothing is
-  // left queued/analyzing.
+  // While an analysis pass runs, poll per-file progress and stop when nothing is left
+  // queued/analyzing. After it, while the capture is still open, keep a slow watch: files that
+  // arrive later are re-analyzed by the platform on its own (about 10 s after uploads go quiet),
+  // and the feed follows that pass too instead of going stale at "Analyzed".
   useEffect(() => {
-    if (analysis.status !== 'running') return undefined;
+    const watching = analysis.status === 'done' && !!captureRunId;
+    if (analysis.status !== 'running' && !watching) return undefined;
     let alive = true;
     const poll = async () => {
       const res = await api.getAnalysisProgress();
       if (!alive || !res?.ok || !res.job) return;
       const counts = res.job.counts || {};
-      const inFlight = (counts.queued || 0) + (counts.analyzing || 0);
-      // Counts partition total, so nothing queued/analyzing => settled (this also resolves
-      // a genuinely empty session, total===0, instead of polling forever).
-      const done = inFlight === 0;
-      setAnalysis({ status: done ? 'done' : 'running', counts, files: res.job.files || [] });
-      if (done) showToast(`Analysis complete · ${counts.completed || 0} analyzed`);
+      const state = progressStatus(counts);
+      if (watching) {
+        if (state === 'running') setAnalysis({ status: 'running', updating: true, counts, files: res.job.files || [] });
+        else if (!findingsSummary) loadFindingsSummary();  // not ready at "done" (still correlating)
+        return;
+      }
+      // Counts partition total, so nothing queued/analyzing => settled; a capture with no
+      // analysis at all settles to idle, never "Analyzed ✓ · 0".
+      setAnalysis((a) => ({ status: state, updating: a.updating, counts, files: res.job.files || [] }));
+      if (state === 'done') {
+        showToast(analysis.updating ? 'Analysis updated with the new files' : `Analysis complete · ${counts.completed || 0} analyzed`);
+      }
     };
     poll();
-    const id = setInterval(poll, 1500);
+    const id = setInterval(poll, watching ? 5000 : 1500);
     return () => { alive = false; clearInterval(id); };
-  }, [analysis.status]);
+  }, [analysis.status, captureRunId, !!findingsSummary]);
 
   // D46: fetch the findings summary once analysis settles to 'done' and a session id is known.
   // Runs whenever analysis.status transitions to 'done'; clears on a new session (status changes
   // back to 'idle'). A failed fetch is silent — the card simply stays hidden.
   useEffect(() => {
-    if (analysis.status !== 'done') return;
-    const sid = status?.sessionId;
-    if (!sid) return;
-    api.getSessionFindingsSummary(sid).then((res) => {
-      if (res?.ok && res.summary?.status === 'complete') {
-        setFindingsSummary(res.summary);
-      }
-    });
-  }, [analysis.status, status?.sessionId]);
+    if (analysis.status === 'done') loadFindingsSummary();
+  }, [analysis.status, captureRunId]);
 
   // toast holds { msg, tone }; tone ∈ ok|warn|error drives colour/icon (ui.jsx). Failures linger
   // longer than the 2.2s success flash so an error can actually be read (D42).
@@ -184,63 +206,14 @@ export function App() {
     api.updateSettings(patch);
   }
 
+  // ---- capture flow (worker-owned capture; scope → Continue/New → Start, Pause/Resume/End) ----
+  const flow = useCaptureFlow({
+    status, ready: !!settings, activeHost, projects, projectsLoaded, projectId, showToast, refresh,
+    onSessionExpired: () => setForceLogin(true),
+    onCaptureStarted: () => { setAnalysis(IDLE_ANALYSIS); setFindingsSummary(null); },
+  });
+
   // ---- actions ----
-  async function toggleCapture() {
-    const next = !status.isCapturing;
-    // Enforce login before capturing: an unauthenticated upload is rejected by a
-    // fail-closed backend (or leaks into the shared tenant), so send the operator to
-    // sign in first instead of piling doomed captures into the outbox.
-    if (next && !settings?.authToken) {
-      showToast('Sign in to capture', 'warn');
-      setView('settings');
-      return;
-    }
-    // Fail-closed scope guard (D40): with no scope AND capture-every-tab off, isInScope captures
-    // ZERO — but the toggle used to flip the card to a green pulsing "CAPTURING" anyway, the silent
-    // no-op. Block the start and point the operator at the inline scope prompt instead.
-    const noScope = settings?.captureEverything !== true &&
-      !(settings?.useDomainScope && (settings?.domainScopes || []).length > 0);
-    if (next && noScope) {
-      showToast('Set a scope to capture', 'warn');
-      return;
-    }
-    setStatus((s) => ({ ...s, isCapturing: next }));
-    await (next ? api.startCapture() : api.stopCapture());
-    refresh();
-  }
-
-  // One-tap "capture this site" for the no-scope empty state (D40): arm the active tab's host as the
-  // scope and start capturing. updateSettings is awaited before startCapture so the gate is armed
-  // before the rescan fires; a stray `*.` is stripped so a pasted wildcard still works.
-  async function armScope(host) {
-    const h = String(host || activeHost || '').trim().replace(/^\*\./, '');
-    if (!h) { showToast('No active tab to scope to', 'warn'); return; }
-    const patch = { domainScopes: [h], useDomainScope: true, captureEverything: false };
-    setSettings((prev) => ({ ...(prev || {}), ...patch }));
-    await api.updateSettings(patch);
-    if (!status.isCapturing) {
-      setStatus((s) => ({ ...s, isCapturing: true }));
-      await api.startCapture();
-    }
-    showToast(`Capturing ${h}`);
-    refresh();
-  }
-
-  // Add a host observed serving out-of-scope scripts to the scope (D44) — the one-click fix for a
-  // CDN-apex / separate host that the operator wants to pull in. Appends (doesn't replace) so the
-  // existing scope is preserved.
-  async function addScopeHost(host) {
-    const h = String(host || '').trim().replace(/^\*\./, '');
-    if (!h) return;
-    const current = settings?.domainScopes || [];
-    if (current.includes(h)) { showToast(`${h} already in scope`); return; }
-    const patch = { domainScopes: [...current, h], useDomainScope: true };
-    setSettings((prev) => ({ ...(prev || {}), ...patch }));
-    await api.updateSettings(patch);
-    showToast(`Added ${h} to scope`);
-    refresh();
-  }
-
   // Central login: authenticate to the workspace, then mirror the identity into local
   // settings so the popup reflects it immediately (adoptSettings won't re-pull from the
   // worker once settings is the edit source of truth). Returns the raw result for the form.
@@ -256,7 +229,8 @@ export function App() {
       // Engagements are tenant-scoped: re-fetch under the new identity (a prior tenant's list
       // would be wrong). Land on Home so the funnel is sign-in -> pick engagement -> capture.
       setProjectId(null);
-      api.listProjects().then((r) => { if (r && Array.isArray(r.projects)) setProjects(r.projects); });
+      flow.clearScope();  // a scope chosen under the previous sign-in is not this one's
+      api.listProjects().then((r) => { if (r && Array.isArray(r.projects)) { setProjects(r.projects); setProjectsLoaded(true); } });
       setView('home');
       setForceLogin(false);   // leave the re-auth view once signed back in (D41)
       // The polled status (authExpired, the uploader's auth pause) would hold the sign-in gate and
@@ -275,59 +249,13 @@ export function App() {
     await api.logout();
     setSettings((prev) => ({ ...(prev || {}), authToken: '', authUser: '', authTenantName: '' }));
     setProjects([]);
+    setProjectsLoaded(false);
     setProjectId(null);
-    setOverrides({});
+    flow.clearScope();
     showToast('Signed out');
   }
 
   function toggleSetting(key) { patchSettings({ [key]: !(settings?.[key]) }); }
-
-  // Start a fresh session with an explicit scope. The background rotates the session id,
-  // clears prior captures, and tags subsequent uploads so the app-side session shows this
-  // scope. We mirror the resolved scope locally so the popup's scope display stays in sync.
-  async function startNewSession(rawScope) {
-    // The popup is the resolving client: resolve the effective config from the project
-    // defaults (or the current global settings, for Standalone) + the sparse overrides, and
-    // send that snapshot. The background applies it to the capture gate and stamps it onto
-    // uploads (spec §7/§8.5); it does not re-resolve.
-    const selected = projectId ? projects.find((p) => p.id === projectId) : null;
-    // Guard: a staged project id that isn't in the loaded list yet (engagements still loading, or
-    // a stale / other-tenant id) would silently resolve as Standalone and bind the session to the
-    // WRONG engagement. Don't commit until the list has loaded and the id resolves.
-    if (projectId && !selected) { showToast('Loading engagements…'); return; }
-    let defaults = selected ? selected.defaults : configFromSettings(settings || {});
-    let ovr = overrides;
-    if (!selected) {
-      // Standalone: bake the ad-hoc scope into the resolved DEFAULTS (not as an override) so
-      // override_keys stays [] (spec §4) while capture still runs under the typed scope.
-      const rootDomains = String(rawScope || '').split(/[\s,]+/).filter(Boolean).map((s) => s.replace(/^\*\./, ''));
-      defaults = { ...defaults, scope: { ...(defaults.scope || {}), rootDomains, includeSubdomains: settings?.includeSubdomains !== false } };
-      ovr = {};
-    }
-
-    const { effective, overrideKeys } = resolveEffectiveConfig(defaults, ovr);
-    const { scope, captureConfig } = splitEffective(effective);
-
-    const res = await api.newSession({ projectId: projectId || null, scope, captureConfig, overrideKeys });
-    if (res?.ok) {
-      // Mirror the applied scope locally so the read-only SCOPE bar updates.
-      setSettings((prev) => ({
-        ...(prev || {}),
-        domainScopes: scope.rootDomains,
-        useDomainScope: scope.rootDomains.length > 0,
-        includeSubdomains: scope.includeSubdomains
-      }));
-      setOverrides({});
-      setFindingsSummary(null);
-      setAnalysis({ status: 'idle', counts: null, files: [] });
-      showToast(selected ? `New session · ${selected.name}` : 'New standalone session');
-      // D46(c): reload history after rotation so the previous session appears immediately.
-      api.getHistory().then((r) => { if (r?.history) setCaptureHistory(r.history); });
-    } else if (!res?.unknownOutcome) {
-      showToast('Could not start session', 'error');
-    }
-    refresh();
-  }
 
   async function exportNow() {
     const res = await api.getExportData({ includeContent: settings?.exportIncludeContent === true });
@@ -377,32 +305,26 @@ export function App() {
   // UI. Drops the captured set for the current session and resets the analysis feed.
   async function clearCaptures() {
     await api.clearFiles();
-    setAnalysis({ status: 'idle', counts: null, files: [] });
+    setAnalysis(IDLE_ANALYSIS);
     showToast('Captures cleared');
     refresh();
   }
 
-  // Kick off the decoupled analysis job for the captured session, then let the polling
-  // effect track it. Flush happens server-side of the message (background flushes first).
+  // Analyze what has arrived so far. It never ends the capture: files that land later join the
+  // same capture and the platform re-analyzes them on its own. The polling effect tracks the pass.
   async function analyzeNow() {
     if (analysis.status === 'starting' || analysis.status === 'running') return;
     setAnalysis((a) => ({ ...a, status: 'starting' }));
     const res = await api.analyzeSession();
-    if (res?.ok) {
-      showToast(res.started ? 'Analysis started' : (res.message || 'Analysis already running'));
-      setAnalysis((a) => ({ ...a, status: 'running' }));
-      return;
-    }
-    setAnalysis((a) => ({ ...a, status: 'idle' }));
-    if (res?.unknownOutcome) return;  // the no-reply handler re-reads the job and resumes the feed
-    // Analyze is blocked until captures finish uploading, so it can't run on a partial set (D43c).
-    // An expired session will never drain without re-auth, so it reads differently from slow uploads.
-    if (res?.reason === 'session_expired') {
-      showToast('Session expired — sign in to finish uploading', 'error');
-    } else if (res?.reason === 'pending_uploads') {
-      showToast(`${res.pending || 'Some'} captures still uploading — try again shortly`, 'warn');
+    // A 200 that started nothing (no stored files yet) is not a finished analysis; "up to date"
+    // adopts the capture's existing result instead of announcing a second completion.
+    const outcome = analyzeOutcome(res);
+    if (outcome.toast) showToast(outcome.toast, outcome.tone);
+    if (outcome.status === 'adopt') {
+      setAnalysis(IDLE_ANALYSIS);
+      api.getAnalysisProgress().then(adoptAnalysisJob);
     } else {
-      showToast(res?.error === 'timeout' ? 'Analyze timed out' : 'Analyze failed', 'error');
+      setAnalysis((a) => ({ ...a, status: outcome.status, updating: false }));
     }
   }
 
@@ -412,7 +334,7 @@ export function App() {
     // defaulting to whatever run is newest. This id is the EXTENSION's session id (the
     // backend session's external_id, NOT its primary key); the workspace resolves
     // ?capture=<external_id> to that session's latest run. Bare URL when none is known yet.
-    const sid = status?.sessionId;
+    const sid = status.capture?.sessionId || status.lastEnded?.sessionId || status?.sessionId;
     const url = sid
       ? `${base}${base.includes('?') ? '&' : '?'}capture=${encodeURIComponent(sid)}`
       : base;
@@ -431,11 +353,6 @@ export function App() {
       setConnState('fail'); setLatency('timeout');
       showToast('Connection failed', 'error');
     }
-  }
-
-  function setDefScope(value) {
-    const list = value.split(/[\s,]+/).filter(Boolean).map((s) => s.replace(/^\*\./, ''));
-    patchSettings({ domainScopes: list, useDomainScope: list.length > 0 });
   }
 
   function addRule() {
@@ -468,7 +385,10 @@ export function App() {
     expired: !!status.authExpired || forceLogin,
     // A capture running when the token expired must stay stoppable from here: the sign-in screen
     // has no other controls, and the workspace may be unreachable for a sign-in.
-    capture: status.isCapturing ? { held: status.uploader?.pendingQueueLength || 0, stop: toggleCapture } : null
+    // (Pause, not End: End needs the workspace to finish, and a paused capture resumes later.)
+    capture: status.isCapturing
+      ? { held: status.uploader?.pendingQueueLength || 0, stop: async () => { await api.capturePause(); refresh(); } }
+      : null
   };
   // Expired (known locally, polled) or rejected (the workspace's 401) -> sign in before capturing.
   if (!settings.authToken || forceLogin || status.authExpired) {
@@ -484,18 +404,6 @@ export function App() {
   }
 
   // ---- view-models ----
-  // Honest, tri-state scope label. It reflects what the CAPTURE GATE (isInScope) will
-  // actually do — never the active tab, which is what made the scope look like it
-  // "followed" whatever tab you were on.
-  const wideOpen = settings.captureEverything === true;
-  const hasScope = settings.useDomainScope && (settings.domainScopes || []).length > 0;
-  const scopeMode = wideOpen ? 'open' : hasScope ? 'scoped' : 'none';
-  const scopeText = wideOpen
-    ? 'WIDE OPEN · all tabs'
-    : hasScope
-      ? settings.domainScopes.join(', ')
-      : 'no scope · capturing nothing';
-
   // Per-file analysis status (by URL) → the captures feed's lifecycle token.
   // The platform keeps a re-captured url's other versions as `url#sha256=…`; the popup lists
   // only the newest copy per url, so key by the bare url (a later version's status wins).
@@ -525,24 +433,12 @@ export function App() {
 
   // The engagement the current session is ACTUALLY bound to (worker getStatus), reconciled
   // against the fetched list so a deleted / different-tenant id renders as Solo, not a phantom.
-  const activeProjectId = reconcileActiveProject(status.projectId, projects);
 
   // Real delivery health from the worker's uploader + processing stats — the D42 fix for a popup
   // that hid "captured nothing" / "never uploaded". A manual connection test still overrides
   // (testing/fail); otherwise the health comes from actual upload/skip/failure outcomes.
   const delivery = deriveDelivery(status);
   const deliveryVm = { ...delivery, lastFile: delivery.lastUrl ? basename(delivery.lastUrl) : '' };
-  // Out-of-scope script hosts to suggest (D44), minus any already covered by the current scope so a
-  // host disappears from the list once added (mirrors the isInScope exact/suffix gate).
-  const scopedSet = new Set((settings.domainScopes || []).map((s) => s.toLowerCase()));
-  const withSubs = settings.includeSubdomains !== false;
-  const outOfScopeHosts = (status.outOfScopeHosts || []).filter(({ host }) => {
-    const h = String(host || '').toLowerCase();
-    if (!h || scopedSet.has(h)) return false;
-    if (withSubs) { for (const s of scopedSet) if (h.endsWith('.' + s)) return false; }
-    return true;
-  });
-
   const health = connState === 'testing' ? 'testing' : connState === 'fail' ? 'fail' : delivery.health;
   const connectionLabel =
     health === 'testing' ? 'testing…'
@@ -552,16 +448,7 @@ export function App() {
           : delivery.paired === true ? 'connected · delivering' : 'connected to workspace';
 
   // Pre-bind actions that need closure access before passing to viewmodel factories.
-  const selectProject = (id) => { setProjectId(id || null); setOverrides({}); };
-  const setOverride = (section, key, value) =>
-    setOverrides((prev) => ({ ...prev, [section]: { ...(prev[section] || {}), [key]: value } }));
-  const clearOverride = (section, key) =>
-    setOverrides((prev) => {
-      const next = { ...prev, [section]: { ...(prev[section] || {}) } };
-      delete next[section][key];
-      if (Object.keys(next[section]).length === 0) delete next[section];
-      return next;
-    });
+  const selectProject = (id) => { setProjectId(id || null); };
   const createProject = async (name, rootDomains) => {
     const cleanName = String(name || '').trim();
     if (!cleanName) { showToast('Project name required', 'warn'); return { ok: false }; }
@@ -572,7 +459,6 @@ export function App() {
     if (res?.ok && res.project) {
       setProjects((prev) => [res.project, ...prev]);
       setProjectId(res.project.id);
-      setOverrides({});
       showToast(`Project created · ${res.project.name}`);
     } else {
       showToast(res?.unknownOutcome ? api.replyError(res) : (res?.error ? `Create failed: ${res.error}` : 'Could not create project'), res?.unknownOutcome ? 'warn' : 'error');
@@ -580,31 +466,32 @@ export function App() {
     return res;
   };
 
+  // The timer ticks locally between status polls; it stops while paused or ending.
+  const capture = status.capture || null;
+  const elapsedMs = capture
+    ? (capture.elapsedMs || 0) + (flow.phase === 'live' ? Math.max(0, now - statusAt) : 0)
+    : 0;
+
   const homeVm = buildHomeViewModel({
-    status, activeHost, delivery, deliveryVm, outOfScopeHosts,
-    scopeText, scopeMode, health, connectionLabel,
+    status, elapsedMs, delivery: deliveryVm, health, connectionLabel,
+    flow,
     captures, mutedCount,
     analysis, canAnalyze: (status.fileCount || 0) > 0,
-    findingsSummary, captureHistory,
-    projects, projectId, activeProjectId,
-    activeProjectName: activeProjectName(activeProjectId, projects),
-    overrides, settings,
+    findingsSummary,
+    projects, projectId,
+    settings,
     reauth: () => setForceLogin(true),
-    armScope, addScopeHost, startNewSession,
     openSettings: () => setView('settings'),
-    toggleCapture,
-    toggleSubdomains: () => patchSettings({ includeSubdomains: !(settings.includeSubdomains !== false) }),
     showAllCaptures: () => patchSettings({ muteNoise: false }),
     toggleSetting, exportNow, openWorkspace, analyzeNow,
-    selectProject, setOverride, clearOverride, createProject,
+    selectProject, createProject,
   });
 
   const settingsVm = buildSettingsViewModel({
     closeSettings: () => setView('home'),
     connState, latency, testConnection,
     settings, status,
-    signOut, patchSettings, setDefScope,
-    toggleSubdomains: () => patchSettings({ includeSubdomains: !(settings.includeSubdomains !== false) }),
+    signOut, patchSettings,
     newRule, setNewRule, addRule, removeRule,
     clearCaptures,
     saveLlmConfig, testLlmConfig,
