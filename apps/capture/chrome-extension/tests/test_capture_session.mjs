@@ -46,41 +46,24 @@ function capture(session, url, extra = {}) {
   session.capturedHashes.set(`h-${url}`, { url });
 }
 
-const complete = { status: 'complete', counts: { total: 4 } };
-
-async function test_start_new_flushes_saves_then_rotates_and_binds() {
+async function test_start_new_flushes_then_rotates_and_binds() {
   const { session, calls, storage } = makeSession({ settings: { authTenantId: 'tenant-a', domainScopes: ['acme.com'] } });
   await session.restore();
   capture(session, 'https://acme.com/app.js', { hasSourceMap: true, secretCount: 2 });
   session.processingQueue.push({ url: 'straggler' });
-  session.noteFindingsSummary('s0', { success: true, summary: complete });
   calls.length = 0;
 
   const binding = { projectId: 'p1', captureConfig: {}, overrideKeys: [] };
   await session.startNew({ binding });
 
-  // Flush the old session's batches before its id is gone; history before rotation; bind last.
+  // Flush the old session's batches before its id is gone; bind last.
   assert.deepEqual(calls, ['uploader.flushAll', 'session.rotate', 'dedup.clear', 'auth.clear', 'uploader.setConfig:p1']);
   assert.equal(session.sessionId, 's1');
   assert.equal(session.capturedFiles.size, 0);
   assert.equal(session.capturedHashes.size, 0);
   assert.equal(session.processingQueue.length, 0, 'stragglers dropped so they cannot be stamped with the new id');
   assert.deepEqual(storage.data.pendingSessionConfig, binding, 'binding survives a respawn');
-  const [row] = storage.data.captureHistory;
-  assert.equal(row.sessionId, 's0');
-  assert.equal(row.tenantId, 'tenant-a');
-  assert.equal(row.fileCount, 1);
-  assert.equal(row.mapsCount, 1);
-  assert.equal(row.secretCount, 2);
-  assert.deepEqual(row.findingsSummary, complete);
-  assert.equal(session.lastFindingsSummary, null);
-}
-
-async function test_start_new_skips_history_for_an_empty_session() {
-  const { session, storage } = makeSession();
-  await session.restore();
-  await session.startNew({ binding: { projectId: 'p1' } });
-  assert.equal(storage.data.captureHistory, undefined);
+  assert.equal(storage.data.captureHistory, undefined, 'no local capture history is kept (the workspace has it)');
 }
 
 async function test_start_standalone_unbinds_and_optionally_drops_outbox() {
@@ -94,7 +77,6 @@ async function test_start_standalone_unbinds_and_optionally_drops_outbox() {
   await session.startStandalone({ dropOutbox: false });
   assert.deepEqual(calls, ['session.rotate', 'dedup.clear', 'auth.clear', 'uploader.setConfig:null']);
   assert.equal(storage.data.pendingSessionConfig, undefined, 'a respawn cannot re-bind the old engagement');
-  assert.equal(storage.data.captureHistory, undefined, 'logout / tenant change never writes history');
   assert.equal(session.processingStats.failedFiles, 0, 'no stale failure state after a tenant switch');
 
   const remove = storage.remove.bind(storage);
@@ -154,47 +136,6 @@ async function test_captured_meta_projection_is_lean() {
   assert.equal(lean.hasSourceMap, true);
 }
 
-async function test_history_and_summary_are_scoped() {
-  const { session } = makeSession({ settings: { authTenantId: 'tenant-a' } });
-  await session.restore();
-  session.noteFindingsSummary('other-session', { success: true, summary: complete });
-  capture(session, 'https://acme.com/app.js');
-  await session.startNew({ binding: { projectId: 'p1' } });
-  const rows = await session.history('tenant-a');
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].findingsSummary, null, "another session's summary is never attached");
-  assert.deepEqual(await session.history('tenant-b'), []);
-}
-
-async function test_start_new_writes_gate_and_binding_together() {
-  const storage = fakeStorage();
-  const writes = [];
-  const set = storage.set.bind(storage);
-  storage.set = async (obj) => { writes.push(Object.keys(obj).sort()); return set(obj); };
-  const { session } = makeSession({ storage });
-  await session.restore();
-  await session.startNew({ binding: { projectId: 'p1' }, persistWith: { domainScopes: ['acme.com'], useDomainScope: true } });
-  // One write: a respawn sees the new capture gate and the new binding, or neither.
-  assert.deepEqual(writes, [['domainScopes', 'pendingSessionConfig', 'useDomainScope']]);
-}
-
-async function test_start_new_runs_on_rotated_before_any_await() {
-  const storage = fakeStorage();
-  const { session, calls } = makeSession({ storage });
-  await session.restore();
-  const set = storage.set.bind(storage);
-  storage.set = async (obj) => { calls.push('storage.set'); return set(obj); };
-  calls.length = 0;
-  let idAtHook = null;
-  await session.startNew({
-    binding: { projectId: 'p1' },
-    onRotated: () => { calls.push('onRotated'); idAtHook = session.sessionId; },
-  });
-  // The caller's capture gate switches in the same turn as the rotation, before the storage await.
-  assert.deepEqual(calls.slice(calls.indexOf('session.rotate')), ['session.rotate', 'dedup.clear', 'auth.clear', 'onRotated', 'storage.set', 'uploader.setConfig:p1']);
-  assert.equal(idAtHook, 's1', 'hook sees the new id');
-}
-
 async function test_observations_persist_without_bodies() {
   const storage = fakeStorage();
   const { session } = makeSession({ storage });
@@ -221,24 +162,18 @@ async function test_every_transition_wipes_persisted_state() {
     const storage = fakeStorage({ capturedFilesMeta: [{ url: 'u' }], capturedObservations: [{ method: 'GET', url: '/x' }] });
     const { session } = makeSession({ storage });
     await session.restore();
-    session.noteFindingsSummary(session.sessionId, { success: true, summary: complete });
     await run(session);
     assert.equal(storage.data.capturedFilesMeta, undefined);
     assert.equal(storage.data.capturedObservations, undefined);
-    assert.equal(session.lastFindingsSummary, null, 'summary cache reset on every transition');
   }
 }
 
-await test_start_new_flushes_saves_then_rotates_and_binds();
-await test_start_new_writes_gate_and_binding_together();
-await test_start_new_runs_on_rotated_before_any_await();
+await test_start_new_flushes_then_rotates_and_binds();
 await test_observations_persist_without_bodies();
 await test_restore_keeps_a_live_capture_that_beat_it();
 await test_every_transition_wipes_persisted_state();
-await test_start_new_skips_history_for_an_empty_session();
 await test_start_standalone_unbinds_and_optionally_drops_outbox();
 await test_clear_captured_keeps_the_session();
 await test_restore_rehydrates_state_and_binding();
 await test_captured_meta_projection_is_lean();
-await test_history_and_summary_are_scoped();
-console.log('ok - CaptureSession lifecycle, persistence and history');
+console.log('ok - CaptureSession lifecycle and persistence');

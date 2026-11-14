@@ -11,7 +11,6 @@ import { WorkspaceClient } from './modules/workspace-client.js';
 import { buildExportData } from './modules/export-builder.js';
 import { classifyAsset, isThirdParty, matchesDenylist, countSecrets } from './modules/asset-classifier.js';
 import { listProjectsWithCache } from './modules/projects-cache.js';
-import { settingsFromConfig } from './modules/project-config.js';
 import { normalizeRootDomains } from './modules/normalize-scope.js';
 import { isRelevantInlineScript } from './modules/inline-relevance.js';
 import { normalizeObservedUrl, isApiIshObservation, isTelemetryPath } from './modules/observation-filter.js';
@@ -147,15 +146,6 @@ class JSExtractor {
     this.ready = Promise.resolve();
   }
 
-  // D46(c): return the persisted capture history list — only the signed-in tenant's rows.
-  async getHistory(sendResponse) {
-    try {
-      sendResponse({ history: await this.session.history(this.settings?.authTenantId) });
-    } catch (e) {
-      sendResponse({ history: [] });
-    }
-  }
-
   buildProcessingError(code, message) {
     const error = new Error(message);
     error.code = code;
@@ -199,6 +189,9 @@ class JSExtractor {
     // Resume the SAME backend session a previous worker instance was using (id, engagement
     // binding, dedup set, popup counters, observations) instead of fragmenting into a new one.
     await this.session.restore();
+    // The popup's "Past sessions" list is gone (the workspace lists captures): drop the rows an
+    // older build stored for it (scope, counts, session ids) instead of keeping them forever.
+    chrome.storage.local.remove('captureHistory').catch(() => {});
     this.isCapturing = this.settings.isCapturing || false;
     // storage.session is cleared on browser restart: re-publish the page-visible capture bit.
     await publishCaptureState(chrome.storage, this.isCapturing).catch(() => {});
@@ -1021,13 +1014,16 @@ class JSExtractor {
     await chrome.storage.local.set({ domainScopes, useDomainScope: domainScopes.length > 0, includeSubdomains: true });
     this.batchUploader.setScope(domainScopes.length ? { rootDomains: domainScopes, includeSubdomains: true } : null);
     this.isCapturing = !!capturing;
+    // Not listening: drop request bodies held for still-in-flight requests, so a pause/resume
+    // can't strand them in the pending map (the completed-request path also self-cleans).
+    if (!this.isCapturing) this.session.pendingRequestBodies.clear();
     await this.persistCaptureState(this.isCapturing);
     this.syncResponseBodyHook();
     this.updateBadge();
   }
 
   // Start/Resume opened the gate: re-scan the open tab so scripts it already loaded are captured
-  // without a reload (the path the legacy startCapture had).
+  // without a reload (webRequest only sees NEW requests).
   async listenAndRescan(transition) {
     const res = await transition();
     if (res && res.ok && this.isCapturing) this.rescanActiveTab();
@@ -1052,11 +1048,8 @@ class JSExtractor {
 
   handleMessage(request, sender, sendResponse) {
     const handlers = {
-      // While a lifecycle capture is active the worker owns it: the legacy controls map onto it
-      // (start → resume, stop → pause) instead of desynchronising the gate from its state.
-      startCapture: async () => (this.capture.state
-        ? sendResponse(await this.listenAndRescan(() => this.capture.resume())) : this.startCapture(sendResponse)),
-      // Capture lifecycle (one capture = one platform run).
+      // Capture lifecycle (one capture = one platform run). It is the ONLY way capture starts or
+      // stops: the gate has one writer (applyCaptureGate), driven by these transitions.
       captureLookup: async (req) => sendResponse(this.replyFrom(await this.capture.lookup(req.scope))),
       captureStart: async (req) => sendResponse(await this.listenAndRescan(() => this.capture.start({
         scope: req.scope, mode: req.mode, match: req.match,
@@ -1076,11 +1069,6 @@ class JSExtractor {
         sendResponse(res);
       },
       captureDismissEnded: async () => sendResponse(await this.capture.dismissEnded()),
-      // Rotating the session under a live capture would orphan its run: End it first.
-      newSession: (req) => (this.capture.state
-        ? sendResponse({ ok: false, error: 'capture_in_progress' }) : this.newSession(req, sendResponse)),
-      stopCapture: async () => (this.capture.state
-        ? sendResponse(await this.capture.pause()) : this.stopCapture(sendResponse)),
       getFiles: () => this.getFiles(sendResponse),
       clearFiles: async () => { await this.clearFiles(sendResponse); },
       getStatus: () => this.getStatus(sendResponse),
@@ -1090,12 +1078,8 @@ class JSExtractor {
       analyzeSession: async () => sendResponse(await this.workspaceClient.analyzeSession()),
       getAnalysisProgress: async () => sendResponse(await this.workspaceClient.getAnalysisProgress()),
       getSessionFindingsSummary: async (req) => {
-        const result = await this.workspaceClient.getSessionFindingsSummary(req.sessionId);
-        // D46(c): cache the summary so history can persist it before rotation.
-        this.session.noteFindingsSummary(req.sessionId, result);
-        sendResponse(result);
+        sendResponse(await this.workspaceClient.getSessionFindingsSummary(req.sessionId));
       },
-      getHistory: async () => { await this.getHistory(sendResponse); },
       listProjects: () => this.listProjects(sendResponse),
       createProject: async (req) => sendResponse(await this.workspaceClient.createProject(req.project)),
       login: (req) => this.login(req, sendResponse),
@@ -1372,14 +1356,6 @@ class JSExtractor {
     }
   }
 
-  startCapture(sendResponse) {
-    this.isCapturing = true;
-    this.persistCaptureState(true);
-    this.updateBadge();
-    this.rescanActiveTab();
-    sendResponse({ success: true, sessionId: this.session.sessionId });
-  }
-
   // Toolbar badge (D46): show live capture state while the popup is closed. Empty when paused; the
   // captured-file count while capturing, orange when delivery/processing is unhealthy (else lime).
   updateBadge() {
@@ -1504,8 +1480,8 @@ class JSExtractor {
   // captured state + engagement binding. Used on logout and on a tenant-changing login. The
   // server binds engagement immutably at session-create (keyed by external_id), so clearing the
   // uploader config alone is not enough — a new session id is the only correct "unbind". Mirrors
-  // the state-clearing half of newSession; the outbox is intentionally left intact (unsent files
-  // keep their own old per-file session id).
+  // a new session's state clearing; the outbox is intentionally left intact (unsent files keep
+  // their own old per-file session id).
   async resetCaptureSession({ stopCapturing = false, dropOutbox = false } = {}) {
     // One tenant's capture never continues under another's token: forget it here (the platform's
     // 24 h idle sweeper ends it server-side).
@@ -1516,67 +1492,6 @@ class JSExtractor {
     }
     await this.session.startStandalone({ dropOutbox });
     this.authNotified = false;
-  }
-
-  async newSession(request, sendResponse) {
-    // Map the client-resolved effective config. The popup resolved (project.defaults +
-    // per-session overrides) and sent the snapshot; here we map it onto the flat capture-gate
-    // keys and the uploader. A blank/absent captureConfig leaves the non-scope gate as-is
-    // (back-compat with pre-project popups); a blank scope RESETS gating (settingsFromConfig
-    // emits domainScopes=[] / useDomainScope=false) so a new session can't silently inherit the
-    // previous session's domainScopes.
-    const req = request || {};
-    const reqScope = req.scope || {};
-    const rootDomains = normalizeRootDomains(reqScope.rootDomains);
-    const includeSubdomains = reqScope.includeSubdomains !== false;
-    const captureConfig = (req.captureConfig && typeof req.captureConfig === 'object') ? req.captureConfig : {};
-    const overrideKeys = Array.isArray(req.overrideKeys) ? req.overrideKeys : [];
-    const projectId = req.projectId || null;
-    const patch = settingsFromConfig({ scope: { rootDomains, includeSubdomains }, ...captureConfig });
-
-    // Flush + save history under the old id, rotate, clear, and bind the new engagement. The
-    // flat gate keys go in the same storage write as the binding, so a respawn sees both or
-    // neither. The in-memory gate switches in the same turn as the rotation (onRotated): history
-    // was saved with the OLD settings, and no request may see the new id with the old scope.
-    await this.session.startNew({
-      binding: { projectId, captureConfig, overrideKeys },
-      persistWith: patch,
-      onRotated: () => Object.assign(this.settings, patch)
-    });
-    this.authNotified = false;
-    this.batchUploader.setScope({ rootDomains, includeSubdomains });
-    this.batchUploader.setPerformAnalysisOnUpload(this.settings.performAnalysisOnUpload === true);
-    // The new session's scope (and capture config) may move the response-body hook's hosts.
-    await this.syncResponseBodyHook();
-
-    // A fresh session on an already-loaded page should still capture that page (parity with
-    // startCapture) — webRequest won't refire for JS that loaded before the rotation.
-    if (this.isCapturing) this.rescanActiveTab();
-
-    sendResponse({
-      success: true,
-      sessionId: this.session.sessionId,
-      scope: { rootDomains, includeSubdomains },
-      projectId,
-      overrideKeys
-    });
-  }
-
-  async stopCapture(sendResponse) {
-    this.isCapturing = false;
-    // Drop request bodies captured for still-in-flight requests so a stop/start can't strand them
-    // in the pending map (review Finding 3); the completed-request path also self-cleans up-front.
-    this.session.pendingRequestBodies.clear();
-    this.persistCaptureState(false);
-    this.updateBadge();
-    // Answer first: the flush can take minutes on a slow workspace, and the popup polls getStatus
-    // for the drain anyway (C7 — the worker owns deadlines; the popup never waits on a flush).
-    sendResponse({
-      success: true,
-      fileCount: this.session.capturedFiles.size,
-      uploader: this.batchUploader.getStats()
-    });
-    await this.batchUploader.flushAll();
   }
 
   getFiles(sendResponse) {
@@ -1651,7 +1566,7 @@ class JSExtractor {
   async updateSettings(request, sendResponse) {
     const incoming = { ...(request.settings || {}) };
     // Scope entries drive the capture gate (isInScope reads this.settings.domainScopes directly),
-    // so normalize them at the WRITE here too — not just on the newSession path (applyConfig). Without
+    // so normalize them at the WRITE here too — not just at a capture's Start. Without
     // this, a `*.target.com` / `https://target.com/` typed in the Settings box (or the one-tap arm)
     // is stored literally and matches no host = silent no-op capture (D40).
     if (Array.isArray(incoming.domainScopes)) {

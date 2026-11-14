@@ -664,21 +664,19 @@ The 24 h idle auto-end bounds the window.
 
 **Fix:** end open captures (final pass) as part of an identity-version deploy, or re-key on the bump.
 
-### 2026-11-13 Capture popup screens — OPEN (D85)
+### 2026-11-13 Capture popup screens — RESOLVED (D85)
 
-#### D85 · Worker code the popup no longer calls [S]  ·  dead code
+#### D85 · Worker code the popup no longer calls [S]  ·  dead code  ·  ✅ RESOLVED 2026-11-14
 
-The scope-first popup (PR 3b) drives the capture only through the lifecycle actions. The worker
-still answers the actions it replaced: `startCapture`, `stopCapture`, `newSession`, `getHistory`
-(`background.js` `handleMessage`), with `modules/capture-history.js` and the session-rotation
-history behind `getHistory`. Nothing in the extension sends them now. They were left in place so
-the popup change stayed a popup change; several structural tests pin their source
-(`test_initial_scan`, `test_hook_matches`, `test_background_engagement_wiring`,
-`test_capture_history`, `test_popup_reply_contract`).
-
-**Fix:** delete the four handlers, `capture-history.js` and the tests that only pin them, in one
-worker-only PR, after checking nothing outside the popup (the content script, the workspace) sends
-those actions.
+The scope-first popup drives the capture only through the lifecycle actions, so the worker's
+`startCapture`, `stopCapture`, `newSession` and `getHistory` handlers had no sender. Removed with
+everything only they reached: their methods in `background.js`, `modules/capture-history.js` (and
+the history write at session rotation), `modules/project-config.js` (the per-session config
+resolver), and `CaptureSession.startNew`'s `persistWith` / `onRotated` hooks. The capture
+lifecycle is now the only way capture starts or stops (`test_popup_reply_contract.mjs` pins that
+no such handler returns). Two behaviours the old handlers carried moved to the gate
+(`applyCaptureGate`): pending request bodies are dropped when it closes, and the rows an older
+build stored under `captureHistory` are deleted at worker start.
 
 ### 2026-11-03 Hidden findings overlay — RESOLVED (D74)
 

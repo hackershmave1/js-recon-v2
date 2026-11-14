@@ -71,8 +71,8 @@ assert.match(sync, /async applyResponseBodyHook\(\) \{\s*const matches = hookMat
 assert.doesNotMatch(sync, /<all_urls>/, 'the hook never hard-codes <all_urls>');
 assert.match(sync, /updateContentScripts\(\[\{ id: 'recon-xhr-hook', matches \}\]\)/, 'an older registration is narrowed in place');
 assert.match(sync, /console\.warn\('response-body hook sync failed', e\)/, 'a failed sync is logged, not silent');
-const newSession = bg.slice(bg.indexOf('async newSession('), bg.indexOf('async stopCapture('));
-assert.match(newSession, /await this\.syncResponseBodyHook\(\);/, 'a new session re-syncs the hook to its scope');
+const gate = bg.slice(bg.indexOf('async applyCaptureGate('), bg.indexOf('async listenAndRescan('));
+assert.match(gate, /this\.syncResponseBodyHook\(\);/, "a capture's scope change re-syncs the hook to it");
 const updateSettings = bg.slice(bg.indexOf('async updateSettings('), bg.indexOf('async updateSettings(') + 1500);
 assert.match(updateSettings, /this\.syncResponseBodyHook\(\);/, 'a settings change re-syncs the hook');
 pass('background wiring: shared rule, serialized recomputing syncs, logged failures, both re-sync sites');

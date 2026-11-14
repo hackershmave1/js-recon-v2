@@ -25,14 +25,6 @@ assert.ok(resetStart >= 0, 'resetCaptureSession() is defined');
 const resetBody = bg.slice(resetStart, resetStart + 600);
 assert.match(resetBody, /await this\.session\.startStandalone\(\{\s*dropOutbox\s*\}\)/, 'reset delegates to CaptureSession.startStandalone, passing dropOutbox through');
 
-// newSession hands the engagement binding + capture-gate patch to startNew in one call, switching
-// the in-memory gate via onRotated (same turn as the rotation), then re-syncs the uploader.
-const newStart = bg.indexOf('async newSession(');
-const newBody = bg.slice(newStart, newStart + 3000);
-assert.match(newBody, /await this\.session\.startNew\(\{\s*binding: \{ projectId, captureConfig, overrideKeys \},\s*persistWith: patch,\s*onRotated: \(\) => Object\.assign\(this\.settings, patch\)\s*\}\)/,
-  'newSession passes binding, persistWith and the onRotated gate switch');
-assert.match(newBody, /startNew\([\s\S]*?this\.batchUploader\.setScope\([\s\S]*?this\.batchUploader\.setPerformAnalysisOnUpload\(/, 'uploader scope + analyze flag re-synced after the transition');
-
 // clearFiles refreshes the badge only after the counters reset (else it stays orange on stale failures).
 assert.match(bg, /async clearFiles\(sendResponse\) \{\s*await this\.session\.clearCaptured\(\);[\s\S]{0,80}this\.updateBadge\(\);/, 'clearFiles updates the badge after clearCaptured');
 
