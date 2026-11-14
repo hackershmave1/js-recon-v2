@@ -82,7 +82,7 @@ export class CaptureLifecycle {
     };
   }
 
-  // The runId a newly captured file is stamped with, or null (not capturing: the legacy path).
+  // The runId a newly captured file is stamped with, or null (not listening: nothing is captured).
   runIdForEnqueue() {
     const s = this.state;
     return s && !s.paused && !s.ending ? s.runId : null;

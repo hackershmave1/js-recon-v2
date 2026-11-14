@@ -66,7 +66,7 @@ A Manifest V3 service worker is torn down aggressively, so the pipeline is built
 across a respawn. These invariants are load-bearing — don't weaken them for convenience:
 
 - **Stable session id** — `modules/session-store.js` persists `reconSessionId` in
-  `chrome.storage.local` and restores it on init, rotating only on an explicit *New Session*. A
+  `chrome.storage.local` and restores it on init, rotating only when a capture starts a *New session*, continues another one, or the sign-in changes tenant. A
   respawn must not mint a new id, or one browse fragments into many backend sessions.
 - **Durable upload outbox** — `modules/idb-store.js` (IndexedDB) backs the uploader. Files are
   persisted **before** the network attempt (keyed `sessionId:contentHash`) and forgotten only once

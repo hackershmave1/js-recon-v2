@@ -14,7 +14,7 @@ export class WorkspaceClient {
     this.batchUploader = batchUploader || null;
     // Runtime request observations to ship with analyze/start (DEBT D45b1); default none.
     this.getObservations = typeof getObservations === 'function' ? getObservations : () => [];
-    // The capture in progress (capture lifecycle), or null for the legacy session-wide flow.
+    // The capture in progress (capture lifecycle), or null when no capture is in progress.
     this.getRunId = typeof getRunId === 'function' ? getRunId : () => null;
   }
 

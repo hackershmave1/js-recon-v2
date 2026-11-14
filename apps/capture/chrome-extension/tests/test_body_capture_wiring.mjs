@@ -24,9 +24,9 @@ assert.match(bg, /obs\.reqBody = reqBody/, 'the observation carries the redacted
 assert.match(bg, /import \{ prepareRequestBody, redactBody, capBody \} from '\.\/modules\/body-capture\.js'/, 'imports body-capture');
 assert.ok(bg.includes('BODY_TOTAL_CAP'), 'bodies bounded by a per-session total budget');
 // review fixes: the pending request body is reclaimed BEFORE any early-return (no orphan on a
-// mid-flight capture stop), stopCapture clears the pending map, and persistence strips bodies.
+// mid-flight capture stop), closing the capture gate clears the pending map, and persistence strips bodies.
 assert.match(bg, /recordObservation\(details\)\s*\{[\s\S]*?pendingRequestBodies\.delete\(details\.requestId\)[\s\S]*?if \(!this\.isCapturing\) return;/, 'request body reclaimed before the isCapturing early-return (Finding 3)');
-assert.match(bg, /async stopCapture[\s\S]*?this\.session\.pendingRequestBodies\.clear\(\)/, 'stopCapture clears pending request bodies (Finding 3)');
+assert.match(bg, /async applyCaptureGate\([\s\S]{0,900}?if \(!this\.isCapturing\) this\.session\.pendingRequestBodies\.clear\(\);/, 'a closed capture gate (Pause/End) clears pending request bodies (Finding 3)');
 // Lean observation persistence (no bodies to disk, Finding 2) is a runtime test in test_capture_session.mjs.
 
 // --- response bodies (OPT-IN, off by default): main-world hook via chrome.scripting ---

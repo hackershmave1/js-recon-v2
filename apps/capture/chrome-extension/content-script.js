@@ -149,7 +149,7 @@
   // from storage.session — the one value the worker publishes to content scripts; storage.local
   // (token, settings) is closed to them (modules/storage-access.js) — no runtime message → no
   // wakeup; the no-reload path (capture toggled on over
-  // a loaded page) is driven separately by startCapture's explicit `rescanScripts` message.
+  // a loaded page) is driven separately by the worker's explicit `rescanScripts` message (capture Start/Resume).
   async function scanIfCapturing() {
     try {
       const { isCapturing } = await chrome.storage.session.get('isCapturing');

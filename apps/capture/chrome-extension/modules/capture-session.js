@@ -10,7 +10,6 @@
 //
 // NOTE: background.js mutates this one instance across rotations; never replace it with a new
 // CaptureSession, or an in-flight processFile would write into the orphaned one.
-import { CAPTURE_HISTORY_KEY, summaryToCache, summaryForSession, addToHistory, historyForTenant } from './capture-history.js';
 
 const CAPTURED_META_KEY = 'capturedFilesMeta';
 const OBSERVATIONS_KEY = 'capturedObservations';
@@ -34,9 +33,6 @@ export class CaptureSession {
     // Runtime API-call observations (DEBT D45b1); observationKeys dedups on "METHOD url".
     this.observations = [];
     this.observationKeys = new Set();
-    // Last finished findings summary as { sessionId, summary }, so history only attaches it to
-    // the session it describes (D46c).
-    this.lastFindingsSummary = null;
     this._captureMetaTimer = null;
     this._obsPersistTimer = null;
     this._resetCounters();
@@ -54,33 +50,28 @@ export class CaptureSession {
   }
 
   // "New session": the platform binds a session to one engagement immutably, so a new binding
-  // means a new id. `persistWith` lets the caller write its own keys in the SAME storage write as
-  // the binding, so a respawn can never see one without the other. `onRotated` runs synchronously
-  // right after the new id exists and the old state is cleared — before any await — so the caller
-  // can switch its capture gate in the same turn and no event sees the new id with the old gate.
-  async startNew({ binding, persistWith = {}, onRotated = () => {} }) {
+  // means a new id.
+  async startNew({ binding }) {
     // Drop not-yet-processed captures BEFORE rotating so a queued straggler can't be stamped with
     // the new id; flush already-built batches under the old id first. NOTE(DEBT D70): a batch
     // processQueue already spliced out is not covered and can still be stamped with the new id.
     this.processingQueue = [];
     await this.uploader.flushAll();
-    await this._saveToHistory();
     this.sessionId = await this.sessionStore.rotate();
     this._clear();
-    onRotated();
-    await this.storage.set({ ...persistWith, [BINDING_KEY]: binding });
+    await this.storage.set({ [BINDING_KEY]: binding });
     this.uploader.setConfig(binding);
   }
 
   // "Continue": take over an EXISTING session (its id and its engagement binding — the platform
   // binds a session to one engagement, immutably) instead of minting a fresh one. Same orderings
   // as startNew: drop stragglers, flush the old id's batches, then switch.
-  async adopt(sessionId, { binding, persistWith = {} } = {}) {
+  async adopt(sessionId, { binding } = {}) {
     this.processingQueue = [];
     await this.uploader.flushAll();
     this.sessionId = await this.sessionStore.save(sessionId);
     this._clear();
-    await this.storage.set({ ...persistWith, [BINDING_KEY]: binding });
+    await this.storage.set({ [BINDING_KEY]: binding });
     this.uploader.setConfig(binding);
   }
 
@@ -113,20 +104,6 @@ export class CaptureSession {
   async clearCaptured() {
     this.processingQueue = [];
     this._clear();
-  }
-
-  noteFindingsSummary(sessionId, result) {
-    const cached = summaryToCache(sessionId, result);
-    if (cached) this.lastFindingsSummary = cached;
-  }
-
-  async history(tenantId) {
-    try {
-      const stored = await this.storage.get(CAPTURE_HISTORY_KEY);
-      return historyForTenant(stored[CAPTURE_HISTORY_KEY], tenantId);
-    } catch (e) {
-      return [];
-    }
   }
 
   // A lean, content-free projection of one captured file — just what the popup counter and the
@@ -190,7 +167,6 @@ export class CaptureSession {
     this.authTracker.clear();
     this.observations = [];
     this.observationKeys.clear();
-    this.lastFindingsSummary = null;
     this._resetCounters();
   }
 
@@ -209,36 +185,6 @@ export class CaptureSession {
       lastFailureUrl: null,
       lastFailureMessage: null
     };
-  }
-
-  // Persist a snapshot of the session to the capture history before rotating away from it.
-  // Skipped when nothing was captured.
-  async _saveToHistory() {
-    if (!this.capturedFiles.size) return;
-    let mapsCount = 0, secretCount = 0;
-    for (const f of this.capturedFiles.values()) {
-      if (f.hasSourceMap) mapsCount++;
-      secretCount += f.secretCount || 0;
-    }
-    const settings = this.getSettings();
-    const entry = {
-      sessionId: this.sessionId,
-      timestamp: new Date().toISOString(),
-      projectId: this.uploader.getStats().projectId || null,
-      scope: settings
-        ? { rootDomains: settings.domainScopes || [], includeSubdomains: settings.includeSubdomains !== false }
-        : null,
-      fileCount: this.capturedFiles.size,
-      mapsCount,
-      secretCount,
-      findingsSummary: summaryForSession(this.lastFindingsSummary, this.sessionId),
-      workspaceUrl: settings?.workspaceUrl || null,
-      tenantId: settings?.authTenantId || '',
-    };
-    try {
-      const stored = await this.storage.get(CAPTURE_HISTORY_KEY);
-      await this.storage.set({ [CAPTURE_HISTORY_KEY]: addToHistory(stored[CAPTURE_HISTORY_KEY], entry) });
-    } catch (e) { /* storage unavailable — non-fatal */ }
   }
 
   // Rebuild the in-memory dedup set from the persistent store so a respawn doesn't re-fetch or

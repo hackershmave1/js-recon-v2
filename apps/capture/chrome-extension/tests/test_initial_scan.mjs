@@ -1,7 +1,7 @@
 // The extension must capture JS a page loaded BEFORE capture was active — webRequest only sees
 // NEW requests and nothing else re-reads a loaded page, so an already-open tab used to capture
 // 0 scripts until the operator reloaded (found in QA against a live SPA). This pins the
-// initial-scan wiring — content-script enumeration + the startCapture rescan — so that gap
+// initial-scan wiring — content-script enumeration + the capture Start/Resume rescan — so that gap
 // can't silently regress. Mirrors test_mv3_listeners.mjs (structural source assertions; the
 // content script is DOM/`chrome`-coupled browser glue that can't be imported in Node).
 import fs from 'node:fs';
@@ -28,21 +28,24 @@ assert.ok(cs.includes("storage.session.get('isCapturing')"), 'load-time scan gat
 assert.ok(!cs.includes('chrome.storage.local'), 'content script never touches storage.local (token + settings)');
 assert.ok(cs.includes("addEventListener('load'"), 'scan triggers on window load');
 
-// The no-reload path: a rescanScripts message (sent by startCapture) re-runs the scan.
+// The no-reload path: a rescanScripts message (sent on capture Start/Resume) re-runs the scan.
 assert.ok(cs.includes("action === 'rescanScripts'"), 'content-script handles rescanScripts');
 
-// --- background: turning capture on rescans the active tab, so an already-open page is captured
-// without a reload; a fresh session does the same. ----------------------------------------- //
+// --- background: a capture that starts or resumes listening rescans the active tab, so an
+// already-open page is captured without a reload; a failed transition does not. ------------- //
 assert.match(
   bg,
-  /startCapture\(sendResponse\)\s*\{[\s\S]*?this\.rescanActiveTab\(\);/,
-  'startCapture rescans the active tab',
+  /async listenAndRescan\(transition\)\s*\{\s*const res = await transition\(\);\s*if \(res && res\.ok && this\.isCapturing\) this\.rescanActiveTab\(\);/,
+  'Start/Resume rescan the active tab only when the transition succeeded and the gate is open',
 );
+for (const action of ['captureStart', 'captureResume']) {
+  assert.match(bg, new RegExp(`${action}: async \\([^)]*\\) => sendResponse\\(await this\\.listenAndRescan\\(`),
+    `${action} goes through listenAndRescan`);
+}
 assert.match(
   bg,
   /async rescanActiveTab\(\)\s*\{[\s\S]*?tabs\.query\([\s\S]*?active:\s*true[\s\S]*?sendMessage\([\s\S]*?rescanScripts/,
   'rescanActiveTab messages the active tab to rescan',
 );
-assert.match(bg, /newSession[\s\S]*?if \(this\.isCapturing\) this\.rescanActiveTab\(\);/, 'newSession rescans when capturing');
 
 console.log('test_initial_scan: ok');

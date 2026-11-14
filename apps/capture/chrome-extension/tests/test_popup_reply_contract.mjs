@@ -62,7 +62,7 @@ this.api = { send };`, sandbox);
 }
 
 // 3b. The worker took the message and died: Chrome closes the channel. That is the real
-// "unknown outcome" (the action may have run) — re-sync, never "Could not start session".
+// "unknown outcome" (the action may have run) — re-sync, never "Could not start the capture".
 {
   const runtime = { lastError: null, getManifest: () => ({ version: '1' }) };
   runtime.sendMessage = (msg, cb) => {
@@ -74,9 +74,9 @@ this.api = { send };`, sandbox);
   vm.runInContext(`${apiSource}\nthis.api = { send, setNoReplyHandler };`, sandbox);
   const resynced = [];
   sandbox.api.setNoReplyHandler((a) => resynced.push(a));
-  const res = await sandbox.api.send('newSession');
+  const res = await sandbox.api.send('captureStart');
   assert.equal(res.unknownOutcome, true);
-  assert.deepEqual([...resynced], ['newSession']);
+  assert.deepEqual([...resynced], ['captureStart']);
   pass('a channel closed mid-request is an unknown outcome -> re-sync');
 }
 
@@ -130,14 +130,22 @@ this.api = { send };`, sandbox);
 }
 
 // 7. Worker wiring: every responding message goes through the one envelope, a throwing handler
-// still answers, and stopCapture answers BEFORE the flush (the flush can take minutes).
+// still answers, and End answers BEFORE it drains uploads (the drain can take minutes).
 {
   assert.match(bg, /import \{[^}]*replyOnce[^}]*\} from '\.\/modules\/message-reply\.js'/, 'background imports the envelope');
   assert.match(bg, /const reply = replyOnce\(sendResponse\);/, 'one reply per message');
   assert.match(bg, /dispatchReply\(\(\) => this\.handleMessage\(request, sender, reply\), reply\)/, 'handlers run under dispatchReply');
-  const stop = bg.slice(bg.indexOf('async stopCapture('), bg.indexOf('async stopCapture(') + 900);
-  assert.ok(stop.indexOf('sendResponse(') >= 0 && stop.indexOf('sendResponse(') < stop.indexOf('flushAll()'),
-    'stopCapture replies before awaiting flushAll');
+  const lifecycle = fs.readFileSync(path.join(root, 'modules/capture-lifecycle.js'), 'utf8');
+  const end = lifecycle.slice(lifecycle.indexOf('  end() {'), lifecycle.indexOf('  async drainAndEnd()'));
+  assert.match(end, /this\.drainAndEnd\(\);\s*return \{ ok: true, ending: true \};/,
+    'End starts the drain without awaiting it and replies at once');
+  assert.doesNotMatch(end, /await this\.drainAndEnd/, 'End never waits on the drain');
   assert.doesNotMatch(bg, /notifyUI/, 'the dead notifyUI broadcast (no listener) is gone');
-  pass('worker wiring: envelope, dispatch, stopCapture order, no notifyUI');
+  // The legacy capture controls are gone: the lifecycle is the only way capture starts or stops.
+  const handlerBlock = bg.slice(bg.indexOf('const handlers = {'), bg.indexOf('};', bg.indexOf('const handlers = {')));
+  for (const gone of ['startCapture', 'stopCapture', 'newSession', 'getHistory']) {
+    assert.doesNotMatch(handlerBlock, new RegExp(`\\b${gone}:`), `no worker handler for the retired ${gone}`);
+    assert.ok(!bg.includes(`${gone}(`), `no ${gone} method left in the worker`);
+  }
+  pass('worker wiring: envelope, dispatch, End replies before draining, no notifyUI, no legacy capture handlers');
 }

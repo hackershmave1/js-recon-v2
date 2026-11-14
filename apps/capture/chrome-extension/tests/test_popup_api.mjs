@@ -170,8 +170,8 @@ async function testSendForwardsAction() {
     const sb = makeSandbox({
       sendMessageImpl: (msg, cb) => { captured = msg; cb({}); }
     });
-    await sb._send('startCapture');
-    assert.equal(captured?.action, 'startCapture', 'message.action must match the sent action');
+    await sb._send('captureStart');
+    assert.equal(captured?.action, 'captureStart', 'message.action must match the sent action');
     pass(name);
   } catch (err) { fail(name, err); }
 }
