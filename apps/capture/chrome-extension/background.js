@@ -191,7 +191,7 @@ class JSExtractor {
     await this.session.restore();
     // The popup's "Past sessions" list is gone (the workspace lists captures): drop the rows an
     // older build stored for it (scope, counts, session ids) instead of keeping them forever.
-    chrome.storage.local.remove('captureHistory').catch(() => {});
+    Promise.resolve(chrome.storage.local.remove('captureHistory')).catch(() => {});
     this.isCapturing = this.settings.isCapturing || false;
     // storage.session is cleared on browser restart: re-publish the page-visible capture bit.
     await publishCaptureState(chrome.storage, this.isCapturing).catch(() => {});

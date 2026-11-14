@@ -145,6 +145,7 @@ this.api = { send };`, sandbox);
   const handlerBlock = bg.slice(bg.indexOf('const handlers = {'), bg.indexOf('};', bg.indexOf('const handlers = {')));
   for (const gone of ['startCapture', 'stopCapture', 'newSession', 'getHistory']) {
     assert.doesNotMatch(handlerBlock, new RegExp(`\\b${gone}:`), `no worker handler for the retired ${gone}`);
+    assert.ok(!bg.includes(`${gone}(`), `no ${gone} method left in the worker`);
   }
   pass('worker wiring: envelope, dispatch, End replies before draining, no notifyUI, no legacy capture handlers');
 }

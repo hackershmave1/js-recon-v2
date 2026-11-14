@@ -1,7 +1,7 @@
 // The extension must capture JS a page loaded BEFORE capture was active — webRequest only sees
 // NEW requests and nothing else re-reads a loaded page, so an already-open tab used to capture
 // 0 scripts until the operator reloaded (found in QA against a live SPA). This pins the
-// initial-scan wiring — content-script enumeration + the startCapture rescan — so that gap
+// initial-scan wiring — content-script enumeration + the capture Start/Resume rescan — so that gap
 // can't silently regress. Mirrors test_mv3_listeners.mjs (structural source assertions; the
 // content script is DOM/`chrome`-coupled browser glue that can't be imported in Node).
 import fs from 'node:fs';
