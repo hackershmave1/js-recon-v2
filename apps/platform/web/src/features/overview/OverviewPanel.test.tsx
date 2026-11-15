@@ -229,7 +229,8 @@ describe("OverviewPanel", () => {
     expect(within(card("Tech stack")).getByText("—")).toBeInTheDocument();
   });
 
-  it("says 'not collected' instead of 0 when tech detection never ran on a finished run", () => {
+  // Walkthrough F18: for extension captures the tile could only ever say "not collected".
+  it("hides the Tech stack tile when tech detection never ran on a finished run", () => {
     const data: FindingsResponse = {
       run_id: "r", count: 1, coverage: null, spec: null,
       findings: [finding({ type: "endpoint", value: "/x" })],
@@ -240,8 +241,8 @@ describe("OverviewPanel", () => {
       { initialEntries: ["/runs/r1"] },
     );
     render(<RouterProvider router={router} />);
-    expect(within(card("Tech stack")).getByText("—")).toBeInTheDocument();
-    expect(within(card("Tech stack")).getByText("not collected for this run")).toBeInTheDocument();
+    expect(screen.getByText("Endpoints")).toBeInTheDocument();
+    expect(screen.queryByText("Tech stack")).not.toBeInTheDocument();
   });
 
   it("says 'awaiting analysis' while the run is still active", () => {

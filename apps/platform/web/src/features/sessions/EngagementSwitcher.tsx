@@ -37,9 +37,8 @@ export function EngagementSwitcher() {
   }, [open]);
 
   const active = engagements.find((e) => e.engagement_id === engagementId) ?? null;
-  const scopeLine = active
-    ? active.in_scope_domains.join(", ") || "no scope set"
-    : `${engagements.length} engagement${engagements.length === 1 ? "" : "s"}`;
+  // An engagement has no scope of its own (the session does), so the subtitle never prints one.
+  const scopeLine = active ? "engagement" : `${engagements.length} engagement${engagements.length === 1 ? "" : "s"}`;
 
   function pick(id: string | null) {
     setEngagementId(id);
@@ -67,9 +66,6 @@ export function EngagementSwitcher() {
               className={"eng-switch-opt" + (e.engagement_id === engagementId ? " sel" : "")}
               onClick={() => pick(e.engagement_id)}>
               <span className="eng-switch-opt-name">{e.name}</span>
-              {e.in_scope_domains.length > 0 && (
-                <span className="eng-switch-opt-scope">{e.in_scope_domains.join(", ")}</span>
-              )}
             </button>
           ))}
           <button type="button" className="eng-switch-new"

@@ -1,3 +1,4 @@
+import { scopeSummary, sessionTitle } from "./sessionScope";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import {
@@ -185,13 +186,16 @@ export function SessionsPage({ tenantId }: { tenantId: string }) {
               className={"sx-card status-" + cls
                 + (busyId === s.session_id || bulk.deleting.has(s.session_id) ? " is-busy" : "")}>
               <div className="sx-card-body" role="button" tabIndex={0}
-                aria-label={failReason ? `Open ${s.host} — run failed: ${failReason}` : `Open ${s.host}`}
+                aria-label={failReason ? `Open ${sessionTitle(s)} — run failed: ${failReason}` : `Open ${sessionTitle(s)}`}
                 onClick={() => open(s)}
                 onKeyDown={(e) => { if (e.key === "Enter") open(s); }}>
                 <div className="sx-card-top">
                   <span className={"sx-dot" + (running ? " pulse" : "")} />
-                  <span className="sx-host">{s.host}</span>
-                  <span className="sx-status">{s.latest_run ? state : "no runs"}</span>
+                  <span className="sx-host">{sessionTitle(s)}</span>
+                  <span className="sx-status">{s.latest_run ? state : "no captures"}</span>
+                </div>
+                <div className="sx-scope" title={scopeSummary(s.scope_hosts).title}>
+                  <span className="sx-scope-l">SCOPE</span> {scopeSummary(s.scope_hosts).text}
                 </div>
                 <div className="sx-metrics">
                   <div className="sx-metric">

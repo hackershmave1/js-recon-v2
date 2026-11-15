@@ -152,7 +152,7 @@ export function listEngagements(tenantId: string): Promise<EngagementsListRespon
 
 export function createEngagement(
   tenantId: string,
-  body: { name: string; in_scope_domains: string[]; out_of_scope_domains: string[] },
+  body: { name: string; in_scope_domains?: string[]; out_of_scope_domains?: string[] },
 ): Promise<Engagement> {
   return request("/engagements", json("POST", body), tenantId);
 }

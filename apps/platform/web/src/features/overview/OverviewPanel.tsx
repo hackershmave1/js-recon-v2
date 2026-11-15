@@ -1,3 +1,4 @@
+import { techStackHidden } from "../../shell/techVisibility";
 import { useNavigate, useParams } from "react-router";
 import type { FindingsResponse, Finding, HostsResponse, TechnologiesResponse } from "../../api/types";
 import { typeLabel } from "../../api/findingLabels";
@@ -113,6 +114,7 @@ export function OverviewPanel(
   ];
 
   const top = [...data.findings].sort((a, b) => priorityRank(a) - priorityRank(b)).slice(0, 6);
+  const shownMetrics = metrics.filter((m) => !(m.key === "tech" && techStackHidden(technologies, runFinished ? "done" : "analyzing")));
 
   // Coverage-gap notes shown under ONE "Partial" banner (curtailed + skipped collapse into one).
   const partialNotes = computePartialNotes(c);
@@ -126,7 +128,7 @@ export function OverviewPanel(
         </div>
       )}
       <div className="ov-metrics">
-        {metrics.map((m) => (
+        {shownMetrics.map((m) => (
           <button key={m.key} type="button" className="ov-card" onClick={() => go(m.section)}>
             <span className="ov-metric-label">{m.label}</span>
             <span className="ov-metric-value">{m.value}</span>

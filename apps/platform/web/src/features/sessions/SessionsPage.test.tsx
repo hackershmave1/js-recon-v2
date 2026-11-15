@@ -41,20 +41,20 @@ describe("SessionsPage", () => {
   it("renders a card per session with real stats and honest '—' for missing ones", async () => {
     vi.spyOn(api, "listSessions").mockResolvedValue({ count: 2, sessions: [DONE, NORUN] });
     renderPage();
-    expect(await screen.findByText("acme.io")).toBeInTheDocument();
-    expect(screen.getByText("shop.test")).toBeInTheDocument();
+    expect(await screen.findByText("acme.io", { selector: ".sx-host" })).toBeInTheDocument();
+    expect(screen.getByText("shop.test", { selector: ".sx-host" })).toBeInTheDocument();
     // real coverage renders "% attributed" (never "% analyzed"); missing renders "—"
     expect(screen.getByText("80% attributed")).toBeInTheDocument();
     expect(screen.getByText("— attributed")).toBeInTheDocument();
-    // a run-less session shows "no runs", never faked zeros
-    expect(screen.getByText("no runs")).toBeInTheDocument();
+    // a session with no captures says so, never faked zeros
+    expect(screen.getByText("no captures")).toBeInTheDocument();
   });
 
   it("re-runs a session from the kebab menu and navigates to the new run", async () => {
     vi.spyOn(api, "listSessions").mockResolvedValue({ count: 1, sessions: [DONE] });
     vi.spyOn(api, "rerunSession").mockResolvedValue({ run_id: "r-new", state: "queued" });
     renderPage();
-    await screen.findByText("acme.io");
+    await screen.findByText("acme.io", { selector: ".sx-host" });
     await userEvent.click(screen.getByRole("button", { name: /session actions/i }));
     await userEvent.click(screen.getByRole("menuitem", { name: /re-run/i }));
     expect(api.rerunSession).toHaveBeenCalledWith("t1", "s1");
@@ -88,7 +88,7 @@ describe("SessionsPage", () => {
     const dialog = await screen.findByRole("dialog", { name: /delete session/i });
     await userEvent.click(within(dialog).getByRole("button", { name: /^delete$/i }));
     expect(del).toHaveBeenCalledWith("t1", "s1");
-    await waitFor(() => expect(screen.queryByText("acme.io")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("acme.io", { selector: ".sx-host" })).not.toBeInTheDocument());
   });
 
   it("bulk-deletes the selected sessions after one confirm and reports the outcome", async () => {
@@ -156,7 +156,7 @@ describe("SessionsPage", () => {
   it("surfaces a failed run's classified reason on the card (visible tip + accessible name)", async () => {
     vi.spyOn(api, "listSessions").mockResolvedValue({ count: 1, sessions: [FAILED] });
     renderPage();
-    await screen.findByText("visa.com");
+    await screen.findByText("visa.com", { selector: ".sx-host" });
     // The reason renders in the DOM as the aria-hidden visual tip (no double-announce)...
     const tip = screen.getByText("Target host is out of scope for this session.");
     expect(tip).toBeInTheDocument();
@@ -169,4 +169,17 @@ describe("SessionsPage", () => {
       }),
     ).toBeInTheDocument();
   });
+
+  // Walkthrough F12: two cards for one host were indistinguishable.
+  it("shows each session's scope on its card, and names an empty session instead of printing a dash", async () => {
+    const EMPTY: SessionSummary = { ...NORUN, session_id: "s9", host: "—", scope_hosts: [] };
+    const WIDE: SessionSummary = { ...DONE, session_id: "s8", scope_hosts: ["acme.io", "api.acme.io", "cdn.acme-static.com"] };
+    vi.spyOn(api, "listSessions").mockResolvedValue({ count: 3, sessions: [DONE, WIDE, EMPTY] });
+    renderPage();
+    expect(await screen.findByText("Empty session")).toBeInTheDocument();
+    expect(screen.getByText("No scope set")).toBeInTheDocument();
+    expect(screen.getByText(/acme\.io, api\.acme\.io \+1/)).toBeInTheDocument();
+    expect(screen.getByText("no captures")).toBeInTheDocument();
+  });
 });
+
