@@ -36,8 +36,33 @@ The hosts a researcher declares as the target of one **capture session**, set in
 scope" for that session's hosts, findings and sources. Each session owns its own scope; an
 **engagement** groups many sessions, each with its own scope, and has no scope of its own.
 
+Scope decides by the **page first, then the host**: a tab outside scope is ignored whole; on an
+in-scope page, a script is analyzed if its host is in scope, dropped if it is a known third party
+or on the **ignore list**, and otherwise **quarantined** until the researcher decides (ADR-0010).
+Editing scope afterwards never re-captures: removing a host hides its files and findings
+(reversible), adding one brings its content in.
+
 _Avoid_: "scope" alone for the analytics **noise hosts** filter or for the fetch guard's allowed
 hosts (those are different rules), "engagement scope".
+
+## Quarantine
+
+Where a script from an **undecided host** waits: fetched and stored, but not analyzed and not in
+findings, sources or hosts counts. Capture and analysis carry on without it. **Add** releases it
+into analysis; **Ignore**, or seven days without a decision, deletes it.
+
+_Avoid_: "pending" (that already means an asset not yet fetched or analyzed).
+
+## Undecided host
+
+A host that served script files to an in-scope page but is neither in the session's scope, on the
+**ignore list**, nor a known third party. Listed for the researcher to Add or Ignore. A link to a
+page on an unknown host is listed the same way, as "linked site, not crawled", and is never fetched.
+
+## Ignore list
+
+The hosts a researcher chose not to add for one **capture session**. Their scripts are dropped and
+never fetched again. It lives with the session, so Continue keeps it.
 
 ## Standalone session
 
