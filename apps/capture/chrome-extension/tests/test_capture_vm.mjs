@@ -5,6 +5,7 @@ import {
   capturePhase, suggestScope, typedScope, scopeLabel, formatElapsed, continueOptions,
   defaultChoice, liveSubtitle, endedBanner, startErrorText, analyzeLabel,
   analyzeOutcome, progressStatus, startEngagement, engagementName,
+  SECRET_HINTS_LABEL, SECRET_HINTS_HELP, secretHintBadge,
 } from '../src/popup/viewmodels/captureVm.js';
 
 // --- which screen ---
@@ -124,5 +125,14 @@ assert.deepEqual(startEngagement('eng-1', [], false), { projectId: null, wait: t
 assert.deepEqual(startEngagement('gone', projects, true), { projectId: null, wait: false }, 'a deleted engagement cannot block Start');
 assert.equal(engagementName('gone', projects), 'Another engagement');
 assert.equal(engagementName(null, projects), 'Solo · standalone');
+
+// --- the popup's own secret count is a hint, never called "secrets" (the findings card owns that
+// word: one popup must not show "5 secrets" beside "3 secrets") ---
+assert.equal(SECRET_HINTS_LABEL, 'secret hints');
+assert.notEqual(SECRET_HINTS_LABEL, 'secrets');
+assert.match(SECRET_HINTS_HELP, /before analysis/);
+assert.equal(secretHintBadge(1), '1 HINT');
+assert.equal(secretHintBadge(4), '4 HINTS');
+assert.ok(!/SEC/.test(secretHintBadge(4)));
 
 console.log('test_capture_vm: ok');

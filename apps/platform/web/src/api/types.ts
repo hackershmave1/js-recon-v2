@@ -143,6 +143,9 @@ export interface ReconstructedRequest {
   operation: string; method: string; path: string; hosts: string[];
   query_params: { name: string; example: string | null }[];
   body_params: string[]; content_type: string | null; example_url: string | null;
+  // scheme://host[:port] the server built the artifacts against (the origin the host was served
+  // from in this run); null while unresolved. Optional for older servers.
+  base_url?: string | null;
   probeable: boolean; endpoint_hashes: string[];
   artifacts: { curl?: string; http?: string; websocat?: string } | null;
 }
@@ -225,7 +228,12 @@ export interface BulkDeleteResponse {
   deleted: string[]; not_found: string[]; failed: { id: string; error: string }[];
 }
 export interface SessionsListResponse { count: number; sessions: SessionSummary[]; }
-export interface SessionRunsResponse { session_id: string; count: number; runs: SessionRunRef[]; }
+// `engagement`: the engagement the session was created in; null = standalone. Optional for
+// older servers (absent = unknown, never shown as "no engagement").
+export interface SessionEngagementRef { engagement_id: string; name: string; }
+export interface SessionRunsResponse {
+  session_id: string; count: number; runs: SessionRunRef[]; engagement?: SessionEngagementRef | null;
+}
 // The widened session view returned by POST/PATCH /sessions (superset of SessionView).
 export interface SessionDetail {
   session_id: string; name: string | null; scope_hosts: string[]; authorization_ack: boolean;

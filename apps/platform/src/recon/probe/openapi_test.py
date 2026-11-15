@@ -621,3 +621,11 @@ def test_operations_on_one_path_share_the_observed_names():
     validate(doc)
     assert list(doc["paths"]) == ["/users/{userId}"]
     assert set(doc["paths"]["/users/{userId}"]) == {"get", "delete"}
+
+
+def test_servers_use_the_origin_a_relative_host_was_served_from():
+    doc = build_openapi(
+        [_req(hosts=("app.example.com",), example_url="/x", origin="http://app.example.com:4173")],
+        run_id="r",
+    )
+    assert [s["url"] for s in doc["servers"]] == ["http://app.example.com:4173"]

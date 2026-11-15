@@ -340,8 +340,10 @@ def _servers(requests: list[ReconstructedRequest]) -> list[dict]:
                 if split.port:
                     origin += f":{split.port}"
                 by_host[split.hostname] = origin
-        for host in request.hosts:
-            by_host.setdefault(host, f"https://{host}")
+        for index, host in enumerate(request.hosts):
+            # The first host's real origin (scheme + port it was served from) when the run knows it.
+            served = request.origin if index == 0 and request.origin else f"https://{host}"
+            by_host.setdefault(host, served)
     return [{"url": url, "description": _SERVER_DESCRIPTION} for url in sorted(by_host.values())]
 
 

@@ -36,7 +36,9 @@ def _request_parts(request: ReconstructedRequest) -> tuple[str, str, str]:
     Prefers the concrete observed URL. If it is ALREADY absolute
     (scheme://host/...), the host/scheme come from it directly — never
     re-prepended, which previously produced a double-scheme URL. If it is
-    relative, the base is the occurrence host (or a {{base_url}} placeholder).
+    relative, the base is the origin the occurrence host was served from in this
+    run (``request.origin``: its real scheme and port), else https://host, else a
+    {{base_url}} placeholder.
     origin_target is always origin-form (path + query) for the raw-HTTP request
     line; curl joins base + origin_target into a full URL.
     """
@@ -47,9 +49,22 @@ def _request_parts(request: ReconstructedRequest) -> tuple[str, str, str]:
         base = f"{split.scheme}://{host}"
         origin = (split.path or "/") + (f"?{split.query}" if split.query else "")
         return base, origin, host
+    served = urlsplit(_control_free(request.origin or "")[:_MAX_URL])
+    if served.scheme in ("http", "https") and served.netloc:
+        # Derived from asset URLs (attacker-influenced), so it gets the same control-char
+        # strip as every other component; curl still shell-quotes the joined URL.
+        return f"{served.scheme}://{served.netloc}", (observed or "/"), served.netloc
     host = _control_free(request.hosts[0])[:_MAX_URL] if request.hosts else None
     base = f"https://{host}" if host else _BASE_URL_PLACEHOLDER
     return base, (observed or "/"), (host or "HOST")
+
+
+def base_url(request: ReconstructedRequest) -> str | None:
+    """The scheme://host[:port] the artifacts are built against, or None while it is still the
+    ``{{base_url}}`` placeholder. The raw-HTTP artifact carries no scheme, so a client deriving a
+    full URL from it (the Probe panel's Python snippet) needs this rather than assuming https."""
+    base, _origin, _host = _request_parts(request)
+    return None if base == _BASE_URL_PLACEHOLDER else base
 
 
 def _json_body(request: ReconstructedRequest) -> str | None:

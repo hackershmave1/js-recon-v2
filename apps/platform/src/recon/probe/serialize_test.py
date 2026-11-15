@@ -199,3 +199,109 @@ def test_http_absolute_example_url_uses_origin_form():
     assert "Host: api.x.com" in out
     request_line = out.split("\n")[0]
     assert "https://" not in request_line
+
+
+def test_relative_request_uses_the_origin_the_host_was_served_from():
+    # A capture of http://app.acme.io:4173 must not become https://app.acme.io (wrong server).
+    req = _req(
+        hosts=("app.acme.io",), origin="http://app.acme.io:4173", body_params=(), content_type=None
+    )
+    assert "'http://app.acme.io:4173/api/users/123'" in serialize.to_curl(req)
+    assert "Host: app.acme.io:4173" in serialize.to_http(req)
+    assert serialize.base_url(req) == "http://app.acme.io:4173"
+
+
+def test_an_absolute_observed_url_ignores_the_origin():
+    req = _req(example_url="https://api.acme.io:8443/x", origin="http://app.acme.io:4173")
+    assert "'https://api.acme.io:8443/x'" in serialize.to_curl(req)
+    assert serialize.base_url(req) == "https://api.acme.io:8443"
+
+
+def test_no_origin_keeps_the_https_fallback_and_no_host_has_no_base_url():
+    assert serialize.base_url(_req()) == "https://api.acme.io"
+    assert serialize.base_url(_req(hosts=(), example_url="/x")) is None
+
+
+def test_a_hostile_origin_cannot_inject():
+    # The origin is derived from asset URLs, which are attacker-influenced: control chars are
+    # stripped, a non-http(s) scheme is refused, and curl still quotes one shell token.
+    crlf = _req(origin="http://app.acme.io:4173\r\nX-Evil: 1", body_params=(), content_type=None)
+    http = serialize.to_http(crlf)
+    assert "\r" not in http and "\nX-Evil:" not in http
+    js = _req(origin="javascript://app.acme.io", body_params=(), content_type=None)
+    assert "'https://api.acme.io/api/users/123'" in serialize.to_curl(js)
+    quote = _req(origin="http://a'b.io:1", body_params=(), content_type=None)
+    assert serialize.to_curl(quote).count("curl -X POST '") == 1
+
+
+def test_websocat_maps_an_http_origin_to_ws():
+    req = _req(
+        operation="WS /live",
+        method="WS",
+        path="/live",
+        example_url="/live",
+        probeable=False,
+        hosts=("app.acme.io",),
+        origin="http://app.acme.io:4173",
+    )
+    assert "'ws://app.acme.io:4173/live'" in serialize.to_websocat(req)
+
+
+def test_hostile_asset_urls_cannot_redirect_or_inject_through_the_origin():
+    # Asset URLs are attacker-influenced. Run them through origin derivation into the artifacts:
+    # userinfo is dropped, quote / CRLF / bad-port URLs yield no origin, and an origin only ever
+    # applies to requests whose own host is the origin's host (it cannot repoint another host).
+    from recon.probe import reconstruct
+
+    hostile = [
+        "http://evil@app.acme.io:4173/a.js",
+        "http://app.acme.io:4173@evil.test/a.js",
+        "http://app.acme.io:4173'$(id)'/a.js",
+        "http://app.acme.io/\r\nX-Evil: 1/a.js",
+        "http://app.acme.io:99999/a.js",
+        "ftp://app.acme.io/a.js",
+    ]
+    origins = reconstruct.origins_from_urls(hostile)
+    assert origins == {"app.acme.io": "http://app.acme.io:4173", "evil.test": "http://evil.test"}
+    for host, origin in origins.items():
+        out = serialize.to_curl(
+            _req(hosts=(host,), origin=origin, example_url="/x", body_params=(), content_type=None)
+        )
+        assert out.splitlines()[-1] == f"curl -X POST '{origin}/x'"
+        http = serialize.to_http(
+            _req(hosts=(host,), origin=origin, example_url="/x", body_params=(), content_type=None)
+        )
+        assert "\r" not in http and "X-Evil" not in http and "@" not in http.splitlines()[1]
+    # A request for the legit host is never sent to the other host's origin.
+    legit = reconstruct.apply_origins(
+        reconstruct.build_requests([_endpoint_for("app.acme.io")]), origins
+    )
+    assert legit[0].origin == "http://app.acme.io:4173"
+
+
+def _endpoint_for(host):
+    from recon.findings.queries import FindingView, OccurrenceView
+
+    occ = OccurrenceView(
+        host=host,
+        raw_url="/x",
+        source_path=None,
+        line=1,
+        col=1,
+        offset_start=0,
+        offset_end=1,
+        evidence=None,
+        engine="vespasian",
+        confidence=None,
+        verified=None,
+    )
+    return FindingView(
+        finding_hash="e1",
+        type="endpoint",
+        value="GET /x",
+        path="input.js",
+        severity=None,
+        attributes={"method": "GET", "kind": "fetch"},
+        first_stage="analyzing",
+        occurrences=[occ],
+    )

@@ -48,7 +48,7 @@ export function ProbeDetail({
           onPick={onPick} onCustom={onCustom} onCommit={onCommit}
         />
       )}
-      <ArtifactTabs artifacts={req.artifacts} />
+      <ArtifactTabs artifacts={req.artifacts} baseUrl={req.base_url} />
       <ParamsTable req={req} />
       <ProbeHandoff req={req} runId={runId} triageStatus={triageStatus} onTriaged={onTriaged} />
     </div>

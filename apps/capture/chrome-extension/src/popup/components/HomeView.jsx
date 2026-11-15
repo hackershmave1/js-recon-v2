@@ -6,7 +6,7 @@ import { Switch, Dot } from './ui.jsx';
 import { LogoMark, GearIcon, DownloadIcon, ArrowRightIcon } from '../icons.jsx';
 import { ScopeStartCard } from './ScopeStartCard.jsx';
 import { LiveCaptureCard, NewSiteBanner, EndingBanner, EndedBanner } from './LiveCaptureCard.jsx';
-import { analyzeLabel } from '../viewmodels/captureVm.js';
+import { analyzeLabel, secretHintBadge, SECRET_HINTS_LABEL, SECRET_HINTS_HELP } from '../viewmodels/captureVm.js';
 import { typeLabel } from '../../../modules/finding-labels.js';
 
 const FLAG = { c: C.pink, bg: 'rgba(255,107,138,0.13)' };
@@ -49,7 +49,7 @@ function CaptureRow({ c }) {
         <span style={{
           fontSize: '9px', fontWeight: 700, color: FLAG.c, background: FLAG.bg,
           padding: '2px 7px', borderRadius: '10px', flex: '0 0 auto'
-        }}>{c.secretCount} SEC</span>
+        }} title={SECRET_HINTS_HELP}>{secretHintBadge(c.secretCount)}</span>
       )}
     </div>
   );
@@ -62,8 +62,8 @@ export function HomeView({ vm }) {
   // Connection dot/label colour = real delivery health (D42), no longer a fake constant green.
   const healthColor = { ok: C.lime, warn: C.amber, fail: C.orange, testing: C.blue }[vm.deliveryHealth] || C.lime;
   const d = vm.delivery || { uploaded: 0, pending: 0, failedTotal: 0, paired: null, lastReason: '', lastFile: '' };
-  const statBox = (value, label, color) => (
-    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: '11px', padding: '12px' }}>
+  const statBox = (value, label, color, help) => (
+    <div title={help} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: '11px', padding: '12px' }}>
       <div style={{ fontFamily: F.display, fontWeight: 700, fontSize: '22px', lineHeight: 1, color: color || C.text }}>{value}</div>
       <div style={{ fontSize: '10px', color: C.faint, marginTop: '4px' }}>{label}</div>
     </div>
@@ -134,7 +134,7 @@ export function HomeView({ vm }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '9px', padding: '0 17px 15px' }}>
         {statBox(vm.stats.js, 'scripts')}
         {statBox(vm.stats.maps, 'maps', C.teal)}
-        {statBox(vm.stats.secrets, 'secrets', C.pink)}
+        {statBox(vm.stats.secretHints, SECRET_HINTS_LABEL, C.pink, SECRET_HINTS_HELP)}
       </div>
 
       {/* delivery — real upload/skip/failure health, not just captured counts (D42) */}
