@@ -3,34 +3,24 @@ import { createEngagement, ApiError } from "../../api/apiClient";
 import type { Engagement } from "../../api/types";
 import { Icon } from "../../shell/icons";
 
-// New Engagement modal (design mockup lines 1197-1234). The mockup's "include
-// subdomains" toggle is intentionally omitted: no backend honors it yet, so shipping it
-// would be a control that lies about what it does (project rule §5). Scope here is
-// organizational metadata — a run's enforced egress scope still comes from its session's
-// scope host (REQ-P2).
+// New Engagement modal. An engagement is a name that groups sessions. It has no scope of its own:
+// each session declares its scope when its capture starts (GLOSSARY "Session scope"), and a run's
+// enforced egress scope comes from that session (REQ-P2). So there are no domain fields here.
 export function NewEngagementModal({ tenantId, onClose, onCreated }: {
   tenantId: string;
   onClose: () => void;
   onCreated: (engagement: Engagement) => void;
 }) {
   const [name, setName] = useState("");
-  const [inScope, setInScope] = useState("");
-  const [outScope, setOutScope] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const lines = (text: string) => text.split("\n").map((l) => l.trim()).filter(Boolean);
 
   async function submit() {
     if (!name.trim()) { setError("An engagement name is required"); return; }
     setBusy(true);
     setError(null);
     try {
-      const engagement = await createEngagement(tenantId, {
-        name: name.trim(),
-        in_scope_domains: lines(inScope),
-        out_of_scope_domains: lines(outScope),
-      });
+      const engagement = await createEngagement(tenantId, { name: name.trim() });
       onCreated(engagement);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to create engagement");
@@ -45,26 +35,14 @@ export function NewEngagementModal({ tenantId, onClose, onCreated }: {
         <div className="eng-modal-head">
           <h2>New engagement</h2>
           <div className="eng-modal-sub">
-            Define the scope once. Every session and finding you collect lives under this umbrella.
+            A name that groups related sessions. Each session sets its own scope when its capture starts.
           </div>
         </div>
         <div className="eng-modal-body">
           <label className="eng-modal-label" htmlFor="eng-name">ENGAGEMENT NAME</label>
           <input id="eng-name" className="eng-modal-input" value={name}
-            onChange={(e) => setName(e.target.value)} placeholder="Acme Q3 Bug Bounty" />
-
-          <label className="eng-modal-label" htmlFor="eng-in">
-            IN-SCOPE DOMAINS <span className="eng-modal-hint">· one per line</span>
-          </label>
-          <textarea id="eng-in" className="eng-modal-area accent" value={inScope}
-            onChange={(e) => setInScope(e.target.value)} placeholder={"api.acme.io\napp.acme.io"} />
-
-          <label className="eng-modal-label" htmlFor="eng-out">
-            OUT OF SCOPE <span className="eng-modal-hint">· optional</span>
-          </label>
-          <textarea id="eng-out" className="eng-modal-area warn" value={outScope}
-            onChange={(e) => setOutScope(e.target.value)} placeholder={"blog.acme.io"} />
-
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") submit(); }} placeholder="Acme Q3 Bug Bounty" />
           {error && <div className="eng-modal-error">{error}</div>}
         </div>
         <div className="eng-modal-foot">
