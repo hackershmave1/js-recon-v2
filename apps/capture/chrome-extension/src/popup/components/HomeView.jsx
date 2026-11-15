@@ -1,61 +1,14 @@
 // HomeView.jsx — the default popup screen. Idle: the scope-first Start card (ScopeStartCard). With
 // a capture in progress: its live card, then stats, delivery, Analyze, the findings summary and the
 // captures feed. Quick toggles and the footer show in both.
-import { C, F, CLASS_COLOR, CLASS_LABEL } from '../theme.js';
+import { C, F } from '../theme.js';
 import { Switch, Dot } from './ui.jsx';
-import { LogoMark, GearIcon, DownloadIcon, ArrowRightIcon } from '../icons.jsx';
+import { LogoMark, GearIcon, ArrowRightIcon } from '../icons.jsx';
 import { ScopeStartCard } from './ScopeStartCard.jsx';
 import { LiveCaptureCard, NewSiteBanner, EndingBanner, EndedBanner } from './LiveCaptureCard.jsx';
 import {
-  analyzeLabel, secretHintBadge, SECRET_HINTS_LABEL, SECRET_HINTS_HELP, findingsSummaryLine, OTHER_FINDINGS_HELP,
+  analyzeLabel, secretHintBadge, SECRET_HINTS_LABEL, SECRET_HINTS_HELP,
 } from '../viewmodels/captureVm.js';
-import { typeLabel } from '../../../modules/finding-labels.js';
-
-const FLAG = { c: C.pink, bg: 'rgba(255,107,138,0.13)' };
-
-function SectionLabel({ children }) {
-  return (
-    <span style={{ fontSize: '10.5px', color: C.faint, fontWeight: 700, letterSpacing: '0.8px' }}>
-      {children}
-    </span>
-  );
-}
-
-function CaptureRow({ c }) {
-  const isApp = c.classification === 'app';
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: '9px', padding: '9px 8px',
-      borderRadius: '9px', animation: 'capflow .25s ease'
-    }}>
-      <Dot color={c.dot} size={7} pulse={c.analyzing} />
-      <span style={{ flex: 1, minWidth: 0 }}>
-        <span style={{
-          display: 'block', fontFamily: F.mono, fontSize: '11.5px', color: C.textSoft,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
-        }}>{c.name}</span>
-        <span style={{ display: 'block', fontSize: '9.5px', color: C.faint }}>{c.meta}</span>
-      </span>
-      {c.isThirdParty && (
-        <span style={{
-          fontSize: '8px', fontWeight: 700, color: C.orange, background: 'rgba(255,138,71,0.13)',
-          padding: '2px 6px', borderRadius: '9px', flex: '0 0 auto'
-        }}>3RD</span>
-      )}
-      {!isApp && (
-        <span style={{ fontSize: '9px', fontWeight: 600, color: CLASS_COLOR[c.classification], flex: '0 0 auto' }}>
-          {CLASS_LABEL[c.classification]}
-        </span>
-      )}
-      {c.secretCount > 0 && (
-        <span style={{
-          fontSize: '9px', fontWeight: 700, color: FLAG.c, background: FLAG.bg,
-          padding: '2px 7px', borderRadius: '10px', flex: '0 0 auto'
-        }} title={SECRET_HINTS_HELP}>{secretHintBadge(c.secretCount)}</span>
-      )}
-    </div>
-  );
-}
 
 export function HomeView({ vm }) {
   const phase = vm.flow.phase;
@@ -184,66 +137,19 @@ export function HomeView({ vm }) {
         </div>
       </div>
 
-      {/* D46: findings summary card — shown after analysis completes (status=done) when the
-          backend has a completed run for this session. Compact 2-line strip: count summary
-          on the first line, top finding type on the second, "View in workspace →" link.
-          Hidden until both the analysis job is done AND a summary with real findings exists. */}
-      {a.status === 'done' && vm.findingsSummary && vm.findingsSummary.status === 'complete' && (() => {
-        const s = vm.findingsSummary;
-        const c = s.counts || {};
-        // Compact summary line: "42 findings: 20 endpoints · 5 secrets · 3 IPs"
-        const summaryLine = findingsSummaryLine(c);
-        return (
-          <div style={{ padding: '0 17px 15px' }}>
-            <div style={{
-              background: 'rgba(205,235,69,0.06)', border: `1px solid rgba(205,235,69,0.25)`,
-              borderRadius: '11px', padding: '11px 13px'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                {/* wraps: a cut-off "3 secr…" hid the very counts the card exists to show */}
-                <span title={c.other > 0 ? OTHER_FINDINGS_HELP : undefined} style={{ fontFamily: F.mono, fontSize: '11.5px', color: C.lime, fontWeight: 700, flex: 1, minWidth: 0, overflowWrap: 'anywhere', lineHeight: 1.4 }}>
-                  {summaryLine}
-                </span>
-                <button onClick={vm.openWorkspace} style={{
-                  flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: '4px',
-                  padding: '3px 10px', borderRadius: '7px', border: `1px solid rgba(205,235,69,0.35)`,
-                  background: 'none', color: C.lime, cursor: 'pointer', fontSize: '10.5px', fontWeight: 700
-                }}>
-                  View <ArrowRightIcon />
-                </button>
-              </div>
-              {(s.top_findings || []).length > 0 && (
-                <div style={{ marginTop: '5px', fontSize: '10.5px', color: C.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  Top: {typeLabel(s.top_findings[0].type)}{s.top_findings[0].value && s.top_findings[0].value !== '[redacted]' ? ` · ${s.top_findings[0].value}` : ''}
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* recent captures */}
-      <div style={{ padding: '0 17px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-          <SectionLabel>RECENT CAPTURES</SectionLabel>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
-            {vm.mutedCount > 0 && (
-              <button onClick={vm.showAllCaptures} style={{
-                fontSize: '10.5px', color: C.purple, background: 'none', border: 'none', cursor: 'pointer', fontFamily: F.mono
-              }}>{vm.mutedCount} muted</button>
-            )}
-            <span style={{ fontSize: '10.5px', color: C.dim, fontFamily: F.mono }}>{cap ? 'live' : 'idle'}</span>
-          </span>
+      {/* Results live in the workspace: once the analysis is done, the popup only links there. */}
+      {a.status === 'done' && (
+        <div style={{ padding: '0 17px 15px' }}>
+          <button onClick={vm.openWorkspace} style={{
+            width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '11px 13px', borderRadius: '11px', cursor: 'pointer',
+            background: 'rgba(205,235,69,0.06)', border: '1px solid rgba(205,235,69,0.25)',
+            color: C.lime, fontSize: '12px', fontWeight: 700
+          }}>
+            Findings are in the workspace<ArrowRightIcon />
+          </button>
         </div>
-        <div style={{ maxHeight: '168px', overflowY: 'auto', margin: '0 -2px' }}>
-          {vm.captures.length === 0 && (
-            <div style={{ padding: '18px 8px', textAlign: 'center', fontSize: '11px', color: C.faint }}>
-              No captures yet
-            </div>
-          )}
-          {vm.captures.map((c) => <CaptureRow key={c.key} c={c} />)}
-        </div>
-      </div>
+      )}
 
       </>)}
 
@@ -262,13 +168,6 @@ export function HomeView({ vm }) {
 
       {/* footer */}
       <div style={{ display: 'flex', gap: '9px', padding: '13px 17px', borderTop: `1px solid ${C.line}` }}>
-        <button onClick={vm.exportNow} style={{
-          flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: '7px', padding: '10px 14px',
-          borderRadius: '10px', border: `1px solid ${C.lineHover}`, background: C.control,
-          color: C.textSoft, cursor: 'pointer', fontSize: '12.5px', fontWeight: 600
-        }}>
-          <DownloadIcon />Export
-        </button>
         <button onClick={vm.openWorkspace} style={{
           flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
           padding: '10px', borderRadius: '10px', border: 'none', background: C.lime,

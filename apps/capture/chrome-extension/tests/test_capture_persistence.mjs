@@ -22,8 +22,4 @@ const bg = fs.readFileSync(path.resolve(__dirname, '../background.js'), 'utf8');
 assert.ok(/capturedFiles\.set\(url, fileObject\);[\s\S]{0,1400}this\.session\.schedulePersistCapturedMeta\(\)/.test(bg),
   'processFile schedules a persist after recording a file');
 
-// getFiles tolerates a rehydrated lean object (which has no dependencies array).
-assert.ok(/dependencyCount:\s*Array\.isArray\(f\.dependencies\)/.test(bg),
-  'getFiles derives dependencyCount defensively for lean rehydrated objects');
-
 console.log('ok - capture-counter persistence wiring');

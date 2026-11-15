@@ -25,9 +25,6 @@ assert.ok(resetStart >= 0, 'resetCaptureSession() is defined');
 const resetBody = bg.slice(resetStart, resetStart + 600);
 assert.match(resetBody, /await this\.session\.startStandalone\(\{\s*dropOutbox\s*\}\)/, 'reset delegates to CaptureSession.startStandalone, passing dropOutbox through');
 
-// clearFiles refreshes the badge only after the counters reset (else it stays orange on stale failures).
-assert.match(bg, /async clearFiles\(sendResponse\) \{\s*await this\.session\.clearCaptured\(\);[\s\S]{0,80}this\.updateBadge\(\);/, 'clearFiles updates the badge after clearCaptured');
-
 // Logout clears the token + identity but KEEPS authTenantId (so a later different-tenant login is
 // still detected), and resets to a fresh Standalone session with capture stopped (capture must not
 // run behind the sign-in gate).

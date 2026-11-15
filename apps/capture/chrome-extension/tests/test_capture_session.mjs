@@ -87,24 +87,6 @@ async function test_start_standalone_unbinds_and_optionally_drops_outbox() {
   assert.deepEqual(calls.slice(-3), ['uploader.setConfig:null', 'storage.remove:binding', 'uploader.clearOutbox']);
 }
 
-async function test_clear_captured_keeps_the_session() {
-  const { session, calls } = makeSession();
-  await session.restore();
-  capture(session, 'https://acme.com/app.js');
-  session.observationKeys.add('GET /x');
-  session.observations.push({ method: 'GET', url: '/x' });
-  session.processingQueue.push({});
-  calls.length = 0;
-
-  await session.clearCaptured();
-  assert.deepEqual(calls, ['dedup.clear', 'auth.clear']);
-  assert.equal(session.sessionId, 's0', 'same session id');
-  assert.equal(session.capturedFiles.size, 0);
-  assert.equal(session.observations.length, 0);
-  assert.equal(session.observationKeys.size, 0);
-  assert.equal(session.processingQueue.length, 0);
-}
-
 async function test_restore_rehydrates_state_and_binding() {
   const storage = fakeStorage({
     pendingSessionConfig: { projectId: 'p9' },
@@ -157,7 +139,6 @@ async function test_every_transition_wipes_persisted_state() {
   for (const run of [
     (s) => s.startNew({ binding: { projectId: 'p1' } }),
     (s) => s.startStandalone(),
-    (s) => s.clearCaptured(),
   ]) {
     const storage = fakeStorage({ capturedFilesMeta: [{ url: 'u' }], capturedObservations: [{ method: 'GET', url: '/x' }] });
     const { session } = makeSession({ storage });
@@ -173,7 +154,6 @@ await test_observations_persist_without_bodies();
 await test_restore_keeps_a_live_capture_that_beat_it();
 await test_every_transition_wipes_persisted_state();
 await test_start_standalone_unbinds_and_optionally_drops_outbox();
-await test_clear_captured_keeps_the_session();
 await test_restore_rehydrates_state_and_binding();
 await test_captured_meta_projection_is_lean();
 console.log('ok - CaptureSession lifecycle and persistence');

@@ -208,28 +208,6 @@ export class WorkspaceClient {
     }
   }
 
-  // Fetch the findings summary for the session's latest completed run (D46).
-  // Called by the popup after analysis completes to render the compact findings card.
-  // Returns { success, summary } on 200, { success: false } otherwise. The caller
-  // treats a non-success result as "no summary yet" and hides the card gracefully.
-  // NOTE: no /api prefix — this endpoint is on the platform's sessions router, mounted at the root
-  // (only the capture routes live under /api). The /api path 404s, silently hiding the card.
-  async getSessionFindingsSummary(sessionId) {
-    const target = `${this.resolveApiBase()}/sessions/${encodeURIComponent(sessionId)}/findings/summary`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    try {
-      const resp = await fetch(target, { method: 'GET', headers: { ...this.authHeaders() }, signal: controller.signal });
-      if (!resp.ok) return { success: false, status: resp.status };
-      const data = await resp.json();
-      return { success: true, summary: data };
-    } catch (error) {
-      return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
-    } finally {
-      clearTimeout(timer); // after the body read too: a stalled body is a timeout
-    }
-  }
-
   // Create a project (quick-create from the popup: name + scope; backend fills the rest).
   async createProject(project) {
     const target = this.resolveApiBase() + '/api/projects';
@@ -250,56 +228,6 @@ export class WorkspaceClient {
       return { success: true, project: await resp.json() };
     } catch (error) {
       return { success: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
-    } finally {
-      clearTimeout(timer); // after the body read too: a stalled body is a timeout
-    }
-  }
-
-  // Save LLM provider config for the current session. The platform encrypts the key at rest.
-  // Sends the extension's session id (external_id); the platform resolves it to its UUID.
-  async saveLlmConfig({ provider, model, apiKey }) {
-    const target = `${this.resolveApiBase()}/api/sessions/${encodeURIComponent(this.getSessionId())}/llm-config`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 12000);
-    try {
-      const resp = await fetch(target, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
-        body: JSON.stringify({ provider, model, api_key: apiKey }),
-        signal: controller.signal
-      });
-      if (!resp.ok) {
-        let detail = `HTTP ${resp.status}`;
-        try { const body = await resp.json(); if (body && body.detail) detail = body.detail; } catch (e) { /* keep default */ }
-        return { ok: false, error: detail };
-      }
-      return { ok: true };
-    } catch (error) {
-      return { ok: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
-    } finally {
-      clearTimeout(timer); // after the body read too: a stalled body is a timeout
-    }
-  }
-
-  // Test the stored LLM config by firing a minimal API call server-side.
-  async testLlmConfig() {
-    const target = `${this.resolveApiBase()}/api/sessions/${encodeURIComponent(this.getSessionId())}/llm-config/test`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000); // LLM calls can be slow
-    try {
-      const resp = await fetch(target, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
-        signal: controller.signal
-      });
-      if (!resp.ok) {
-        let detail = `HTTP ${resp.status}`;
-        try { const body = await resp.json(); if (body && body.detail) detail = body.detail; } catch (e) { /* keep default */ }
-        return { ok: false, error: detail };
-      }
-      return { ok: true, ...(await resp.json()) };
-    } catch (error) {
-      return { ok: false, error: error?.name === 'AbortError' ? 'timeout' : (error?.message || 'unreachable') };
     } finally {
       clearTimeout(timer); // after the body read too: a stalled body is a timeout
     }

@@ -95,8 +95,8 @@ this.api = { send };`, sandbox);
 {
   let late;
   const api = loadApi((msg, cb) => { late = cb; });
-  const res = await api.send('getFiles');
-  late({ ok: true, files: [] });
+  const res = await api.send('getStatus');
+  late({ ok: true });
   assert.equal(res.error, 'no_reply');
   pass('a late reply after the deadline is ignored');
 }

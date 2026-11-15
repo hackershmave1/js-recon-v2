@@ -8,7 +8,6 @@ import { SessionStore } from './modules/session-store.js';
 import { IdbStore } from './modules/idb-store.js';
 import { AuthContextTracker } from './modules/auth-context.js';
 import { WorkspaceClient } from './modules/workspace-client.js';
-import { buildExportData } from './modules/export-builder.js';
 import { classifyAsset, isThirdParty, matchesDenylist, countSecrets } from './modules/asset-classifier.js';
 import { listProjectsWithCache } from './modules/projects-cache.js';
 import { normalizeRootDomains } from './modules/normalize-scope.js';
@@ -1069,26 +1068,18 @@ class JSExtractor {
         sendResponse(res);
       },
       captureDismissEnded: async () => sendResponse(await this.capture.dismissEnded()),
-      getFiles: () => this.getFiles(sendResponse),
-      clearFiles: async () => { await this.clearFiles(sendResponse); },
       getStatus: () => this.getStatus(sendResponse),
       updateSettings: (req) => this.updateSettings(req, sendResponse),
-      getExportData: (req) => this.getExportData(req, sendResponse),
       testConnection: async () => sendResponse(await this.workspaceClient.testConnection()),
       analyzeSession: async () => sendResponse(await this.workspaceClient.analyzeSession()),
       getAnalysisProgress: async () => sendResponse(await this.workspaceClient.getAnalysisProgress()),
-      getSessionFindingsSummary: async (req) => {
-        sendResponse(await this.workspaceClient.getSessionFindingsSummary(req.sessionId));
-      },
       listProjects: () => this.listProjects(sendResponse),
       createProject: async (req) => sendResponse(await this.workspaceClient.createProject(req.project)),
       login: (req) => this.login(req, sendResponse),
       logout: () => this.logout(sendResponse),
       dynamicScriptDetected: (req) => this.handleDynamicScript(req, sender),
       inlineScriptDetected: (req) => this.handleInlineScript(req, sender),
-      responseBodyObserved: (req) => this.handleResponseBody(req),
-      saveLlmConfig: async (req) => sendResponse(await this.workspaceClient.saveLlmConfig(req.config || {})),
-      testLlmConfig: async () => sendResponse(await this.workspaceClient.testLlmConfig())
+      responseBodyObserved: (req) => this.handleResponseBody(req)
     };
 
     const handler = handlers[request.action];
@@ -1494,36 +1485,6 @@ class JSExtractor {
     this.authNotified = false;
   }
 
-  getFiles(sendResponse) {
-    const files = Array.from(this.session.capturedFiles.values()).map(f => ({
-      url: f.url,
-      size: f.contentLength,
-      hasSourceMap: f.hasSourceMap,
-      dependencyCount: Array.isArray(f.dependencies) ? f.dependencies.length : (f.dependencyCount || 0),
-      capturedAt: f.capturedAt,
-      isMinified: f.isMinified,
-      classification: f.classification || 'app',
-      isThirdParty: f.isThirdParty === true,
-      secretCount: f.secretCount || 0,
-      sourceMapFetchStatus: f.sourceMapFetchStatus,
-      sourceMapFetchError: f.sourceMapFetchError
-    }));
-    
-    sendResponse({
-      files,
-      total: files.length,
-      sessionId: this.session.sessionId,
-      isCapturing: this.isCapturing
-    });
-  }
-
-  async clearFiles(sendResponse) {
-    await this.session.clearCaptured();
-    this.authNotified = false;
-    this.updateBadge();
-    sendResponse({ success: true });
-  }
-
   getStatus(sendResponse) {
     let mapsCount = 0;
     let secretCount = 0;
@@ -1609,31 +1570,6 @@ class JSExtractor {
       success: true, projects, source,
       authRejected: status === 401 && !!tokenAtSend && this.settings?.authToken === tokenAtSend
     });
-  }
-
-  getExportData(request, sendResponse) {
-    const files = Array.from(this.session.capturedFiles.values());
-    // D46: let the operator export WITH the captured code, not just metadata. Best-effort — files
-    // rehydrated after a worker respawn are lean (no content) and simply export without it.
-    const includeContent = !!(request && request.includeContent);
-
-    try {
-      const exportData = buildExportData({
-        sessionId: this.session.sessionId,
-        files,
-        includeContent,
-        version: '3.0.0'
-      });
-
-      sendResponse({
-        success: true,
-        filename: `js-extraction-${this.session.sessionId}${includeContent ? '-with-code' : ''}.json`,
-        exportData
-      });
-    } catch (error) {
-      console.error('Export payload build failed:', error);
-      sendResponse({ success: false, error: error.message });
-    }
   }
 }
 

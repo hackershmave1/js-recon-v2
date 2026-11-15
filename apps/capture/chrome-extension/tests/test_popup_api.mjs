@@ -56,7 +56,7 @@ function makeSandbox({ sendMessageImpl = null, tabsQueryImpl = null } = {}) {
     }
   };
 
-  // Minimal document stub for downloadJson (anchor-click path).
+  // Minimal document stub (the popup no longer downloads files; kept so the sandbox shape is stable).
   const appendedChildren = [];
   const removedChildren = [];
   const mockDocument = {
@@ -97,7 +97,7 @@ function makeSandbox({ sendMessageImpl = null, tabsQueryImpl = null } = {}) {
   };
   vm.createContext(sandbox);
   vm.runInContext(
-    `${source}\nthis._send = send;\nthis._getActiveTabHost = getActiveTabHost;\nthis._downloadJson = downloadJson;`,
+    `${source}\nthis._send = send;\nthis._getActiveTabHost = getActiveTabHost;`,
     sandbox,
     { filename: modPath }
   );
@@ -249,26 +249,6 @@ async function testGetActiveTabHostThrows() {
   } catch (err) { fail(name, err); }
 }
 
-// ─── Test 11: downloadJson() — creates anchor, clicks it, and removes it ─────
-
-async function testDownloadJsonCreatesAnchorAndClicks() {
-  const name = 'downloadJson(): creates an anchor, sets href+download, clicks and removes it';
-  try {
-    const sb = makeSandbox();
-    sb._downloadJson({ foo: 'bar' }, 'export.json');
-    const anchors = sb._appendedChildren;
-    assert.equal(anchors.length, 1, 'exactly one anchor appended to document.body');
-    const anchor = anchors[0];
-    assert.ok(anchor.href.startsWith('blob:'), 'anchor href must be a blob URL');
-    assert.equal(anchor.download, 'export.json', 'anchor download attribute must be the filename');
-    assert.equal(anchor.rel, 'noopener', 'anchor rel must be noopener');
-    assert.equal(anchor._clicked, true, 'anchor.click() must have been called');
-    assert.equal(sb._removedChildren.length, 1, 'anchor.remove() must have been called');
-    assert.equal(sb._createdObjectURLs.length, 1, 'URL.createObjectURL must have been called once');
-    pass(name);
-  } catch (err) { fail(name, err); }
-}
-
 // ─── runner ────────────────────────────────────────────────────────────────
 
 async function run() {
@@ -282,7 +262,6 @@ async function run() {
   await testGetActiveTabHostNoUrl();
   await testGetActiveTabHostNoTabs();
   await testGetActiveTabHostThrows();
-  await testDownloadJsonCreatesAnchorAndClicks();
   console.log('test_popup_api: ok');
   finished = true;
   process.exit(0);

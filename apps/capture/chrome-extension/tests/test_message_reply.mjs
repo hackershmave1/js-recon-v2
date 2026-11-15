@@ -12,7 +12,7 @@ assert.deepEqual(toWire({ success: false, status: 401, error: 'bad credentials' 
 // A handler that already speaks { ok } keeps its verdict; detail fields survive.
 assert.deepEqual(toWire({ ok: false, error: 'timeout' }), { error: 'timeout', ok: false });
 assert.deepEqual(toWire({ ok: true, status: 200, latencyMs: 12 }), { status: 200, latencyMs: 12, ok: true });
-// A plain data reply (getStatus / getFiles) is a success.
+// A plain data reply (getStatus) is a success.
 assert.deepEqual(toWire({ isCapturing: true, fileCount: 3 }), { isCapturing: true, fileCount: 3, ok: true });
 assert.deepEqual(toWire(undefined), { ok: true });
 // `ok` is written LAST: a handler's own `ok: true` can never override a `success: false`.

@@ -5,7 +5,7 @@ import {
   capturePhase, suggestScope, typedScope, scopeLabel, formatElapsed, continueOptions,
   defaultChoice, liveSubtitle, endedBanner, startErrorText, analyzeLabel,
   analyzeOutcome, progressStatus, startEngagement, engagementName,
-  findingsSummaryLine, OTHER_FINDINGS_HELP, newEngagementBody,
+  newEngagementBody,
   SECRET_HINTS_LABEL, SECRET_HINTS_HELP, secretHintBadge,
 } from '../src/popup/viewmodels/captureVm.js';
 
@@ -126,15 +126,6 @@ assert.deepEqual(startEngagement('eng-1', [], false), { projectId: null, wait: t
 assert.deepEqual(startEngagement('gone', projects, true), { projectId: null, wait: false }, 'a deleted engagement cannot block Start');
 assert.equal(engagementName('gone', projects), 'Another engagement');
 assert.equal(engagementName(null, projects), 'Solo · standalone');
-
-// --- the findings card headline names every part, and says what "other" is ---
-assert.equal(findingsSummaryLine({ total: 29, endpoints: 14, secrets: 3, other: 12 }), '29 findings: 14 endpoints · 3 secrets · 12 other');
-assert.equal(findingsSummaryLine({ total: 1, endpoints: 1 }), '1 finding: 1 endpoint');
-assert.equal(findingsSummaryLine({ total: 2, secrets: 1, internal_ips: 1 }), '2 findings: 1 secret · 1 IP');
-assert.equal(findingsSummaryLine({ total: 3, graphql: 3 }), '3 findings: 3 GraphQL');
-assert.equal(findingsSummaryLine({ total: 0 }), '0 findings');
-assert.equal(findingsSummaryLine(null), '0 findings');
-assert.match(OTHER_FINDINGS_HELP, /Parameters/);
 
 // --- an engagement made from the popup carries a name and nothing else (no scope of its own) ---
 assert.deepEqual(newEngagementBody('  Acme Q4 review '), { name: 'Acme Q4 review' });
