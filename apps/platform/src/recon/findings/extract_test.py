@@ -1974,3 +1974,49 @@ def test_review_wrapper_keys_decode_linearly_on_nested_computed_keys():
     start = time.perf_counter()
     extract(src)
     assert time.perf_counter() - start < 5.0
+
+
+# --- #230: jQuery reached through a bundler-minified receiver ---------------------------------- #
+# A webpack bundle imports jQuery as `a.A` / `o.A`, so the receiver text is not `$`. Those calls
+# used to be dropped unless the config carried a literal `method:` key; jQuery's own key is `type:`.
+
+
+@pytest.mark.parametrize("receiver", ["$", "jQuery", "a.A", "o.A", "this.http"])
+def test_ajax_config_is_a_jquery_sink_on_any_receiver(receiver):
+    ep = _only(f'{receiver}.ajax({{url:"/api/save", type:"POST", data:{{name:"n"}}}})')
+    assert (ep.kind, ep.method, ep.url) == ("jquery", "POST", "/api/save")
+    assert ("name", "body") in {(p.name, p.location) for p in ep.params}
+
+
+def test_ajax_on_aliased_receiver_without_a_verb_defaults_to_get():
+    ep = _only('a.A.ajax({url:"/api/items", data:{q:1}})')
+    assert (ep.kind, ep.method, ep.url) == ("jquery", "GET", "/api/items")
+    assert ("q", "query") in {(p.name, p.location) for p in ep.params}
+
+
+def test_ajax_on_aliased_receiver_with_method_key_is_recorded_once():
+    # Formerly recorded as kind "client" through the config-object branch; it must not now be
+    # recorded twice (once per route).
+    r = extract('a.A.ajax({method:"PUT", url:"/api/x"})')
+    assert [(e.kind, e.method, e.url) for e in r.endpoints] == [("jquery", "PUT", "/api/x")]
+
+
+def test_ajax_on_aliased_receiver_with_runtime_url_is_surfaced_not_dropped():
+    r = extract('o.A.ajax({url:this.urlValue, type:"post"})')
+    assert r.endpoints == []
+    assert [(u.kind, u.method) for u in r.unresolved] == [("jquery", "POST")]
+    assert r.unattributed == 1
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "x.ajax({foo:1})",  # an object with no url is not a request
+        'x.ajax("/api/x")',  # a bare string first argument is not the config form
+        "x.ajax()",
+        'x.ajaxSetup({url:"/api/x"})',  # a different method that merely starts with "ajax"
+    ],
+)
+def test_ajax_lookalikes_are_not_sinks(source):
+    r = extract(source)
+    assert r.endpoints == [] and r.unresolved == []

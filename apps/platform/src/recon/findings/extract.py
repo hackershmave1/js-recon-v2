@@ -631,6 +631,11 @@ def _dispatch_member(
         _record_nav_route(call, obj, nav_arg, result)
     elif prop == "open":  # ANY receiver's `.open(method, url)` is XHR, checked before instances
         _xhr_open(call, result, env)
+    elif prop == "ajax" and _is_ajax_config(call):
+        # `x.ajax({url, ...})` on ANY receiver is jQuery: a webpack bundle imports it under a
+        # minified name (`a.A`, `o.A`), so matching only `$`/`jQuery` dropped those calls (#230).
+        # Before the instance/config branches so `type:` (jQuery's own verb key) is read too.
+        _jquery(call, prop, result, env)
     elif obj == "axios":
         _axios_member(call, prop, result, env, base=env.default_base or "")
     elif obj in _JQUERY:
@@ -829,6 +834,19 @@ def _axios_from_config(
             headers=headers,
             mark=pairs.get("url"),
         )
+    )
+
+
+def _is_ajax_config(call: Node) -> bool:
+    """True when the call's first argument is a config object holding a `url` (a shorthand
+    `{url}` counts: still a request site, just unresolvable). A bare string or an object with no
+    `url` is not the jQuery config form, so lookalike `.ajax(...)` methods stay unrecorded."""
+    args = _args(call)
+    if not args or args[0].type != "object":
+        return False
+    return "url" in _object_pairs(args[0]) or any(
+        child.type == "shorthand_property_identifier" and _text_if_short(child) == "url"
+        for child in args[0].named_children
     )
 
 
