@@ -102,11 +102,11 @@ export function NewSiteBanner({ vm }) {
       </p>
       <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
         <button onClick={() => f.addSite(site)} disabled={!!f.busy} style={smallBtn(true)}>Add to scope</button>
-        <button onClick={() => f.endAndStartNew(site)} disabled={!!f.busy} style={smallBtn(false)}>End + start new</button>
+        <button onClick={() => f.dismissSite(site)} disabled={!!f.busy} title="Not part of this target: stop asking about it" style={smallBtn(false)}>Ignore this site</button>
       </div>
-      <button onClick={() => f.dismissSite(site)} disabled={!!f.busy} style={{
-        border: 'none', background: 'none', color: C.faint, cursor: 'pointer', fontSize: '10.5px', padding: '4px 0 0', textAlign: 'left'
-      }}>Not part of this target — don't ask again</button>
+      <button onClick={() => f.endAndStartNew(site)} disabled={!!f.busy} style={{
+        border: 'none', background: 'none', color: C.faint, cursor: 'pointer', fontSize: '10.5px', padding: '8px 0 0', textAlign: 'left'
+      }}>It's a different target: end this capture and start a new one</button>
     </Banner>
   );
 }
