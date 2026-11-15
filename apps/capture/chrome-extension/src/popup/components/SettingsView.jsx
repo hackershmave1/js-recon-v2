@@ -7,7 +7,7 @@ import { C, F, TAG_COLOR } from '../theme.js';
 import { Switch } from './ui.jsx';
 import {
   BackIcon, SearchIcon, LinkIcon, GlobeIcon, EyeOffIcon,
-  CloseIcon
+  PulseIcon, SpinnerIcon, CloseIcon
 } from '../icons.jsx';
 
 const inputStyle = {

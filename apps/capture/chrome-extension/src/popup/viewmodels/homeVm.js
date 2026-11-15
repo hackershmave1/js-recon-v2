@@ -49,7 +49,6 @@ export function buildHomeViewModel({
     toggles: [
       { key: 'muteNoise', label: 'Mute plugins & trackers', on: settings.muteNoise === true },
       { key: 'captureAuthContext', label: 'Capture auth context', on: settings.captureAuthContext !== false },
-      { key: 'exportIncludeContent', label: 'Include code in export', on: settings.exportIncludeContent === true },
     ],
     openSettings,
     toggleSetting,
