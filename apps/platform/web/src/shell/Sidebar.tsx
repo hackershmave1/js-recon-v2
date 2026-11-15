@@ -6,6 +6,7 @@ import { useRunDataOptional } from "../features/progress/runData";
 import { getSessionRuns } from "../api/apiClient";
 import type { SessionEngagementRef } from "../api/types";
 import { useTenant } from "../tenant/TenantContext";
+import { techStackHidden } from "./techVisibility";
 
 // The crawl target as a bare host for display ("http://recon-range.test/" ->
 // "recon-range.test"); a bare host or unparseable value is shown as-is, null stays null.
@@ -75,6 +76,9 @@ export const NAV_ITEMS: NavItem[] = [
 export function Sidebar({ mode, runId }: { mode: "run" | "sessions" | "settings"; runId?: string }) {
   const navigate = useNavigate();
   const inRun = mode === "run";
+  const run = useRunDataOptional();
+  // A run that finished without technology detection (extension captures) has nothing to show there.
+  const navItems = NAV_ITEMS.filter((item) => !(item.id === "tech" && techStackHidden(run?.technologies, run?.state)));
   return (
     <aside className="shell-side">
       <div className="shell-brand">
@@ -94,7 +98,7 @@ export function Sidebar({ mode, runId }: { mode: "run" | "sessions" | "settings"
 
       <nav className="shell-nav" aria-label="Analyze">
         <div className="shell-nav-label">ANALYZE</div>
-        {NAV_ITEMS.map((item) => {
+        {navItems.map((item) => {
           if (item.soon) {
             return (
               <div key={item.id} className="shell-nav-item is-soon" aria-disabled="true">
