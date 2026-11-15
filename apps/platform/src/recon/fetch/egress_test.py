@@ -351,3 +351,57 @@ def test_local_only_scope_entries_are_the_ones_the_dev_switch_unlocks():
         assert egress.is_local_only_scope_entry(local) is True, local
     for not_local in ["acme.io", "127.0.0.1", "10.0.0.1", "github.io", "https://localhost", ""]:
         assert egress.is_local_only_scope_entry(not_local) is False, not_local
+
+
+# #206: the host is declared but the PORT was never checked, so a declared host could be pointed
+# at a non-web service on the same machine (a public Redis, Elasticsearch, Docker API...).
+@pytest.mark.parametrize("port", [6379, 9200, 2375, 8080, 8443, 22])
+def test_validate_target_blocks_non_web_ports(monkeypatch, port):
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("93.184.216.34"))
+    with pytest.raises(EgressBlocked, match="port"):
+        egress.validate_target(f"http://acme.io:{port}/x.js", _SCOPE)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://acme.io/a.js",
+        "https://acme.io/a.js",
+        "http://acme.io:80/a.js",
+        "https://acme.io:443/a.js",
+        "http://acme.io:443/a.js",
+        "https://acme.io:80/a.js",
+    ],
+)
+def test_validate_target_allows_ports_80_and_443(monkeypatch, url):
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("93.184.216.34"))
+    assert egress.validate_target(url, _SCOPE).host == "acme.io"
+
+
+def test_validate_target_blocks_port_zero(monkeypatch):
+    # ":0" is falsy, so `parts.port or default` used to fall back to 80 while the URL still said :0.
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("93.184.216.34"))
+    with pytest.raises(EgressBlocked, match="port"):
+        egress.validate_target("http://acme.io:0/a.js", _SCOPE)
+
+
+def test_validate_target_port_check_runs_before_dns(monkeypatch):
+    # A blocked port must not even resolve the host.
+    def boom(*_a, **_k):
+        raise AssertionError("DNS must not be consulted for a blocked port")
+
+    monkeypatch.setattr(socket, "getaddrinfo", boom)
+    with pytest.raises(EgressBlocked, match="port"):
+        egress.validate_target("http://acme.io:6379/x.js", _SCOPE)
+
+
+def test_validate_target_dev_local_egress_keeps_any_port(monkeypatch):
+    # RECON_ALLOW_LOCAL_EGRESS is the dev-only switch for local test targets, which sit on
+    # arbitrary ports (a local site on :4173). Outside it, only 80 and 443.
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("93.184.216.34"))
+    assert (
+        egress.validate_target("http://acme.io:4173/a.js", _SCOPE, allow_local=True).host
+        == "acme.io"
+    )
+    with pytest.raises(EgressBlocked, match="port"):
+        egress.validate_target("http://acme.io:4173/a.js", _SCOPE, allow_local=False)

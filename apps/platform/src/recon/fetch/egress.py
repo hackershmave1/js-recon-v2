@@ -3,8 +3,10 @@
 An outbound fetch may reach a URL only if:
   1. its scheme is http/https,
   2. its host is one the session explicitly declared in scope (REQ-P2: egress
-     scope comes from ``session.scope_hosts``, never from crawled content), and
-  3. every IP the host resolves to is globally routable — so a hostile target
+     scope comes from ``session.scope_hosts``, never from crawled content),
+  3. its port is 80 or 443 (a declared host must not be pointed at a non-web
+     service on the same machine: Redis, Elasticsearch, the Docker API...), and
+  4. every IP the host resolves to is globally routable — so a hostile target
      can't point the fetcher at loopback/private/link-local/cloud-metadata
      addresses and turn it into an SSRF pivot into our own infrastructure.
 
@@ -23,6 +25,9 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
+# The only ports an egress fetch may use. The dev-only ``allow_local`` switch lifts this (a local
+# test target sits on an arbitrary port); production never does.
+_ALLOWED_PORTS = frozenset({80, 443})
 
 # One DNS label: 1-63 chars of letters/digits/hyphen, not leading/trailing hyphen
 # (LDH rule). An allowlist, not a denylist — so control chars, whitespace, and any
@@ -280,7 +285,8 @@ def validate_target(
         scheme = parts.scheme.lower()
         username, password = parts.username, parts.password
         host = parts.hostname  # excludes port + userinfo; strips IPv6 brackets; lowercased
-        port = parts.port or (443 if scheme == "https" else 80)
+        # `is not None`, not `or`: an explicit ":0" is falsy and must not fall back to 80.
+        port = parts.port if parts.port is not None else (443 if scheme == "https" else 80)
     except ValueError as exc:
         raise EgressBlocked(f"malformed URL: {exc}") from exc
     if scheme not in _ALLOWED_SCHEMES:
@@ -293,6 +299,9 @@ def validate_target(
         raise EgressBlocked("missing host in URL")
     if not host_in_scope(host, scope_hosts, allow_local=allow_local):
         raise EgressBlocked(f"host not in engagement scope: {host}")
+    if not allow_local and port not in _ALLOWED_PORTS:
+        # Before DNS: a blocked port never even resolves the host.
+        raise EgressBlocked(f"port not allowed: {port}")
 
     try:
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
