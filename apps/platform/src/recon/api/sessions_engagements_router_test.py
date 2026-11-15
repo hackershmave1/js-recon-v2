@@ -378,3 +378,26 @@ def test_session_carries_its_engagement_id(tenant, redis):
     assert r.json()["engagement_id"] == engagement_id
     card = client.get("/sessions", headers=_hdr(tenant)).json()["sessions"][0]
     assert card["engagement_id"] == engagement_id
+
+
+def test_session_runs_names_the_sessions_engagement(tenant, redis):
+    client = _client()
+    engagement_id = client.post(
+        "/engagements", headers=_hdr(tenant), json={"name": "Acme Q4 review"}
+    ).json()["engagement_id"]
+    bound = client.post(
+        "/sessions",
+        headers=_hdr(tenant),
+        json={
+            "scope_hosts": ["acme.io"],
+            "authorized_by": "tester",
+            "engagement_id": engagement_id,
+        },
+    ).json()["session_id"]
+    assert client.get(f"/sessions/{bound}/runs", headers=_hdr(tenant)).json()["engagement"] == {
+        "engagement_id": engagement_id,
+        "name": "Acme Q4 review",
+    }
+    # A standalone session has none: the run page says so instead of guessing.
+    solo = _new_session(client, tenant)
+    assert client.get(f"/sessions/{solo}/runs", headers=_hdr(tenant)).json()["engagement"] is None

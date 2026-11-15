@@ -1,7 +1,11 @@
+import { useEffect, useState } from "react";
 import { NavLink, useNavigate } from "react-router";
 import { Icon } from "./icons";
 import { EngagementSwitcher } from "../features/sessions/EngagementSwitcher";
 import { useRunDataOptional } from "../features/progress/runData";
+import { getSessionRuns } from "../api/apiClient";
+import type { SessionEngagementRef } from "../api/types";
+import { useTenant } from "../tenant/TenantContext";
 
 // The crawl target as a bare host for display ("http://recon-range.test/" ->
 // "recon-range.test"); a bare host or unparseable value is shown as-is, null stays null.
@@ -10,18 +14,42 @@ function hostOf(raw: string | null | undefined): string | null {
   try { return new URL(raw).host || raw; } catch { return raw; }
 }
 
-// The persistent "what am I looking at" card: the run's crawl target (read from the
-// assets manifest the run stream already holds) above the run id. Only mounted in run
-// mode, so the optional hook is non-null here; an upload run has no crawl domain and
-// falls back to the generic label.
+// What the card under ENGAGEMENT says on a run page. The heading promises an engagement, so the
+// first line IS the run's engagement: its name, "No engagement" for a standalone session, and
+// nothing claimed while that is still unknown (not loaded, or a server that doesn't say). The
+// second line is the "what am I looking at": the run's target and its short id.
+export function runCardLines({ engagement, domain, runId }: {
+  engagement: SessionEngagementRef | null | undefined; domain: string | null; runId?: string;
+}): { name: string; detail: string } {
+  const name = engagement ? engagement.name : engagement === null ? "No engagement" : "—";
+  const detail = [domain, runId ? runId.slice(0, 8) : null].filter(Boolean).join(" · ") || "Current run";
+  return { name, detail };
+}
+
+// The persistent card on a run page: the engagement the run's session belongs to, above the
+// run's crawl target (from the assets manifest the run stream already holds) and run id. Only
+// mounted in run mode, so the optional hook is non-null here.
 function CurrentRunCard({ runId }: { runId?: string }) {
-  const domain = hostOf(useRunDataOptional()?.assets?.domain);
+  const { tenantId } = useTenant();
+  const run = useRunDataOptional();
+  const sessionId = run?.sessionId ?? null;
+  const [engagement, setEngagement] = useState<SessionEngagementRef | null | undefined>(undefined);
+  useEffect(() => {
+    setEngagement(undefined);
+    if (!tenantId || !sessionId) return;
+    let live = true;
+    getSessionRuns(tenantId, sessionId)
+      .then((r) => { if (live) setEngagement(r.engagement); })
+      .catch(() => { /* unknown stays unknown: never shown as "No engagement" */ });
+    return () => { live = false; };
+  }, [tenantId, sessionId]);
+  const { name, detail } = runCardLines({ engagement, domain: hostOf(run?.assets?.domain), runId });
   return (
     <div className="shell-eng-card">
       <span className="shell-eng-mark"><Icon name="folder" size={15} /></span>
       <span className="shell-eng-body">
-        <span className="shell-eng-name" title={domain ?? undefined}>{domain ?? "Current run"}</span>
-        <span className="shell-eng-id" title={runId}>{runId ? runId.slice(0, 8) : "—"}</span>
+        <span className="shell-eng-name" title={name}>{name}</span>
+        <span className="shell-eng-id" title={runId}>{detail}</span>
       </span>
     </div>
   );

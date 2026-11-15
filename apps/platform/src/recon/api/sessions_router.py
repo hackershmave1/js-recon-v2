@@ -85,8 +85,13 @@ def list_session_runs(session_id: str, tenant_id: str = Depends(get_tenant_id)) 
     runs = service.list_runs_for_session(tenant_id, session_id)
     if runs is None:
         raise HTTPException(status_code=404, detail="session not found")
+    engagement = service.engagement_of_session(tenant_id, session_id)
     return {
         "session_id": session_id,
+        # The engagement this session was created in (null = standalone), so a run page can name it.
+        "engagement": {"engagement_id": engagement[0], "name": engagement[1]}
+        if engagement
+        else None,
         "count": len(runs),
         "runs": [_run_ref_dict(run) for run in runs],
     }
