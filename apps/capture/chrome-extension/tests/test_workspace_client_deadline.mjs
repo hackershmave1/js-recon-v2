@@ -43,10 +43,7 @@ const calls = {
   analyzeSession: () => client.analyzeSession(),
   getAnalysisProgress: () => client.getAnalysisProgress(),
   listProjects: () => client.listProjects(),
-  getSessionFindingsSummary: () => client.getSessionFindingsSummary('s1'),
   createProject: () => client.createProject({ name: 'p' }),
-  // (saveLlmConfig reads no body on success, so it cannot stall there.)
-  testLlmConfig: () => client.testLlmConfig(),
 };
 for (const [name, call] of Object.entries(calls)) {
   const result = await guard(call(), name);

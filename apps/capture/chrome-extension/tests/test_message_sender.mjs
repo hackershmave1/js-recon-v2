@@ -25,7 +25,7 @@ const ourIdOtherExtensionUrl = { id: ID, url: `chrome-extension://${OTHER}/popup
 const otherExtensionInTab = { id: OTHER, url: `chrome-extension://${OTHER}/x.html`, tab: { id: 9 } };
 
 // Popup commands: only from the extension's own pages.
-for (const action of ['updateSettings', 'getExportData', 'getStatus', 'login', 'captureStart']) {
+for (const action of ['updateSettings', 'getStatus', 'login', 'captureStart']) {
   assert.equal(isAllowedSender(action, popup, runtime), true, `${action} from popup`);
   assert.equal(isAllowedSender(action, popupInTab, runtime), true, `${action} from popup opened in a tab`);
   assert.equal(isAllowedSender(action, page, runtime), false, `${action} forged by a web page`);

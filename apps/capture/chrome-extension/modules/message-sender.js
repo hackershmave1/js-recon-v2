@@ -4,7 +4,7 @@
 // messages from a content script might have been crafted by an attacker"
 // (developer.chrome.com/docs/extensions/develop/concepts/messaging). Without this check a
 // compromised page could send `updateSettings` (point uploads + the Bearer token at its own
-// server) or `getExportData` (read every captured file and its auth headers). Storage, the other
+// server) or `captureStart` (start capturing under its own scope). Storage, the other
 // way to reach that state, is closed in modules/storage-access.js.
 
 // Notices the content script sends from a page. Every other action is a popup command.

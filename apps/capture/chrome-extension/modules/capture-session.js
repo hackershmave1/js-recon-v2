@@ -100,15 +100,8 @@ export class CaptureSession {
     if (dropOutbox) await this.uploader.clearOutbox();
   }
 
-  // "Clear files": empty the captured state but keep the session id and binding.
-  async clearCaptured() {
-    this.processingQueue = [];
-    this._clear();
-  }
-
-  // A lean, content-free projection of one captured file — just what the popup counter and the
-  // recent-captures feed render. Rehydrated objects carry dependencyCount (not the full
-  // dependencies array) to stay small; getFiles reads either shape.
+  // A lean, content-free projection of one captured file — just what the popup counter renders. Rehydrated objects carry dependencyCount (not the full
+  // dependencies array) to stay small.
   projectCapturedFile(f) {
     return {
       url: f.url,

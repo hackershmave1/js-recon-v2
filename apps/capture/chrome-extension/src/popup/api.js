@@ -11,7 +11,7 @@ const NO_REPLY_MS = { captureStart: 300000 };
 const DEFAULT_NO_REPLY_MS = 60000;
 // Reads the popup already repeats on its 2 s poll: an unanswered one needs no re-sync of its own
 // (re-syncing would send more reads, which would time out too — a feedback loop).
-const POLLED_READS = new Set(['getStatus', 'getFiles', 'getAnalysisProgress', 'listProjects', 'getSessionFindingsSummary']);
+const POLLED_READS = new Set(['getStatus', 'getAnalysisProgress', 'listProjects']);
 // The worker took the message and died before answering (MV3 teardown, a crash): Chrome closes
 // the channel. Unlike "Receiving end does not exist" (never delivered), the action may have run.
 const CHANNEL_CLOSED = /message (port|channel) closed/i;
@@ -51,7 +51,6 @@ export function send(action, extra = {}) {
 }
 
 export const getStatus = () => send('getStatus');
-export const getFiles = () => send('getFiles');
 // Capture lifecycle (the worker owns the capture; getStatus carries `capture` / `lastEnded`).
 // Sessions whose scope holds `scope`, for "Continue": { ok, sessions: [...] }.
 export const captureLookup = (scope) => send('captureLookup', { scope });
@@ -66,8 +65,6 @@ export const captureAddScope = (host) => send('captureAddScope', { host });
 export const captureDismissSite = (site) => send('captureDismissSite', { site });
 // "Done" on the "Capture ended" banner.
 export const captureDismissEnded = () => send('captureDismissEnded');
-export const getExportData = (opts = {}) => send('getExportData', opts);
-export const clearFiles = () => send('clearFiles');
 export const testConnection = () => send('testConnection');
 export const updateSettings = (settings) => send('updateSettings', { settings });
 // Central login: authenticate to the workspace so captures route to the operator's tenant.
@@ -81,10 +78,7 @@ export const createProject = (project) => send('createProject', { project });
 export const analyzeSession = () => send('analyzeSession');
 export const getAnalysisProgress = () => send('getAnalysisProgress');
 // D46: fetch the findings summary for the session's latest completed run (popup card).
-export const getSessionFindingsSummary = (sessionId) => send('getSessionFindingsSummary', { sessionId });
 // LLM provider config — save encrypts the key on the platform server.
-export const saveLlmConfig = (config) => send('saveLlmConfig', { config });
-export const testLlmConfig = () => send('testLlmConfig');
 
 // Active tab hostname for "Use this site as scope". Empty when the tab is not a website (a new
 // tab, chrome://, a local file), so the one-click scope is offered only where it means something.
@@ -105,18 +99,3 @@ export function openTab(url) {
 export const extensionVersion = () => {
   try { return chrome.runtime.getManifest().version; } catch (e) { return ''; }
 };
-
-// Trigger a JSON download from the popup (object URL + anchor click).
-export function downloadJson(data, filename) {
-  const json = JSON.stringify(data, null, 2);
-  const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.rel = 'noopener';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
-}

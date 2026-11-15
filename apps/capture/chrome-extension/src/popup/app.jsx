@@ -15,8 +15,6 @@ import { analyzeOutcome, progressStatus, newEngagementBody } from './viewmodels/
 
 const IDLE_ANALYSIS = { status: 'idle', counts: null, files: [] };
 
-const NOISE = new Set(['lib', 'cms', 'tracker']);
-
 function basename(url) {
   try {
     const u = new URL(url);
@@ -25,15 +23,6 @@ function basename(url) {
   } catch (e) {
     return url;
   }
-}
-
-function fileMeta(f) {
-  const kb = Math.max(1, Math.round((f.size || 0) / 1024));
-  const parts = [`${kb} KB`];
-  if (f.hasSourceMap) parts.push('map');
-  else if (f.sourceMapFetchStatus && !['not_detected', 'disabled'].includes(f.sourceMapFetchStatus)) parts.push(`map ${f.sourceMapFetchStatus}`);
-  if (f.isMinified) parts.push('min');
-  return parts.join(' · ');
 }
 
 function ruleTag(pattern) {
@@ -49,7 +38,6 @@ export function App() {
   // When `status` was read, and a 1 s clock: the capture timer ticks between the 2 s status polls.
   const [statusAt, setStatusAt] = useState(Date.now());
   const [now, setNow] = useState(Date.now());
-  const [files, setFiles] = useState([]);
   const [settings, setSettings] = useState(null);
   const [activeHost, setActiveHost] = useState('');
   const [toast, setToast] = useState(null);
@@ -65,7 +53,6 @@ export function App() {
   // which drives the captures feed's ingested→analyzing→analyzed lifecycle.
   const [analysis, setAnalysis] = useState(IDLE_ANALYSIS);
   // D46: findings summary card — null until fetched after analysis completes.
-  const [findingsSummary, setFindingsSummary] = useState(null);
   // The engagement list (cached in the worker) and the one picked for a NEW session (null => Solo).
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useState(null);
@@ -74,11 +61,6 @@ export function App() {
   const toastTimer = useRef(null);
   const seededProjectRef = useRef(false);
   // LLM provider config state (threat-model generation)
-  const [llmApiKeyDraft, setLlmApiKeyDraft] = useState('');
-  const [llmSaving, setLlmSaving] = useState(false);
-  const [llmTesting, setLlmTesting] = useState(false);
-  const [llmStatusMsg, setLlmStatusMsg] = useState('');
-  const [llmStatusOk, setLlmStatusOk] = useState(false);
 
   // Local settings is the edit source of truth once loaded; polling refreshes only
   // live status/files so it never clobbers an in-progress text edit. `settings` is null until
@@ -95,24 +77,10 @@ export function App() {
     if (state !== 'idle') setAnalysis({ status: state, counts: res.job.counts, files: res.job.files || [] });
   }
 
-  // The findings card belongs to THIS capture. The session's "latest finished run" can still be an
-  // earlier capture while this one's pass is correlating, so a summary for another run is ignored
-  // (the watch poll asks again).
-  function loadFindingsSummary() {
-    const cap = status.capture;
-    if (!cap) return;
-    api.getSessionFindingsSummary(cap.sessionId).then((res) => {
-      if (res?.ok && res.summary?.status === 'complete' && res.summary.run_id === cap.runId) {
-        setFindingsSummary(res.summary);
-      }
-    });
-  }
-
   async function refresh() {
-    const [st, fl] = await Promise.all([api.getStatus(), api.getFiles()]);
+    const st = await api.getStatus();
     if (st && typeof st.isCapturing === 'boolean') { setStatus(st); setStatusAt(Date.now()); }
     if (st?.settings) adoptSettings(st.settings);
-    if (fl?.files) setFiles(fl.files);
   }
 
   useEffect(() => {
@@ -143,7 +111,6 @@ export function App() {
   const captureRunId = status.capture?.runId || null;
   useEffect(() => {
     setAnalysis(IDLE_ANALYSIS);
-    setFindingsSummary(null);
     if (captureRunId) api.getAnalysisProgress().then(adoptAnalysisJob);
   }, [captureRunId]);
 
@@ -172,7 +139,6 @@ export function App() {
       const state = progressStatus(counts);
       if (watching) {
         if (state === 'running') setAnalysis({ status: 'running', updating: true, counts, files: res.job.files || [] });
-        else if (!findingsSummary) loadFindingsSummary();  // not ready at "done" (still correlating)
         return;
       }
       // Counts partition total, so nothing queued/analyzing => settled; a capture with no
@@ -185,13 +151,6 @@ export function App() {
     poll();
     const id = setInterval(poll, watching ? 5000 : 1500);
     return () => { alive = false; clearInterval(id); };
-  }, [analysis.status, captureRunId, !!findingsSummary]);
-
-  // D46: fetch the findings summary once analysis settles to 'done' and a session id is known.
-  // Runs whenever analysis.status transitions to 'done'; clears on a new session (status changes
-  // back to 'idle'). A failed fetch is silent — the card simply stays hidden.
-  useEffect(() => {
-    if (analysis.status === 'done') loadFindingsSummary();
   }, [analysis.status, captureRunId]);
 
   // toast holds { msg, tone }; tone ∈ ok|warn|error drives colour/icon (ui.jsx). Failures linger
@@ -211,7 +170,7 @@ export function App() {
   const flow = useCaptureFlow({
     status, ready: !!settings, activeHost, projects, projectsLoaded, projectId, showToast, refresh,
     onSessionExpired: () => setForceLogin(true),
-    onCaptureStarted: () => { setAnalysis(IDLE_ANALYSIS); setFindingsSummary(null); },
+    onCaptureStarted: () => { setAnalysis(IDLE_ANALYSIS); },
   });
 
   // ---- actions ----
@@ -258,59 +217,6 @@ export function App() {
   }
 
   function toggleSetting(key) { patchSettings({ [key]: !(settings?.[key]) }); }
-
-  async function exportNow() {
-    const res = await api.getExportData({ includeContent: settings?.exportIncludeContent === true });
-    if (res?.ok) {
-      api.downloadJson(res.exportData, res.filename || 'js-extraction.json');
-      showToast(settings?.exportIncludeContent ? 'Export downloaded · with code' : 'Export downloaded');
-    } else if (!res?.unknownOutcome) {
-      showToast(res?.error ? 'Export failed' : 'Nothing to export', res?.error ? 'error' : 'warn');
-    }
-  }
-
-  // LLM provider config — save encrypts the key server-side, never stores it locally.
-  async function saveLlmConfig() {
-    if (!llmApiKeyDraft.trim()) { setLlmStatusMsg('Paste an API key first'); setLlmStatusOk(false); return; }
-    setLlmSaving(true); setLlmStatusMsg(''); setLlmStatusOk(false);
-    const res = await api.saveLlmConfig({
-      provider: settings?.llmProvider || 'anthropic',
-      model: settings?.llmModel || 'claude-opus-4-7',
-      apiKey: llmApiKeyDraft.trim(),
-    });
-    setLlmSaving(false);
-    if (res?.ok) {
-      patchSettings({ llmConfigured: true });
-      setLlmApiKeyDraft('');
-      setLlmStatusMsg('Saved · key encrypted on server');
-      setLlmStatusOk(true);
-    } else {
-      setLlmStatusMsg(api.replyError(res, 'Save failed'));
-      setLlmStatusOk(false);
-    }
-  }
-
-  async function testLlmConfig() {
-    setLlmTesting(true); setLlmStatusMsg(''); setLlmStatusOk(false);
-    const res = await api.testLlmConfig();
-    setLlmTesting(false);
-    if (res?.ok) {
-      setLlmStatusMsg(`Connected · ${res.provider} / ${res.model}`);
-      setLlmStatusOk(true);
-    } else {
-      setLlmStatusMsg(api.replyError(res, 'Test failed'));
-      setLlmStatusOk(false);
-    }
-  }
-
-  // Reachable "clear captures" (D46): the worker's clearFiles handler existed but was wired to no
-  // UI. Drops the captured set for the current session and resets the analysis feed.
-  async function clearCaptures() {
-    await api.clearFiles();
-    setAnalysis(IDLE_ANALYSIS);
-    showToast('Captures cleared');
-    refresh();
-  }
 
   // Analyze what has arrived so far. It never ends the capture: files that land later join the
   // same capture and the platform re-analyzes them on its own. The polling effect tracks the pass.
@@ -405,34 +311,6 @@ export function App() {
     );
   }
 
-  // ---- view-models ----
-  // Per-file analysis status (by URL) → the captures feed's lifecycle token.
-  // The platform keeps a re-captured url's other versions as `url#sha256=…`; the popup lists
-  // only the newest copy per url, so key by the bare url (a later version's status wins).
-  const analysisByUrl = new Map((analysis.files || []).map((f) => [f.url.split('#sha256=')[0], f.status]));
-  const LIFECYCLE = { queued: 'ingested', analyzing: 'analyzing', completed: 'analyzed', failed: 'analysis failed', cancelled: 'ingested' };
-  const allCaptures = files.map((f, i) => {
-    const cls = f.classification || 'app';
-    const aStatus = analysisByUrl.get(f.url);
-    const lifecycle = aStatus ? (LIFECYCLE[aStatus] || 'ingested') : 'ingested';
-    return {
-      key: f.url || i,
-      name: basename(f.url),
-      meta: `${fileMeta(f)} · ${lifecycle}`,
-      classification: cls,
-      secretCount: f.secretCount || 0,
-      isThirdParty: !!f.isThirdParty,
-      analyzing: aStatus === 'analyzing',
-      dot: { app: C.lime, lib: C.blue, cms: C.purple, tracker: C.dim }[cls] || C.lime,
-      _noise: NOISE.has(cls)
-    };
-  });
-  const muteNoise = settings.muteNoise === true;
-  const muteThirdParty = settings.outOfScopeMode === 'mute';
-  const isHidden = (c) => (muteNoise && c._noise) || (muteThirdParty && c.isThirdParty);
-  const mutedCount = allCaptures.filter(isHidden).length;
-  const captures = allCaptures.filter((c) => !isHidden(c)).slice().reverse();
-
   // The engagement the current session is ACTUALLY bound to (worker getStatus), reconciled
   // against the fetched list so a deleted / different-tenant id renders as Solo, not a phantom.
 
@@ -475,15 +353,12 @@ export function App() {
   const homeVm = buildHomeViewModel({
     status, elapsedMs, delivery: deliveryVm, health, connectionLabel,
     flow,
-    captures, mutedCount,
     analysis, canAnalyze: (status.fileCount || 0) > 0,
-    findingsSummary,
     projects, projectId,
     settings,
     reauth: () => setForceLogin(true),
     openSettings: () => setView('settings'),
-    showAllCaptures: () => patchSettings({ muteNoise: false }),
-    toggleSetting, exportNow, openWorkspace, analyzeNow,
+    toggleSetting, openWorkspace, analyzeNow,
     selectProject, createProject,
   });
 
@@ -493,10 +368,6 @@ export function App() {
     settings, status,
     signOut, patchSettings,
     newRule, setNewRule, addRule, removeRule,
-    clearCaptures,
-    saveLlmConfig, testLlmConfig,
-    llmApiKeyDraft, setLlmApiKeyDraft,
-    llmSaving, llmTesting, llmStatusMsg, llmStatusOk,
     version: api.extensionVersion(),
   });
 

@@ -52,7 +52,7 @@ const notify = bg.slice(bg.indexOf('  async notifyExpiredOncePerToken() {'), bg.
 assert.match(notify, /if \(authNotifiedExp === exp\) return;[\s\S]*this\.handleAuthExpired\('expired'\);/, 'one notification per token across respawns');
 const login = bg.slice(bg.indexOf('  async login('), bg.indexOf('  async logout('));
 assert.match(login, /localExpiryUntrusted: authMarker\(result\.token\)\.authExpired/, 'a token expired on arrival means the clock is skewed: stop trusting the local read');
-const projects = bg.slice(bg.indexOf('  async listProjects(sendResponse) {'), bg.indexOf('  getExportData('));
+const projects = bg.slice(bg.indexOf('  async listProjects(sendResponse) {'), bg.indexOf('const extractor = new JSExtractor'));
 assert.match(projects, /const tokenAtSend = this\.settings\?\.authToken;/);
 assert.match(projects, /authRejected: status === 401 && !!tokenAtSend && this\.settings\?\.authToken === tokenAtSend/,
   'only a 401 for the token still held (a 403 is a proxy, not our auth)');

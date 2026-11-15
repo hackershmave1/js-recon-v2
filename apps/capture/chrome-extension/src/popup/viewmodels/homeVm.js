@@ -8,17 +8,15 @@ export function buildHomeViewModel({
   // the capture flow (useCaptureFlow): phase, scope draft, Continue lookup, and its actions
   flow,
   // captures feed (analysisByUrl is pre-baked into captures by the caller)
-  captures, mutedCount,
   // analysis
   analysis, canAnalyze,
   // D46: findings summary card — null until analysis is done and summary loaded
-  findingsSummary,
   // engagement picker (a NEW session's engagement; locked once a capture runs)
   projects, projectId,
   // settings slices the vm needs
   settings,
   // actions
-  reauth, openSettings, showAllCaptures, toggleSetting, exportNow, openWorkspace, analyzeNow,
+  reauth, openSettings, toggleSetting, openWorkspace, analyzeNow,
   selectProject, createProject,
 }) {
   const capture = status.capture || null;
@@ -45,21 +43,15 @@ export function buildHomeViewModel({
     createProject,
     // secretHints: the extension's own pre-analysis pattern count, not the platform's findings.
     stats: { js: files, maps: status.mapsCount || 0, secretHints: status.secretCount || 0 },
-    captures,
-    mutedCount,
     analysis,
     analyzeNow,
     canAnalyze,
-    findingsSummary: findingsSummary || null,
     toggles: [
       { key: 'muteNoise', label: 'Mute plugins & trackers', on: settings.muteNoise === true },
       { key: 'captureAuthContext', label: 'Capture auth context', on: settings.captureAuthContext !== false },
-      { key: 'exportIncludeContent', label: 'Include code in export', on: settings.exportIncludeContent === true },
     ],
     openSettings,
-    showAllCaptures,
     toggleSetting,
-    exportNow,
     openWorkspace,
   };
 }

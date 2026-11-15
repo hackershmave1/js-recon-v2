@@ -7,10 +7,6 @@ export function buildSettingsViewModel({
   signOut,
   patchSettings,
   newRule, setNewRule, addRule, removeRule,
-  clearCaptures,
-  saveLlmConfig, testLlmConfig,
-  llmApiKeyDraft, setLlmApiKeyDraft,
-  llmSaving, llmTesting, llmStatusMsg, llmStatusOk,
   version,
 }) {
   return {
@@ -40,22 +36,7 @@ export function buildSettingsViewModel({
     newRule,
     setNewRule,
     addRule,
-    clearCaptures,
-    capturedCount: status.fileCount || 0,
     // LLM provider config
-    llmProvider: settings.llmProvider || 'anthropic',
-    setLlmProvider: (v) => patchSettings({ llmProvider: v }),
-    llmModel: settings.llmModel || 'claude-opus-4-7',
-    setLlmModel: (v) => patchSettings({ llmModel: v }),
-    llmConfigured: settings.llmConfigured === true,
-    llmApiKeyDraft,
-    setLlmApiKeyDraft,
-    saveLlmConfig,
-    testLlmConfig,
-    llmSaving,
-    llmTesting,
-    llmStatusMsg,
-    llmStatusOk,
     version,
   };
 }
