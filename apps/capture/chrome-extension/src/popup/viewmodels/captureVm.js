@@ -136,6 +136,29 @@ export function startEngagement(projectId, projects, projectsLoaded) {
   return { projectId: null, wait: !projectsLoaded };
 }
 
+// The findings card's headline: "29 findings: 14 endpoints · 3 secrets · 12 other". "Other" is what
+// the platform does not headline (parameters, suspected calls, page routes, postMessage and storage
+// signals), so it says so in its tooltip instead of leaving a bare, unexplained number.
+export const OTHER_FINDINGS_HELP = 'Parameters, suspected calls, page routes and other signals. Open the workspace for the full list.';
+export function findingsSummaryLine(counts) {
+  const c = counts || {};
+  const parts = [];
+  const add = (n, singular, plural) => { if (n > 0) parts.push(`${n} ${n === 1 ? singular : plural}`); };
+  add(c.endpoints, 'endpoint', 'endpoints');
+  add(c.secrets, 'secret', 'secrets');
+  add(c.internal_ips, 'IP', 'IPs');
+  if (c.graphql > 0) parts.push(`${c.graphql} GraphQL`);
+  if (c.other > 0) parts.push(`${c.other} other`);
+  const total = c.total || 0;
+  return `${total} finding${total === 1 ? '' : 's'}${parts.length ? ': ' + parts.join(' · ') : ''}`;
+}
+
+// The body for creating an engagement from the popup. A name only: an engagement has no scope of
+// its own (the scope belongs to the session), so none is sent along with it.
+export function newEngagementBody(name) {
+  return { name: String(name || '').trim() };
+}
+
 export function analyzeLabel(analysis, scripts) {
   const a = analysis || { status: 'idle' };
   const c = a.counts || {};

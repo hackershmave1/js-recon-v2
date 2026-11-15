@@ -11,7 +11,7 @@ import { deriveDelivery } from '../../modules/delivery-health.js';
 import { buildHomeViewModel } from './viewmodels/homeVm.js';
 import { buildSettingsViewModel } from './viewmodels/settingsVm.js';
 import { useCaptureFlow } from './useCaptureFlow.js';
-import { analyzeOutcome, progressStatus } from './viewmodels/captureVm.js';
+import { analyzeOutcome, progressStatus, newEngagementBody } from './viewmodels/captureVm.js';
 
 const IDLE_ANALYSIS = { status: 'idle', counts: null, files: [] };
 
@@ -53,7 +53,8 @@ export function App() {
   const [settings, setSettings] = useState(null);
   const [activeHost, setActiveHost] = useState('');
   const [toast, setToast] = useState(null);
-  const [connState, setConnState] = useState('ok');
+  // 'idle' until a test or a sign-in says otherwise: "Connected" is a result, not a starting value.
+  const [connState, setConnState] = useState('idle');
   const [latency, setLatency] = useState('');
   // Force the sign-in view while a (now-expired) token is still held — the re-auth path for a
   // 401/403 upload pause (DEBT D41). Cleared on a successful sign-in. A same-tenant re-login
@@ -231,6 +232,7 @@ export function App() {
       setProjectId(null);
       flow.clearScope();  // a scope chosen under the previous sign-in is not this one's
       api.listProjects().then((r) => { if (r && Array.isArray(r.projects)) { setProjects(r.projects); setProjectsLoaded(true); } });
+      setConnState('ok');  // the workspace just answered a sign-in
       setView('home');
       setForceLogin(false);   // leave the re-auth view once signed back in (D41)
       // The polled status (authExpired, the uploader's auth pause) would hold the sign-in gate and
@@ -449,19 +451,17 @@ export function App() {
 
   // Pre-bind actions that need closure access before passing to viewmodel factories.
   const selectProject = (id) => { setProjectId(id || null); };
-  const createProject = async (name, rootDomains) => {
-    const cleanName = String(name || '').trim();
-    if (!cleanName) { showToast('Project name required', 'warn'); return { ok: false }; }
-    const res = await api.createProject({
-      name: cleanName,
-      defaults: { scope: { rootDomains: String(rootDomains || '').split(/[\s,]+/).filter(Boolean) } }
-    });
+  // The extension's "project" is the platform's engagement; the popup only ever says engagement.
+  const createProject = async (name) => {
+    const body = newEngagementBody(name);
+    if (!body.name) { showToast('Engagement name required', 'warn'); return { ok: false }; }
+    const res = await api.createProject(body);
     if (res?.ok && res.project) {
       setProjects((prev) => [res.project, ...prev]);
       setProjectId(res.project.id);
-      showToast(`Project created · ${res.project.name}`);
+      showToast(`Engagement created · ${res.project.name}`);
     } else {
-      showToast(res?.unknownOutcome ? api.replyError(res) : (res?.error ? `Create failed: ${res.error}` : 'Could not create project'), res?.unknownOutcome ? 'warn' : 'error');
+      showToast(res?.unknownOutcome ? api.replyError(res) : (res?.error ? `Create failed: ${res.error}` : 'Could not create the engagement'), res?.unknownOutcome ? 'warn' : 'error');
     }
     return res;
   };

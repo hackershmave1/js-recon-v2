@@ -14,6 +14,7 @@ const inputStyle = {
 };
 
 const CONN = {
+  idle: { label: 'Not tested', color: C.faint, pulse: false },
   ok: { label: 'Connected', color: C.lime, pulse: true },
   testing: { label: 'Testing…', color: C.amber, pulse: false },
   fail: { label: 'Unreachable', color: C.pink, pulse: false }
@@ -28,7 +29,7 @@ export function LoginView({ vm }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const conn = CONN[vm.connState] || CONN.ok;
+  const conn = CONN[vm.connState] || CONN.idle;
 
   const submit = async () => {
     if (!username.trim() || !password || busy) return;
@@ -133,7 +134,7 @@ export function LoginView({ vm }) {
           <div style={{ fontSize: '10px', color: C.faint, fontWeight: 700, letterSpacing: '0.9px', marginBottom: '11px' }}>HOW IT WORKS</div>
           {[
             ['1', 'Sign in', 'Connect to your workspace so captures route to your tenant.'],
-            ['2', 'Set a scope', 'Pick an engagement, or type the target’s root domain.'],
+            ['2', 'Set a scope', 'Use the current site, or type the target’s domain. An engagement is optional.'],
             ['3', 'Browse the target', 'In-scope JavaScript is captured automatically as you go.']
           ].map(([n, title, body]) => (
             <div key={n} style={{ display: 'flex', gap: '10px', marginBottom: n === '3' ? 0 : '11px' }}>

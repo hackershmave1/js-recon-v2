@@ -109,13 +109,14 @@ function AccountSection({ vm }) {
 }
 
 const CONN = {
+  idle: { label: 'Not tested', color: C.faint, pulse: false },
   ok: { label: 'Connected', color: C.lime, pulse: true },
   testing: { label: 'Testing…', color: C.amber, pulse: false },
   fail: { label: 'Unreachable', color: C.pink, pulse: false }
 };
 
 export function SettingsView({ vm }) {
-  const conn = CONN[vm.connState] || CONN.ok;
+  const conn = CONN[vm.connState] || CONN.idle;
   // Turning "Capture every tab" ON takes an explicit in-app confirm (D44): it uploads JS from
   // unrelated sites into the engagement, and window.confirm is suppressed in the popup.
   const [confirmEvery, setConfirmEvery] = useState(false);
