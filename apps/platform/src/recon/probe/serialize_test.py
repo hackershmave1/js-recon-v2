@@ -245,3 +245,63 @@ def test_websocat_maps_an_http_origin_to_ws():
         origin="http://app.acme.io:4173",
     )
     assert "'ws://app.acme.io:4173/live'" in serialize.to_websocat(req)
+
+
+def test_hostile_asset_urls_cannot_redirect_or_inject_through_the_origin():
+    # Asset URLs are attacker-influenced. Run them through origin derivation into the artifacts:
+    # userinfo is dropped, quote / CRLF / bad-port URLs yield no origin, and an origin only ever
+    # applies to requests whose own host is the origin's host (it cannot repoint another host).
+    from recon.probe import reconstruct
+
+    hostile = [
+        "http://evil@app.acme.io:4173/a.js",
+        "http://app.acme.io:4173@evil.test/a.js",
+        "http://app.acme.io:4173'$(id)'/a.js",
+        "http://app.acme.io/\r\nX-Evil: 1/a.js",
+        "http://app.acme.io:99999/a.js",
+        "ftp://app.acme.io/a.js",
+    ]
+    origins = reconstruct.origins_from_urls(hostile)
+    assert origins == {"app.acme.io": "http://app.acme.io:4173", "evil.test": "http://evil.test"}
+    for host, origin in origins.items():
+        out = serialize.to_curl(
+            _req(hosts=(host,), origin=origin, example_url="/x", body_params=(), content_type=None)
+        )
+        assert out.splitlines()[-1] == f"curl -X POST '{origin}/x'"
+        http = serialize.to_http(
+            _req(hosts=(host,), origin=origin, example_url="/x", body_params=(), content_type=None)
+        )
+        assert "\r" not in http and "X-Evil" not in http and "@" not in http.splitlines()[1]
+    # A request for the legit host is never sent to the other host's origin.
+    legit = reconstruct.apply_origins(
+        reconstruct.build_requests([_endpoint_for("app.acme.io")]), origins
+    )
+    assert legit[0].origin == "http://app.acme.io:4173"
+
+
+def _endpoint_for(host):
+    from recon.findings.queries import FindingView, OccurrenceView
+
+    occ = OccurrenceView(
+        host=host,
+        raw_url="/x",
+        source_path=None,
+        line=1,
+        col=1,
+        offset_start=0,
+        offset_end=1,
+        evidence=None,
+        engine="vespasian",
+        confidence=None,
+        verified=None,
+    )
+    return FindingView(
+        finding_hash="e1",
+        type="endpoint",
+        value="GET /x",
+        path="input.js",
+        severity=None,
+        attributes={"method": "GET", "kind": "fetch"},
+        first_stage="analyzing",
+        occurrences=[occ],
+    )
