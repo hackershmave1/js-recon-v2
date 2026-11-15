@@ -31,11 +31,23 @@ Chosen option: **page-aware rule plus quarantine**. For each script, in order:
 1. **Page outside the session's scope** — ignore the tab. "Page" means the **top-frame URL read
    from the tab at admission** (`chrome.tabs.get(tabId)`), never a page-supplied value. A request
    whose page cannot be determined (worker, `tabId` -1) is not quarantined.
-2. **Known analytics, ad, payment widget or public library host** — drop; never stored.
+2. **Known third-party host or file** — analytics, ads, payment widgets, public libraries, CMS
+   plugin paths: drop; never stored. The **third-party rules** are a built-in list of hosts and
+   file patterns (for example `*/jquery*.min.js`, `/wp-content/plugins/*`) plus the team's own
+   additions from workspace Settings. A **host** entry never drops a host the researcher typed into
+   the scope list; a **file pattern** applies on any host, scoped or not.
 3. **Host in the session's scope list** — capture and analyze.
 4. **Host on the session's ignore list** — drop; not fetched. The server enforces the list on
    ingest, so a replayed batch cannot re-store it.
 5. **Unknown host** — **quarantine**. Capture and analysis never wait on it.
+
+**Third-party rules** have one home: the platform, tenant-scoped, edited in workspace Settings
+beside the team LLM provider. The extension downloads the merged list when it signs in and when a
+capture starts, and falls back to the built-in list plus its last saved copy if that fails. The
+team's additions can only add to what is dropped; they cannot switch off a built-in entry. The
+Ignore button on an undecided host offers "Ignore for all my sessions", which adds the host to the
+team list. The popup has no rules editor. The built-in list is shared by the extension and the
+platform and a test keeps the two identical.
 
 **Quarantine is stored apart** from the run: a separate table and blob prefix, never a status on
 `run_asset`. Every reader of run assets (findings, sources, hosts, coverage, completeness, tech
@@ -102,7 +114,11 @@ are enforced and tested:
 
 ## More Information
 
-Tickets #175 and #176, #178 (scope set per capture in the popup), #174 (map). Related: ADR-0004
+Tickets #175 and #176, #178 (scope set per capture in the popup), #179 (what stays in the
+extension: the popup is sign-in and capture only; the third-party rules above), #174 (map). Two
+#179 decisions need their own design review before build: a single-use handoff code so "Open in
+workspace" signs you in (a new sign-in path), and letting Continue adopt a session started in the
+workspace by giving it an extension id (a new write path into an existing session; #158). Related: ADR-0004
 (content-addressed blobs), ADR-0005 (egress guard), ADR-0009 (runtime capture), REQ-P2, GLOSSARY
 "Session scope", "Quarantine", "Undecided host", "Ignore list". Evidence: walkthrough frictions F11
 and F12.

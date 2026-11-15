@@ -68,6 +68,15 @@ after Add, through the unchanged egress guard.
 The hosts a researcher chose not to add for one **capture session**. Their scripts are dropped and
 never fetched again. It lives with the session, so Continue keeps it.
 
+## Third-party rules
+
+What decides that a script or file is someone else's code and is dropped at capture: a built-in
+list of hosts and file patterns, plus the team's additions in workspace Settings (ADR-0010). A host
+entry never drops a host the researcher typed into the scope list. Different from the **ignore
+list**, which is per session and hosts only.
+
+_Avoid_: "denylist" (the retired popup editor), "noise rules".
+
 ## Standalone session
 
 A capture session with no engagement binding ("Solo · standalone" in the popup). Logout and a
