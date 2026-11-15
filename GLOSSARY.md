@@ -47,9 +47,11 @@ hosts (those are different rules), "engagement scope".
 
 ## Quarantine
 
-Where a script from an **undecided host** waits: fetched and stored, but not analyzed and not in
-findings, sources or hosts counts. Capture and analysis carry on without it. **Add** releases it
-into analysis; **Ignore**, or seven days without a decision, deletes it.
+Where a script from an **undecided host** waits: fetched and stored apart from the run's files
+(its own table and blob prefix), so it is not analyzed and no findings, sources or hosts view can
+see it. Capture and analysis carry on without it. **Add** promotes it into analysis; **Ignore**, or
+seven days without a decision, deletes it. A quarantined file is a leaf: nothing it references is
+fetched until Add.
 
 _Avoid_: "pending" (that already means an asset not yet fetched or analyzed).
 
@@ -58,11 +60,22 @@ _Avoid_: "pending" (that already means an asset not yet fetched or analyzed).
 A host that served script files to an in-scope page but is neither in the session's scope, on the
 **ignore list**, nor a known third party. Listed for the researcher to Add or Ignore. A link to a
 page on an unknown host is listed the same way, as "linked site, not crawled", and is never fetched.
+A standard crawl lists unknown script hosts as "referenced, not fetched" and downloads them only
+after Add, through the unchanged egress guard.
 
 ## Ignore list
 
 The hosts a researcher chose not to add for one **capture session**. Their scripts are dropped and
 never fetched again. It lives with the session, so Continue keeps it.
+
+## Third-party rules
+
+What decides that a script or file is someone else's code and is dropped at capture: a built-in
+list of hosts and file patterns, plus the team's additions in workspace Settings (ADR-0010). A host
+entry never drops a host the researcher typed into the scope list. Different from the **ignore
+list**, which is per session and hosts only.
+
+_Avoid_: "denylist" (the retired popup editor), "noise rules".
 
 ## Standalone session
 
