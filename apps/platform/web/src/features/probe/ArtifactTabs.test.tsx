@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ArtifactTabs } from "./ArtifactTabs";
+import { ArtifactTabs, httpToPython } from "./ArtifactTabs";
 
 describe("ArtifactTabs", () => {
   it("shows 'Not probeable' message when artifacts is null", () => {
@@ -84,5 +84,20 @@ describe("ArtifactTabs", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+});
+
+// The raw HTTP artifact has no scheme: a target captured at http://app.acme.io:4173 used to get
+// a Python snippet for https://app.acme.io:4173 (wrong scheme, so a different server).
+describe("httpToPython", () => {
+  const http = ["DELETE /api/v1/session HTTP/1.1", "Host: app.acme.io:4173", "", ""].join("\n");
+
+  it("builds the URL on the server's base URL (real scheme and port)", () => {
+    expect(httpToPython(http, "http://app.acme.io:4173")).toContain('httpx.delete("http://app.acme.io:4173/api/v1/session"');
+  });
+
+  it("falls back to https on the Host header when the server sends no base URL", () => {
+    expect(httpToPython(http)).toContain('"https://app.acme.io:4173/api/v1/session"');
+    expect(httpToPython(http, null)).toContain('"https://app.acme.io:4173/api/v1/session"');
   });
 });

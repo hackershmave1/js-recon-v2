@@ -37,7 +37,9 @@ def get_run_requests(
     requests = reconstruct.reconstruct_run(tenant_id, run_id)
     if requests is None:
         raise HTTPException(status_code=404, detail="run not found")
-    requests = reconstruct.apply_probe_host(requests, host)
+    # The picked host is rebuilt against the scheme and port it was served from in this run.
+    origins = reconstruct.run_origins(tenant_id, run_id) if host else None
+    requests = reconstruct.apply_probe_host(requests, host, origins=origins)
     return {
         "run_id": run_id,
         "count": len(requests),
@@ -121,6 +123,9 @@ def _request_dict(request: ReconstructedRequest) -> dict:
         "body_params": list(request.body_params),
         "content_type": request.content_type,
         "example_url": request.example_url,
+        # scheme://host[:port] the artifacts target (None while unresolved): the raw-HTTP
+        # artifact has no scheme, so the panel's derived snippets read it from here.
+        "base_url": serialize.base_url(request),
         "probeable": request.probeable,
         "endpoint_hashes": list(request.endpoint_hashes),
         "artifacts": artifacts,

@@ -11,6 +11,8 @@ never invented; the serializer renders them as explicit ``<name>`` placeholders.
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from urllib.parse import parse_qsl, urlsplit
 
@@ -79,6 +81,10 @@ class ReconstructedRequest:
     auth: tuple[tuple[str, str | None], ...] = ()
     # Positional path-param evidence (identity v3), unioned across the operation's findings.
     path_params: tuple[PathParamEvidence, ...] = ()
+    # scheme://host[:port] that ``hosts[0]`` was served from in this run (its assets' URLs), so a
+    # relative endpoint is rebuilt against the real server instead of an assumed https://host.
+    # None when the run never fetched anything from that host.
+    origin: str | None = None
 
 
 def _method_and_path(operation: str) -> tuple[str, str]:
@@ -279,11 +285,58 @@ def reconstruct_run(tenant_id: str, run_id: str) -> list[ReconstructedRequest] |
     if view is None:
         return None
     rules = queries.list_base_url_rules(tenant_id, run_id)
-    return build_requests(view.findings, rules)
+    return apply_origins(build_requests(view.findings, rules), run_origins(tenant_id, run_id))
+
+
+def origins_from_urls(urls: Iterable[str | None]) -> dict[str, str]:
+    """host -> the http(s) origin (scheme://host[:port]) most of the run's assets on that host
+    were served from. A page-relative endpoint (``fetch("/api/x")``) goes to the origin that
+    served the script, and a finding's host carries neither scheme nor port, so the assets are the
+    only record of them. A tie prefers https. Anything that is not an http(s) URL is ignored."""
+    counts: dict[str, Counter[str]] = {}
+    for url in urls:
+        try:
+            split = urlsplit(url or "")
+            port = split.port
+        except ValueError:
+            continue  # a malformed URL (bad port / IPv6 literal) is no evidence of an origin
+        host = (split.hostname or "").lower()
+        if split.scheme not in ("http", "https") or not host:
+            continue
+        origin = f"{split.scheme}://{f'[{host}]' if ':' in host else host}"
+        if port:
+            origin += f":{port}"
+        counts.setdefault(host, Counter())[origin] += 1
+    return {
+        host: min(seen, key=lambda origin: (-seen[origin], not origin.startswith("https://")))
+        for host, seen in counts.items()
+    }
+
+
+def run_origins(tenant_id: str, run_id: str) -> dict[str, str]:
+    """The origins the run's assets were served from (see :func:`origins_from_urls`)."""
+    from recon.runs import assets  # local: keep the probe read model import-light
+
+    return origins_from_urls(row.url for row in assets.list_for_run(tenant_id, run_id))
+
+
+def apply_origins(
+    requests: list[ReconstructedRequest], origins: Mapping[str, str]
+) -> list[ReconstructedRequest]:
+    """Give each request the origin its first host was served from, when the run knows it."""
+    return [
+        replace(request, origin=origins[request.hosts[0]])
+        if request.hosts and request.hosts[0] in origins
+        else request
+        for request in requests
+    ]
 
 
 def apply_probe_host(
-    requests: list[ReconstructedRequest], host: str | None
+    requests: list[ReconstructedRequest],
+    host: str | None,
+    *,
+    origins: Mapping[str, str] | None = None,
 ) -> list[ReconstructedRequest]:
     """Resolve host-less (relative) requests against a probe-time chosen host (QA #2).
 
@@ -298,11 +351,17 @@ def apply_probe_host(
     nonempty-but-odd host is passed through literally — it only ever renders a curl /
     raw-HTTP string for the operator (never an egress fetch), so there is no scope/SSRF
     surface to validate it against.
+
+    ``origins`` (host -> scheme://host[:port], see :func:`origins_from_urls`) gives the picked
+    host the scheme and port it was served from; a host the run never fetched from has none.
     """
     clean = egress._normalize_host(egress.host_of(host)) if host else ""
     if not clean:
         return requests
+    origin = (origins or {}).get(clean)
     return [
-        replace(request, hosts=(clean,)) if request.probeable and not request.hosts else request
+        replace(request, hosts=(clean,), origin=origin)
+        if request.probeable and not request.hosts
+        else request
         for request in requests
     ]

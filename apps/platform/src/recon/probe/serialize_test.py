@@ -199,3 +199,49 @@ def test_http_absolute_example_url_uses_origin_form():
     assert "Host: api.x.com" in out
     request_line = out.split("\n")[0]
     assert "https://" not in request_line
+
+
+def test_relative_request_uses_the_origin_the_host_was_served_from():
+    # A capture of http://app.acme.io:4173 must not become https://app.acme.io (wrong server).
+    req = _req(
+        hosts=("app.acme.io",), origin="http://app.acme.io:4173", body_params=(), content_type=None
+    )
+    assert "'http://app.acme.io:4173/api/users/123'" in serialize.to_curl(req)
+    assert "Host: app.acme.io:4173" in serialize.to_http(req)
+    assert serialize.base_url(req) == "http://app.acme.io:4173"
+
+
+def test_an_absolute_observed_url_ignores_the_origin():
+    req = _req(example_url="https://api.acme.io:8443/x", origin="http://app.acme.io:4173")
+    assert "'https://api.acme.io:8443/x'" in serialize.to_curl(req)
+    assert serialize.base_url(req) == "https://api.acme.io:8443"
+
+
+def test_no_origin_keeps_the_https_fallback_and_no_host_has_no_base_url():
+    assert serialize.base_url(_req()) == "https://api.acme.io"
+    assert serialize.base_url(_req(hosts=(), example_url="/x")) is None
+
+
+def test_a_hostile_origin_cannot_inject():
+    # The origin is derived from asset URLs, which are attacker-influenced: control chars are
+    # stripped, a non-http(s) scheme is refused, and curl still quotes one shell token.
+    crlf = _req(origin="http://app.acme.io:4173\r\nX-Evil: 1", body_params=(), content_type=None)
+    http = serialize.to_http(crlf)
+    assert "\r" not in http and "\nX-Evil:" not in http
+    js = _req(origin="javascript://app.acme.io", body_params=(), content_type=None)
+    assert "'https://api.acme.io/api/users/123'" in serialize.to_curl(js)
+    quote = _req(origin="http://a'b.io:1", body_params=(), content_type=None)
+    assert serialize.to_curl(quote).count("curl -X POST '") == 1
+
+
+def test_websocat_maps_an_http_origin_to_ws():
+    req = _req(
+        operation="WS /live",
+        method="WS",
+        path="/live",
+        example_url="/live",
+        probeable=False,
+        hosts=("app.acme.io",),
+        origin="http://app.acme.io:4173",
+    )
+    assert "'ws://app.acme.io:4173/live'" in serialize.to_websocat(req)

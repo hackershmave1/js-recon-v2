@@ -3,8 +3,10 @@ import { useEffect, useState } from "react";
 type ArtifactKind = "curl" | "http" | "websocat" | "python";
 
 // Generate a minimal Python/httpx snippet from a raw HTTP request string.
-// Labeled as derived (server-side http artifact → client-side conversion).
-function httpToPython(http: string): string {
+// Labeled as derived (server-side http artifact → client-side conversion). The raw request has
+// no scheme, so the URL is built on the server's `baseUrl` (the real scheme and port); https on
+// the Host header is only the fallback for an older server that doesn't send one.
+export function httpToPython(http: string, baseUrl?: string | null): string {
   const lines = http.split("\n");
   const requestLine = lines[0] ?? "";
   const methodMatch = requestLine.match(/^(\w+)\s+(\S+)/);
@@ -21,21 +23,22 @@ function httpToPython(http: string): string {
     headers[m[1]] = m[2].trim();
   }
 
-  const url = host ? `https://${host}${path}` : path;
+  const url = baseUrl ? `${baseUrl}${path}` : host ? `https://${host}${path}` : path;
   const headerStr = Object.entries(headers).length > 0
     ? `headers=${JSON.stringify(headers)}, `
     : "";
   return `# derived from server-provided HTTP artifact\nimport httpx\nr = httpx.${method}("${url}", ${headerStr})\nprint(r.status_code, r.text)`;
 }
 
-export function ArtifactTabs({ artifacts }: {
+export function ArtifactTabs({ artifacts, baseUrl }: {
   artifacts: { curl?: string; http?: string; websocat?: string } | null;
+  baseUrl?: string | null;
 }) {
   const tabs: { key: ArtifactKind; label: string; content: string }[] = [];
   if (artifacts?.curl) tabs.push({ key: "curl", label: "curl", content: artifacts.curl });
   if (artifacts?.http) tabs.push({ key: "http", label: "HTTP", content: artifacts.http });
   if (artifacts?.websocat) tabs.push({ key: "websocat", label: "websocat", content: artifacts.websocat });
-  if (artifacts?.http) tabs.push({ key: "python", label: "Python (derived)", content: httpToPython(artifacts.http) });
+  if (artifacts?.http) tabs.push({ key: "python", label: "Python (derived)", content: httpToPython(artifacts.http, baseUrl) });
 
   const [activeKey, setActiveKey] = useState<ArtifactKind | null>(tabs[0]?.key ?? null);
   const [copied, setCopied] = useState(false);
