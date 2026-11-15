@@ -198,3 +198,52 @@ def test_build_carries_merged_path_param_evidence():
         reconstruct.PathParamEvidence(position=1, names=("userId",), integer_only=False),
     )
     assert req.path_params[0].name == "userId"
+
+
+def test_origins_from_urls_keeps_scheme_and_port_per_host():
+    origins = reconstruct.origins_from_urls(
+        [
+            "http://app.acme.io:4173/assets/a.js",
+            "http://app.acme.io:4173/assets/b.js",
+            "https://App.Acme.io/legacy.js",  # the minority origin for the same host loses
+            "https://cdn.acme.io/lib.js",
+            "http://[::1]:8080/x.js",
+            "capture-request://app.acme.io/api/v1/orders",  # not http(s): never an origin
+            "inline:abc",
+            "",
+        ]
+    )
+    assert origins == {
+        "app.acme.io": "http://app.acme.io:4173",
+        "cdn.acme.io": "https://cdn.acme.io",
+        "::1": "http://[::1]:8080",
+    }
+
+
+def test_origins_from_urls_tie_prefers_https():
+    origins = reconstruct.origins_from_urls(["http://acme.io/a.js", "https://acme.io/b.js"])
+    assert origins == {"acme.io": "https://acme.io"}
+
+
+def test_apply_origins_sets_the_first_hosts_origin_only_when_known():
+    reqs = reconstruct.build_requests(
+        [
+            _endpoint("GET /a", host="app.acme.io", raw_url="/a", finding_hash="e1"),
+            _endpoint("GET /b", host="other.acme.io", raw_url="/b", finding_hash="e2"),
+            _endpoint("GET /c", raw_url="/c", finding_hash="e3"),
+        ]
+    )
+    out = reconstruct.apply_origins(reqs, {"app.acme.io": "http://app.acme.io:4173"})
+    assert [r.origin for r in out] == ["http://app.acme.io:4173", None, None]
+
+
+def test_apply_probe_host_gives_the_picked_host_its_origin():
+    reqs = reconstruct.build_requests([_endpoint("GET /rel", raw_url="/rel")])
+    (out,) = reconstruct.apply_probe_host(
+        reqs, "app.acme.io", origins={"app.acme.io": "http://app.acme.io:4173"}
+    )
+    assert out.hosts == ("app.acme.io",)
+    assert out.origin == "http://app.acme.io:4173"
+    # A free-typed host the run never saw has no origin: the serializer falls back to https.
+    (typed,) = reconstruct.apply_probe_host(reqs, "new.acme.io", origins={})
+    assert typed.origin is None

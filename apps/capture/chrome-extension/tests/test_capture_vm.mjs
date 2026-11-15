@@ -6,6 +6,7 @@ import {
   defaultChoice, liveSubtitle, endedBanner, startErrorText, analyzeLabel,
   analyzeOutcome, progressStatus, startEngagement, engagementName,
   findingsSummaryLine, OTHER_FINDINGS_HELP, newEngagementBody,
+  SECRET_HINTS_LABEL, SECRET_HINTS_HELP, secretHintBadge,
 } from '../src/popup/viewmodels/captureVm.js';
 
 // --- which screen ---
@@ -139,5 +140,14 @@ assert.match(OTHER_FINDINGS_HELP, /Parameters/);
 assert.deepEqual(newEngagementBody('  Acme Q4 review '), { name: 'Acme Q4 review' });
 assert.deepEqual(newEngagementBody(undefined), { name: '' });
 assert.ok(!('defaults' in newEngagementBody('x')) && !('rootDomains' in newEngagementBody('x')));
+
+// --- the popup's own secret count is a hint, never called "secrets" (the findings card owns that
+// word: one popup must not show "5 secrets" beside "3 secrets") ---
+assert.equal(SECRET_HINTS_LABEL, 'secret hints');
+assert.notEqual(SECRET_HINTS_LABEL, 'secrets');
+assert.match(SECRET_HINTS_HELP, /before analysis/);
+assert.equal(secretHintBadge(1), '1 HINT');
+assert.equal(secretHintBadge(4), '4 HINTS');
+assert.ok(!/SEC/.test(secretHintBadge(4)));
 
 console.log('test_capture_vm: ok');

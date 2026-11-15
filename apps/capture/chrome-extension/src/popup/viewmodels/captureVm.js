@@ -159,6 +159,15 @@ export function newEngagementBody(name) {
   return { name: String(name || '').trim() };
 }
 
+// The extension's own secret count is a HINT: distinct pattern matches in the raw files, counted
+// before any analysis. It is not the platform's result (the findings card), and the two rarely
+// agree, so it is never labelled plain "secrets".
+export const SECRET_HINTS_LABEL = 'secret hints';
+export const SECRET_HINTS_HELP = 'Pattern matches the extension spotted in the captured files, before analysis. The analyzed count is in the findings card.';
+export function secretHintBadge(count) {
+  return `${count} HINT${count === 1 ? '' : 'S'}`;
+}
+
 export function analyzeLabel(analysis, scripts) {
   const a = analysis || { status: 'idle' };
   const c = a.counts || {};

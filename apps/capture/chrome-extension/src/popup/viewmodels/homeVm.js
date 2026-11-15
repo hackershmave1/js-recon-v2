@@ -43,7 +43,8 @@ export function buildHomeViewModel({
     activeProjectName: engagementName(status.projectId, projects),
     selectProject,
     createProject,
-    stats: { js: files, maps: status.mapsCount || 0, secrets: status.secretCount || 0 },
+    // secretHints: the extension's own pre-analysis pattern count, not the platform's findings.
+    stats: { js: files, maps: status.mapsCount || 0, secretHints: status.secretCount || 0 },
     captures,
     mutedCount,
     analysis,

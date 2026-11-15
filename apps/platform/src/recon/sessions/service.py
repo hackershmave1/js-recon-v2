@@ -278,6 +278,18 @@ def list_runs_for_session(tenant_id: str, session_id: str) -> list[RunRefView] |
         return [_run_ref(run, stats.get(str(run.id))) for run in rows]
 
 
+def engagement_of_session(tenant_id: str, session_id: str) -> tuple[str, str] | None:
+    """``(engagement_id, name)`` of the engagement the session belongs to, or ``None`` for a
+    standalone session (or one the tenant can't see). A run page names the engagement its
+    capture landed in; the binding is set once, at session creation."""
+    with tenant_session(tenant_id) as session:
+        row = session.get(EngagementSession, session_id)
+        if row is None or row.engagement_id is None:
+            return None
+        engagement = session.get(Engagement, row.engagement_id)
+        return (str(engagement.id), engagement.name) if engagement is not None else None
+
+
 def rename_session(tenant_id: str, session_id: str, *, name: str) -> SessionView | None:
     if not name or not name.strip():
         raise SessionInvalid("a session name is required")

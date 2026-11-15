@@ -85,10 +85,15 @@ describe("app routes", () => {
     expect(screen.getByText("Endpoints")).toBeInTheDocument();       // OverviewPanel metric tile
   });
 
-  it("surfaces the run's crawl target host in the sidebar", async () => {
+  it("names the run's engagement in the sidebar, above its crawl target and run id", async () => {
     vi.spyOn(api, "getAssets").mockResolvedValue({ domain: "http://recon-range.test/", status: "ok", assets: [] });
+    vi.spyOn(api, "getStatus").mockResolvedValue({ run_id: "r1", session_id: "s1", state: "done", stage: null, done: 0, total: 0 } as never);
+    vi.spyOn(api, "getSessionRuns").mockResolvedValue({
+      session_id: "s1", count: 0, runs: [], engagement: { engagement_id: "e1", name: "Acme Q4 review" },
+    });
     renderAt("/runs/r1");
-    expect(await screen.findByText("recon-range.test")).toBeInTheDocument(); // Sidebar current-run card, host of the manifest domain
+    expect(await screen.findByText("Acme Q4 review")).toBeInTheDocument(); // under the ENGAGEMENT heading
+    expect(await screen.findByText("recon-range.test · r1")).toBeInTheDocument(); // what am I looking at
   });
 
   it("renders findings on the findings page", async () => {
