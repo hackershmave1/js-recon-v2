@@ -101,6 +101,14 @@ describe("HostsPage", () => {
     ).toBeInTheDocument();
   });
 
+  // Walkthrough F17: the amber note was a bare warning with nothing to do about it.
+  it("explains what 'no resolved host' means and the two ways to fix it", () => {
+    render(<HostsPage data={data} />);
+    expect(screen.getByText(/use a path with no host in the code/i)).toBeInTheDocument();
+    expect(screen.getByText(/Findings .* Tune extraction/)).toBeInTheDocument();
+    expect(screen.getByText(/pick a host on the Probe page/i)).toBeInTheDocument();
+  });
+
   it("shows an unknown Tech count, not 0, when tech detection never ran", () => {
     render(<HostsPage data={data} techUnknown />);
     const row = screen.getByText("acme.io").closest("tr") as HTMLElement;

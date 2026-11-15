@@ -21,6 +21,12 @@ type SortKey = "host" | "assets" | "endpoints" | "inferred" | "suspected" | "rou
 const SCOPE_LABEL: Record<ScopeFilter, string> = { all: "All", in: "In scope", out: "Out of scope" };
 
 // techUnknown: technology detection never ran for this run, so per-host Tech counts are unknown, not 0.
+// Calls whose URL is a bare path in the code have no host to attribute them to. Say why, and the
+// two things that fix it, instead of leaving an unexplained warning.
+const HOSTLESS_HELP =
+  "Those calls use a path with no host in the code (fetch(\"/api/x\")), so they belong to no host row above. "
+  + "Add a base URL under Findings → Tune extraction to attribute them, or pick a host on the Probe page to build their commands.";
+
 export function HostsPage({ data, techUnknown = false }: { data: HostsResponse; techUnknown?: boolean }) {
   const [scope, setScope] = useState<ScopeFilter>("all");
   const [query, setQuery] = useState("");
@@ -82,10 +88,11 @@ export function HostsPage({ data, techUnknown = false }: { data: HostsResponse; 
           {hostlessParts.length > 0 && (
             <>
               {" · "}
-              <span className="hosts-note">no resolved host: {hostlessParts.join(" · ")}</span>
+              <span className="hosts-note" title={HOSTLESS_HELP}>no resolved host: {hostlessParts.join(" · ")}</span>
             </>
           )}
         </p>
+        {hostlessParts.length > 0 && <p className="hosts-note muted">{HOSTLESS_HELP}</p>}
         {data.local_targets_disabled && (
           <p className="hosts-note">
             localhost can't be marked in scope: local targets are disabled on this server (development stacks
