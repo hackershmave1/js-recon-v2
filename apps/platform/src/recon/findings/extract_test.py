@@ -2020,3 +2020,50 @@ def test_ajax_on_aliased_receiver_with_runtime_url_is_surfaced_not_dropped():
 def test_ajax_lookalikes_are_not_sinks(source):
     r = extract(source)
     assert r.endpoints == [] and r.unresolved == []
+
+
+# --- #232: a config getter on a library object is not an HTTP call ------------------------------ #
+# ECharts-style code: a prototype METHOD stores a model on `this`, another method reads settings
+# with `.get("name")`. A field assigned inside any function used to count as "injected" (a
+# constructor-injected client), so `.get("handleLabel")` was reported as a confirmed GET endpoint.
+
+_ECHARTS_SHAPE = """
+function View() {}
+View.prototype.render = function (t, e) { this.dataZoomModel = t; this.api = e; };
+View.prototype.draw = function () {
+  return [this.dataZoomModel.get("handleLabel"), this.dataZoomModel.get("realtime")];
+};
+"""
+
+
+def test_prototype_method_assignment_does_not_make_a_field_an_http_client():
+    r = extract(_ECHARTS_SHAPE)
+    assert r.endpoints == [] and r.unresolved == []
+
+
+def test_injected_field_read_with_a_bare_setting_name_is_not_a_request():
+    # Even a constructor-injected field: `.get("realtime")` has no path anchor, so it is a
+    # property read unless the receiver is proven to be a client (axios.create / interceptors).
+    r = extract(
+        "class V { constructor(m) { this.model = m } draw() { return this.model.get('realtime') } }"
+    )
+    assert r.endpoints == [] and r.unresolved == []
+
+
+def test_constructor_injected_client_still_resolves_a_path():
+    ep = _only(
+        "class S { constructor(h) { this.http = h } load() { return this.http.get('/api/users') } }"
+    )
+    assert (ep.method, ep.url) == ("GET", "/api/users")
+
+
+def test_es5_constructor_injected_client_still_resolves_a_path():
+    ep = _only(
+        "function S(h) { this.http = h } S.prototype.load = function () { return this.http.get('/api/users') }"
+    )
+    assert (ep.method, ep.url) == ("GET", "/api/users")
+
+
+def test_injected_client_with_a_runtime_url_is_still_a_counted_gap():
+    r = extract("class S { constructor(h) { this.http = h } load(u) { return this.http.get(u) } }")
+    assert r.endpoints == [] and len(r.unresolved) == 1

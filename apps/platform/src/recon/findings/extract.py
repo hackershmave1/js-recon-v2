@@ -669,12 +669,26 @@ def _dispatch_member(
         # .interceptors. Confirmed sink, so URL resolution runs and an unresolvable URL is a real,
         # counted gap. Only `this.X`: a local axios instance is already `env.instances`, and a
         # minified local name proves nothing. Anything else falls to the SUSPECTED branch below.
+        if not _receivers.is_proven_http(env.receivers, obj) and _is_setting_name(call):
+            # Provenance alone (a constructor stored a parameter on `this.x`) does not make
+            # `this.x.get("realtime")` a request: a bare word is a property read (#232).
+            return
         _axios_member(call, prop, result, env, base="")
     elif prop in _GENERIC_METHODS and _is_http_client_name(obj):
         # Tier 5 (generic-call): unrecognised receiver + verb method + path-shaped arg = a
         # SUSPECTED custom client. STRICTLY last — every real sink, axios instance, and taught
         # wrapper above wins first; this only sees receivers nothing else claimed.
         _record_generic(call, prop, result)
+
+
+def _is_setting_name(call: Node) -> bool:
+    """The first argument is a string literal with no path anchor (`"realtime"`, `"a.b"`): a
+    settings key, not a URL. A variable, a template or a rooted path is not judged here."""
+    args = _args(call)
+    if not args:
+        return False
+    literal = _string_value(args[0])
+    return literal is not None and not _looks_like_api_path(literal)
 
 
 def _client_call_allowed(obj: str, call: Node, env: BaseEnv) -> bool:
