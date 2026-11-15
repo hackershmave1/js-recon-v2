@@ -25,6 +25,7 @@ decision date.
 | [0007](0007-single-analysis-core-v1-convergence.md) | Single analysis core (v1 convergence, no dual-core union) | accepted |
 | [0008](0008-hardened-out-of-process-engine-harness.md) | One hardened harness for out-of-process engines | accepted |
 | [0009](0009-runtime-cdp-js-capture.md) | Runtime JS capture via in-process CDP (whole target tree) | accepted |
+| [0010](0010-scope-decides-analysis-unknown-scripts-quarantined.md) | Scope decides analysis; unknown script hosts are quarantined until decided | proposed |
 
 ## Adding an ADR
 
