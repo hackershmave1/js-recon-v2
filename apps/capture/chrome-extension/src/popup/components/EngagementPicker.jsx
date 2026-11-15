@@ -53,8 +53,7 @@ export function EngagementPicker({ vm, scope }) {
           <input value={newName} placeholder="engagement name" aria-label="New engagement name"
                  onInput={(e) => setNewName(e.target.value)} style={input} />
           <button onClick={async () => {
-            // The new engagement's default scope is the scope being captured.
-            const res = await vm.createProject(newName, scope);
+            const res = await vm.createProject(newName);
             if (res && res.ok) { setCreating(false); setNewName(''); }
           }} style={{ padding: '7px 14px', borderRadius: '8px', border: 'none', background: C.lime, color: C.onLime, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700 }}>Create</button>
           <button onClick={() => setCreating(false)} style={{ padding: '7px 12px', borderRadius: '8px', border: `1px solid ${C.lineHover}`, background: C.control, color: C.muted, cursor: 'pointer', fontSize: '11.5px', fontWeight: 600 }}>Cancel</button>

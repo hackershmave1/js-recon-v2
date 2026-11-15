@@ -6,7 +6,9 @@ import { Switch, Dot } from './ui.jsx';
 import { LogoMark, GearIcon, DownloadIcon, ArrowRightIcon } from '../icons.jsx';
 import { ScopeStartCard } from './ScopeStartCard.jsx';
 import { LiveCaptureCard, NewSiteBanner, EndingBanner, EndedBanner } from './LiveCaptureCard.jsx';
-import { analyzeLabel, secretHintBadge, SECRET_HINTS_LABEL, SECRET_HINTS_HELP } from '../viewmodels/captureVm.js';
+import {
+  analyzeLabel, secretHintBadge, SECRET_HINTS_LABEL, SECRET_HINTS_HELP, findingsSummaryLine, OTHER_FINDINGS_HELP,
+} from '../viewmodels/captureVm.js';
 import { typeLabel } from '../../../modules/finding-labels.js';
 
 const FLAG = { c: C.pink, bg: 'rgba(255,107,138,0.13)' };
@@ -190,13 +192,7 @@ export function HomeView({ vm }) {
         const s = vm.findingsSummary;
         const c = s.counts || {};
         // Compact summary line: "42 findings: 20 endpoints · 5 secrets · 3 IPs"
-        const parts = [];
-        if (c.endpoints > 0) parts.push(`${c.endpoints} endpoint${c.endpoints !== 1 ? 's' : ''}`);
-        if (c.secrets > 0) parts.push(`${c.secrets} secret${c.secrets !== 1 ? 's' : ''}`);
-        if (c.internal_ips > 0) parts.push(`${c.internal_ips} IP${c.internal_ips !== 1 ? 's' : ''}`);
-        if (c.graphql > 0) parts.push(`${c.graphql} GraphQL`);
-        if (c.other > 0) parts.push(`${c.other} other`);
-        const summaryLine = `${c.total || 0} finding${c.total !== 1 ? 's' : ''}${parts.length ? ': ' + parts.join(' · ') : ''}`;
+        const summaryLine = findingsSummaryLine(c);
         return (
           <div style={{ padding: '0 17px 15px' }}>
             <div style={{
@@ -204,7 +200,8 @@ export function HomeView({ vm }) {
               borderRadius: '11px', padding: '11px 13px'
             }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <span style={{ fontFamily: F.mono, fontSize: '11.5px', color: C.lime, fontWeight: 700, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {/* wraps: a cut-off "3 secr…" hid the very counts the card exists to show */}
+                <span title={c.other > 0 ? OTHER_FINDINGS_HELP : undefined} style={{ fontFamily: F.mono, fontSize: '11.5px', color: C.lime, fontWeight: 700, flex: 1, minWidth: 0, overflowWrap: 'anywhere', lineHeight: 1.4 }}>
                   {summaryLine}
                 </span>
                 <button onClick={vm.openWorkspace} style={{

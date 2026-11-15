@@ -244,4 +244,18 @@ describe("FindingsPage", () => {
     await userEvent.type(screen.getByLabelText(/search findings/i), "userId");
     expect(screen.getByText("GET /api/v1/users/{userId} path:userId")).toBeInTheDocument();
   });
+
+  // Walkthrough F15: every fresh row carried the same two chips, which squeezed the value out.
+  it("draws a classification or triage chip only when one was set, not the default on every row", () => {
+    view();
+    const rows = Array.from(document.querySelectorAll(".fp-li"));
+    const chipsOf = (row: Element) => Array.from(row.querySelectorAll(".chip")).map((c) => c.textContent);
+    const row = (text: string) => rows.find((r) => r.textContent?.includes(text)) as Element;
+    expect(chipsOf(row("aws:sha256:abcd"))).toEqual([]);               // secret: both defaults, so no chips
+    expect(chipsOf(row("GET /api/known"))).toEqual(["documented"]);    // a set classification still shows
+    expect(chipsOf(row("POST /admin/wipe"))).toEqual(["shadow"]);
+    // The facets still filter on the default states.
+    expect(rail()).toHaveTextContent("unclassified");
+    expect(rail()).toHaveTextContent("untriaged");
+  });
 });

@@ -33,16 +33,24 @@ function matchFile(o: Occurrence, file: SourceFile): boolean {
 // exactly one bucket, so the parts sum to files.length. This is the BROWSABLE set —
 // the Overview "Files" tile counts every analyzed file (incl. recovered originals with
 // no findings, which are not enumerated here), so the two totals legitimately differ.
-function sourcesSubtitle(files: SourceFile[]): string {
+// A runtime request the extension recorded (not a file): listed because it carries findings.
+const isObservedRequest = (file: SourceFile) => file.kind === "source" && /^capture-(request|response):\/\//.test(file.path);
+
+export const SOURCES_SUBTITLE_HELP =
+  "Sources lists the files that carry findings. The Overview counts every analyzed file, including recovered originals with none.";
+
+export function sourcesSubtitle(files: SourceFile[]): string {
   const fetched = files.filter((file) => file.kind === "asset" && file.fetch_status === "ok").length;
   const notFetched = files.filter((file) => file.kind === "asset" && file.fetch_status !== "ok").length;
   const uploaded = files.filter((file) => file.kind === "upload").length;
-  const recovered = files.filter((file) => file.kind === "source").length;
+  const observed = files.filter(isObservedRequest).length;
+  const recovered = files.filter((file) => file.kind === "source" && !isObservedRequest(file)).length;
   const parts: string[] = [];
   if (fetched) parts.push(`${fetched} fetched`);
   if (notFetched) parts.push(`${notFetched} not fetched`);
   if (uploaded) parts.push(`${uploaded} uploaded`);
-  if (recovered) parts.push(`${recovered} recovered`);
+  if (recovered) parts.push(`${recovered} recovered with findings`);
+  if (observed) parts.push(`${observed} observed request${observed === 1 ? "" : "s"}`);
   const total = `${files.length} file${files.length === 1 ? "" : "s"}`;
   return parts.length ? `${total} · ${parts.join(" · ")}` : total;
 }
@@ -609,7 +617,7 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
           <div className="sv-rail-titlerow">
             <div className="sv-rail-titles">
               <h2 className="sv-rail-title">Sources</h2>
-              <div className="sv-rail-sub">{sourcesSubtitle(files)}</div>
+              <div className="sv-rail-sub" title={SOURCES_SUBTITLE_HELP}>{sourcesSubtitle(files)}</div>
             </div>
             <button type="button" className="sv-rail-toggle" onClick={toggleRail}
               title="Collapse sources" aria-label="Collapse sources panel"><PanelIcon /></button>

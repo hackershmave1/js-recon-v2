@@ -84,11 +84,13 @@ describe("SourcesPage", () => {
     const asset: SourceFile = { path: "https://acme.io/app.js", kind: "asset", fetch_status: "ok", asset_url: null };
     const pending: SourceFile = { path: "https://acme.io/late.js", kind: "asset", fetch_status: "pending", asset_url: null };
     const recovered: SourceFile = { path: "webpack:/src/api.js", kind: "source", fetch_status: "ok", asset_url: "https://acme.io/app.js" };
-    mount([asset, pending, recovered], null);
+    const request: SourceFile = { path: "capture-request://acme.io/api/v1/orders", kind: "source", fetch_status: "ok", asset_url: null };
+    mount([asset, pending, recovered, request], null);
     await screen.findByText("acme.io");
-    // The pending asset is NOT counted as fetched, and the recovered original is not
-    // called "fetched": every file falls in exactly one honest bucket.
-    expect(screen.getByText("3 files · 1 fetched · 1 not fetched · 1 recovered")).toBeInTheDocument();
+    // The pending asset is NOT counted as fetched, the recovered original is not called "fetched",
+    // and a recorded runtime request is not a recovered file: every file falls in exactly one
+    // honest bucket (walkthrough F14).
+    expect(screen.getByText("4 files · 1 fetched · 1 not fetched · 1 recovered with findings · 1 observed request")).toBeInTheDocument();
     expect(screen.queryByText(/fetched from the target/i)).not.toBeInTheDocument();
   });
 

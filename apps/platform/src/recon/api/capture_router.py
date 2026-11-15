@@ -1031,7 +1031,7 @@ def create_project(
     if not name:
         # create is user-initiated (not the JS-loss ingest path); a string detail
         # matches the platform's engagements 400 and renders cleanly in the popup.
-        raise HTTPException(status_code=400, detail="a project name is required")
+        raise HTTPException(status_code=400, detail="an engagement name is required")
     defaults = payload.get("defaults") if isinstance(payload.get("defaults"), dict) else {}
     scope = defaults.get("scope") if isinstance(defaults.get("scope"), dict) else {}
     raw_domains = scope.get("rootDomains")

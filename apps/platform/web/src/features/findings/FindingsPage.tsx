@@ -336,18 +336,20 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                             title={`Priority ${f.priority ?? 0}/100`}>{f.severity}</span>
                         )}
                         <span className={`fp-type fp-type-${f.type}`}>{typeLabel(f.type)}</span>
-                        <span className={`chip chip-${cls}`}>{cls}</span>
+                        {/* The default state is the same on every fresh row, so it is not drawn (the facets
+                            still filter on it); a row only shows a classification or triage that was SET. */}
+                        {cls !== "unclassified" && <span className={`chip chip-${cls}`}>{cls}</span>}
                         {/* Other observed names ride the tooltip: a chip here squeezed the value out. */}
                         <span className="fp-val"
                           title={alsoSeenAs(f).length > 0 ? `Also seen as: ${alsoSeenAs(f).join(", ")}` : undefined}>
                           {shownValue(f)}
                         </span>
-                        {host && <span className="fp-host">{host}</span>}
+                        {host && <span className="fp-host" title={host}>{host}</span>}
                         {riskTags(f).map((t) => (
                           <span key={t} className={`fp-risk fp-risk-${t}`}
                             title={`Risk: ${t}`}>{t}</span>
                         ))}
-                        <span className="chip">{triage}</span>
+                        {triage !== "untriaged" && <span className="chip">{triage}</span>}
                         {sight && (
                           <span className="chip chip-sightings"
                             title="Same finding in other runs of this engagement">{sight}</span>
