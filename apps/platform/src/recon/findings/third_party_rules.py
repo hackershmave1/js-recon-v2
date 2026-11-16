@@ -20,8 +20,8 @@ one containing ``/`` anywhere else on ``host + path`` or the path.
 from __future__ import annotations
 
 import json
-import re
-from functools import cache, lru_cache
+from collections.abc import Iterable
+from functools import lru_cache
 from importlib import resources
 from typing import Any
 from urllib.parse import urlsplit
@@ -43,15 +43,39 @@ FILE_PATTERNS: tuple[str, ...] = tuple(_doc()["file_patterns"])
 CASES: tuple[tuple[str, bool], ...] = tuple((url, bool(match)) for url, match in _doc()["cases"])
 
 
-@cache
-def _compile(pattern: str) -> re.Pattern[str]:
-    # Collapse runs of `*` (no catastrophic backtracking), escape everything else, `*` -> `.*`.
-    collapsed = re.sub(r"\*+", "*", pattern.strip())
-    return re.compile("^" + ".*".join(re.escape(part) for part in collapsed.split("*")) + "$", re.I)
+_MAX_MATCHED_LENGTH = 2048  # a longer host/path is cut: the matcher is O(pattern x text)
+
+
+def glob_match(pattern: str, text: str) -> bool:
+    """``*`` wildcard match, case-insensitive, in O(len(pattern) x len(text)) with no regex.
+
+    A team-supplied pattern is untrusted input (ADR-0010 R2): a regex built from ``a*a*a*a``
+    backtracks polynomially on a long hostile path, so the matcher walks the text once with a single
+    remembered star position instead. The extension has the same algorithm (``globMatch`` in
+    ``modules/asset-classifier.js``), and the shared ``cases`` run through both."""
+    p, s = pattern.lower(), text.lower()[:_MAX_MATCHED_LENGTH]
+    pi = si = 0
+    star = mark = -1
+    while si < len(s):
+        if pi < len(p) and p[pi] == "*":
+            star, mark = pi, si
+            pi += 1
+        elif pi < len(p) and p[pi] == s[si]:
+            pi += 1
+            si += 1
+        elif star != -1:
+            mark += 1
+            pi, si = star + 1, mark
+        else:
+            return False
+    while pi < len(p) and p[pi] == "*":
+        pi += 1
+    return pi == len(p)
 
 
 def matches_pattern(url: str, pattern: str) -> bool:
     """The extension's ``matchesPattern``, in Python."""
+    pattern = pattern.strip()
     if not pattern:
         return False
     try:
@@ -60,16 +84,16 @@ def matches_pattern(url: str, pattern: str) -> bool:
         path = (parts.path or "").lower()
     except ValueError:
         return False
-    rx = _compile(pattern)
     if pattern.startswith("/"):
-        return bool(rx.match(path))
+        return glob_match(pattern, path)
     if "/" in pattern:
-        return bool(rx.match(host + path) or rx.match(path))
-    return bool(rx.match(host))
+        return glob_match(pattern, host + path) or glob_match(pattern, path)
+    return glob_match(pattern, host)
 
 
-def matches_file_pattern(url: str | None) -> bool:
-    """Whether ``url`` is a known third-party FILE (a library, a CMS plugin path, an analytics tag)."""
+def matches_file_pattern(url: str | None, extra_patterns: Iterable[str] = ()) -> bool:
+    """Whether ``url`` is a known third-party FILE (a library, a CMS plugin path, an analytics tag):
+    a built-in pattern or one of the team's additions."""
     if not url:
         return False
-    return any(matches_pattern(url, pattern) for pattern in FILE_PATTERNS)
+    return any(matches_pattern(url, pattern) for pattern in (*FILE_PATTERNS, *extra_patterns))

@@ -7,6 +7,7 @@
 // persisted or surfaced through the popup status/file APIs.
 
 import { FILE_PATTERNS } from './third-party-rules.js';
+import { teamFilePatterns } from './team-rules.js';
 
 const TRACKER_HOSTS = [
   'google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'segment.io',
@@ -67,24 +68,41 @@ export function isThirdParty(assetUrl, pageUrl) {
   return reg(a) !== reg(p);
 }
 
-// Glob-ish matcher: `*` is wildcard. A bare-domain pattern (e.g. "*.doubleclick.net")
-// matches the host; a path-ish pattern (starts with `/`) matches the pathname.
+// `*` wildcard match, case-insensitive, in O(pattern x text) with no RegExp: a team-supplied pattern
+// (modules/team-rules.js) is untrusted input and a regex built from `a*a*a*a` backtracks polynomially
+// on a long hostile path. Same algorithm as the platform's glob_match (third_party_rules.py).
+const MAX_MATCHED_LENGTH = 2048;
+export function globMatch(pattern, text) {
+  const p = String(pattern).toLowerCase();
+  const s = String(text).toLowerCase().slice(0, MAX_MATCHED_LENGTH);
+  let pi = 0; let si = 0; let star = -1; let mark = -1;
+  while (si < s.length) {
+    if (pi < p.length && p[pi] === '*') { star = pi; mark = si; pi += 1; }
+    else if (pi < p.length && p[pi] === s[si]) { pi += 1; si += 1; }
+    else if (star !== -1) { mark += 1; pi = star + 1; si = mark; }
+    else return false;
+  }
+  while (pi < p.length && p[pi] === '*') pi += 1;
+  return pi === p.length;
+}
+
+// A bare-domain pattern (e.g. "*.doubleclick.net") matches the host; a path-ish pattern (starts with
+// `/`) matches the pathname.
 export function matchesPattern(url, pattern) {
   if (!pattern) return false;
-  const rx = new RegExp('^' + pattern.trim()
-    .replace(/\*+/g, '*')                 // collapse runs of * (avoid catastrophic backtracking)
-    .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*/g, '.*') + '$', 'i');
+  const pat = pattern.trim();
+  if (!pat) return false;
   const host = hostnameOf(url);
   const path = pathOf(url);
-  if (pattern.startsWith('/')) return rx.test(path);
-  if (pattern.includes('/')) return rx.test(host + path) || rx.test(path);
-  return rx.test(host);
+  if (pat.startsWith('/')) return globMatch(pat, path);
+  if (pat.includes('/')) return globMatch(pat, host + path) || globMatch(pat, path);
+  return globMatch(pat, host);
 }
 
 export function matchesDenylist(url, rules = [], includeDefaultProfile = true) {
   const patterns = [
     ...(includeDefaultProfile ? DEFAULT_PROFILE_PATTERNS : []),
+    ...teamFilePatterns(),  // the team's additions (workspace Settings) always apply: they only add
     ...rules.map((r) => (typeof r === 'string' ? r : r.pattern)).filter(Boolean)
   ];
   return patterns.some((p) => matchesPattern(url, p));

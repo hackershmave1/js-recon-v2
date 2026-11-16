@@ -23,6 +23,8 @@ Reasons:
   Endpoints joined this rule in #240, reversing the earlier "a third-party API call is attack
   surface" stance: the finding list answers "what does THIS app's backend expose", and the hide is
   reversible (``include_hidden``). One in-scope or relative occurrence keeps an endpoint shown.
+- The team's additions (Settings > Third-party rules, ``team_rules``) are merged with the built-in
+  hosts and file patterns here; they only add.
 - ``third_party`` (any type but a confirmed ``secret``): ALSO when every sighting is in a stored file whose
   URL matches a built-in third-party FILE pattern (``recon.findings.third_party_rules``), on any host.
 - ``third_party`` (any type but a confirmed ``secret``): EVERY occurrence comes from a third-party
@@ -46,7 +48,7 @@ from recon.config import get_settings
 from recon.db.models import Engagement, EngagementSession, Finding, FindingOccurrence, Run, RunAsset
 from recon.domain import FindingType
 from recon.fetch import egress
-from recon.findings import noise_hosts, origin, third_party_rules
+from recon.findings import noise_hosts, origin, team_rules, third_party_rules
 
 NOISE = "noise"
 JUNK_OR_DYNAMIC = "junk_or_dynamic"
@@ -85,6 +87,7 @@ def why_hidden(
     app_packages: Iterable[str] = (),
     asset_hosts: Iterable[str | None] = (),
     asset_urls: Iterable[str | None] = (),
+    rules: team_rules.TeamRules = team_rules.EMPTY,
 ) -> str | None:
     """Why a finding is hidden by default, or ``None`` when it is shown.
 
@@ -99,11 +102,11 @@ def why_hidden(
             egress.host_in_scope(h, first_party or [], allow_local=allow_local) for h in attributed
         )
     )
-    if not own and noise_hosts.is_all_noise(attributed):
+    if not own and noise_hosts.is_all_noise(attributed, denylist=rules.noise_hosts()):
         return NOISE
     if _third_party(finding_type, occurrences, first_party, app_packages, allow_local=allow_local):
         return THIRD_PARTY
-    if _only_in_third_party_files(finding_type, asset_urls):
+    if _only_in_third_party_files(finding_type, asset_urls, rules.file_patterns):
         return THIRD_PARTY
     if finding_type != FindingType.SECRET.value and _only_out_of_scope_files(
         asset_hosts, first_party, allow_local
@@ -141,7 +144,9 @@ _ENDPOINT_TYPES = frozenset(
 )
 
 
-def _only_in_third_party_files(finding_type: str, asset_urls: Iterable[str | None]) -> bool:
+def _only_in_third_party_files(
+    finding_type: str, asset_urls: Iterable[str | None], extra_patterns: Iterable[str] = ()
+) -> bool:
     """Every sighting is in a stored file whose URL matches a built-in third-party FILE pattern
     (``jquery*.min.js``, ``/wp-content/plugins/*``: recon.findings.third_party_rules). A file
     pattern applies on any host, the researcher's own included. A confirmed secret is exempt (a
@@ -149,7 +154,9 @@ def _only_in_third_party_files(finding_type: str, asset_urls: Iterable[str | Non
     if finding_type == FindingType.SECRET.value:
         return False
     urls = [u for u in asset_urls if u]
-    return bool(urls) and all(third_party_rules.matches_file_pattern(u) for u in urls)
+    return bool(urls) and all(
+        third_party_rules.matches_file_pattern(u, extra_patterns) for u in urls
+    )
 
 
 def _only_out_of_scope_files(
@@ -302,6 +309,7 @@ def hidden_finding_ids(session: Session, run_id: str) -> dict[str, str]:
         return {}
     first_party = first_party_hosts(session, run)
     allow_local = get_settings().allow_local_egress
+    rules = team_rules.load_team_rules(session, str(run.tenant_id))  # built-in + team, read time
     app_packages = (
         session.scalar(
             select(EngagementSession.app_packages).where(EngagementSession.id == run.session_id)
@@ -355,6 +363,7 @@ def hidden_finding_ids(session: Session, run_id: str) -> dict[str, str]:
             app_packages=app_packages,
             asset_hosts=asset_hosts_by_finding.get(str(finding_id), ()),
             asset_urls=asset_urls_by_finding.get(str(finding_id), ()),
+            rules=rules,
         )
         if reason:
             hidden[str(finding_id)] = reason

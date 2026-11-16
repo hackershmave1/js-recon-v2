@@ -310,7 +310,7 @@ export function removeScopeHost(tenantId: string, sessionId: string, host: strin
 // Add or Ignore for a host whose scripts are held, undecided.
 export function decideHost(
   tenantId: string, sessionId: string, host: string, decision: "add" | "ignore",
-): Promise<{ state: string; promoted: number; deleted: number; recrawl?: { source_run_id: string; run_id: string | null; error?: string } | null }> {
+): Promise<{ state: string; promoted: number; deleted: number; analysis?: Record<string, string>; recrawl?: { source_run_id: string; run_id: string | null; error?: string } | null }> {
   return request(
     `/sessions/${encodeURIComponent(sessionId)}/hosts/${encodeURIComponent(host)}/decision`,
     json("POST", { decision }), tenantId,

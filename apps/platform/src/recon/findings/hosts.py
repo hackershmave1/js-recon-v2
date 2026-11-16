@@ -64,7 +64,7 @@ from recon.db.models import (
 )
 from recon.domain import FindingType
 from recon.fetch import egress
-from recon.findings import noise_hosts, visibility
+from recon.findings import noise_hosts, team_rules, visibility
 
 
 @dataclass(frozen=True)
@@ -162,6 +162,7 @@ def _aggregate_hosts(
     allow_local: bool,
     include_noise: bool = False,
     inferred_occurrences: list[tuple[str | None, str]] | None = None,
+    noise_denylist: frozenset[str] = noise_hosts.DEFAULT_NOISE_HOSTS,
 ) -> HostsView:
     """Pure roll-up (no DB/network) so the host-universe + scope logic is unit
     testable. ``endpoint_occurrences`` / ``suspected_occurrences`` / ``route_occurrences``
@@ -220,7 +221,9 @@ def _aggregate_hosts(
         # #3: drop third-party analytics/telemetry/vendor hosts (amplitude, sentry, stripe, ...)
         # from the inventory by DEFAULT — reversible via the toggle. A declared/in-scope host is
         # never on the denylist, so this removes only vendor noise, never the target's own surface.
-        universe = {h for h in universe if not noise_hosts.is_noise_host(h)}
+        universe = {
+            h for h in universe if not noise_hosts.is_noise_host(h, denylist=noise_denylist)
+        }
     display_scope = visibility.expand_scope_for_display(scope_hosts, allow_local=allow_local)
     rows = [
         HostRow(
@@ -336,6 +339,7 @@ def list_hosts(tenant_id: str, run_id: str, *, include_noise: bool = False) -> H
                 select(RunTechnology.host).where(RunTechnology.run_id == str(run_id))
             ).all()
         )
+        noise_denylist = team_rules.load_team_rules(session, tenant_id).noise_hosts()
         declared_hosts = list(
             session.scalars(
                 select(SessionBaseUrl.base_url).where(SessionBaseUrl.session_id == session_id)
@@ -353,4 +357,5 @@ def list_hosts(tenant_id: str, run_id: str, *, include_noise: bool = False) -> H
         allow_local=get_settings().allow_local_egress,
         include_noise=include_noise,
         inferred_occurrences=inferred_occurrences,
+        noise_denylist=noise_denylist,
     )
