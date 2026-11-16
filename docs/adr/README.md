@@ -26,7 +26,7 @@ decision date.
 | [0008](0008-hardened-out-of-process-engine-harness.md) | One hardened harness for out-of-process engines | accepted |
 | [0009](0009-runtime-cdp-js-capture.md) | Runtime JS capture via in-process CDP (whole target tree) | accepted |
 | [0010](0010-scope-decides-analysis-unknown-scripts-quarantined.md) | Scope decides analysis; unknown script hosts are quarantined until decided | accepted |
-| [0011](0011-single-use-handoff-code-for-open-in-workspace.md) | A single-use handoff code lets "Open in workspace" sign the researcher in | proposed |
+| [0011](0011-single-use-handoff-code-for-open-in-workspace.md) | A single-use handoff code lets "Open in workspace" sign the researcher in | accepted |
 
 ## Adding an ADR
 
