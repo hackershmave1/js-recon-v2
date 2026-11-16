@@ -55,6 +55,12 @@ def receiver_key(text: str) -> str:
     return _WS.sub("", text)
 
 
+def is_proven_http(evidence: dict[str, int], receiver: str) -> bool:
+    """The bundle itself shows ``receiver`` is a client (``axios.create``, ``.interceptors``), as
+    opposed to the weaker "a constructor stored a parameter on it" provenance (INJECTED)."""
+    return bool(evidence.get(receiver_key(receiver), 0) & _HTTP_SEEN)
+
+
 def kind_of(evidence: dict[str, int], receiver: str) -> str | None:
     """``HTTP`` / ``COLLECTION`` when the bundle's evidence about ``receiver`` decides it, else
     None (no evidence, or contradictory injected-vs-collection evidence)."""
@@ -94,7 +100,27 @@ def observe(node: Node, evidence: dict[str, int]) -> None:
         if name is not None and name.type == "property_identifier" and _text(name) == "constructor":
             _mark_injected(node, evidence)
     elif kind in ("function_declaration", "function_expression", "function"):
-        _mark_injected(node, evidence)  # ES5 / down-levelled constructor function
+        # ES5 / down-levelled constructor function. A function assigned to `X.prototype.name` is a
+        # METHOD: `render = function (model) { this.model = model }` stores a model, it does not
+        # inject a client (#232), so only a real constructor counts as injection.
+        if not _is_prototype_method(node):
+            _mark_injected(node, evidence)
+
+
+def _is_prototype_method(node: Node) -> bool:
+    """`X.prototype.name = function (...) {...}`: a method assigned onto a prototype."""
+    parent = node.parent
+    if parent is None or parent.type != "assignment_expression":
+        return False
+    left = parent.child_by_field_name("left")
+    if left is None or left.type != "member_expression":
+        return False
+    owner = left.child_by_field_name("object")
+    return (
+        owner is not None
+        and owner.type == "member_expression"
+        and _text_if_short(owner.child_by_field_name("property")) == "prototype"
+    )
 
 
 def _is_static(field: Node) -> bool:
