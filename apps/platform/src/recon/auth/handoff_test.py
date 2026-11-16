@@ -153,3 +153,27 @@ def test_code_never_appears_in_logs(caplog) -> None:
         handoff.consume_code(redis, code, key=KEY, now=NOW)
         handoff.consume_code(redis, code, key=KEY, now=NOW)
     assert code not in caplog.text
+
+
+@pytest.mark.integration
+def test_single_use_under_a_race_on_real_redis() -> None:
+    from redis import Redis
+
+    from recon.config import get_settings
+
+    redis = Redis.from_url(get_settings().redis_url)
+    code = _issue(redis, user=f"race-{threading.get_ident()}")
+    wins: list[object] = []
+    barrier = threading.Barrier(16)
+
+    def attempt() -> None:
+        barrier.wait()
+        if handoff.consume_code(redis, code, key=KEY, now=NOW) is not None:
+            wins.append(1)
+
+    threads = [threading.Thread(target=attempt) for _ in range(16)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(wins) == 1
