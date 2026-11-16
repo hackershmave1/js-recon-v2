@@ -25,6 +25,8 @@ Leaf position in the import DAG: ``_jsast`` <- ``_dataflow`` <- ``_base_env`` <-
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from tree_sitter import Node
 
 from recon.findings._jsast import _MAX_URL_SPAN, _string_value, _text
@@ -37,7 +39,9 @@ from recon.findings._jsast import _MAX_URL_SPAN, _string_value, _text
 _MAX_RESOLVE_DEPTH = 40
 
 
-def resolve_local_consts(raw: dict[str, Node]) -> dict[str, str]:
+def resolve_local_consts(
+    raw: dict[str, Node], window_globals: Mapping[str, str] | None = None
+) -> dict[str, str]:
     """Resolve pre-collected single-unshadowed local bindings to their string values.
 
     ``raw`` maps a local constant name to its value node — collected by the caller's own
@@ -45,6 +49,10 @@ def resolve_local_consts(raw: dict[str, Node]) -> dict[str, str]:
     and excluding axios-instance bindings. Returns only the names that resolve to a fully-static
     string; a binding whose value is a call result, a member access, a reference to a name not in
     ``raw``, or a ternary is omitted, so a sink reading the result never gets a guess.
+
+    Two exceptions fold, because they are as certain as a literal: ``window.NAME`` when
+    ``window_globals`` (already poison-filtered by the caller) holds it, and
+    ``<resolvable>.replace("lit", "lit")`` (the first occurrence only, as in JS).
     """
     resolved: dict[str, str] = {}
 
@@ -109,6 +117,19 @@ def resolve_local_consts(raw: dict[str, Node]) -> dict[str, str]:
         if node.type == "parenthesized_expression":
             inner = node.named_children
             return _resolve_node(inner[0], active, depth + 1) if len(inner) == 1 else None
+        if node.type == "member_expression" and window_globals:
+            owner, prop = node.child_by_field_name("object"), node.child_by_field_name("property")
+            if (
+                owner is not None
+                and prop is not None
+                and owner.type == "identifier"
+                and _text(owner) == "window"
+                and prop.type == "property_identifier"
+            ):
+                return window_globals.get(_text(prop))
+            return None
+        if node.type == "call_expression":
+            return _resolve_literal_replace(node, active, depth)
         if node.type == "binary_expression":
             operator = node.child_by_field_name("operator")
             if operator is None or _text(operator) != "+":
@@ -121,6 +142,23 @@ def resolve_local_consts(raw: dict[str, Node]) -> dict[str, str]:
                 return None
             return left + right  # pure concatenation (mirrors _base_env._resolve_concat_operand)
         return None
+
+    def _resolve_literal_replace(node: Node, active: frozenset[str], depth: int) -> str | None:
+        """``X.replace("a", "b")`` with both arguments plain string literals: JS replaces the first
+        occurrence only. A pattern object, a non-literal argument or a replacement holding a
+        ``$`` special pattern (``$&``, ``$1``) is not certain, so it does not fold."""
+        fn = node.child_by_field_name("function")
+        args = node.child_by_field_name("arguments")
+        if fn is None or args is None or fn.type != "member_expression":
+            return None
+        prop = fn.child_by_field_name("property")
+        if prop is None or _text(prop) != "replace" or len(args.named_children) != 2:
+            return None
+        pattern, replacement = (_string_value(arg) for arg in args.named_children)
+        if not pattern or replacement is None or "$" in replacement:
+            return None
+        base = _resolve_node(fn.child_by_field_name("object"), active, depth + 1)
+        return None if base is None else base.replace(pattern, replacement, 1)
 
     for name in raw:
         resolve_name(name, frozenset())

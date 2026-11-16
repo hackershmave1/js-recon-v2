@@ -11,7 +11,7 @@ Imports only the standard library and tree-sitter — the leaf of the import DAG
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 
 import tree_sitter_javascript as tsjs
@@ -176,6 +176,9 @@ class Extraction:
     # alongside `unattributed` (never instead of it), so the honesty counter is
     # unchanged — an unresolved call is still counted as unattributed AND shown.
     unresolved: list[RawEndpoint] = field(default_factory=list)
+    # The certain `window.NAME` literals for this unit (see `BaseEnv.window_globals`), so an
+    # unresolved sink's skeleton can show the URL head. Set once by `extract`.
+    window_globals: dict[str, str] = field(default_factory=dict)
     # Tier 5 (generic-call): SUSPECTED sinks — a verb call on an unrecognised HTTP-client-
     # shaped receiver (see recon.findings.extract._record_generic). NOT counted in
     # `unattributed` (it is not a DETECTED sink, unlike `unresolved`), surfaced as a distinct
@@ -224,6 +227,10 @@ class BaseEnv:
     # sink folds to a value. Alias -> {export_name: value}; build-scoped + poison-safe
     # upstream (recon.findings._modulegraph), so a wrong module can never leak in.
     webpack_members: dict[str, dict[str, str]] = field(default_factory=dict)
+    # `window.NAME` -> a string literal certain across this file and the same host's other assets
+    # (#233). Separate from const_prefixes for the same reason as cross_module_consts: a declared
+    # const would be emitted as its own finding; a global is only an operand of a sink's URL.
+    window_globals: dict[str, str] = field(default_factory=dict)
     # What each `.get()`-style receiver IS, per the bundle's own evidence (recon.findings._receivers):
     # receiver text -> evidence rank. Read through `_receivers.kind_of`.
     receivers: dict[str, int] = field(default_factory=dict)
@@ -403,7 +410,9 @@ def _expr_token(node: Node | None) -> str:
     return _EXPR
 
 
-def _collapse_url(node: Node | None, _depth: int = 0) -> str:
+def _collapse_url(
+    node: Node | None, _depth: int = 0, window_globals: Mapping[str, str] | None = None
+) -> str:
     """Best-effort skeleton for a sink's UNRESOLVED URL argument (Tier 4 / jsluice
     ``CollapsedString``): keep static string/template text, reconstruct ``+`` AND
     ``.concat()`` chains, and render a readable non-constant leaf as a ``:holder`` token
@@ -425,9 +434,9 @@ def _collapse_url(node: Node | None, _depth: int = 0) -> str:
     if node.type == "binary_expression":
         operator = node.child_by_field_name("operator")
         if operator is not None and _text(operator) == "+":  # string concatenation only
-            return _collapse_url(node.child_by_field_name("left"), _depth + 1) + _collapse_url(
-                node.child_by_field_name("right"), _depth + 1
-            )
+            return _collapse_url(
+                node.child_by_field_name("left"), _depth + 1, window_globals
+            ) + _collapse_url(node.child_by_field_name("right"), _depth + 1, window_globals)
         return _EXPR
     if node.type == "call_expression":
         fn = node.child_by_field_name("function")
@@ -439,10 +448,16 @@ def _collapse_url(node: Node | None, _depth: int = 0) -> str:
             # String#concat: ``a.concat(b, c)`` == ``a + b + c`` — reconstructed like ``+``,
             # sharing the depth cap so a ``.concat()``-split obfuscation degrades to a
             # skeleton instead of a stack blow-out.
-            parts = [_collapse_url(fn.child_by_field_name("object"), _depth + 1)]
-            parts += [_collapse_url(arg, _depth + 1) for arg in _args(node)]
+            parts = [_collapse_url(fn.child_by_field_name("object"), _depth + 1, window_globals)]
+            parts += [_collapse_url(arg, _depth + 1, window_globals) for arg in _args(node)]
             return "".join(parts)
         return _EXPR
+    if window_globals and node.type == "member_expression":
+        # `window.NAME` the same host's assets assign ONE string literal (certain, not a guess):
+        # the skeleton shows the real URL head instead of a `:NAME` holder (#233).
+        text = _text_if_short(node)
+        if text.startswith("window.") and text[7:] in window_globals:
+            return window_globals[text[7:]]
     return _expr_token(node)
 
 

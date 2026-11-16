@@ -253,3 +253,36 @@ def test_webpack_build_scoping_prevents_cross_build_wire(monkeypatch):
     # a build-A consumer resolves 389 to A's value only (no cross-wire to B)
     _consts, members = analyze._resolve_cross_module("/assets/9.js", _WP_ORDERS_A.decode(), index)
     assert members == {"r": {"M": "/api/v3/orders", "t": "https://api.acme.com"}}
+
+
+# --- #233: window globals harvested per host, resolved for a consumer on the same host ---------- #
+
+_INLINE = "window.pspApiPath = 'https://status.acme.io/api/getMonitorList/abc'; window.n = 1;"
+
+
+def test_harvest_collects_window_literals_per_host_and_poisons_non_literals():
+    index = CrossModuleIndex()
+    analyze._harvest_minified(_INLINE, "https://status.acme.io/#inline-6", index)
+    assert index.window_globals == {
+        "status.acme.io": {"pspApiPath": "https://status.acme.io/api/getMonitorList/abc", "n": None}
+    }
+
+
+def test_conflicting_literals_across_assets_on_one_host_poison_the_name():
+    index = CrossModuleIndex()
+    analyze._harvest_minified("window.a = 'x';", "https://h.io/#inline-1", index)
+    analyze._harvest_minified("window.a = 'y';", "https://h.io/#inline-2", index)
+    assert index.window_globals == {"h.io": {"a": None}}
+
+
+def test_window_globals_for_returns_only_this_hosts_literals():
+    index = CrossModuleIndex()
+    analyze._harvest_minified(_INLINE, "https://status.acme.io/#inline-6", index)
+    analyze._harvest_minified(
+        "window.pspApiPath = 'https://evil.io/x';", "https://evil.io/#i", index
+    )
+    got = analyze._window_globals_for("https://status.acme.io/build/home.js", index)
+    # `n` (a non-literal) stays in the map as None: the caller needs it to poison a local fold.
+    assert got == {"pspApiPath": "https://status.acme.io/api/getMonitorList/abc", "n": None}
+    assert analyze._window_globals_for(None, index) is None
+    assert analyze._window_globals_for("https://other.io/a.js", index) is None

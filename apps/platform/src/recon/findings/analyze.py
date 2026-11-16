@@ -22,6 +22,7 @@ import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 from botocore.exceptions import ClientError
 from redis import Redis
@@ -86,9 +87,13 @@ class CrossModuleIndex:
 
     exports: dict[str, dict[str, str]] = field(default_factory=dict)
     webpack: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
+    # ``window.NAME = "literal"`` assignments per page host -> name -> literal, or ``None`` when the
+    # host assigns it a non-literal or two different literals (#233). Scoped by host so one site's
+    # inline script can never supply a value for another site's bundle.
+    window_globals: dict[str, dict[str, str | None]] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
-        return bool(self.exports or self.webpack)
+        return bool(self.exports or self.webpack or self.window_globals)
 
 
 def analyze_run(
@@ -509,6 +514,7 @@ def _extract_endpoints(
             wrappers=wrappers,
             cross_module_consts=cross_module_consts,
             webpack_members=webpack_members,
+            window_globals=_window_globals_for(asset_url, cross_index),
         )
         path = normalize.normalize_source_path(source_name)
         # Only at_sink=True endpoints count as attributed (confirmed network sinks whose URL
@@ -1039,12 +1045,39 @@ def _merge_module_exports(exports: dict[str, dict[str, str]], key: str, content:
         exports.setdefault(key, {}).update(module_exports)
 
 
+def _asset_host(asset_url: str | None) -> str | None:
+    host = urlsplit(asset_url).hostname if asset_url else None
+    return host.lower() if host else None
+
+
+def _merge_window_globals(
+    index: CrossModuleIndex, asset_url: str | None, found: dict[str, str | None]
+) -> None:
+    host = _asset_host(asset_url)
+    if host is None or not found:
+        return
+    known = index.window_globals.setdefault(host, {})
+    for name, value in found.items():
+        known[name] = value if name not in known or known[name] == value else None
+
+
+def _window_globals_for(
+    asset_url: str | None, index: CrossModuleIndex | None
+) -> dict[str, str | None] | None:
+    """This asset's host's ``window.NAME`` literals (ambiguous names stay ``None``), or None."""
+    host = _asset_host(asset_url)
+    if index is None or host is None:
+        return None
+    return index.window_globals.get(host) or None
+
+
 def _harvest_minified(source: str, asset_url: str | None, index: CrossModuleIndex) -> None:
     """No-map chunk: parse the minified source ONCE and harvest BOTH webpack modules
     (keyed per build id, `webpack_build_id`) and minified-ESM exports (keyed by URL
     path). A chunk is one bundler or the other, so the wrong-bundler branch simply
     finds nothing — no double parse (folds the webpack harvest into the ESM pass, F6)."""
     tree = _modulegraph.parse(source)
+    _merge_window_globals(index, asset_url, _modulegraph.collect_window_globals(tree))
     build_id = _modulegraph.webpack_build_id(source)
     if build_id is not None:
         modules = _modulegraph.collect_webpack_modules(tree)

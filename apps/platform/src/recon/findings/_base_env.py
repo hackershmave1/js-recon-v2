@@ -10,6 +10,7 @@ and is itself imported by :mod:`recon.findings.extract` (the sink handlers).
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 
 from tree_sitter import Node
 
@@ -158,7 +159,23 @@ def _declared_names(root: Node) -> set[str]:
     return {name for name, count in seen.items() if count > 1}
 
 
-def collect_base_env(root: Node, data: bytes) -> BaseEnv:
+def _merge_window_globals(
+    local: Mapping[str, str | None], indexed: Mapping[str, str | None] | None
+) -> dict[str, str]:
+    """The `window.NAME` string literals that are certain for this file: the file's own
+    assignments and the run index's (same host) must all agree on ONE literal. Any non-literal
+    assignment, or two different literals, anywhere drops the name (REQ-C2: never a guess)."""
+    merged: dict[str, str] = {}
+    for name in set(local) | set(indexed or {}):
+        values = [src[name] for src in (local, indexed or {}) if name in src]
+        if all(v is not None and v == values[0] for v in values) and values[0] is not None:
+            merged[name] = values[0]
+    return merged
+
+
+def collect_base_env(
+    root: Node, data: bytes, window_globals: Mapping[str, str | None] | None = None
+) -> BaseEnv:
     # `data` isn't read here — every helper resolves text via `node.text` — but
     # stays part of the signature to match the interface Task 2 will call.
     poisoned = _declared_names(root)
@@ -176,6 +193,7 @@ def collect_base_env(root: Node, data: bytes) -> BaseEnv:
     # dropping ALL local consts when it appears costs ~0 real recall and closes the 0-FP (§4
     # gate-2 LOW). Flagged here, applied after the walk.
     has_with = False
+    local_window: dict[str, str | None] = {}
     # What `.get()`/`.post()` receivers ARE (collection vs HTTP client), gathered in this same walk.
     receivers: dict[str, int] = {}
     # QA #4: clients/wrappers the bundle proves under any (minified) name, same walk.
@@ -216,15 +234,27 @@ def collect_base_env(root: Node, data: bytes) -> BaseEnv:
             left = _text_if_short(node.child_by_field_name("left"))
             if left in ("axios.defaults.baseURL",):
                 default_base = _string_value(node.child_by_field_name("right"))
+            elif left.startswith("window.") and left[7:].isidentifier():
+                # `window.NAME = "literal"` (#233). Every assignment is recorded: a non-literal, or
+                # a second different literal, makes the name ambiguous (None), never a guess.
+                literal = _string_value(node.child_by_field_name("right"))
+                global_name = left[7:]
+                local_window[global_name] = (
+                    literal
+                    if global_name not in local_window or local_window[global_name] == literal
+                    else None
+                )
     # Resolve the collected local consts once — literals AND values built from other local consts
     # (`const url = base + "/x"`). Poison-filtered above, so every entry is a value that cannot
     # differ at the sink (0-FP); the sink resolver then folds by an O(1) `const_prefixes` lookup.
     # A `with` anywhere drops them all (see above) — its dynamic scope defeats the certainty.
-    const_prefixes = {} if has_with else resolve_local_consts(raw_consts)
+    merged_window = {} if has_with else _merge_window_globals(local_window, window_globals)
+    const_prefixes = {} if has_with else resolve_local_consts(raw_consts, merged_window)
     return BaseEnv(
         instances=instances,
         default_base=default_base,
         const_prefixes=const_prefixes,
+        window_globals=merged_window,
         receivers=receivers,
         inferred_instances=frozenset(inferred_instances),
         wrappers={key: w for key, w in wrappers.items() if w is not None},
@@ -384,6 +414,8 @@ def _resolve_concat_operand(node: Node | None, env: BaseEnv, depth: int) -> str 
         if obj is not None and prop is not None and obj.type == "identifier":
             obj_text = _text(obj)
             prop_text = _text(prop)
+            if obj_text == "window" and prop_text in env.window_globals:
+                return env.window_globals[prop_text]
             # webpack `alias.export` where alias was bound to `require(id)` (2b)
             webpack_val = env.webpack_members.get(obj_text, {}).get(prop_text)
             if webpack_val is not None:
@@ -421,7 +453,9 @@ def _fold_indirect(node: Node, env: BaseEnv) -> str | None:
     """
     if node.type not in ("identifier", "member_expression", "binary_expression"):
         return None
-    has_sources = env.const_prefixes or env.cross_module_consts or env.webpack_members
+    has_sources = (
+        env.const_prefixes or env.cross_module_consts or env.webpack_members or env.window_globals
+    )
     if not has_sources and node.type != "binary_expression":
         return None
     if node.end_byte - node.start_byte > _MAX_URL_SPAN:
