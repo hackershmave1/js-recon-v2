@@ -12,7 +12,8 @@ import { ADMIT, admitScript } from '../modules/script-admission.js';
 const doc = JSON.parse(readFileSync(SOURCE, 'utf8'));
 
 // 1) No drift: the committed module is exactly what the generator renders from the JSON.
-assert.equal(readFileSync(TARGET, 'utf8'), renderModule(doc),
+// Line endings are normalized: a Windows checkout may turn the committed LF into CRLF.
+assert.equal(readFileSync(TARGET, 'utf8').split(String.fromCharCode(13, 10)).join(String.fromCharCode(10)), renderModule(doc),
   'modules/third-party-rules.js is stale: run `node scripts/gen-third-party-rules.mjs`');
 assert.deepEqual([...NOISE_HOSTS].sort(), [...new Set(Object.values(doc.hosts).flat())].sort());
 assert.deepEqual(FILE_PATTERNS, doc.file_patterns);
