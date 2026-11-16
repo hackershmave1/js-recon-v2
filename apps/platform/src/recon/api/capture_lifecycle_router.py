@@ -9,12 +9,12 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from recon.api import capture_router as ingest
-from recon.api.deps import get_redis
+from recon.api.deps import get_actor, get_redis
 from recon.config import get_settings
 from recon.db.base import tenant_session
 from recon.db.models import Run
@@ -86,7 +86,39 @@ def capture_sessions_for_scope(
     tenant_id, signed_in = ingest._resolve_ingest_tenant(authorization)
     if not signed_in:
         raise HTTPException(status_code=401, detail="sign in to look up sessions")
-    return {"sessions": [asdict(m) for m in capture_scope.sessions_for_scope(tenant_id, scope)]}
+    return {
+        "sessions": [asdict(m) for m in capture_scope.sessions_for_scope(tenant_id, scope)],
+        # Started in the workspace, no extension id yet: Continue may adopt one (ADR-0012).
+        "workspace": [
+            asdict(m) for m in capture_scope.workspace_sessions_for_scope(tenant_id, scope)
+        ],
+    }
+
+
+@router.post("/capture/sessions/{session_id}/adopt")
+def adopt_workspace_session(
+    session_id: str,
+    origin: str | None = Header(default=None, alias="Origin"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    actor: str | None = Depends(get_actor),
+) -> dict:
+    """Continue adopts a session started in the workspace: it gets an extension id, once
+    (ADR-0012). Signed-in, same tenant only (RLS), and an actor is required for the audit log.
+    Never overwrites an id, never touches the engagement binding or the scope."""
+    ingest._enforce_origin_lock(origin, enabled=get_settings().capture_ingest_origin_lock)
+    tenant_id, signed_in = ingest._resolve_ingest_tenant(authorization)
+    if not signed_in or not actor:
+        raise HTTPException(status_code=401, detail="sign in to adopt a session")
+    try:
+        adopted = capture_scope.adopt_workspace_session(tenant_id, session_id, actor=actor)
+    except capture_scope.AdoptRefused as exc:
+        code = 404 if exc.reason == "not_found" else 409
+        raise HTTPException(status_code=code, detail=exc.reason) from exc
+    return {
+        "sessionId": adopted.session_id,
+        "externalId": adopted.external_id,
+        "engagementId": adopted.engagement_id,
+    }
 
 
 @router.post("/sessions/{ext_session_id}/scope")

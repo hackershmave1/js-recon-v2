@@ -39,12 +39,20 @@ def _session(tenant: str, *, engagement_id: str | None, external_id: str | None)
     ).id
 
 
-def _run_with_endpoint(tenant: str, session_id: str, *, input_ref: str | None = None) -> str:
+def _run_with_endpoint(
+    tenant: str, session_id: str, *, input_ref: str | None = None, target: str | None = None
+) -> str:
     """A ``done`` run in ``session_id`` carrying the one shared endpoint finding.
     ``input_ref`` set == an uploaded bundle (the upload origin); left NULL == a
     crawl or an extension-capture accumulator run."""
     with tenant_session(tenant) as session:
-        run = models.Run(tenant_id=tenant, session_id=session_id, state="done", input_ref=input_ref)
+        run = models.Run(
+            tenant_id=tenant,
+            session_id=session_id,
+            state="done",
+            input_ref=input_ref,
+            target=target,
+        )
         session.add(run)
         session.flush()
         run_id = str(run.id)
@@ -222,3 +230,17 @@ def test_sightings_fan_out_buckets_both_origins_per_hash():
         assert finding.sightings is not None, finding.value
         assert finding.sightings.capture == 1, finding.value
         assert finding.sightings.platform == 2, finding.value
+
+
+def test_a_crawl_run_in_an_adopted_session_still_reads_as_platform():
+    # ADR-0012: adopting a workspace session gives it an external_id; its earlier CRAWL run
+    # (target set) must not start counting as an extension capture.
+    tenant = sessions_service.create_tenant("sight-adopted")
+    engagement = _engagement(tenant)
+    adopted = _session(tenant, engagement_id=engagement, external_id="ext-adopted")
+    other = _session(tenant, engagement_id=engagement, external_id=None)
+    _run_with_endpoint(tenant, adopted, target="acme.io")  # the crawl, before adopt
+    seen_from = _run_with_endpoint(tenant, other, target="acme.io")
+
+    finding = _only(queries.list_findings(tenant, seen_from))
+    assert finding.sightings.capture == 0 and finding.sightings.platform == 1

@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from redis import Redis
-from sqlalchemy import desc, func, select, update
+from sqlalchemy import desc, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from recon import storage
@@ -325,7 +325,12 @@ def rerun(redis: Redis, *, tenant_id: str, session_id: str) -> RunView:
     with tenant_session(tenant_id) as session:
         latest = session.scalars(
             select(Run)
-            .where(Run.session_id == str(session_id))
+            # The latest REPRODUCIBLE run: a capture run (no target, no stored input) cannot be
+            # repeated, and an adopted workspace session ends with one (ADR-0012).
+            .where(
+                Run.session_id == str(session_id),
+                or_(Run.target.is_not(None), Run.input_ref.is_not(None)),
+            )
             .order_by(desc(Run.created_at))
             .limit(1)
         ).first()
