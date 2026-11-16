@@ -5,6 +5,7 @@ import { C, F } from '../theme.js';
 import { Dot } from './ui.jsx';
 import { PauseIcon, PlayIcon, StopIcon, ArrowRightIcon } from '../icons.jsx';
 import { EngagementLocked } from './EngagementPicker.jsx';
+import { newSiteExplanation } from '../viewmodels/captureVm.js';
 
 const TONE = {
   teal: { c: C.teal, bg: 'rgba(91,214,192,0.07)', line: 'rgba(91,214,192,0.5)' },
@@ -97,7 +98,7 @@ export function NewSiteBanner({ vm }) {
   return (
     <Banner tone="blue" title={`New site seen: ${site}`}>
       <p style={bannerText}>
-        It is outside this capture's scope, so its scripts are not being captured.
+        {newSiteExplanation(site, vm.held)}
         {more.length > 0 && ` ${more.length} more site${more.length === 1 ? '' : 's'} waiting.`}
       </p>
       <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>

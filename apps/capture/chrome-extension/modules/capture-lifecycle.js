@@ -27,6 +27,15 @@ const DOT = '•';
 // The toolbar badge: the capture's file count, plus a dot while a "new site seen" is unanswered.
 // The dot survives the count (one writer: updateBadge) and stays while paused, so it's noticed with
 // the popup closed. Chrome fits about four characters.
+// site -> number of scripts held for it, from the stored site -> { host: count } map.
+export function heldCounts(held) {
+  const out = {};
+  for (const [site, hosts] of Object.entries(held || {})) {
+    out[site] = Object.values(hosts).reduce((a, b) => a + b, 0);
+  }
+  return out;
+}
+
 export function badgeText({ capturing, files, newSites }) {
   const dot = newSites > 0 ? DOT : '';
   if (!capturing) return dot;
@@ -73,6 +82,8 @@ export class CaptureLifecycle {
     return {
       capture: s && {
         runId: s.runId, sessionId: s.sessionId, scope: s.scope, paused: s.paused, ending: !!s.ending,
+        // How many scripts the platform holds per undecided site (ADR-0010), for the popup's prompt.
+        held: heldCounts(s.held),
         elapsedMs: s.elapsedMs + (s.paused || s.ending ? 0 : this.now() - s.resumedAt),
         newSites: s.newSites,
         // For the popup's header only: how the capture began and what paused it.
@@ -170,6 +181,9 @@ export class CaptureLifecycle {
       this.captureSession.resetForCapture();  // dedup per capture: a Continue re-sends its files
       this.state = {
         runId: res.data.runId, sessionId, scope: [entry], startedAt: this.now(), resumedAt: this.now(),
+        // The PLATFORM's session id (the decision endpoints use it, not the extension's), and the
+        // scripts held for undecided hosts: site -> { host: count }.
+        platformSessionId: res.data.sessionId || null, held: {},
         elapsedMs: 0, paused: false, ending: null, newSites: [], dismissedSites: [], lastBatchAt: this.now(),
         // Shown in the popup header ("Continuing acme.io · capture 5"). The number counts the
         // session's captures at the lookup, so reusing an empty open capture can read one high.
@@ -311,6 +325,37 @@ export class CaptureLifecycle {
     return true;
   }
 
+  // The platform stored a script of an undecided host (the quarantine queue's upload succeeded).
+  noteHeld(host) {
+    const s = this.state;
+    if (!s || !host) return;
+    const site = apexForHost(host);
+    s.held = s.held || {};
+    s.held[site] = s.held[site] || {};
+    s.held[site][host] = (s.held[site][host] || 0) + 1;
+    this.persist().catch(() => {});
+  }
+
+  // Whether this site is on the capture's ignore list (the researcher said "not part of this
+  // target"): its scripts are not fetched. The list is the sites the popup dismissed.
+  isIgnoredSite(host) {
+    const s = this.state;
+    return !!s && (s.dismissedSites || []).includes(apexForHost(host));
+  }
+
+  // Tell the platform the researcher's decision for every host it holds scripts for under `site`.
+  // Returns the first failure, or null. A 404 means the platform holds nothing for that host.
+  async decideHeld(site, decision) {
+    const s = this.state;
+    const hosts = Object.keys((s && s.held && s.held[site]) || {});
+    if (!s || !s.platformSessionId) return null;
+    for (const host of hosts) {
+      const res = await this.api.decideHost(s.platformSessionId, host, decision);
+      if (!res.ok && res.status !== 404) return res;
+    }
+    return null;
+  }
+
   // "Done" on the popup's "Capture ended" banner.
   dismissEnded() {
     return this.serialize(async () => {
@@ -325,8 +370,12 @@ export class CaptureLifecycle {
       if (!this.state) return { ok: false, error: 'no_capture' };
       this.state.newSites = this.state.newSites.filter((h) => h !== site);
       this.state.dismissedSites = [...new Set([...(this.state.dismissedSites || []), site])];
+      // Ignore: the platform deletes what it holds and refuses this host's scripts from now on. A
+      // failed call is not fatal: the held content expires on its own after 7 days.
+      const failed = await this.decideHeld(site, 'ignore');
+      if (this.state.held) delete this.state.held[site];
       await this.persist();
-      return { ok: true };
+      return failed ? { ok: true, decisionPending: true } : { ok: true };
     });
   }
 
@@ -335,10 +384,17 @@ export class CaptureLifecycle {
       const s = this.state;
       if (!s) return { ok: false, error: 'no_capture' };
       const { scope } = CaptureLifecycle.scopeForHost(host);
+      // Add releases what the platform holds for this site into analysis (and widens its scope),
+      // BEFORE the local scope changes: a failed release leaves the site offered, not half-added.
+      const failedDecision = await this.decideHeld(apexForHost(scope), 'add');
+      if (failedDecision) {
+        return { ok: false, error: failedDecision.status === 401 ? 'session_expired' : (failedDecision.error || 'failed') };
+      }
       const res = await this.api.addScope(s.sessionId, scope);
       if (!res.ok) return { ok: false, error: res.status === 401 ? 'session_expired' : (res.error || 'failed') };
       if (!s.scope.includes(scope)) s.scope.push(scope);
       s.newSites = s.newSites.filter((h) => h !== scope);
+      if (s.held) delete s.held[apexForHost(scope)];
       await this.persist();
       await this.applyGate({ scope: s.scope, capturing: this.isListening() });
       return { ok: true, scope: s.scope };

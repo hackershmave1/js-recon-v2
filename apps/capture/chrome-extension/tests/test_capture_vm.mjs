@@ -142,3 +142,19 @@ assert.equal(secretHintBadge(4), '4 HINTS');
 assert.ok(!/SEC/.test(secretHintBadge(4)));
 
 console.log('test_capture_vm: ok');
+
+// --- the "new site seen" prompt says what is held and that Add widens the scope (ADR-0010) ---
+import { newSiteExplanation } from '../src/popup/viewmodels/captureVm.js';
+assert.equal(
+  newSiteExplanation('acme-static.com', { 'acme-static.com': 3 }),
+  "3 scripts are held, not analyzed. Add widens this capture's scope to acme-static.com and its subdomains.",
+);
+assert.equal(
+  newSiteExplanation('acme-static.com', { 'acme-static.com': 1 }),
+  "1 script is held, not analyzed. Add widens this capture's scope to acme-static.com and its subdomains.",
+);
+assert.equal(
+  newSiteExplanation('acme-static.com', {}),
+  "Its scripts are not being captured. Add widens this capture's scope to acme-static.com and its subdomains.",
+);
+assert.match(newSiteExplanation('x.io', undefined), /widens this capture's scope/);

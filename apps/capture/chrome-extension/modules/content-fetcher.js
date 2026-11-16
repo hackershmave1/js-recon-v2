@@ -38,6 +38,32 @@ export class ContentFetcher {
     }
   }
 
+  // A script from a host the researcher has not decided on (ADR-0010 quarantine): fetched WITHOUT
+  // the browser's cookies or HTTP auth for that site (`credentials: 'omit'`), so an unknown host can
+  // never be sent the researcher's session, and capped in size. Single attempt, never throws: a
+  // miss just means nothing is held. The caller follows no dependency or source map from it.
+  async fetchQuarantined(url, { maxBytes = 10 * 1024 * 1024 } = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.fetchTimeoutMs);
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        credentials: 'omit',
+        signal: controller.signal
+      });
+      if (!response.ok) return { success: false, error: `HTTP ${response.status}` };
+      const declared = Number(response.headers.get('content-length'));
+      if (declared > maxBytes) return { success: false, error: 'too_large' };
+      const content = await response.text();
+      if (content.length > maxBytes) return { success: false, error: 'too_large' };
+      return { success: true, content };
+    } catch (error) {
+      return { success: false, error: error && error.name === 'AbortError' ? 'timeout' : 'fetch failed' };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async fetch(url, options = {}) {
     if (this.cache.has(url)) {
       return { success: true, content: this.cache.get(url), cached: true };
