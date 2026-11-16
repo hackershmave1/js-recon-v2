@@ -927,6 +927,13 @@ class HostDecision(Base):
     first_seen_at: Mapped[dt.datetime] = _now_col(nullable=False)
     decided_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # K1: a standard crawl REFERENCED this host's scripts but, being out of scope, fetched none.
+    # The run that saw them (Add re-crawls it) and a bounded sample of the script URLs, for the
+    # "referenced, not fetched" label. Null for a host only the extension quarantined.
+    referenced_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("run.id", ondelete="SET NULL")
+    )
+    referenced_urls: Mapped[list[str] | None] = mapped_column(JSONB)
 
 
 class QuarantinedAsset(Base):

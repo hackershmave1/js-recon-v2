@@ -48,6 +48,25 @@ describe("ScopePanel", () => {
     expect(within(hidden).getByText(/2 files · 4 findings/)).toBeInTheDocument();
   });
 
+  it("labels a crawl-referenced host 'referenced, not fetched' and says Add starts a crawl", async () => {
+    vi.mocked(api.getSessionScope).mockResolvedValue({
+      ...full,
+      undecided: [{
+        host: "cdn.acme-static.com", files: 0, bytes: 0, first_seen_at: "2026-11-10T00:00:00Z", expires_at: soon,
+        referenced: true, referenced_urls: ["https://cdn.acme-static.com/lib.js", "https://cdn.acme-static.com/b.js"],
+      }],
+    });
+    vi.mocked(api.decideHost).mockResolvedValue({
+      state: "added", promoted: 0, deleted: 0, recrawl: { source_run_id: "r-1", run_id: "r-2" },
+    });
+    show();
+    const group = await screen.findByRole("region", { name: "Waiting for your decision" });
+    expect(within(group).getByText(/referenced, not fetched/)).toBeInTheDocument();
+    expect(within(group).getByText(/2 scripts/)).toBeInTheDocument();
+    await userEvent.click(within(group).getByRole("button", { name: "Add" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(/new crawl is fetching/i);
+  });
+
   it("says what removing does: it hides and is reversible", async () => {
     show();
     await screen.findByText("acme.io");

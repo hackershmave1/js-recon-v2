@@ -97,3 +97,51 @@ def test_parse_assets_keeps_ordered_unique_js_urls():
         "https://acme.io/vendor.js",
         "https://acme.io/legacy.js",
     ]
+
+
+# Verified against the pinned katana v1.6.1 (-display-out-scope): an out-of-scope row has no
+# response and carries ``"error": "out of scope"``, plus the tag/attribute that referenced it.
+_OUT_OF_SCOPE_SCRIPT = (
+    b'{"timestamp":"t","request":{"method":"GET","endpoint":"http://cdn.acme.test:8000/lib.js",'
+    b'"tag":"script","attribute":"src","source":"http://app.acme.test:8000"},"error":"out of scope"}'
+)
+_OUT_OF_SCOPE_PAGE = (
+    b'{"timestamp":"t","request":{"method":"GET","endpoint":"http://blog.other.test/post.html",'
+    b'"tag":"a","attribute":"href","source":"http://app.acme.test:8000"},"error":"out of scope"}'
+)
+_IN_SCOPE_JS = (
+    b'{"timestamp":"t","request":{"method":"GET","endpoint":"http://app.acme.test:8000/app.js",'
+    b'"tag":"script","attribute":"src","source":"http://app.acme.test:8000"},'
+    b'"response":{"status_code":200}}'
+)
+
+
+def test_build_argv_lists_out_of_scope_references():
+    argv = katana.build_argv(
+        katana_bin="katana",
+        domain="acme.io",
+        scope_hosts=["acme.io"],
+        depth=3,
+        crawl_duration_seconds=120.0,
+    )
+    # ADR-0010: katana reports out-of-scope URLs instead of silently dropping them. It still
+    # does NOT request them (that is what "out of scope" means), so nothing is fetched.
+    assert "-display-out-scope" in argv
+
+
+def test_parse_assets_ignores_out_of_scope_rows():
+    out = b"\n".join([_IN_SCOPE_JS, _OUT_OF_SCOPE_SCRIPT])
+    assert katana.parse_assets(out) == ["http://app.acme.test:8000/app.js"]
+
+
+def test_parse_out_of_scope_scripts_only_not_page_links():
+    out = b"\n".join([_IN_SCOPE_JS, _OUT_OF_SCOPE_SCRIPT, _OUT_OF_SCOPE_PAGE, b"not json"])
+    assert katana.parse_out_of_scope_scripts(out) == ["http://cdn.acme.test:8000/lib.js"]
+
+
+def test_parse_out_of_scope_scripts_dedupes_and_keeps_only_http():
+    dup = _OUT_OF_SCOPE_SCRIPT
+    data_uri = _OUT_OF_SCOPE_SCRIPT.replace(b"http://cdn.acme.test:8000/lib.js", b"data:text/js,1")
+    assert katana.parse_out_of_scope_scripts(b"\n".join([dup, dup, data_uri])) == [
+        "http://cdn.acme.test:8000/lib.js"
+    ]

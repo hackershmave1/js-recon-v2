@@ -234,3 +234,58 @@ def test_discover_run_builds_a_schemed_seed_url_for_the_guard(monkeypatch):
     ):
         crawl.discover_run(MagicMock(), tenant_id="t", run_id="r", job_id="j")
     run_crawl.assert_called_once()
+
+
+def _run_crawl_with_referenced(referenced_urls, note_side_effect=None):
+    engagement = SimpleNamespace(scope_hosts=["acme.io"], authorization_ack=True)
+    with (
+        patch("recon.discover.manifest.record_event", return_value=MagicMock()),
+        patch("recon.discover.crawl.publish"),
+        patch(
+            "recon.discover.crawl.katana.parse_out_of_scope_scripts",
+            return_value=referenced_urls,
+        ),
+        patch(
+            "recon.discover.crawl.quarantine_service.note_referenced",
+            side_effect=note_side_effect,
+        ) as note,
+    ):
+        for p in _patches(
+            katana_urls=["https://acme.io/app.js"],
+            validated={"https://acme.io/app.js"},
+            engagement=engagement,
+        ):
+            p.start()
+        try:
+            crawl.discover_run(MagicMock(), tenant_id="t", run_id="r", job_id="j")
+        finally:
+            patch.stopall()
+    return note
+
+
+def test_crawl_lists_unknown_script_hosts_without_fetching_them():
+    note = _run_crawl_with_referenced(
+        [
+            "https://cdn.acme-static.com/a.js",
+            "https://cdn.acme-static.com/b.js",
+            "https://acme.io/in-scope.js",  # already in scope: not an unknown host
+            "https://other.example.org/x.js",
+        ]
+    )
+    note.assert_called_once()
+    assert note.call_args.kwargs["urls_by_host"] == {
+        "cdn.acme-static.com": [
+            "https://cdn.acme-static.com/a.js",
+            "https://cdn.acme-static.com/b.js",
+        ],
+        "other.example.org": ["https://other.example.org/x.js"],
+    }
+
+
+def test_crawl_does_not_note_when_nothing_was_referenced():
+    assert not _run_crawl_with_referenced([]).called
+
+
+def test_crawl_survives_a_failure_to_list_hosts():
+    # The listing is a convenience on top of the crawl: it must never fail the run.
+    _run_crawl_with_referenced(["https://cdn.acme-static.com/a.js"], note_side_effect=RuntimeError)

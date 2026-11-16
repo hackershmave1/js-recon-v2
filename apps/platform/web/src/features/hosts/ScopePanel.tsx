@@ -31,6 +31,7 @@ export function ScopePanel({ sessionId, onChanged }: { sessionId: string; onChan
   const [busy, setBusy] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!tenantId) return;
@@ -48,6 +49,7 @@ export function ScopePanel({ sessionId, onChanged }: { sessionId: string; onChan
   const act = async (key: string, fn: () => Promise<unknown>, failure: string) => {
     if (!tenantId) return;
     setBusy(key);
+    setNotice(null);
     try {
       await fn();
       await load();
@@ -63,6 +65,13 @@ export function ScopePanel({ sessionId, onChanged }: { sessionId: string; onChan
   if (!view) {
     return error ? <div className="card sp"><p className="sp-error" role="alert">{error}</p></div> : null;
   }
+  // Add of a host the crawl only referenced starts one new crawl that fetches its scripts (K1).
+  const decide = (host: string, decision: "add" | "ignore") =>
+    act(`${decision}:${host}`, async () => {
+      const result = await decideHost(tenantId!, sessionId, host, decision);
+      if (result.recrawl?.run_id) setNotice(`Added ${host}. A new crawl is fetching its scripts; the findings appear when it finishes.`);
+      else if (result.recrawl) setNotice(`Added ${host}, but the crawl didn't start. Re-run the session to fetch its scripts.`);
+    }, `Couldn't ${decision} ${host}.`);
   const add = (host: string) => act(`add:${host}`, () => addScopeHost(tenantId!, sessionId, host), `Couldn't add ${host}.`);
 
   return (
@@ -73,6 +82,7 @@ export function ScopePanel({ sessionId, onChanged }: { sessionId: string; onChan
         findings under “Hidden: out of scope” and they return if you add it back.
       </p>
       {error && <p className="sp-error" role="alert">{error}</p>}
+      {notice && <p className="sp-note" role="status">{notice}</p>}
 
       <ul className="sp-chips" aria-label="Hosts in scope">
         {view.scope_hosts.length === 0 && <li className="muted">No scope set.</li>}
@@ -94,21 +104,28 @@ export function ScopePanel({ sessionId, onChanged }: { sessionId: string; onChan
       {view.undecided.length > 0 && (
         <section className="sp-group" aria-label="Waiting for your decision">
           <h3>Waiting for your decision</h3>
-          <p className="sp-note muted">Their scripts are held, not analyzed. Add widens the scope to the host and its subdomains.</p>
+          <p className="sp-note muted">
+            Scripts from these hosts are not analyzed. “Referenced, not fetched” means the crawl saw the script tag and
+            downloaded nothing; Add starts one new crawl that fetches it. Otherwise the scripts are held, not analyzed.
+            Add widens the scope to the host and its subdomains.
+          </p>
           <ul>
             {view.undecided.map((u) => (
               <li key={u.host} className="sp-row">
                 <span className="sp-host">{u.host}</span>
-                <span className="muted">
-                  {u.files} script{u.files === 1 ? "" : "s"}{u.expires_at ? ` · ${expiryLabel(u.expires_at)}` : ""}
+                <span className="muted" title={(u.referenced_urls ?? []).join(", ") || undefined}>
+                  {u.referenced && u.files === 0
+                    ? `referenced, not fetched · ${(u.referenced_urls ?? []).length} script${(u.referenced_urls ?? []).length === 1 ? "" : "s"}`
+                    : `${u.files} script${u.files === 1 ? "" : "s"}`}
+                  {u.expires_at ? ` · ${expiryLabel(u.expires_at)}` : ""}
                 </span>
                 <span className="sp-actions">
                   <button type="button" disabled={busy !== null}
-                    onClick={() => act(`d:${u.host}`, () => decideHost(tenantId!, sessionId, u.host, "add"), `Couldn't add ${u.host}.`)}>
+                    onClick={() => decide(u.host, "add")}>
                     Add
                   </button>
                   <button type="button" disabled={busy !== null}
-                    onClick={() => act(`i:${u.host}`, () => decideHost(tenantId!, sessionId, u.host, "ignore"), `Couldn't ignore ${u.host}.`)}>
+                    onClick={() => decide(u.host, "ignore")}>
                     Ignore
                   </button>
                 </span>

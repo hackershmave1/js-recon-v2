@@ -49,6 +49,10 @@ def build_argv(
         f"{crawl_duration_seconds:g}",
         "-field-scope",
         "rdn",
+        # ADR-0010: report URLs outside the crawl scope instead of dropping them silently. katana
+        # still does NOT request them, so no byte is fetched from an unknown host; we only learn
+        # which script hosts the pages referenced (verified on the pinned v1.6.1).
+        "-display-out-scope",
     ]
     if js_crawl:
         # -jc parses lazy/dynamic import() chunk URLs out of the JS and follows
@@ -82,6 +86,8 @@ def parse_assets(stdout: bytes) -> list[str]:
             row = json.loads(line)
         except (json.JSONDecodeError, UnicodeDecodeError):
             continue
+        if _is_out_of_scope(row):
+            continue  # listed for the researcher, never an asset to download (see below)
         url = _extract_url(row)
         if url is None:
             continue
@@ -92,6 +98,33 @@ def parse_assets(stdout: bytes) -> list[str]:
             continue
         seen.setdefault(url, None)
     return list(seen)
+
+
+def parse_out_of_scope_scripts(stdout: bytes) -> list[str]:
+    """Script URLs the crawl REFERENCED but, being outside the scope, did not fetch.
+
+    With ``-display-out-scope`` katana v1.6.1 emits ``{"request": {"endpoint", "tag", "attribute",
+    "source"}, "error": "out of scope"}`` (no response). Only ``<script src>`` references count:
+    a page link to another site is a different thing (not crawled, not listed here)."""
+    seen: dict[str, None] = {}
+    for raw in stdout.splitlines():
+        try:
+            row = json.loads(raw.strip() or "null")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not _is_out_of_scope(row):
+            continue
+        url = _extract_url(row)
+        if url is None or urlsplit(url).scheme.lower() not in ("http", "https"):
+            continue
+        request = row.get("request")
+        if isinstance(request, dict) and request.get("tag") == "script":
+            seen.setdefault(url, None)
+    return list(seen)
+
+
+def _is_out_of_scope(row: object) -> bool:
+    return isinstance(row, dict) and row.get("error") == "out of scope"
 
 
 def _extract_url(row: object) -> str | None:
