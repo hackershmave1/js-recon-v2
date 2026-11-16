@@ -36,11 +36,10 @@ from botocore.exceptions import ClientError
 from sqlalchemy import select
 
 from recon import storage
-from recon.config import get_settings
 from recon.db import models
 from recon.db.base import tenant_session
-from recon.fetch import egress
-from recon.findings import deobfuscate, engines, sourcemapper, visibility
+from recon.findings import deobfuscate, engines, queries, sourcemapper, visibility
+from recon.findings.coverage import read_run_coverage
 from recon.probe import formatted_text, recovered_store
 from recon.runs import assets as run_assets
 
@@ -104,7 +103,7 @@ def list_sources(
             SourceFile(path=row.url, kind="asset", fetch_status=row.fetch_status)
             for row in asset_rows
         ]
-        return files + (_recovered_sources(tenant_id, run_id) or [])
+        return files + _visible_recovered(tenant_id, run_id, include_hidden)
     # No asset rows: a legacy run, or a run invisible to this tenant. The run row
     # distinguishes them (RLS hides another tenant's run -> None -> 404).
     with tenant_session(tenant_id) as session:
@@ -125,18 +124,57 @@ def _in_scope_rows(tenant_id: str, run_id: str, rows: list) -> list:
     under "out of scope", not deleted, and back when the host is added again. With no scope known
     nothing is hidden. A run whose every file is out of scope lists none, which is what it should
     show (the Hosts page offers to add the host back)."""
+    hidden = _hidden_urls(tenant_id, run_id)
+    return [row for row in rows if row.url not in hidden]
+
+
+def _hidden_urls(tenant_id: str, run_id: str) -> set[str]:
     with tenant_session(tenant_id) as session:
         run = session.get(models.Run, run_id)
-        first_party = visibility.first_party_hosts(session, run) if run is not None else None
-    if first_party is None:
-        return rows
-    allow_local = get_settings().allow_local_egress
-    kept = []
-    for row in rows:
-        host = visibility._static_host(row.url)
-        if host is None or egress.host_in_scope(host, first_party, allow_local=allow_local):
-            kept.append(row)
-    return kept
+        return visibility.out_of_scope_asset_urls(session, run) if run is not None else set()
+
+
+@dataclass(frozen=True)
+class FileCounts:
+    """The pair of counts the Overview and the Sources page both show (L1 / F14), from the same
+    definitions: ``collected`` files fetched and shown, ``hidden_out_of_scope`` fetched but hidden
+    because their host was removed from the scope, and the recovered originals listed here because
+    they carry findings (the Overview's "original sources recovered" is the larger total)."""
+
+    collected: int
+    hidden_out_of_scope: int
+    recovered_with_findings: int
+    sources_recovered: int
+
+
+def file_counts(tenant_id: str, run_id: str) -> FileCounts | None:
+    """The run's file counts, or ``None`` if the run is absent/invisible."""
+    with tenant_session(tenant_id) as session:
+        run = session.get(models.Run, run_id)
+        if run is None:
+            return None
+        collected, hidden = queries.file_counts(session, run)
+        hidden_urls = visibility.out_of_scope_asset_urls(session, run)
+        coverage = read_run_coverage(session, run_id)
+    recovered = [
+        f for f in (_recovered_sources(tenant_id, run_id) or []) if f.asset_url not in hidden_urls
+    ]
+    return FileCounts(
+        collected=collected,
+        hidden_out_of_scope=hidden,
+        recovered_with_findings=len(recovered),
+        sources_recovered=coverage.sources_recovered if coverage is not None else 0,
+    )
+
+
+def _visible_recovered(tenant_id: str, run_id: str, include_hidden: bool) -> list[SourceFile]:
+    """Recovered originals with findings, minus those whose owning file is hidden by scope: an
+    original is hidden together with the bundle whose map produced it (L1 / F14)."""
+    recovered = _recovered_sources(tenant_id, run_id) or []
+    if include_hidden:
+        return recovered
+    hidden = _hidden_urls(tenant_id, run_id)
+    return [f for f in recovered if f.asset_url not in hidden]
 
 
 def _recovered_sources(tenant_id: str, run_id: str) -> list[SourceFile] | None:

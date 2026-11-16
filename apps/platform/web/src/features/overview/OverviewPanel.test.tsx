@@ -68,6 +68,31 @@ describe("OverviewPanel", () => {
     expect(within(card("Attribution")).getByText("75%")).toBeInTheDocument(); // 3 / (3+1)
   });
 
+  it("says how many files are hidden because their host left the scope (F14)", () => {
+    const data: FindingsResponse = {
+      run_id: "r", count: 0, spec: null, findings: [], files: 30, files_hidden: 4,
+      coverage: {
+        attributed: 0, unattributed: 0, secrets: 0, secrets_engine: "ok",
+        sources_recovered: 63, source_map: "capture", files: [],
+      },
+    };
+    renderPanel(data);
+    expect(within(card("Files")).getByText("30")).toBeInTheDocument();
+    expect(within(card("Files")).getByText("63 original sources recovered · 4 hidden: out of scope")).toBeInTheDocument();
+  });
+
+  it("adds nothing about hidden files when none are hidden", () => {
+    const data: FindingsResponse = {
+      run_id: "r", count: 0, spec: null, findings: [], files: 5, files_hidden: 0,
+      coverage: {
+        attributed: 0, unattributed: 0, secrets: 0, secrets_engine: "ok",
+        sources_recovered: 65, source_map: "capture", files: [],
+      },
+    };
+    renderPanel(data);
+    expect(within(card("Files")).getByText("65 original sources recovered")).toBeInTheDocument();
+  });
+
   it("shows JS files collected, not recovered analysis units, on the Files card (QA)", () => {
     // 5 bundles fetched; their source maps recovered 65 originals (mostly a vendor library).
     // The card must say 5 — the Sessions list's number — with the 65 as a labelled sub-line.

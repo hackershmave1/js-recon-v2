@@ -137,6 +137,8 @@ class FindingsView:
     # The run's "Files" metric (see files_collected) — one definition shared with the
     # Sessions summary so every surface shows the same number.
     files: int = 0
+    # Of the files collected, how many are hidden because their host left the scope.
+    files_hidden: int = 0
     # Findings captured but not shown by default, per reason (visibility) — after the type
     # filter, so the count matches the list the caller asked for.
     hidden: dict[str, int] = field(default_factory=dict)
@@ -504,6 +506,7 @@ def list_findings(
             )
             is not None
         )
+        run_file_counts = file_counts(session, run)
         return FindingsView(
             run_id=str(run_id),
             hidden=hidden_counts,
@@ -531,7 +534,8 @@ def list_findings(
                 else None
             ),
             total=total,
-            files=files_collected(session, run),
+            files=run_file_counts[0],
+            files_hidden=run_file_counts[1],
         )
 
 
@@ -801,27 +805,39 @@ def graphql_operations(tenant_id: str, run_id: str) -> list[dict[str, Any]]:
 
 
 def files_collected(session: Session, run: Run) -> int:
-    """The run's "Files" metric: the JS files actually COLLECTED from the target — a crawl or
-    capture run's assets whose fetch succeeded, else 1 for a single uploaded bundle.
+    """The run's "Files" metric: the JS files actually COLLECTED from the target and shown — a
+    crawl or capture run's assets whose fetch succeeded, else 1 for a single uploaded bundle.
 
-    This is the one definition every surface shows (Overview card, run header, Sessions list).
-    It is deliberately NOT ``coverage.files``: that counts analysis UNITS — every original a
-    source map recovered (vendor libraries included) plus a fallback per map-less bundle, with
-    an original shared by two bundles counted once per bundle — so it is a recovery figure, not
-    a file count (QA: "65 files" for 5 fetched bundles). A failed fetch was never collected or
-    analyzed, so it is not a file either (the run progress reports it separately)."""
+    This is the one definition every surface shows (Overview card, run header, Sessions list, and
+    the Sources page). It is deliberately NOT ``coverage.files``: that counts analysis UNITS —
+    every original a source map recovered (vendor libraries included) plus a fallback per
+    map-less bundle, with an original shared by two bundles counted once per bundle — so it is a
+    recovery figure, not a file count (QA: "65 files" for 5 fetched bundles). A failed fetch was
+    never collected or analyzed, so it is not a file either (the run progress reports it
+    separately). Files served by a host removed from the session scope are hidden, so they are
+    not counted here; ``files_hidden_by_scope`` names how many (L1 / F14)."""
+    return file_counts(session, run)[0]
+
+
+def files_hidden_by_scope(session: Session, run: Run) -> int:
+    """How many collected files are hidden because their host was removed from the scope."""
+    return file_counts(session, run)[1]
+
+
+def file_counts(session: Session, run: Run) -> tuple[int, int]:
+    """``(collected, hidden_out_of_scope)`` — the pair every screen shows (L1 / F14)."""
     run_id = str(run.id)
     has_assets = session.scalar(select(RunAsset.id).where(RunAsset.run_id == run_id).limit(1))
     if has_assets is None:
-        return 1 if run.input_ref else 0
-    return int(
-        session.scalar(
-            select(func.count())
-            .select_from(RunAsset)
-            .where(RunAsset.run_id == run_id, RunAsset.fetch_status == AssetStatus.OK.value)
+        return (1 if run.input_ref else 0), 0
+    fetched = session.scalars(
+        select(RunAsset.url).where(
+            RunAsset.run_id == run_id, RunAsset.fetch_status == AssetStatus.OK.value
         )
-        or 0
-    )
+    ).all()
+    hidden_urls = visibility.out_of_scope_asset_urls(session, run)
+    hidden = sum(1 for url in fetched if url in hidden_urls)
+    return len(fetched) - hidden, hidden
 
 
 def _run_spec_summary(

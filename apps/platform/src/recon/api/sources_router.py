@@ -49,6 +49,7 @@ async def get_run_sources(
         source_count=len(files),
         elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
     )
+    counts = await run_in_threadpool(sources.file_counts, tenant_id, run_id)
     session_id, packages = await run_in_threadpool(sources.run_session, tenant_id, run_id)
     return {
         "run_id": run_id,
@@ -57,6 +58,17 @@ async def get_run_sources(
         # and "Treat as app code" PATCHes this session's app_packages.
         "session_id": session_id,
         "app_packages": packages,
+        # The pair the Overview shows too (L1 / F14), from the same definitions: files collected,
+        # files hidden because their host left the scope, and the original sources recovered
+        # (total, from coverage) of which only those with findings are listed in the tree.
+        "counts": None
+        if counts is None
+        else {
+            "collected": counts.collected,
+            "hidden_out_of_scope": counts.hidden_out_of_scope,
+            "sources_recovered": counts.sources_recovered,
+            "recovered_with_findings": counts.recovered_with_findings,
+        },
         "sources": [
             {
                 "path": f.path,

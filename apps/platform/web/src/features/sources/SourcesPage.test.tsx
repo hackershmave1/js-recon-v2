@@ -4,7 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SourcesPage } from "./SourcesPage";
 import * as api from "../../api/apiClient";
-import type { FindingsResponse, Finding, Occurrence, SourceFile, SourceJump } from "../../api/types";
+import type { FindingsResponse, Finding, Occurrence, SourceFile, SourceJump, SourcesResponse } from "../../api/types";
 
 // CodeViewer highlights the visible window via loadPrism/highlightLine; mock them out so
 // these tests assert plain text deterministically (highlight.ts has its own tests).
@@ -39,8 +39,8 @@ const findings: FindingsResponse = {
 const UPLOAD: SourceFile = { path: "input.js", kind: "upload", fetch_status: "ok", asset_url: null };
 const CODE = "const a = 1\nfetch('/x')\nconst b = 2\n";
 
-function mount(sources: SourceFile[], data: FindingsResponse | null = findings, jump: SourceJump | null = null) {
-  vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: sources.length, sources });
+function mount(sources: SourceFile[], data: FindingsResponse | null = findings, jump: SourceJump | null = null, counts?: SourcesResponse["counts"]) {
+  vi.spyOn(api, "getSources").mockResolvedValue({ run_id: "r", count: sources.length, sources, counts });
   vi.spyOn(api, "getSourceContent").mockResolvedValue({ path: "input.js", content: CODE, truncated: false, formatted: true });
   vi.spyOn(api, "getSourcesIndexStatus").mockResolvedValue({ indexed: 1, total: 1, indexing: false });
   return render(<SourcesPage data={data} tenantId="t" runId="r" jump={jump} />);
@@ -171,6 +171,20 @@ describe("SourcesPage", () => {
   });
 
   // ---- source-map (kind:"source") files, M4 asset-awareness, and the jump prop ----
+
+  it("shows the same pair of counts as the Overview, with the same labels, and why some are hidden (F14)", async () => {
+    const asset: SourceFile = { path: "https://acme.io/app.js", kind: "asset", fetch_status: "ok", asset_url: null };
+    mount([asset], null, null, { collected: 30, hidden_out_of_scope: 4, sources_recovered: 63, recovered_with_findings: 10 });
+    await screen.findByText("acme.io");
+    expect(screen.getByText("30 files collected · 63 original sources recovered · 4 hidden: out of scope")).toBeInTheDocument();
+    expect(screen.getByText("Listed here: 10 recovered originals with findings.")).toBeInTheDocument();
+  });
+
+  it("shows no counts line from an older server that sends none", async () => {
+    mount([UPLOAD], null);
+    await screen.findByText("1 file · 1 uploaded");
+    expect(screen.queryByText(/files collected/)).not.toBeInTheDocument();
+  });
 
   it("lists a source-map-recovered file (kind:source) in the tree", async () => {
     const src: SourceFile = {

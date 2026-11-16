@@ -1,10 +1,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getSources, getSourceContent, searchSources, setAppPackages as saveAppPackages, ApiError } from "../../api/apiClient";
 import { THIRD_PARTY_ROOT, treeSegments } from "./origin";
-import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump, SourceMatch, SourceSearchResponse, ViewLoc } from "../../api/types";
+import type { FindingsResponse, Occurrence, SourceContent, SourceFile, SourceJump, SourceMatch, SourceSearchResponse, SourcesResponse, ViewLoc } from "../../api/types";
 import { SourceSearchResults } from "./SourceSearchResults";
 import { useIndexStatus } from "./useIndexStatus";
 import { SearchScopeChips, scopeFor, type ScopeKind, type SearchScope } from "./SearchScopeChips";
+import { sourcesCountsLine } from "../../api/fileCounts";
 import { occJump } from "../../api/occurrenceSource";
 import { CodeViewer } from "./CodeViewer";
 import { beautify } from "./beautifyClient";
@@ -31,13 +32,13 @@ function matchFile(o: Occurrence, file: SourceFile): boolean {
 // findings (kind "source"). The old subheading called all of them "fetched from the
 // target", which mislabeled the recovered and the non-ok assets. Every file is in
 // exactly one bucket, so the parts sum to files.length. This is the BROWSABLE set —
-// the Overview "Files" tile counts every analyzed file (incl. recovered originals with
-// no findings, which are not enumerated here), so the two totals legitimately differ.
+// the Overview's recovered-originals figure includes originals with no findings, which are not
+// enumerated here; the counts line under the subtitle states both so the screens agree (F14).
 // A runtime request the extension recorded (not a file): listed because it carries findings.
 const isObservedRequest = (file: SourceFile) => file.kind === "source" && /^capture-(request|response):\/\//.test(file.path);
 
 export const SOURCES_SUBTITLE_HELP =
-  "Sources lists the files that carry findings. The Overview counts every analyzed file, including recovered originals with none.";
+  "The tree lists the collected files plus the recovered originals that carry findings. Files hidden because their host was removed from the scope are brought back from the Hosts page.";
 
 export function sourcesSubtitle(files: SourceFile[]): string {
   const fetched = files.filter((file) => file.kind === "asset" && file.fetch_status === "ok").length;
@@ -350,6 +351,8 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
   // The third-party folder starts collapsed: it is grouped out of the way, not deleted.
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set([`/${THIRD_PARTY_ROOT}`]));
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [counts, setCounts] = useState<SourcesResponse["counts"]>(null);
+  const countsLine = sourcesCountsLine(counts);
   const [appPackages, setAppPackagesState] = useState<string[]>([]);
   const [includeThirdParty, setIncludeThirdParty] = useState(false);
   const [pkgSaving, setPkgSaving] = useState(false);
@@ -456,6 +459,7 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
         setFiles(r.sources);
         setSessionId(r.session_id ?? null);
         setAppPackagesState(r.app_packages ?? []);
+        setCounts(r.counts ?? null);
       })
       .catch((e) => { if (live) setListError(e instanceof ApiError ? e.message : "Failed to load sources"); });
     return () => { live = false; };
@@ -618,6 +622,12 @@ export const SourcesPage = memo(function SourcesPage({ data, tenantId, runId, ju
             <div className="sv-rail-titles">
               <h2 className="sv-rail-title">Sources</h2>
               <div className="sv-rail-sub" title={SOURCES_SUBTITLE_HELP}>{sourcesSubtitle(files)}</div>
+              {countsLine && <div className="sv-rail-sub" title={SOURCES_SUBTITLE_HELP}>{countsLine}</div>}
+              {counts && counts.sources_recovered > 0 && (
+                <div className="sv-rail-sub" title={SOURCES_SUBTITLE_HELP}>
+                  Listed here: {counts.recovered_with_findings} recovered original{counts.recovered_with_findings === 1 ? "" : "s"} with findings.
+                </div>
+              )}
             </div>
             <button type="button" className="sv-rail-toggle" onClick={toggleRail}
               title="Collapse sources" aria-label="Collapse sources panel"><PanelIcon /></button>

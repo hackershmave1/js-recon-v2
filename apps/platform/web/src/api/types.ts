@@ -105,6 +105,8 @@ export interface FindingsResponse {
   // same number the Sessions list shows. NOT coverage.files, which counts recovered
   // analysis units (every source-map original, vendor libraries included).
   files?: number;
+  // Of those, files hidden because their host was removed from the session scope (L1).
+  files_hidden?: number;
   // Findings captured but not shown by default, per reason (backend findings/visibility):
   // "junk_or_dynamic" | "noise" | "off_scope" | "third_party". Optional for older servers.
   hidden?: Record<string, number>;
@@ -171,6 +173,9 @@ export interface SourceFile {
 // third-party files itself and "Treat as app code" update the session. Optional for older servers.
 export interface SourcesResponse {
   run_id: string; count: number; sources: SourceFile[]; session_id?: string | null; app_packages?: string[];
+  // The same counts the Overview shows (L1): files collected, files hidden by scope, original
+  // sources recovered (total) and the ones with findings that this tree lists.
+  counts?: { collected: number; hidden_out_of_scope: number; sources_recovered: number; recovered_with_findings: number } | null;
 }
 // D52: a full-text search hit across a run's sources (file + line + snippet).
 // `line` is the viewer's row, or null when the file predates search indexing (searched raw).
