@@ -102,7 +102,13 @@ no other module names the tables), reference-counted delete, the per-(session, h
 decision record, the ingest-side ignore list, the 7-day expiry sweep and the caps. **Add after the
 capture ended** is defined: promotion inserts into the same run; a run that can still take a pass is
 scheduled (`analysis: scheduled`), a finished run rests and the caller re-runs it
-(`analysis: needs_rerun`). Still to build: the extension side (S2) and the Hosts page (S3).
+(`analysis: needs_rerun`). The crawl half (K1) is built: the pinned katana v1.6.1 is run with `-display-out-scope`, which
+reports out-of-scope URLs as `{"request": {"endpoint", "tag", "attribute", "source"}, "error": "out of
+scope"}` rows with no response (verified against the real binary), so `<script src>` references to unknown
+hosts are listed as undecided hosts with no held files (`host_decision.referenced_*`), nothing is
+downloaded, and Add re-crawls the run that saw them once the host is in scope. Ignore is final: a later
+crawl never re-lists it. Page links to other sites are not listed yet.
+The extension side (S2) and the Hosts page (S3) are built.
 
 The ordered rule is one pure function with a test per rule, and these are enforced and tested:
 
