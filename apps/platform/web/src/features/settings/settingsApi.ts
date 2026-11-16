@@ -40,3 +40,30 @@ export function deleteTeamLlmSettings(tenantId: string): Promise<void> {
 export function testTeamLlmSettings(tenantId: string): Promise<{ ok: boolean; provider: string; model: string }> {
   return request("/settings/llm/test", { method: "POST" }, tenantId);
 }
+
+export interface TeamRule {
+  id: string;
+  kind: "host" | "file_pattern";
+  value: string;
+  created_at: string | null;
+  created_by: string | null;
+}
+
+export interface ThirdPartyRules {
+  builtin: { hosts: Record<string, string[]>; file_patterns: string[] };
+  team: { hosts: TeamRule[]; file_patterns: TeamRule[] };
+  limits: { hosts: number; file_patterns: number; pattern_length: number };
+  can_edit: boolean;
+}
+
+export function getThirdPartyRules(tenantId: string): Promise<ThirdPartyRules> {
+  return request("/settings/third-party-rules", {}, tenantId);
+}
+
+export function addThirdPartyRule(tenantId: string, kind: TeamRule["kind"], value: string): Promise<TeamRule> {
+  return request("/settings/third-party-rules", json("POST", { kind, value }), tenantId);
+}
+
+export function removeThirdPartyRule(tenantId: string, id: string): Promise<void> {
+  return request(`/settings/third-party-rules/${encodeURIComponent(id)}`, { method: "DELETE" }, tenantId);
+}
