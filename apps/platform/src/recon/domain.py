@@ -210,3 +210,14 @@ TERMINAL_STATES: frozenset[RunState] = frozenset(
 # literal one. Shared by the extractor (which assigns it) and correlation (which treats it as a
 # wildcard), so it lives here, not in either feature.
 UNKNOWN_METHOD = "ANY"
+
+
+class HostDecisionState(StrEnum):
+    """A researcher's decision about one (session, host) whose scripts were quarantined
+    (ADR-0010). ``undecided`` is the only state that can still change; the rest are terminal
+    except that a host's content arriving again after ``expired`` starts a fresh ``undecided``."""
+
+    UNDECIDED = "undecided"
+    ADDED = "added"
+    IGNORED = "ignored"
+    EXPIRED = "expired"

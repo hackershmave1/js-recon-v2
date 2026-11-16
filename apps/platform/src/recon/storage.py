@@ -46,6 +46,9 @@ BLOB_KINDS = frozenset(
         # Per bundle: the list of its source-map-recovered originals and their stored `formatted`
         # copies (recon.probe.recovered_store), keyed by the bundle's input digest.
         "originals",
+        # Scripts from a host the researcher has not decided on yet (recon.quarantine). Their own
+        # prefix, so no reader of a run's `input` blobs can ever see them (ADR-0010).
+        "quarantine",
     }
 )
 
@@ -203,6 +206,21 @@ class BlobPurgeError(RuntimeError):
         super().__init__(
             f"blob purge incomplete for {prefix}: {failed} object(s) failed, {deleted} deleted"
         )
+
+
+def delete_keys(keys: list[str]) -> int:
+    """Delete specific object keys (best effort per key); return how many were deleted. Used by
+    the reference-counted delete (recon.quarantine.blobs): a missing key is not an error."""
+    if not keys:
+        return 0
+    client = _s3_client()
+    bucket = get_settings().s3_bucket
+    deleted = 0
+    for start in range(0, len(keys), _DELETE_BATCH_MAX):
+        batch = [{"Key": key} for key in keys[start : start + _DELETE_BATCH_MAX]]
+        resp = client.delete_objects(Bucket=bucket, Delete={"Objects": batch, "Quiet": True})
+        deleted += len(batch) - len(resp.get("Errors") or [])
+    return deleted
 
 
 def delete_run_blobs(tenant_id: str, run_id: str) -> int:
