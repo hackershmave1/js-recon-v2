@@ -90,6 +90,7 @@ def extract(
     *,
     cross_module_consts: Mapping[str, str] | None = None,
     webpack_members: Mapping[str, Mapping[str, str]] | None = None,
+    window_globals: Mapping[str, str | None] | None = None,
 ) -> Extraction:
     """Extract network endpoints from JavaScript source.
 
@@ -104,10 +105,14 @@ def extract(
     `webpack_members` is the minified-webpack analogue (2b): a `var r = require(id)`
     alias -> that module's exported string consts, so `fetch(r.t + r.M)` folds. Both
     empty/None = today's per-file behavior, unchanged.
+
+    `window_globals` maps `window.NAME` -> the string literal the same host's other assets assign
+    it (built per host by `analyze`, a name assigned a non-literal or two different literals is
+    `None`), so a bundle's `window.apiPath + "?page="` folds against the page's inline script.
     """
     data = source.encode("utf-8") if isinstance(source, str) else source
     tree = _PARSER.parse(data)
-    env = collect_base_env(tree.root_node, data)
+    env = collect_base_env(tree.root_node, data, window_globals)
     if cross_module_consts:
         env = replace(env, cross_module_consts=dict(cross_module_consts))
     if webpack_members:
@@ -120,6 +125,7 @@ def extract(
     walk_limit = _MAX_AST_NODES if tree.root_node.descendant_count > _MAX_AST_NODES else None
     callees = wrapper_callees(wrappers)
     result = Extraction()
+    result.window_globals = env.window_globals
     # D31 honesty (REQ-C2): a bounded walk means the tree's tail was not examined — record it so
     # the partial extract is surfaced on coverage downstream, never a silent under-report.
     result.curtailed = walk_limit is not None
@@ -279,7 +285,15 @@ def _record_unresolved(
     skeleton row so the call is visible to the analyst instead of silently dropped."""
     result.unattributed += 1
     result.unresolved.append(
-        _endpoint(kind, method, _collapse_url(url_node), [], call, wrapper=wrapper, mark=url_node)
+        _endpoint(
+            kind,
+            method,
+            _collapse_url(url_node, 0, result.window_globals),
+            [],
+            call,
+            wrapper=wrapper,
+            mark=url_node,
+        )
     )
 
 

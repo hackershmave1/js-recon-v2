@@ -54,6 +54,32 @@ class ImportBinding:
     specifier: str  # the module specifier, e.g. "./base.js"
 
 
+def collect_window_globals(root: Node) -> dict[str, str | None]:
+    """Every ``window.NAME = <value>`` assignment in the unit: NAME -> its string literal, or
+    ``None`` when ANY assignment of that name is a non-literal or a different literal (ambiguous,
+    so it must never fold). A plain walk of the already-parsed tree, like the other harvests."""
+    found: dict[str, str | None] = {}
+    for node in _walk(root):
+        if node.type != "assignment_expression":
+            continue
+        left = node.child_by_field_name("left")
+        if left is None or left.type != "member_expression":
+            continue
+        owner, prop = left.child_by_field_name("object"), left.child_by_field_name("property")
+        if (
+            owner is None
+            or prop is None
+            or owner.type != "identifier"
+            or _text(owner) != "window"
+            or prop.type != "property_identifier"
+        ):
+            continue
+        name = _text(prop)
+        value = _string_value(node.child_by_field_name("right"))
+        found[name] = value if name not in found or found[name] == value else None
+    return found
+
+
 def collect_module_exports(root: Node) -> dict[str, str]:
     """Map each exported name to its statically-certain string-literal value.
 

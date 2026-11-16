@@ -16,8 +16,8 @@ from tree_sitter import Node
 from recon.findings.extract import _PARSER, RawEndpoint, collect_base_env, extract
 
 
-def _only(source: str):
-    result = extract(source)
+def _only(source: str, **kwargs):
+    result = extract(source, **kwargs)
     assert len(result.endpoints) == 1, result.endpoints
     return result.endpoints[0]
 
@@ -2067,3 +2067,88 @@ def test_es5_constructor_injected_client_still_resolves_a_path():
 def test_injected_client_with_a_runtime_url_is_still_a_counted_gap():
     r = extract("class S { constructor(h) { this.http = h } load(u) { return this.http.get(u) } }")
     assert r.endpoints == [] and len(r.unresolved) == 1
+
+
+# --- #233: window globals assigned a string literal, read from another asset --------------------- #
+# A page's inline script sets `window.apiPath = "https://h.io/api/x"`; a bundle on the same host
+# reads it. The run-level index supplies `window_globals`; a local assignment that disagrees wins.
+
+_WG = {"pspApiPath": "https://status.acme.io/api/getMonitorList/abc"}
+
+
+def test_window_global_folds_into_a_fetch_url():
+    ep = _only('fetch(window.pspApiPath + "?page=1")', window_globals=_WG)
+    assert ep.url == "https://status.acme.io/api/getMonitorList/abc?page=1"
+
+
+def test_window_global_with_a_runtime_tail_stays_unresolved():
+    # All-or-none: a runtime operand (`t`) keeps the whole URL unresolved, never a partial guess.
+    r = extract('fetch(window.pspApiPath + "?page=" + t)', window_globals=_WG)
+    assert r.endpoints == [] and len(r.unresolved) == 1
+
+
+def test_window_global_is_not_used_without_the_index():
+    r = extract('fetch(window.pspApiPath + "?page=1")')
+    assert r.endpoints == [] and len(r.unresolved) == 1
+
+
+def test_a_local_non_literal_assignment_poisons_the_indexed_value():
+    src = 'window.pspApiPath = compute(); fetch(window.pspApiPath + "?page=1")'
+    r = extract(src, window_globals=_WG)
+    assert r.endpoints == [] and len(r.unresolved) == 1
+
+
+def test_a_local_different_literal_poisons_the_indexed_value():
+    src = 'window.pspApiPath = "https://other.io/x"; fetch(window.pspApiPath + "?p=1")'
+    r = extract(src, window_globals=_WG)
+    assert r.endpoints == [] and len(r.unresolved) == 1
+
+
+def test_same_file_single_literal_assignment_folds_without_the_index():
+    ep = _only('window.apiPath = "https://h.io/api/v1"; fetch(window.apiPath + "/x")')
+    assert ep.url == "https://h.io/api/v1/x"
+
+
+def test_same_file_two_different_literals_stay_unresolved():
+    src = 'window.apiPath = "https://a.io"; window.apiPath = "https://b.io"; fetch(window.apiPath + "/x")'
+    r = extract(src)
+    assert r.endpoints == [] and len(r.unresolved) == 1
+
+
+def test_literal_replace_on_a_window_global_folds():
+    src = (
+        'var t = window.pspApiPath.replace("getMonitorList", "getStatistics");'
+        '$.ajax({type: "GET", url: t});'
+    )
+    ep = _only(src, window_globals=_WG)
+    assert (ep.method, ep.url) == ("GET", "https://status.acme.io/api/getStatistics/abc")
+
+
+@pytest.mark.parametrize(
+    "replace_args",
+    [
+        'new RegExp("List"), "X"',  # a pattern object, not a literal string
+        '"getMonitorList", "$&x"',  # JS special replacement pattern
+        '"getMonitorList"',  # one argument
+        '"getMonitorList", fn',  # non-literal replacement
+    ],
+)
+def test_non_literal_or_special_replace_stays_unresolved(replace_args):
+    src = f'var t = window.pspApiPath.replace({replace_args}); $.ajax({{type:"GET", url: t}});'
+    r = extract(src, window_globals=_WG)
+    assert r.endpoints == [] and len(r.unresolved) == 1
+
+
+def test_unresolved_skeleton_shows_the_window_global_head():
+    # The runtime tail keeps the URL unresolved, but the researcher sees the real endpoint head.
+    r = extract('fetch(window.pspApiPath + "?page=" + t)', window_globals=_WG)
+    assert [u.url for u in r.unresolved] == [
+        "https://status.acme.io/api/getMonitorList/abc?page=EXPR"
+    ]
+
+
+def test_unresolved_skeleton_keeps_the_holder_when_the_global_is_poisoned():
+    r = extract(
+        'window.pspApiPath = f(); fetch(window.pspApiPath + "?page=" + t)', window_globals=_WG
+    )
+    assert [u.url for u in r.unresolved] == [":pspApiPath?page=EXPR"]
