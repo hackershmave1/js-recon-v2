@@ -78,6 +78,19 @@ export async function login(username: string, password: string): Promise<LoginRe
   return res.json() as Promise<LoginResult>;
 }
 
+// POST /auth/handoff/exchange — spend a single-use handoff code (ADR-0011). Throws ApiError;
+// the caller shows NO error detail (a failed handoff falls back to the login screen).
+export async function exchangeHandoffCode(code: string): Promise<LoginResult> {
+  const res = await fetch("/auth/handoff/exchange", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ code }),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new ApiError(res.status, "handoff failed");
+  return res.json() as Promise<LoginResult>;
+}
+
 // The capture health probe (public): carries the stack's local-targets switch.
 export interface ServerHealth { status: string; allowLocalTargets?: boolean; }
 export async function getServerHealth(): Promise<ServerHealth> {
