@@ -136,3 +136,35 @@ def test_coverage_reports_a_truncated_source_map_recovery(client: TestClient) ->
     with patch.object(queries, "list_findings", return_value=view):
         body = client.get(f"/runs/{_RUN}/findings", headers=_HEADERS).json()
     assert body["coverage"]["recovered_partial"] is True
+
+
+def test_findings_payload_carries_the_priority_reason(client: TestClient) -> None:
+    """L2: the severity's reason is served by the API so the UI never invents it."""
+    reason = {"base": 45, "risk_tag": "idor", "bump": 20, "score": 65, "label": "high"}
+    finding = queries.FindingView(
+        finding_hash="h",
+        type="endpoint",
+        value="/api/u",
+        path="",
+        severity="high",
+        attributes={},
+        first_stage="analyze",
+        occurrences=[],
+        priority=65,
+        priority_reason=reason,
+    )
+    view = queries.FindingsView(run_id=_RUN, findings=[finding], coverage=None, total=1)
+    with patch.object(queries, "list_findings", return_value=view):
+        body = client.get(f"/runs/{_RUN}/findings", headers=_HEADERS).json()
+    assert body["findings"][0]["priority_reason"] == reason
+
+
+def test_findings_payload_priority_reason_defaults_to_null(client: TestClient) -> None:
+    finding = queries.FindingView(
+        finding_hash="h", type="endpoint", value="/a", path="", severity=None,
+        attributes={}, first_stage=None, occurrences=[],
+    )  # fmt: skip
+    view = queries.FindingsView(run_id=_RUN, findings=[finding], coverage=None, total=1)
+    with patch.object(queries, "list_findings", return_value=view):
+        body = client.get(f"/runs/{_RUN}/findings", headers=_HEADERS).json()
+    assert body["findings"][0]["priority_reason"] is None

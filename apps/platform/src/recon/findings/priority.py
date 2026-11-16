@@ -67,12 +67,39 @@ def priority_label(score: int) -> str:
     return "low"
 
 
+def _risk_tags(attributes: Mapping[str, Any] | None) -> tuple[str, ...]:
+    raw = (attributes or {}).get("risk_tags")
+    return tuple(str(t) for t in raw) if isinstance(raw, (list, tuple)) else ()
+
+
+def explain_priority(
+    finding_type: str, risk_tags: tuple[str, ...] | list[str] = ()
+) -> dict[str, Any]:
+    """Why a finding scores what it does: the type's base, the one risk tag that bumped it.
+
+    Same inputs as ``priority_score`` so the explanation can never disagree with the score.
+    ``risk_tag`` is the single highest-bump tag (the one that counted), or None.
+    """
+    score = priority_score(finding_type, risk_tags)
+    tags = [t for t in risk_tags if t in _TAG_BUMP]
+    winner = max(tags, key=lambda t: _TAG_BUMP[t], default=None)
+    return {
+        "base": _TYPE_BASE.get(finding_type, _DEFAULT_BASE),
+        "risk_tag": winner,
+        "bump": _TAG_BUMP[winner] if winner else 0,
+        "score": score,
+        "label": priority_label(score),
+    }
+
+
 def derive_priority(finding_type: str, attributes: Mapping[str, Any] | None) -> tuple[int, str]:
     """Return ``(score, label)`` for a finding, reading ``risk_tags`` from ``attributes``."""
-    tags: tuple[str, ...] = ()
-    if attributes:
-        raw = attributes.get("risk_tags")
-        if isinstance(raw, (list, tuple)):
-            tags = tuple(str(t) for t in raw)
-    score = priority_score(finding_type, tags)
+    score = priority_score(finding_type, _risk_tags(attributes))
     return score, priority_label(score)
+
+
+def derive_priority_reason(
+    finding_type: str, attributes: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """``explain_priority`` reading ``risk_tags`` from a finding's ``attributes``."""
+    return explain_priority(finding_type, _risk_tags(attributes))

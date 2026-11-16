@@ -80,6 +80,8 @@ def get_run_findings(
                 "severity": finding.severity,
                 # D49: 0-100 read-time priority (type + risk tags); `severity` is its label.
                 "priority": finding.priority,
+                # L2: the reason behind `severity` (base + the risk tag that bumped it).
+                "priority_reason": finding.priority_reason,
                 "attributes": finding.attributes,
                 "first_stage": finding.first_stage,
                 "revealable": finding.revealable,

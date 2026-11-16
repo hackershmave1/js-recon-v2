@@ -54,3 +54,37 @@ def test_derive_tolerates_missing_or_malformed_attributes() -> None:
         score, label = derive_priority("endpoint", attrs)  # type: ignore[arg-type]
         assert score == priority_score("endpoint")  # no tags applied, never raises
         assert label == priority_label(score)
+
+
+def test_explain_priority_reports_base_and_the_single_winning_tag() -> None:
+    from recon.findings.priority import explain_priority
+
+    reason = explain_priority("endpoint", ["auth", "idor"])
+    # idor (20) beats auth (15): the reason names the tag that actually moved the score.
+    assert reason == {"base": 45, "risk_tag": "idor", "bump": 20, "score": 65, "label": "high"}
+
+
+def test_explain_priority_without_tags_has_no_bump() -> None:
+    from recon.findings.priority import explain_priority
+
+    assert explain_priority("secret", []) == {
+        "base": 90,
+        "risk_tag": None,
+        "bump": 0,
+        "score": 90,
+        "label": "critical",
+    }
+
+
+def test_explain_priority_score_matches_priority_score_including_the_cap() -> None:
+    from recon.findings.priority import explain_priority
+
+    reason = explain_priority("secret", ["admin"])
+    assert reason["score"] == priority_score("secret", ["admin"]) == 100
+    assert reason["base"] + reason["bump"] == 115  # the cap is visible: score < base + bump
+
+
+def test_explain_priority_marks_an_unknown_type_as_the_default_base() -> None:
+    from recon.findings.priority import explain_priority
+
+    assert explain_priority("something_new", [])["base"] == 20

@@ -2,7 +2,8 @@ import type { Finding, SourceJump } from "../../api/types";
 import { typeLabel } from "../../api/findingLabels";
 import { TriageControls } from "./TriageControls";
 import { RevealButton } from "./RevealButton";
-import { occJump, occSource } from "../../api/occurrenceSource";
+import { mergeBundleAndRecovered, occJump, occSource } from "../../api/occurrenceSource";
+import { FindingExplain } from "./FindingExplain";
 
 // `onJumpToSource` is optional (the shared ApiSpec drawer omits it): when present,
 // an occurrence with a source location becomes a button that reveals it in Sources.
@@ -35,8 +36,10 @@ export function FindingDetail({ finding, runId, onJumpToSource }: {
           <span className="muted"> → {finding.spec_status.matched_operation}</span>
         )}
       </div>
-      <ul>
-        {finding.occurrences.map((o, i) => {
+      <FindingExplain finding={finding} />
+      <ul className="fd-occs">
+        {/* A secret in both the bundle and its recovered source is ONE place: fold the pair. */}
+        {(isSecret ? mergeBundleAndRecovered(finding.occurrences) : finding.occurrences).map((o, i) => {
           const { primary, bundle } = occSource(o);
           // Where Sources can show it: exact, an old run's approximate line, or nowhere.
           const at = occJump(o);

@@ -123,4 +123,41 @@ describe("FindingDetail", () => {
     show(finding({ occurrences: [occ({ host: null })] }));
     expect(screen.queryByTestId("occ-host")).toBeNull();
   });
+
+  describe("L2: explanation + merged secret occurrence", () => {
+    const bundle = (over: Partial<Occurrence> = {}) =>
+      occ({ source_path: "input.js", asset_url: "https://acme.io/app.js", evidence: null, ...over });
+    const recovered = (over: Partial<Occurrence> = {}) =>
+      occ({ source_path: "src/config.ts", asset_url: "https://acme.io/app.js", ...over });
+
+    it("shows the four explanation sections in the drawer detail", () => {
+      show(finding({ priority_reason: { base: 45, risk_tag: null, bump: 0, score: 45, label: "medium" }, severity: "medium" }));
+      expect(screen.getByRole("region", { name: /what it is/i })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: /why this severity/i })).toBeInTheDocument();
+    });
+
+    it("lists a secret seen in the bundle and in its recovered source as ONE occurrence", () => {
+      show(finding({ type: "secret", value: "aws:sha256:ab", revealable: true,
+        occurrences: [bundle(), recovered()] }));
+      const items = screen.getAllByRole("listitem").filter((li) => li.closest("ul")?.classList.contains("fd-occs"));
+      expect(items).toHaveLength(1);
+      expect(items[0].textContent).toMatch(/src\/config\.ts/);
+      expect(items[0].textContent).toMatch(/https:\/\/acme\.io\/app\.js/); // bundle kept as the owner tag
+    });
+
+    it("keeps both lines when the bundle sighting has no recovered twin (different assets)", () => {
+      show(finding({ type: "secret", occurrences: [bundle(), recovered({ asset_url: "https://acme.io/other.js" })] }));
+      expect(document.querySelectorAll(".fd-occs > li")).toHaveLength(2);
+    });
+
+    it("pairs one-to-one: two bundle sightings and one recovered leave two lines", () => {
+      show(finding({ type: "secret", occurrences: [bundle(), bundle(), recovered()] }));
+      expect(document.querySelectorAll(".fd-occs > li")).toHaveLength(2);
+    });
+
+    it("does not merge non-secret occurrences", () => {
+      show(finding({ occurrences: [bundle(), recovered()] }));
+      expect(document.querySelectorAll(".fd-occs > li")).toHaveLength(2);
+    });
+  });
 });

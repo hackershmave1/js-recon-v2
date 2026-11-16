@@ -61,7 +61,11 @@ export interface Finding {
   display_value?: string;
   // D49: read-time priority 0-100 (type + risk tags); `severity` is its label. Optional so
   // pre-D49 fixtures/responses stay valid.
-  severity: string | null; priority?: number; attributes: Record<string, unknown>; first_stage: string | null;
+  severity: string | null; priority?: number;
+  // L2: why that score — the type's base and the one risk tag that bumped it (backend
+  // priority.explain_priority). Optional: absent on older servers.
+  priority_reason?: { base: number; risk_tag: string | null; bump: number; score: number; label: string } | null;
+  attributes: Record<string, unknown>; first_stage: string | null;
   revealable: boolean; triage: Triage | null; spec_status: SpecStatus | null;
   sightings?: Sightings | null; occurrences: Occurrence[];
 }
