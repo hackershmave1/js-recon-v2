@@ -37,6 +37,7 @@ from dataclasses import replace
 
 from tree_sitter import Node
 
+from recon.domain import UNKNOWN_METHOD
 from recon.findings import _receivers
 from recon.findings._base_env import _resolve_url, collect_base_env
 from recon.findings._config_calls import is_config_call
@@ -720,25 +721,53 @@ def _client_call_allowed(obj: str, call: Node, env: BaseEnv) -> bool:
     return args[0].type == "object" or _looks_like_api_path(_collapse_url(args[0]))
 
 
+def _verb(*nodes: Node | None, default: str = "GET") -> str:
+    """The HTTP verb a config reads from its `method`/`type` value nodes. The first literal string
+    wins. A key that is PRESENT but not a literal (`method: t`, `type: r || "GET"`) is a runtime
+    value, so the verb is unknown (``ANY``), never silently GET: a DELETE caller must not
+    disappear into a GET. No key at all is the protocol default."""
+    present = [node for node in nodes if node is not None]
+    for node in present:
+        literal = _string_value(node)
+        if literal:
+            return literal.upper()
+    return UNKNOWN_METHOD if present else default
+
+
 def _fetch(call: Node, result: Extraction, env: BaseEnv, base: str = "") -> None:
     args = _args(call)
     url = _resolve_url(args[0], env, base) if args else None
     if url is None:
-        method = "GET"
-        if len(args) >= 2 and args[1].type == "object":
-            method = (_string_value(_object_pairs(args[1]).get("method")) or "GET").upper()
+        method = _fetch_verb(args)
         _record_unresolved(result, "fetch", method, args[0] if args else None, call)
         return
-    method, params = "GET", _query_params(url)
+    method, params = _fetch_verb(args), _query_params(url)
     headers: list[HeaderRef] = []
     if len(args) >= 2 and args[1].type == "object":
         options = _object_pairs(args[1])
-        method = (_string_value(options.get("method")) or "GET").upper()
         params += _body_params_from_value(options.get("body"))
         headers = _auth_headers(options.get("headers"))
     result.endpoints.append(
         _endpoint("fetch", method, url, params, call, headers=headers, mark=args[0])
     )
+
+
+def _fetch_verb(args: list[Node]) -> str:
+    """`fetch(url)` is GET; `fetch(url, {method})` reads the key; `fetch(url, opts)` with a non-object
+    second argument (a variable, a call) forwards an options bag we cannot see, so the verb is
+    unknown."""
+    if len(args) < 2:
+        return "GET"
+    if args[1].type == "object":
+        return _verb(_object_pairs(args[1]).get("method"))
+    return UNKNOWN_METHOD
+
+
+def _axios_verb(args: list[Node]) -> str:
+    """`axios(url)` is GET; `axios(url, {method})` reads the key (a non-literal is unknown)."""
+    if len(args) >= 2 and args[1].type == "object":
+        return _verb(_object_pairs(args[1]).get("method"))
+    return "GET"
 
 
 def _xhr_open(call: Node, result: Extraction, env: BaseEnv) -> None:
@@ -767,17 +796,13 @@ def _axios_call(call: Node, result: Extraction, env: BaseEnv, base: str = "") ->
     elif args:
         url = _resolve_url(args[0], env, base)
         if url is None:
-            method = "GET"
-            if len(args) >= 2 and args[1].type == "object":
-                method = (_string_value(_object_pairs(args[1]).get("method")) or "GET").upper()
+            method = _axios_verb(args)
             _record_unresolved(result, "axios", method, args[0], call)
             return
-        method = "GET"
+        method = _axios_verb(args)
         headers: list[HeaderRef] = []
         if len(args) >= 2 and args[1].type == "object":
-            cfg = _object_pairs(args[1])
-            method = (_string_value(cfg.get("method")) or "GET").upper()
-            headers = _auth_headers(cfg.get("headers"))
+            headers = _auth_headers(_object_pairs(args[1]).get("headers"))
         result.endpoints.append(
             _endpoint("axios", method, url, _query_params(url), call, headers=headers, mark=args[0])
         )
@@ -839,10 +864,10 @@ def _axios_from_config(
     pairs = _object_pairs(config)
     url = _resolve_url(pairs.get("url"), env, base)
     if url is None:
-        method = (_string_value(pairs.get("method")) or "GET").upper()
+        method = _verb(pairs.get("method"))
         _record_unresolved(result, kind, method, pairs.get("url"), call, wrapper=wrapper)
         return
-    method = (_string_value(pairs.get("method")) or "GET").upper()
+    method = _verb(pairs.get("method"))
     params = (
         _query_params(url)
         + _config_query_params(config)  # axios `params` -> query, not body
@@ -885,14 +910,10 @@ def _jquery(call: Node, prop: str, result: Extraction, env: BaseEnv) -> None:
         pairs = _object_pairs(config)
         url = _resolve_url(pairs.get("url"), env, "")  # folds a single-unshadowed const (S1)
         if url is None:
-            method = (
-                _string_value(pairs.get("type")) or _string_value(pairs.get("method")) or "GET"
-            ).upper()
+            method = _verb(pairs.get("type"), pairs.get("method"))
             _record_unresolved(result, "jquery", method, pairs.get("url"), call)
             return
-        method = (
-            _string_value(pairs.get("type")) or _string_value(pairs.get("method")) or "GET"
-        ).upper()
+        method = _verb(pairs.get("type"), pairs.get("method"))
         # jQuery sends `data` as the query string for GET/HEAD, else as the body.
         location = "query" if method in ("GET", "HEAD") else "body"
         params = _query_params(url) + [

@@ -204,3 +204,9 @@ ACTIVE_STATES: frozenset[RunState] = frozenset(
 TERMINAL_STATES: frozenset[RunState] = frozenset(
     {RunState.DONE, RunState.PARTIAL, RunState.FAILED, RunState.CANCELLED}
 )
+
+
+# The HTTP method of an endpoint whose verb is a runtime value (`{method: t}`), as opposed to a
+# literal one. Shared by the extractor (which assigns it) and correlation (which treats it as a
+# wildcard), so it lives here, not in either feature.
+UNKNOWN_METHOD = "ANY"
