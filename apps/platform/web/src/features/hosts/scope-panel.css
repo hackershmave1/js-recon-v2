@@ -1,0 +1,28 @@
+/* The Hosts page's scope panel (ADR-0010, S3). Tokens come from styles.css. */
+.sp { margin-bottom: 14px; }
+.sp-note { margin: 2px 0 10px; font-size: 12.5px; max-width: 78ch; }
+.sp-error { color: var(--danger, #e5484d); margin: 6px 0; font-size: 12.5px; }
+.sp ul { list-style: none; margin: 0; padding: 0; }
+.sp-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.sp-chip {
+  display: inline-flex; align-items: center; gap: 8px; padding: 4px 6px 4px 10px;
+  border: 1px solid var(--border); border-radius: var(--r-sm); font-family: var(--font-mono, monospace); font-size: 12.5px;
+}
+.sp button {
+  background: var(--panel); color: var(--text-2, var(--text)); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.sp button:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text); }
+.sp button:disabled { opacity: .55; cursor: default; }
+.sp .sp-danger { color: var(--danger, #e5484d); }
+.sp-add { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.sp-add input {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--text); font-size: 12.5px; padding: 6px 10px; min-width: 200px;
+}
+.sp-group { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+.sp-group h3 { margin: 0 0 2px; font-size: 13px; }
+.sp-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; flex-wrap: wrap; }
+.sp-host { font-family: var(--font-mono, monospace); font-size: 12.5px; min-width: 0; overflow-wrap: anywhere; }
+.sp-actions { margin-left: auto; display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.sp-confirm { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }

@@ -26,9 +26,17 @@ _log = get_logger(__name__)
 
 
 @router.get("/runs/{run_id}/sources")
-async def get_run_sources(run_id: str, tenant_id: str = Depends(get_tenant_id)) -> dict:
+async def get_run_sources(
+    run_id: str,
+    tenant_id: str = Depends(get_tenant_id),
+    # Files served by a host removed from the session's scope are hidden by default (#218);
+    # ?include_hidden=true lists them again.
+    include_hidden: bool = False,
+) -> dict:
     started = time.perf_counter()
-    files = await run_in_threadpool(sources.list_sources, tenant_id, run_id)
+    files = await run_in_threadpool(
+        lambda: sources.list_sources(tenant_id, run_id, include_hidden=include_hidden)
+    )
     if files is None:
         raise HTTPException(status_code=404, detail="run not found")
     # Observability (D25): the Sources endpoint served large trees with no trace, so

@@ -168,6 +168,9 @@ function useRunStream(runId: string): RunData {
     if (!tenantId) return;
     try {
       setFindings(await getFindings(tenantId, runId));
+      // The Hosts page re-labels with the scope (adding or removing a host), so its inventory is
+      // re-read with the findings.
+      getHosts(tenantId, runId).then(setHosts).catch(() => { /* best-effort */ });
       setFindingsVersion((v) => v + 1);
     } catch { /* best-effort */ }
   }, [tenantId, runId]);
