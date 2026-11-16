@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import {
   getTeamRules, setTeamRules, resetTeamRules, loadSavedTeamRules, syncTeamRules, STORAGE_KEY,
 } from '../modules/team-rules.js';
-import { matchesDenylist, matchesPattern, globMatch } from '../modules/asset-classifier.js';
+import { matchesThirdPartyFile, matchesPattern, globMatch } from '../modules/asset-classifier.js';
 import { isNoiseHost } from '../modules/capture-scope.js';
 import { SOURCE } from '../scripts/gen-third-party-rules.mjs';
 
@@ -23,17 +23,15 @@ const memory = (seed = {}) => {
 resetTeamRules();
 assert.deepEqual(getTeamRules(), { hosts: [], filePatterns: [] });
 assert.equal(isNoiseHost('cdn.tracker.example.com'), false);
-assert.equal(matchesDenylist('https://app.acme.io/vendor/chat-widget.js', [], true), false);
+assert.equal(matchesThirdPartyFile('https://app.acme.io/vendor/chat-widget.js'), false);
 
 // 2) Team additions only ADD: a host entry and a file pattern both start dropping, built-ins stay.
 setTeamRules({ hosts: ['Tracker.Example.com'], filePatterns: ['/vendor/chat*.js'] });
 assert.equal(isNoiseHost('cdn.tracker.example.com'), true);
 assert.equal(isNoiseHost('nottracker.example.com'), false);
 assert.equal(isNoiseHost('google-analytics.com'), true, 'a built-in entry is still dropped');
-assert.equal(matchesDenylist('https://app.acme.io/vendor/chat-widget.js', [], true), true, 'a file pattern applies on any host');
-assert.equal(matchesDenylist('https://app.acme.io/static/jquery-3.6.0.min.js', [], true), true);
-// With the old default-profile switch off the team still applies (it is not that profile).
-assert.equal(matchesDenylist('https://app.acme.io/vendor/chat-widget.js', [], false), true);
+assert.equal(matchesThirdPartyFile('https://app.acme.io/vendor/chat-widget.js'), true, 'a file pattern applies on any host');
+assert.equal(matchesThirdPartyFile('https://app.acme.io/static/jquery-3.6.0.min.js'), true);
 
 // 3) Junk is refused: non-strings, empties, oversized, too many.
 setTeamRules({ hosts: [5, '', null, 'ok.example.com', 'x'.repeat(300)], filePatterns: ['', 'p'.repeat(500), 'good/path*'] });

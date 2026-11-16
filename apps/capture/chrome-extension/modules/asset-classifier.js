@@ -1,6 +1,6 @@
 // asset-classifier.js — lightweight, dependency-free heuristics that drive the
 // redesigned popup: asset classification (app/lib/cms/tracker), third-party
-// detection, noise denylist matching, and a bounded secret COUNTER.
+// detection, third-party file matching, and a bounded secret COUNTER.
 //
 // Design note: this is intentionally cheap (regex + string ops). The secret
 // counter returns a count only — never the matched values — so secrets are never
@@ -20,14 +20,14 @@ const LIB_HINTS = [
   /bootstrap/i, /\bd3[.-]/i, /moment/i, /polyfill/i, /\bvendors?[~.\-]/i, /runtime~/i
 ];
 
-// Built-in "default profile" denylist patterns: the shared third-party FILE patterns (ADR-0010, generated
-// from the platform's third_party_rules.json). Host entries are no longer patterns here: the admission rule
+// The built-in third-party FILE patterns (ADR-0010, generated from the platform's
+// third_party_rules.json). Host entries are not patterns here: the admission rule
 // (modules/script-admission.js) treats a known third-party HOST separately so it never drops a host the
 // researcher typed into the scope; a file pattern applies on any host.
 export const DEFAULT_PROFILE_PATTERNS = [
   ...FILE_PATTERNS,
-  // Kept as before: these three analytics hosts were always dropped by the default profile (also under
-  // "Capture every tab", which skips the admission rule), so that behaviour is unchanged.
+  // Kept as before: these three analytics hosts were always dropped (also under "Capture every tab",
+  // which skips the admission rule), so that behaviour is unchanged.
   '*.google-analytics.com', '*.googletagmanager.com', '*.doubleclick.net',
 ];
 
@@ -99,13 +99,10 @@ export function matchesPattern(url, pattern) {
   return globMatch(pat, host);
 }
 
-export function matchesDenylist(url, rules = [], includeDefaultProfile = true) {
-  const patterns = [
-    ...(includeDefaultProfile ? DEFAULT_PROFILE_PATTERNS : []),
-    ...teamFilePatterns(),  // the team's additions (workspace Settings) always apply: they only add
-    ...rules.map((r) => (typeof r === 'string' ? r : r.pattern)).filter(Boolean)
-  ];
-  return patterns.some((p) => matchesPattern(url, p));
+// Whether `url` is a known third-party FILE: a built-in pattern or one of the team's additions
+// (modules/team-rules.js, edited in workspace Settings). No setting turns this off.
+export function matchesThirdPartyFile(url) {
+  return [...DEFAULT_PROFILE_PATTERNS, ...teamFilePatterns()].some((p) => matchesPattern(url, p));
 }
 
 const SECRET_PATTERNS = [

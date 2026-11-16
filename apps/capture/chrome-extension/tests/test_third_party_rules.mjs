@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { renderModule, SOURCE, TARGET } from '../scripts/gen-third-party-rules.mjs';
 import { NOISE_HOSTS, FILE_PATTERNS } from '../modules/third-party-rules.js';
-import { matchesPattern, matchesDenylist, DEFAULT_PROFILE_PATTERNS } from '../modules/asset-classifier.js';
+import { matchesPattern, matchesThirdPartyFile, DEFAULT_PROFILE_PATTERNS } from '../modules/asset-classifier.js';
 import { isNoiseHost } from '../modules/capture-scope.js';
 import { ADMIT, admitScript } from '../modules/script-admission.js';
 
@@ -26,9 +26,9 @@ for (const [url, expected] of doc.cases) {
 }
 
 // 3) A file pattern applies on any host: the app's own, an unscoped one, and with a query string.
-assert.equal(matchesDenylist('https://app.acme.io/static/jquery-3.6.0.min.js?v=2', [], true), true);
-assert.equal(matchesDenylist('http://localhost:3000/js/jquery.min.js', [], true), true);
-assert.equal(matchesDenylist('https://app.acme.io/static/app.js', [], true), false);
+assert.equal(matchesThirdPartyFile('https://app.acme.io/static/jquery-3.6.0.min.js?v=2'), true);
+assert.equal(matchesThirdPartyFile('http://localhost:3000/js/jquery.min.js'), true);
+assert.equal(matchesThirdPartyFile('https://app.acme.io/static/app.js'), false);
 assert.ok(FILE_PATTERNS.every((p) => DEFAULT_PROFILE_PATTERNS.includes(p)), 'the default profile carries every file pattern');
 
 // 4) What the admission rule does with them: a file pattern drops on a scoped host; a host entry never

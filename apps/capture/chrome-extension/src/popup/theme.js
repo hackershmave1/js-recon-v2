@@ -38,11 +38,3 @@ export const F = {
 export const CLASS_COLOR = { app: C.lime, lib: C.blue, cms: C.purple, tracker: C.dim };
 export const CLASS_LABEL = { app: 'app', lib: 'lib', cms: 'plugin', tracker: 'tracker' };
 
-// denylist rule tag → colour + translucent background (mirrors prototype TAGC map)
-export const TAG_COLOR = {
-  CMS: { c: '#C792EA', bg: 'rgba(199,146,234,0.13)' },
-  TRACK: { c: '#7E8AA3', bg: 'rgba(126,138,163,0.15)' },
-  LIB: { c: '#6BA8FF', bg: 'rgba(107,168,255,0.13)' },
-  AD: { c: '#FF8A47', bg: 'rgba(255,138,71,0.13)' },
-  HOST: { c: '#5BD6C0', bg: 'rgba(91,214,192,0.13)' }
-};

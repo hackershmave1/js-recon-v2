@@ -8,7 +8,7 @@ import { SessionStore } from './modules/session-store.js';
 import { IdbStore } from './modules/idb-store.js';
 import { AuthContextTracker } from './modules/auth-context.js';
 import { WorkspaceClient } from './modules/workspace-client.js';
-import { classifyAsset, isThirdParty, matchesDenylist, countSecrets } from './modules/asset-classifier.js';
+import { classifyAsset, isThirdParty, matchesThirdPartyFile, countSecrets } from './modules/asset-classifier.js';
 import { listProjectsWithCache } from './modules/projects-cache.js';
 import { normalizeRootDomains } from './modules/normalize-scope.js';
 import { isRelevantInlineScript } from './modules/inline-relevance.js';
@@ -28,16 +28,14 @@ import { ADMIT, admitScript } from './modules/script-admission.js';
 import { topFramePageHost } from './modules/top-frame-page.js';
 import { QuarantineQueue } from './modules/quarantine-queue.js';
 
-// Seed denylist shown in the redesigned popup Settings on first run.
-const DEFAULT_DENY_RULES = [
-  { tag: 'CMS', pattern: '/wp-content/plugins/*' },
-  { tag: 'CMS', pattern: '/wp-includes/*' },
-  { tag: 'TRACK', pattern: '*.google-analytics.com' },
-  { tag: 'TRACK', pattern: '*.doubleclick.net' },
-  { tag: 'LIB', pattern: '*/jquery*.min.js' }
+// Settings an older popup stored for the rules editor, Tag/Mute/Exclude and the Mute toggle (removed in
+// Q6, ADR-0010): deleted at worker start so they do not linger in storage.
+const LEGACY_SETTING_KEYS = [
+  'muteNoise',
+  'outOfScopeMode',
+  'denyDefaultProfile',
+  'denyRules',
 ];
-
-
 // Messages the popup/content-script send without waiting for a response. The onMessage
 // listener must NOT hold the response channel open for these (see setupListeners).
 const FIRE_AND_FORGET_ACTIONS = PAGE_ACTIONS;
@@ -176,6 +174,7 @@ class JSExtractor {
   async initialize() {
     // Every start: keep the token/settings store away from content scripts (modules/storage-access.js).
     await restrictStorageAccess(chrome.storage).catch((e) => console.warn('storage access level', e));
+    Promise.resolve(chrome.storage.local.remove(LEGACY_SETTING_KEYS)).catch(() => {});
     this.settings = await this.loadSettings();
     // The team's third-party rules: the last saved copy first (never waits on the network), the fresh
     // download follows at sign-in and when a capture starts (ADR-0010, R2).
@@ -286,7 +285,7 @@ class JSExtractor {
 
     // Runtime API-call observations (DEBT D45b1): XHR/fetch completions. We record ONLY
     // { method, url } for CONFIRMING endpoints — never the response body (that is the opt-in
-    // main-world path). Same client-side scope/denylist gate as script capture.
+    // main-world path). Same client-side scope + third-party gate as script capture.
     chrome.webRequest.onCompleted.addListener(
       (details) => { this.ready.then(() => this.recordObservation(details)); },
       {
@@ -385,20 +384,15 @@ class JSExtractor {
     }
   }
 
-  // Noise denylist + out-of-scope "exclude" mode → drop before capture.
-  shouldSkipUrl(url, documentUrl) {
+  // Known third-party files (built-in + the team's additions) and the workspace's own assets → drop
+  // before capture.
+  shouldSkipUrl(url) {
     // Never capture the recon workspace's own assets — the tool must not recon itself. Safety
     // net even when scope is wide-open (e.g. after "Open Workspace" loads the workspace at localhost:8000).
     if (this.isWorkspaceUrl(url)) {
       return true;
     }
-    if (matchesDenylist(url, this.settings.denyRules || [], this.settings.denyDefaultProfile !== false)) {
-      return true;
-    }
-    if (this.settings.outOfScopeMode === 'exclude' && documentUrl && isThirdParty(url, documentUrl)) {
-      return true;
-    }
-    return false;
+    return matchesThirdPartyFile(url);
   }
 
   // True if the URL is served by the configured RECON Workspace origin (workspaceUrl / API base),
@@ -424,7 +418,7 @@ class JSExtractor {
       this.handleNotCaptured(details, verdict);
       return;
     }
-    if (this.shouldSkipUrl(details.url, details.documentUrl)) return;
+    if (this.shouldSkipUrl(details.url)) return;
 
     const authContext = this.authTracker.consume(details.requestId, details.url);
     const fileMetadata = this.extractMetadata(details, authContext);
@@ -450,7 +444,7 @@ class JSExtractor {
       captureEverything: everything,
       pageKnown,
       pageInScope: pageKnown && this.isInScope(`https://${pageHost}/`),
-      thirdPartyFile: matchesDenylist(details.url, this.settings.denyRules || [], this.settings.denyDefaultProfile !== false),
+      thirdPartyFile: matchesThirdPartyFile(details.url),
       thirdPartyHost: isNoiseHost(host),
       scriptInScope: this.isInScope(details.url),
       ignored: this.capture.isIgnoredSite(host),
@@ -755,10 +749,10 @@ class JSExtractor {
       if (!this.isLikelyScriptResource(depUrl)) {
         continue;
       }
-      // Dependency children must honour the same denylist / out-of-scope-exclude
-      // rules as top-level requests (isInScope is intentionally NOT applied here —
+      // Dependency children must honour the same third-party rules
+      // as top-level requests (isInScope is intentionally NOT applied here —
       // dependency resolution may legitimately pull cross-scope libraries).
-      if (this.shouldSkipUrl(depUrl, url)) {
+      if (this.shouldSkipUrl(depUrl)) {
         continue;
       }
       if (!this.session.capturedFiles.has(depUrl)) {
@@ -949,12 +943,12 @@ class JSExtractor {
   }
 
   // Record an out-of-scope script host as a discovery hint (D44). Skips the workspace's own origin
-  // and denylisted hosts (trackers/CMS noise) so the popup only suggests plausible target hosts.
+  // and third-party hosts (trackers/CMS noise) so the popup only suggests plausible target hosts.
   // Bounded at 50 distinct hosts so a busy tab can't grow this unboundedly.
   noteOutOfScopeScript(url) {
     try {
       if (this.isWorkspaceUrl(url)) return;
-      if (matchesDenylist(url, this.settings.denyRules || [], this.settings.denyDefaultProfile !== false)) return;
+      if (matchesThirdPartyFile(url)) return;
       const host = new URL(url).hostname.toLowerCase();
       if (!host) return;
       // Capture lifecycle: a site outside the capture's scope raises the "new site seen" badge.
@@ -993,11 +987,7 @@ class JSExtractor {
       'authUser',
       'authTenantName',
       'authTenantId',
-      'muteNoise',
-      'outOfScopeMode',
-      'maxAssetMb',
-      'denyDefaultProfile',
-      'denyRules'
+      'maxAssetMb'
     ]);
 
     return {
@@ -1026,15 +1016,11 @@ class JSExtractor {
       authUser: result.authUser || '',
       authTenantName: result.authTenantName || '',
       authTenantId: result.authTenantId || '',
-      muteNoise: result.muteNoise !== false,
-      outOfScopeMode: result.outOfScopeMode || 'tag',
       // Default 10 MB to match the backend ceiling (settings.max_upload_bytes) and the
       // server-advertised capture config (maxAssetMb: 10); an 8 MB default silently skipped
       // 8-10 MB main bundles (DEBT D43b). Clamp to 10 so a legacy stored value (from the old
       // 25 MB slider) can't wave through files the server will 422.
-      maxAssetMb: Math.min(10, typeof result.maxAssetMb === 'number' ? result.maxAssetMb : 10),
-      denyDefaultProfile: result.denyDefaultProfile !== false,
-      denyRules: Array.isArray(result.denyRules) ? result.denyRules : DEFAULT_DENY_RULES
+      maxAssetMb: Math.min(10, typeof result.maxAssetMb === 'number' ? result.maxAssetMb : 10)
     };
   }
 
@@ -1156,7 +1142,7 @@ class JSExtractor {
     if (!this.isCapturing) return;
     if (!request || !request.url) return;
     if (!this.isInScope(request.url)) return;
-    if (this.shouldSkipUrl(request.url, sender?.tab?.url || request.documentUrl)) return;
+    if (this.shouldSkipUrl(request.url)) return;
 
     const senderTabId = sender?.tab?.id;
     const senderFrameId = sender?.frameId;
@@ -1188,7 +1174,7 @@ class JSExtractor {
     const pageUrl = request.pageUrl || sender?.tab?.url;
     if (!pageUrl) return;
     if (!this.isInScope(pageUrl)) { this.noteOutOfScopeScript(pageUrl); return; }
-    if (this.shouldSkipUrl(pageUrl, pageUrl)) return;
+    if (this.shouldSkipUrl(pageUrl)) return;
     if (!isRelevantInlineScript(request.content)) return;
 
     // Per-page cap so a churny SPA can't flood the outbox (review Claim 4).
@@ -1250,7 +1236,7 @@ class JSExtractor {
 
     const rawUrl = details.url;
     if (!this.isInScope(rawUrl)) return;
-    if (this.shouldSkipUrl(rawUrl, details.documentUrl)) return;
+    if (this.shouldSkipUrl(rawUrl)) return;
     if (isTelemetryPath(rawUrl)) return;
     if (!isApiIshObservation(this.responseContentType(details.responseHeaders))) return;
 
@@ -1287,7 +1273,7 @@ class JSExtractor {
     if (!details.requestBody) return;
     const url = details.url;
     if (!this.isInScope(url)) return;
-    if (this.shouldSkipUrl(url, details.documentUrl)) return;
+    if (this.shouldSkipUrl(url)) return;
     if (this.session.bodyBytesUsed >= BODY_TOTAL_CAP) return;
     if (this.session.pendingRequestBodies.size >= 512) return; // bound un-completed requests
     const prepared = prepareRequestBody(details.requestBody, REQ_BODY_CAP);
@@ -1296,7 +1282,7 @@ class JSExtractor {
   }
 
   // A RESPONSE body from the opt-in main-world hook (DEBT D45b2). Lower-trust (page-forgeable) —
-  // re-apply scope + denylist + telemetry + budget here (the hook can't see scope), redact, cap,
+  // re-apply scope + third-party + telemetry + budget here (the hook can't see scope), redact, cap,
   // and attach to the matching observation (dedup keeps one respBody per method+url).
   handleResponseBody(request) {
     if (!this.isCapturing) return;
@@ -1304,7 +1290,7 @@ class JSExtractor {
     if (!request || typeof request.url !== 'string' || typeof request.body !== 'string') return;
     const rawUrl = request.url;
     if (!this.isInScope(rawUrl)) return;
-    if (this.shouldSkipUrl(rawUrl, request.pageUrl)) return;
+    if (this.shouldSkipUrl(rawUrl)) return;
     if (isTelemetryPath(rawUrl)) return;
     // Apply the same API-ish content-type gate as recordObservation — the forgeable hook's own
     // filter is not trusted in the worker (review nit).

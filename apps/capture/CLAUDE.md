@@ -53,8 +53,9 @@ Match the existing style; prefer small, verifiable changes over broad rewrites. 
 URL + credentials); signed-in → **Home**, which is scope-first: no scope and a disabled Start, then
 "Capture into" (Continue a session that holds the scope, or a New session with an optional
 engagement), then the live capture card (Pause / Resume / End). Settings keep the signed-in
-**Account** summary, Connection, Capture Rules (incl. "Capture every tab" behind its confirm), and
-Noise Denylist. Results, export, the LLM key and clearing captures live in the workspace, not the popup (once
+**Account** summary, Connection and Capture Rules (incl. "Capture every tab" behind its confirm). There is no
+rules editor: third-party rules are the built-in list plus the team's additions from workspace Settings
+(`modules/team-rules.js`, downloaded at sign-in and capture start). Results, export, the LLM key and clearing captures live in the workspace, not the popup (once
 analysis is done it only links there). There is no scope setting: the scope belongs to one capture. The workspace URL is the single
 source of truth for uploads, health, and analyze.
 

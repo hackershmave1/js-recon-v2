@@ -26,4 +26,3 @@ button { font-family: inherit; }
 
 /* hover affordances the prototype declared via style-hover */
 .pp-iconbtn:hover { color: #ECEFF6 !important; border-color: #2a3243 !important; }
-.pp-rule-remove:hover { color: #FF6B8A !important; background: rgba(255,107,138,0.1) !important; }

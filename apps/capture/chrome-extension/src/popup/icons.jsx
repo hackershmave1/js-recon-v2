@@ -91,15 +91,6 @@ export const GlobeIcon = ({ size = 13, color = '#5C6680' }) => (
   </svg>
 );
 
-export const EyeOffIcon = ({ size = 13, color = '#5C6680' }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color}
-       stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M9.9 4.2A9.1 9.1 0 0 1 12 4c7 0 10 8 10 8a13.2 13.2 0 0 1-1.7 2.7" />
-    <path d="M6.6 6.6A13.5 13.5 0 0 0 2 12s3 8 10 8a9 9 0 0 0 5.4-1.6" />
-    <path d="m2 2 20 20" />
-  </svg>
-);
-
 export const PulseIcon = ({ size = 14 }) => stroke(size, <path d="M22 12h-4l-3 9L9 3l-3 9H2" />);
 
 export const SpinnerIcon = ({ size = 14 }) => (
