@@ -5,7 +5,9 @@ import {
   getMe,
   login as apiLogin,
   setUnauthorizedHandler,
+  type LoginResult,
 } from "../api/apiClient";
+import { hasHandoffCode, startHandoff } from "./handoffFragment";
 
 // The login token is the source of the active tenant. We ALSO mirror its tenant id into
 // `recon.tenantId` so the existing TenantProvider (and every useTenant() consumer) keeps
@@ -22,8 +24,18 @@ export interface AuthUser {
   tenantName: string | null;
 }
 
+/** ADR-0011 handoff from the extension: "pending" while the code is being exchanged, "offer" once
+ * it names an account (held in memory only, until the researcher clicks), else "none". */
+export interface HandoffState {
+  status: "none" | "pending" | "offer";
+  offer: LoginResult | null;
+  accept: () => void;
+  decline: () => void;
+}
+
 interface AuthCtx {
   user: AuthUser | null;
+  handoff: HandoffState;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
 }
@@ -80,10 +92,34 @@ function bootstrapUser(): AuthUser | null {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() => bootstrapUser());
+  const [handoffStatus, setHandoffStatus] = useState<"none" | "pending" | "offer">(() =>
+    hasHandoffCode() ? "pending" : "none",
+  );
+  const [offer, setOffer] = useState<LoginResult | null>(null);
+
+  // Spend the extension's handoff code once (startHandoff is memoised, so StrictMode's second
+  // effect run shares the first's promise). Any failure => no offer, no message: the researcher
+  // just sees the normal login screen.
+  useEffect(() => {
+    if (!hasHandoffCode()) return;
+    let cancelled = false;
+    startHandoff().then((result) => {
+      if (cancelled) return;
+      setOffer(result);
+      setHandoffStatus(result ? "offer" : "none");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Confirm a persisted token with the server once on load (its signature can't be
   // checked in the browser). A 401 => stale/rotated/forged token => log out.
+  // Held back until the handoff settles, so a stale stored token's 401 cannot wipe the
+  // storage the handoff is about to replace (ADR-0011 review N3).
+  const handoffSettled = handoffStatus !== "pending";
   useEffect(() => {
+    if (!handoffSettled) return;
     if (!localStorage.getItem(AUTH_TOKEN_KEY)) return;
     let cancelled = false;
     getMe()
@@ -107,7 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [handoffSettled]);
 
   // Any tenant call that 401s means this session is dead (expired/rotated token). Drop to the
   // login screen instead of looping on 401s until a manual reload (review Finding 3).
@@ -119,8 +155,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => setUnauthorizedHandler(null);
   }, []);
 
-  const login = async (username: string, password: string): Promise<void> => {
-    const result = await apiLogin(username, password);
+  const storeSession = (result: LoginResult): void => {
     localStorage.setItem(AUTH_TOKEN_KEY, result.token);
     localStorage.setItem(TENANT_KEY, result.tenant.id);
     localStorage.setItem(USER_KEY, result.user);
@@ -133,12 +168,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const login = async (username: string, password: string): Promise<void> => {
+    storeSession(await apiLogin(username, password));
+  };
+
+  const handoff: HandoffState = {
+    status: handoffStatus,
+    offer,
+    accept: () => {
+      if (offer) storeSession(offer);
+      setOffer(null);
+      setHandoffStatus("none");
+    },
+    decline: () => {
+      setOffer(null);
+      setHandoffStatus("none");
+    },
+  };
+
   const logout = (): void => {
     clearAuthStorage();
     setUser(null);
   };
 
-  return <Ctx.Provider value={{ user, login, logout }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, handoff, login, logout }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth(): AuthCtx {
