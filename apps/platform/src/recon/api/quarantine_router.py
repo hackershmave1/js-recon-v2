@@ -106,7 +106,11 @@ def decide_host(
 ) -> dict:
     try:
         result = service.decide(
-            tenant_id=tenant_id, session_id=session_id, host=host, decision=body.decision
+            tenant_id=tenant_id,
+            session_id=session_id,
+            host=host,
+            decision=body.decision,
+            redis=redis,
         )
     except service.QuarantineError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

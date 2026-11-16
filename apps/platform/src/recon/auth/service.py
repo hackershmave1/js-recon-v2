@@ -78,6 +78,32 @@ def authenticate(username: str, password: str) -> Principal | None:
     return Principal(user_id=str(user.id), tenant_id=str(user.tenant_id), role=user.role)
 
 
+@dataclass(frozen=True)
+class UserRecord:
+    """A user as stored now (not as an old token claimed): used by the handoff exchange."""
+
+    user_id: str
+    tenant_id: str
+    role: str
+    username: str
+
+
+def lookup_user(user_id: str) -> UserRecord | None:
+    """The current ``app_user`` row for ``user_id`` (admin connection: no tenant context
+    exists yet at exchange time, same as login), or ``None`` if gone / not a UUID."""
+    try:
+        key = uuid.UUID(user_id)
+    except ValueError:
+        return None
+    with admin_session() as session:
+        user = session.get(AppUser, key)
+        if user is None:
+            return None
+        return UserRecord(
+            user_id=str(user.id), tenant_id=str(user.tenant_id), role=user.role, username=user.email
+        )
+
+
 def tenant_name(tenant_id: str) -> str | None:
     """The display name of a tenant, for the login/``/me`` response. Uses the admin
     connection because the caller is resolving their OWN just-verified tenant and no

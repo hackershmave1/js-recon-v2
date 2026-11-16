@@ -1134,6 +1134,7 @@ class JSExtractor {
       getStatus: () => this.getStatus(sendResponse),
       updateSettings: (req) => this.updateSettings(req, sendResponse),
       testConnection: async () => sendResponse(await this.workspaceClient.testConnection()),
+      workspaceUrl: async (req) => sendResponse({ ok: true, url: await this.workspaceClient.workspaceOpenUrl(req.captureId) }),
       analyzeSession: async () => sendResponse(await this.workspaceClient.analyzeSession()),
       getAnalysisProgress: async () => sendResponse(await this.workspaceClient.getAnalysisProgress()),
       listProjects: () => this.listProjects(sendResponse),
