@@ -1,8 +1,8 @@
 ---
-status: "proposed"
+status: "accepted"
 date: 2026-11-16
 # Adversarial review 2026-11-16: ACCEPTED WITH CONDITIONS (C1-C5 folded in below).
-# Proposed until the owner approves this security design (it adds a sign-in path). H2 (#222) must not merge first.
+# Accepted 2026-11-16: the owner approved this design, with the review conditions below and the always-click "Continue as X" step kept (silent sign-in was rejected).
 ---
 
 # 11. A single-use handoff code lets "Open in workspace" sign the researcher in
