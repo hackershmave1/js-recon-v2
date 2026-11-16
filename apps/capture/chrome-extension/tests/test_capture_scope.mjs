@@ -20,10 +20,10 @@ const quoted = (text) => new Set([...text.matchAll(/"([^"]+)"/g)].map((m) => m[1
   const block = egress.slice(start, start + end);
   assert.deepEqual([...SHARED_SUFFIXES].sort(), [...quoted(block)].sort(), 'SHARED_SUFFIXES drifted from egress.py');
 
-  const noise = readFileSync(join(recon, 'findings', 'noise_hosts.py'), 'utf8');
-  const nblock = noise.slice(noise.indexOf('_ANALYTICS = {'), noise.indexOf('DEFAULT_NOISE_HOSTS'));
-  const py = new Set([...nblock.matchAll(/^\s+"([^"]+)",/gm)].map((m) => m[1]));
-  assert.deepEqual([...NOISE_HOSTS].sort(), [...py].sort(), 'NOISE_HOSTS drifted from noise_hosts.py');
+  // The hosts come from the shared third_party_rules.json (also read by the platform's noise_hosts.py).
+  const rules = JSON.parse(readFileSync(join(recon, 'findings', 'third_party_rules.json'), 'utf8'));
+  const hosts = new Set(Object.values(rules.hosts).flat());
+  assert.deepEqual([...NOISE_HOSTS].sort(), [...hosts].sort(), 'NOISE_HOSTS drifted from third_party_rules.json');
 }
 
 // apexForHost: registrable domain, one more label under a shared suffix, exact host otherwise.

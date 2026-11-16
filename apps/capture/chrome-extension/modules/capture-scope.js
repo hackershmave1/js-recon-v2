@@ -6,8 +6,11 @@
 // - SHARED_SUFFIXES = recon/fetch/egress.py _PUBLIC_SUFFIX_DENYLIST. "acme.io and all its
 //   subdomains" must never become "every *.github.io site": the server drops such an entry from the
 //   session scope, and the extension's gate would capture every site under it.
-// - NOISE_HOSTS = recon/findings/noise_hosts.py DEFAULT_NOISE_HOSTS (analytics, telemetry, ads, vendor
-//   CDNs). Scripts from these never raise the "new site seen" badge.
+// - NOISE_HOSTS = the hosts of the built-in third-party rules (analytics, telemetry, ads, vendor CDNs),
+//   generated from the platform's third_party_rules.json (modules/third-party-rules.js). Scripts from these
+//   never raise the "new site seen" badge.
+
+import { NOISE_HOSTS } from './third-party-rules.js';
 
 export const SHARED_SUFFIXES = new Set([
   'co.uk', 'org.uk', 'gov.uk', 'ac.uk', 'co.jp', 'com.au', 'com.br', 'co.in', 'co.za', 'github.io',
@@ -17,25 +20,7 @@ export const SHARED_SUFFIXES = new Set([
   'wordpress.com', 'glitch.me', 'repl.co', 'surge.sh',
 ]);
 
-export const NOISE_HOSTS = new Set([
-  'addthis.com', 'adservice.google.com', 'ajax.aspnetcdn.com', 'ajax.googleapis.com',
-  'amplitude.com', 'appboycdn.com', 'apple.com', 'apple.news', 'bootstrapcdn.com', 'branch.io',
-  'braze.com', 'bugsnag.com', 'cdnjs.cloudflare.com', 'cloudflareinsights.com', 'code.jquery.com',
-  'connect.facebook.net', 'datadoghq-browser-agent.com', 'datadoghq.com', 'doubleclick.net',
-  'drift.com', 'dublincore.org', 'ecma-international.org', 'facebook.com', 'facebook.net',
-  'fbcdn.net', 'fontawesome.com', 'fullstory.com', 'google-analytics.com', 'google.com',
-  'googleadservices.com', 'googleapis.com', 'googlesyndication.com', 'googletagmanager.com',
-  'gstatic.com', 'gvt1.com', 'gvt2.com', 'heapanalytics.com', 'hotjar.com', 'ietf.org',
-  'ingest.sentry.io', 'intercom.io', 'intercomassets.com', 'intercomcdn.com', 'js.stripe.com',
-  'jsdelivr.net', 'json-ld.org', 'launchdarkly.com', 'logrocket.com', 'logrocket.io',
-  'mixpanel.com', 'mouseflow.com', 'mozilla.org', 'mxpnl.com', 'newrelic.com', 'nr-data.net',
-  'openapis.org', 'optimizely.com', 'purl.org', 'quantserve.com', 'recaptcha.net',
-  'rfc-editor.org', 'schema.org', 'scorecardresearch.com', 'segment.com', 'segment.io',
-  'sentry-cdn.com', 'sentry.io', 'stripe.com', 'stripe.network', 'swagger.io', 'tc39.es',
-  'tealiumiq.com', 'testfairy.com', 'tiqcdn.com', 'unpkg.com', 'use.fontawesome.com',
-  'use.typekit.net', 'w3.org', 'wappalyzer.com', 'whatwg.org', 'xml.org', 'xmlns.com',
-  'xmlsoap.org', 'zdassets.com',
-]);
+export { NOISE_HOSTS };
 
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
 
