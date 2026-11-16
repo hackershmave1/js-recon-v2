@@ -1,7 +1,7 @@
 """session.external_id is write-once (ADR-0012)
 
-Revision ID: 0038_session_extid_write_once
-Revises: 0037_host_decision_referenced
+Revision ID: 0039_session_extid_write_once
+Revises: 0038_tenant_third_party_rule
 Create Date: 2026-11-16
 
 The extension id is the write capability for a session's captures. ADR-0012 lets a workspace
@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0038_session_extid_write_once"
-down_revision = "0037_host_decision_referenced"
+revision = "0039_session_extid_write_once"
+down_revision = "0038_tenant_third_party_rule"
 branch_labels = None
 depends_on = None
 
