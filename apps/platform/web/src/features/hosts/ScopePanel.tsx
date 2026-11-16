@@ -69,8 +69,13 @@ export function ScopePanel({ sessionId, onChanged }: { sessionId: string; onChan
   const decide = (host: string, decision: "add" | "ignore") =>
     act(`${decision}:${host}`, async () => {
       const result = await decideHost(tenantId!, sessionId, host, decision);
+      const outcomes = Object.values(result.analysis ?? {});
       if (result.recrawl?.run_id) setNotice(`Added ${host}. A new crawl is fetching its scripts; the findings appear when it finishes.`);
       else if (result.recrawl) setNotice(`Added ${host}, but the crawl didn't start. Re-run the session to fetch its scripts.`);
+      else if (outcomes.some((o) => o.startsWith("followup:")))
+        setNotice(`Added ${host}. Its scripts arrived after the capture ended, so they are being analyzed in a new run of this session; its findings appear there.`);
+      else if (outcomes.includes("needs_rerun"))
+        setNotice(`Added ${host}, but its analysis didn't start. Re-run the session to analyze its scripts.`);
     }, `Couldn't ${decision} ${host}.`);
   const add = (host: string) => act(`add:${host}`, () => addScopeHost(tenantId!, sessionId, host), `Couldn't add ${host}.`);
 
