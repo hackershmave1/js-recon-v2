@@ -27,6 +27,7 @@ from recon.domain import DiscoveryStatus
 from recon.events.log import publish
 from recon.fetch import egress
 from recon.observability import get_logger
+from recon.quarantine import service as quarantine_service
 from recon.queue import retry
 from recon.runs import assets
 from recon.sessions import service as sessions_service
@@ -130,7 +131,44 @@ def discover_run(redis: Redis, *, tenant_id: str, run_id: str, job_id: str) -> N
         assets.seed_pending(session, tenant_id=tenant_id, run_id=run_id, urls=kept)
         event = discovery.record(session, tenant_id=tenant_id, run_id=run_id, found=found)
     publish(redis, event)
+    _list_unknown_script_hosts(
+        tenant_id,
+        session_id,
+        run_id,
+        katana.parse_out_of_scope_scripts(result.stdout),
+        engagement.scope_hosts,
+        allow_local=settings.allow_local_egress,
+    )
     log.info("discover.done", run_id=run_id, count=len(kept), status=status)
+
+
+def _list_unknown_script_hosts(
+    tenant_id: str,
+    session_id: str | None,
+    run_id: str,
+    script_urls: list[str],
+    scope_hosts: list[str],
+    *,
+    allow_local: bool,
+) -> None:
+    """ADR-0010: the crawl has no egress exception. Scripts on hosts outside the scope are NOT
+    downloaded; their hosts are listed as "referenced, not fetched" so the researcher can Add one
+    (it joins the scope and the unchanged guard fetches it on the re-crawl) or Ignore it.
+    Best-effort: the listing is a convenience and must never fail a crawl that succeeded."""
+    by_host: dict[str, list[str]] = {}
+    for url in script_urls:
+        host = egress.host_of(url)
+        if not host or egress.host_in_scope(host, scope_hosts, allow_local=allow_local):
+            continue
+        by_host.setdefault(host, []).append(url)
+    if not by_host or session_id is None:
+        return
+    try:
+        quarantine_service.note_referenced(
+            tenant_id=tenant_id, session_id=session_id, run_id=run_id, urls_by_host=by_host
+        )
+    except Exception:  # noqa: BLE001 - see docstring
+        log.exception("discover.list_referenced_failed", run_id=run_id)
 
 
 def _revalidate(urls: list[str], scope_hosts: list[str], *, allow_local: bool = False) -> list[str]:

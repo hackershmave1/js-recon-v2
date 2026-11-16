@@ -3,6 +3,8 @@ open-capture gate, status codes. The behaviour itself is covered in recon.quaran
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -71,3 +73,35 @@ def test_decision_status_codes(client, monkeypatch):
     respond("not_found")
     assert client.post(url, json={"decision": "add"}, headers=H).status_code == 404
     assert client.post(url, json={"decision": "maybe"}, headers=H).status_code == 422
+
+
+def test_add_of_a_referenced_host_starts_one_recrawl(client, monkeypatch):
+    started = []
+    monkeypatch.setattr(
+        service,
+        "decide",
+        lambda **k: service.DecisionResult(status="ok", state="added", recrawl_run_id="run-1"),
+    )
+    monkeypatch.setattr(
+        quarantine_router.coordinator,
+        "edit_and_rerun",
+        lambda redis, **k: started.append(k["run_id"]) or SimpleNamespace(id="run-2"),
+    )
+    body = client.post(
+        "/sessions/s-1/hosts/cdn.acme-static.com/decision", json={"decision": "add"}, headers=H
+    ).json()
+    assert started == ["run-1"]
+    assert body["recrawl"] == {"source_run_id": "run-1", "run_id": "run-2"}
+
+
+def test_ignore_and_plain_add_start_no_recrawl(client, monkeypatch):
+    monkeypatch.setattr(
+        quarantine_router.coordinator,
+        "edit_and_rerun",
+        lambda *a, **k: pytest.fail("no re-crawl expected"),
+    )
+    monkeypatch.setattr(
+        service, "decide", lambda **k: service.DecisionResult(status="ok", state="ignored")
+    )
+    url = "/sessions/s-1/hosts/cdn.acme-static.com/decision"
+    assert client.post(url, json={"decision": "ignore"}, headers=H).json()["recrawl"] is None

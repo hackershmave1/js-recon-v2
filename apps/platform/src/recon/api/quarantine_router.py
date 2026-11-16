@@ -15,15 +15,19 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
+from redis import Redis
 from sqlalchemy import select
 
 from recon.api import capture_router
-from recon.api.deps import get_tenant_id
+from recon.api.deps import get_redis, get_tenant_id
 from recon.config import get_settings
 from recon.db.base import tenant_session
 from recon.db.models import Run
+from recon.observability import get_logger
 from recon.quarantine import service
-from recon.runs import capture_lifecycle
+from recon.runs import capture_lifecycle, coordinator
+
+log = get_logger("recon.quarantine")
 
 router = APIRouter(tags=["quarantine"])
 
@@ -94,7 +98,11 @@ def list_ignored(session_id: str, tenant_id: str = Depends(get_tenant_id)) -> di
 
 @router.post("/sessions/{session_id}/hosts/{host}/decision")
 def decide_host(
-    session_id: str, host: str, body: DecisionIn, tenant_id: str = Depends(get_tenant_id)
+    session_id: str,
+    host: str,
+    body: DecisionIn,
+    tenant_id: str = Depends(get_tenant_id),
+    redis: Redis = Depends(get_redis),
 ) -> dict:
     try:
         result = service.decide(
@@ -113,4 +121,19 @@ def decide_host(
         "promoted": result.promoted,
         "deleted": result.deleted,
         "analysis": result.analysis,
+        "recrawl": _start_recrawl(redis, tenant_id, result.recrawl_run_id),
     }
+
+
+def _start_recrawl(redis: Redis, tenant_id: str, source_run_id: str | None) -> dict | None:
+    """K1: Add of a host a crawl only REFERENCED. The host is now in the scope, so one new crawl of
+    the same target fetches its scripts through the unchanged egress guard (the "fetch pass").
+    The Add already happened and stands: a failure here is reported, never turned into an error."""
+    if source_run_id is None:
+        return None
+    try:
+        view = coordinator.edit_and_rerun(redis, tenant_id=tenant_id, run_id=source_run_id)
+    except Exception as exc:  # noqa: BLE001 - Add is committed; the researcher can re-run by hand
+        log.exception("quarantine.recrawl_failed", run_id=source_run_id)
+        return {"source_run_id": source_run_id, "run_id": None, "error": type(exc).__name__}
+    return {"source_run_id": source_run_id, "run_id": view.id}

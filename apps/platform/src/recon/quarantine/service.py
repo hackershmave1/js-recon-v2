@@ -52,6 +52,7 @@ CAP_HOST_BYTES = "cap_host_bytes"
 CAP_SESSION_BYTES = "cap_session_bytes"
 
 _MAX_HOST_LEN = 253
+_MAX_REFERENCED_URLS = 20  # a sample for the label, not an inventory
 
 
 class QuarantineError(Exception):
@@ -77,6 +78,9 @@ class DecisionResult:
     promoted: int = 0
     deleted: int = 0
     analysis: dict[str, str] = field(default_factory=dict)  # run id -> scheduled | needs_rerun
+    # K1: the run whose crawl referenced this host's scripts, set only on the Add that won. The
+    # caller re-crawls it: the host is now in scope, so the unchanged guard fetches the scripts.
+    recrawl_run_id: str | None = None
 
 
 def normalize_host(host: str) -> str:
@@ -214,7 +218,7 @@ def decide(*, tenant_id: str, session_id: str, host: str, decision: str) -> Deci
                 models.HostDecision.state == HostDecisionState.UNDECIDED.value,
             )
             .values(state=target.value, decided_at=now, expires_at=None)
-            .returning(models.HostDecision.id)
+            .returning(models.HostDecision.id, models.HostDecision.referenced_run_id)
         ).first()
         if won is None:
             current = session.scalar(
@@ -230,6 +234,7 @@ def decide(*, tenant_id: str, session_id: str, host: str, decision: str) -> Deci
                 status="ok" if current == target.value else "conflict", state=current
             )
         if target is HostDecisionState.ADDED:
+            result.recrawl_run_id = str(won.referenced_run_id) if won.referenced_run_id else None
             _add_to_scope(session, session_id, host)
             promoted, keys_to_delete = _promote(session, tenant_id, session_id, host, result)
             result.promoted = promoted
@@ -238,6 +243,62 @@ def decide(*, tenant_id: str, session_id: str, host: str, decision: str) -> Deci
     result.deleted = result.deleted or len(keys_to_delete)
     _delete_after_commit(keys_to_delete)
     return result
+
+
+def note_referenced(
+    *, tenant_id: str, session_id: str, run_id: str, urls_by_host: dict[str, list[str]]
+) -> list[str]:
+    """List hosts whose scripts a crawl referenced but did not fetch (ADR-0010, K1).
+
+    Each becomes an undecided host with NO held files, remembering the run and a bounded sample of
+    URLs. Nothing is stored or downloaded. A host already added or ignored is left alone (Ignore is
+    final: a later crawl never re-lists it), an expired one starts afresh, and the session's cap
+    on undecided hosts applies. Returns the hosts newly listed."""
+    settings = get_settings()
+    now = _now()
+    expires = now + dt.timedelta(days=settings.quarantine_expiry_days)
+    listed: list[str] = []
+    with tenant_session(tenant_id) as session:
+        owner = session.scalar(select(models.Run.session_id).where(models.Run.id == run_id))
+        if owner is None or str(owner) != str(session_id):
+            raise QuarantineError("run does not belong to the session")
+        for raw_host, urls in urls_by_host.items():
+            host = normalize_host(raw_host)
+            sample = list(dict.fromkeys(urls))[:_MAX_REFERENCED_URLS]
+            decision = _lock_decision_for_share(session, tenant_id, session_id, host)
+            if decision is None:
+                if (
+                    _undecided_host_count(session, session_id)
+                    >= settings.quarantine_max_hosts_per_session
+                ):
+                    continue
+                session.add(
+                    models.HostDecision(
+                        tenant_id=tenant_id,
+                        session_id=session_id,
+                        host=host,
+                        state=HostDecisionState.UNDECIDED.value,
+                        first_seen_at=now,
+                        expires_at=expires,
+                        referenced_run_id=run_id,
+                        referenced_urls=sample,
+                    )
+                )
+                listed.append(host)
+            elif decision.state == HostDecisionState.UNDECIDED.value:
+                merged = list(dict.fromkeys([*(decision.referenced_urls or []), *sample]))
+                decision.referenced_run_id = run_id
+                decision.referenced_urls = merged[:_MAX_REFERENCED_URLS]
+            elif decision.state == HostDecisionState.EXPIRED.value:
+                decision.state = HostDecisionState.UNDECIDED.value
+                decision.first_seen_at = now
+                decision.expires_at = expires
+                decision.decided_at = None
+                decision.referenced_run_id = run_id
+                decision.referenced_urls = sample
+                listed.append(host)
+            # added / ignored: the decision stands
+    return listed
 
 
 def sweep(*, now: dt.datetime | None = None, limit: int = 200) -> int:
@@ -275,6 +336,8 @@ def undecided_hosts(*, tenant_id: str, session_id: str) -> list[dict]:
                 models.HostDecision.host,
                 models.HostDecision.first_seen_at,
                 models.HostDecision.expires_at,
+                models.HostDecision.referenced_run_id,
+                models.HostDecision.referenced_urls,
                 func.count(models.QuarantinedAsset.id),
                 func.coalesce(func.sum(models.QuarantinedAsset.size_bytes), 0),
             )
@@ -297,8 +360,11 @@ def undecided_hosts(*, tenant_id: str, session_id: str) -> list[dict]:
             "expires_at": expires.isoformat() if expires else None,
             "files": int(files),
             "bytes": int(size),
+            # K1: a crawl referenced scripts here and fetched none ("referenced, not fetched").
+            "referenced": referenced_run is not None,
+            "referenced_urls": list(referenced_urls or []),
         }
-        for host, first_seen, expires, files, size in rows
+        for host, first_seen, expires, referenced_run, referenced_urls, files, size in rows
     ]
 
 
