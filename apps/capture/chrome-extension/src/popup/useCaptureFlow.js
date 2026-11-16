@@ -125,6 +125,10 @@ export function useCaptureFlow({
     addSite,
     endAndStartNew: (site) => end(site),
     dismissSite: (site) => run('site', () => api.captureDismissSite(site)),
+    ignoreSiteForAll: async (site) => {
+      const res = await run('site', () => api.captureIgnoreForAll(site));
+      if (res && res.ok === false) fail(res, 'Could not add the site to the team list');
+    },
     dismissEnded: () => run('ended', () => api.captureDismissEnded()),
   };
 }

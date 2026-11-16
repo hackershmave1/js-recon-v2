@@ -21,6 +21,7 @@ import { replyOnce, dispatchReply } from './modules/message-reply.js';
 import { hookMatchPatterns, hostInScope } from './modules/hook-matches.js';
 import { authMarker, tokenExpiry } from './modules/token-validity.js';
 import { CaptureApi } from './modules/capture-api.js';
+import { loadSavedTeamRules, syncTeamRules, resetTeamRules, STORAGE_KEY as TEAM_RULES_KEY } from './modules/team-rules.js';
 import { CaptureLifecycle, badgeText } from './modules/capture-lifecycle.js';
 import { apexForHost, isNoiseHost } from './modules/capture-scope.js';
 import { ADMIT, admitScript } from './modules/script-admission.js';
@@ -142,6 +143,7 @@ class JSExtractor {
       getObservations: () => this.session.observations,
       getProcessing: () => this.session.processingQueue.length + (this.processingInFlight || 0),
       scheduleRetry: () => { try { chrome.alarms.create('captureEndRetry', { delayInMinutes: 1 }); } catch (e) { /* no alarms here */ } },
+      teamRulesChanged: () => this.refreshTeamRules(),
     });
     // Scripts from hosts the researcher has not decided on (ADR-0010): fetched without cookies and
     // held by the platform apart from the run, a leaf (no dependencies or maps), best effort.
@@ -175,6 +177,9 @@ class JSExtractor {
     // Every start: keep the token/settings store away from content scripts (modules/storage-access.js).
     await restrictStorageAccess(chrome.storage).catch((e) => console.warn('storage access level', e));
     this.settings = await this.loadSettings();
+    // The team's third-party rules: the last saved copy first (never waits on the network), the fresh
+    // download follows at sign-in and when a capture starts (ADR-0010, R2).
+    await loadSavedTeamRules(chrome.storage.local);
     // Register the opt-in main-world response-body hook if it's enabled (DEBT D45b2).
     // Awaited so the XHR hook is registered before any requests arrive after a respawn.
     await this.syncResponseBodyHook();
@@ -1103,10 +1108,10 @@ class JSExtractor {
       // Capture lifecycle (one capture = one platform run). It is the ONLY way capture starts or
       // stops: the gate has one writer (applyCaptureGate), driven by these transitions.
       captureLookup: async (req) => sendResponse(this.replyFrom(await this.capture.lookup(req.scope))),
-      captureStart: async (req) => sendResponse(await this.listenAndRescan(() => this.capture.start({
+      captureStart: async (req) => sendResponse(await this.listenAndRescan(() => { this.refreshTeamRules(); return this.capture.start({
         scope: req.scope, mode: req.mode, match: req.match,
         binding: { projectId: req.projectId || null, captureConfig: {}, overrideKeys: [] },
-      }))),
+      }); }))),
       capturePause: async () => sendResponse(await this.capture.pause()),
       captureResume: async () => sendResponse(await this.listenAndRescan(() => this.capture.resume())),
       captureEnd: async () => sendResponse(await this.capture.end()),
@@ -1117,6 +1122,11 @@ class JSExtractor {
       },
       captureDismissSite: async (req) => {
         const res = await this.capture.dismissSite(req.site);
+        this.updateBadge();
+        sendResponse(res);
+      },
+      captureIgnoreForAll: async (req) => {
+        const res = await this.capture.ignoreForAll(req.site);
         this.updateBadge();
         sendResponse(res);
       },
@@ -1489,6 +1499,8 @@ class JSExtractor {
         this.batchUploader.resumeUploads();
         this.capture.resumeAfterLogin();
         this.authNotified = false;
+        if (prevTenantId && nextTenantId && prevTenantId !== nextTenantId) await this.forgetTeamRules();
+        this.refreshTeamRules();  // the new tenant's rules; never awaited, never blocks sign-in
         sendResponse({ success: true, user: this.settings.authUser, tenant: result.tenant || null, role: result.role || '' });
         return;
       }
@@ -1517,7 +1529,23 @@ class JSExtractor {
     // behind the sign-in gate, and the next sign-in must start clean (no old-tenant binding). The
     // outbox is kept (it cannot leak without a token; a same-tenant re-login resumes it).
     await this.resetCaptureSession({ stopCapturing: true });
+    await this.forgetTeamRules();  // the next sign-in may be another tenant's
     sendResponse({ success: true });
+  }
+
+  // Download the team's third-party rules (best effort: a failure keeps the last saved copy, and the
+  // built-in list always applies). Fire and forget: capture never waits on it.
+  refreshTeamRules() {
+    if (!this.settings || !this.settings.authToken) return Promise.resolve({ source: 'saved' });
+    return syncTeamRules({
+      fetchRules: () => this.captureApi.teamRulesMerged(),
+      storageArea: chrome.storage.local,
+    }).catch(() => ({ source: 'saved' }));
+  }
+
+  async forgetTeamRules() {
+    resetTeamRules();
+    try { await chrome.storage.local.remove(TEAM_RULES_KEY); } catch (e) { /* nothing saved */ }
   }
 
   // Rotate to a fresh, UNBOUND (Standalone) capture session and drop the previous session's

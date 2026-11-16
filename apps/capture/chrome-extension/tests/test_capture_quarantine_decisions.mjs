@@ -10,13 +10,14 @@ function storage(seed = {}) {
   };
 }
 
-function harness({ decide = async () => ({ ok: true }), addScope = async () => ({ ok: true }) } = {}) {
+function harness({ decide = async () => ({ ok: true }), addScope = async () => ({ ok: true }), teamRule = async () => ({ ok: true, status: 201 }) } = {}) {
   const calls = [];
   const api = {
     start: async () => ({ ok: true, data: { runId: 'run-1', sessionId: 'plat-1' } }),
     end: async () => ({ ok: true, data: { ended: true } }),
     lookup: async () => ({ ok: true, data: { sessions: [] } }),
     addScope: async (sid, host) => { calls.push(['scope', sid, host]); return addScope(sid, host); },
+    addTeamRule: async (kind, value) => { calls.push(['team', kind, value]); return teamRule(kind, value); },
     decideHost: async (sid, host, decision) => { calls.push(['decide', sid, host, decision]); return decide(sid, host, decision); },
   };
   const cs = { sessionId: 'ext-1', async startNew() {}, async adopt() {}, resetForCapture() {} };
@@ -25,6 +26,7 @@ function harness({ decide = async () => ({ ok: true }), addScope = async () => (
     local: storage(), session: storage(), api, captureSession: cs,
     getProcessing: () => 0, scheduleRetry: () => {},
     uploader: { flushAll: async () => {}, getStats: () => ({ pendingQueueLength: 0, isUploading: false, authPaused: false }) },
+    teamRulesChanged: () => { calls.push(['team-changed']); },
     applyGate: async (g) => { gates.push(g); }, now: () => 1_000_000, sleep: async () => {},
   });
   return { lc, calls, gates };
@@ -102,6 +104,46 @@ async function started(h) {
   assert.equal(r.ok, true);
   assert.equal(r.decisionPending, true);
   assert.equal(h.lc.isIgnoredSite('cdn.acme-static.com'), true);
+}
+
+// "Ignore for all my sessions": the site joins the TEAM list (apex host), then this session ignores it
+// exactly as above, and the worker is told the team list changed.
+{
+  const h = harness();
+  await started(h);
+  const r = await h.lc.ignoreForAll('acme-static.com');
+  assert.equal(r.ok, true);
+  assert.deepEqual(h.calls.find((c) => c[0] === 'team'), ['team', 'host', 'acme-static.com']);
+  assert.ok(h.calls.some((c) => c[0] === 'team-changed'));
+  assert.deepEqual(h.calls.filter((c) => c[0] === 'decide').map((c) => c[3]), ['ignore', 'ignore']);
+  assert.equal(h.lc.isIgnoredSite('cdn.acme-static.com'), true);
+  assert.ok(!h.lc.state.newSites.includes('acme-static.com'));
+}
+// Already on the team list (409) is fine: the researcher's wish is already true.
+{
+  const h = harness({ teamRule: async () => ({ ok: false, status: 409 }) });
+  await started(h);
+  assert.equal((await h.lc.ignoreForAll('acme-static.com')).ok, true);
+  assert.equal(h.lc.isIgnoredSite('cdn.acme-static.com'), true);
+}
+// A refused or failed team add changes nothing: the site is still offered.
+for (const [res, error] of [[{ ok: false, status: 422, data: { detail: 'not a usable host' } }, 'not a usable host'],
+                            [{ ok: false, status: 401 }, 'session_expired'],
+                            [{ ok: false, error: 'unreachable' }, 'unreachable']]) {
+  const h = harness({ teamRule: async () => res });
+  await started(h);
+  const r = await h.lc.ignoreForAll('acme-static.com');
+  assert.equal(r.ok, false);
+  assert.equal(r.error, error);
+  assert.equal(h.lc.isIgnoredSite('cdn.acme-static.com'), false);
+  assert.ok(h.lc.state.newSites.includes('acme-static.com'));
+  assert.equal(h.calls.filter((c) => c[0] === 'decide').length, 0);
+}
+// No capture, no team rule.
+{
+  const h = harness();
+  assert.deepEqual(await h.lc.ignoreForAll('acme-static.com'), { ok: false, error: 'no_capture' });
+  assert.equal(h.calls.length, 0);
 }
 
 console.log('ok - capture lifecycle: Add and Ignore reach the platform');
