@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { HostsResponse, HostRow } from "../../api/types";
 import { Icon } from "../../shell/icons";
 import { typeLabel } from "../../api/findingLabels";
+import { ScopePanel } from "./ScopePanel";
 import "./hosts.css";
 
 // The discovered-host inventory (DEBT D26): EVERY host recon surfaced — from fetched
@@ -27,7 +28,11 @@ const HOSTLESS_HELP =
   "Those calls use a path with no host in the code (fetch(\"/api/x\")), so they belong to no host row above. "
   + "Add a base URL under Findings → Tune extraction to attribute them, or pick a host on the Probe page to build their commands.";
 
-export function HostsPage({ data, techUnknown = false }: { data: HostsResponse; techUnknown?: boolean }) {
+export function HostsPage({
+  data, techUnknown = false, sessionId = null, onScopeChanged,
+}: {
+  data: HostsResponse; techUnknown?: boolean; sessionId?: string | null; onScopeChanged?: () => void;
+}) {
   const [scope, setScope] = useState<ScopeFilter>("all");
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("host");
@@ -47,12 +52,17 @@ export function HostsPage({ data, techUnknown = false }: { data: HostsResponse; 
       );
   }, [data.hosts, scope, query, sortKey, sortAsc]);
 
+  const panel = sessionId ? <ScopePanel sessionId={sessionId} onChanged={onScopeChanged} /> : null;
+
   if (data.count === 0) {
     return (
-      <div className="card">
-        <h2 className="rp-title">Hosts</h2>
-        <p className="muted">No hosts discovered for this run yet.</p>
-      </div>
+      <>
+        {panel}
+        <div className="card">
+          <h2 className="rp-title">Hosts</h2>
+          <p className="muted">No hosts discovered for this run yet.</p>
+        </div>
+      </>
     );
   }
 
@@ -80,6 +90,8 @@ export function HostsPage({ data, techUnknown = false }: { data: HostsResponse; 
   );
 
   return (
+    <>
+    {panel}
     <div className="card">
       <div className="hosts-head">
         <h2 className="rp-title">Hosts</h2>
@@ -165,6 +177,7 @@ export function HostsPage({ data, techUnknown = false }: { data: HostsResponse; 
         </table>
       )}
     </div>
+    </>
   );
 }
 

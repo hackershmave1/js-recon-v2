@@ -100,6 +100,19 @@ def sessions_for_scope(tenant_id: str, entry: str) -> list[ScopeMatch]:
         return matches
 
 
+def _pruned(scope: list[str]) -> list[str]:
+    """The scope without entries another entry already covers (an exact host under its apex)."""
+    allow_local = get_settings().allow_local_egress
+    return [
+        h
+        for h in scope
+        if not any(
+            other != h and egress.host_in_scope(h, [other], allow_local=allow_local)
+            for other in scope
+        )
+    ]
+
+
 def add_scope_entry(tenant_id: str, session_id: str, entry: str) -> list[str]:
     """Add ``entry`` to the session's scope (no-op when already there); returns the scope.
     Read-time overlays (hosts, hidden findings) pick it up on the next read."""
@@ -114,5 +127,28 @@ def add_scope_entry(tenant_id: str, session_id: str, entry: str) -> list[str]:
         scope = [str(h) for h in row.scope_hosts or []]
         if host not in scope:
             scope.append(host)
+            # An entry already covered by another (``cdn.acme.io`` under ``acme.io``) is redundant
+            # and would survive removing the broader one, leaving its host still in scope: keep one.
+            scope = _pruned(scope)
+            row.scope_hosts = scope
+        return scope
+
+
+def remove_scope_entry(tenant_id: str, session_id: str, entry: str) -> list[str]:
+    """Remove ``entry`` from the session's scope (no-op when absent); returns the scope.
+
+    A read-time rule, never a deletion: the host's files and findings are HIDDEN under "out of
+    scope" (recon.findings.visibility, recon.probe.sources) and return when the host is added back.
+    Deleting content is a separate, explicit action (recon.quarantine.scope_view)."""
+    host = _normalize(entry)
+    if host is None:
+        raise InvalidScopeEntry(entry)
+    with tenant_session(tenant_id) as db:
+        row = db.get(EngagementSession, session_id, with_for_update=True)
+        if row is None:
+            raise LookupError(session_id)
+        scope = [str(h) for h in row.scope_hosts or []]
+        if host in scope:
+            scope = [h for h in scope if h != host]
             row.scope_hosts = scope
         return scope

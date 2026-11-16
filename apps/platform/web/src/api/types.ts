@@ -280,6 +280,14 @@ export interface HostRow {
   // calls (endpoint_unresolved/generic) only.
   assets: number; endpoints: number; inferred: number; suspected: number; routes: number; techs: number;
 }
+// The Hosts page's scope panel (ADR-0010): what the session's scope is, hosts awaiting a decision
+// (with their 7-day expiry), the ignore list, and hosts removed from the scope whose files and
+// findings are hidden (reversible) until added back or explicitly deleted.
+export interface UndecidedHost { host: string; files: number; bytes: number; first_seen_at: string; expires_at: string | null }
+export interface HiddenHost { host: string; files: number; findings: number }
+export interface SessionScope {
+  scope_hosts: string[]; undecided: UndecidedHost[]; ignored: string[]; hidden: HiddenHost[];
+}
 export interface HostsResponse {
   run_id: string; count: number; in_scope: number;
   endpoints_unattributed: number; inferred_unattributed: number; suspected_unattributed: number; hosts: HostRow[];

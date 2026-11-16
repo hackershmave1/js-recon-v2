@@ -16,6 +16,8 @@ Reasons:
 - ``junk_or_dynamic`` (page routes): an absolute URL with no real host — a single label
   (``https://x``), a template (``https://${e}``), loopback, an IP — the same
   ``egress.attributed_host`` bar scope uses.
+- ``off_scope`` (any finding but a confirmed secret, when every sighting is in a file served by a host
+  outside the scope: removing a host from the session's scope hides its findings, #218).
 - ``off_scope`` (page routes AND endpoints): a real host that is not first-party (a library doc
   link, a schema id, a third-party site; for an endpoint, EVERY occurrence is on such a host).
   Endpoints joined this rule in #240, reversing the earlier "a third-party API call is attack
@@ -79,6 +81,7 @@ def why_hidden(
     allow_local: bool = False,
     occurrences: Iterable[tuple[str | None, str | None]] = (),
     app_packages: Iterable[str] = (),
+    asset_hosts: Iterable[str | None] = (),
 ) -> str | None:
     """Why a finding is hidden by default, or ``None`` when it is shown.
 
@@ -97,6 +100,12 @@ def why_hidden(
         return NOISE
     if _third_party(finding_type, occurrences, first_party, app_packages, allow_local=allow_local):
         return THIRD_PARTY
+    if finding_type != FindingType.SECRET.value and _only_out_of_scope_files(
+        asset_hosts, first_party, allow_local
+    ):
+        return (
+            OFF_SCOPE  # every sighting is in a file served by a host removed from the scope (#218)
+        )
     if finding_type in _ENDPOINT_TYPES:
         if _from_app_package(occurrences, app_packages):
             return None  # the researcher said this package is app code: its calls stay shown
@@ -125,6 +134,20 @@ _ENDPOINT_TYPES = frozenset(
         FindingType.ENDPOINT_GENERIC.value,
     }
 )
+
+
+def _only_out_of_scope_files(
+    asset_hosts: Iterable[str | None], first_party: list[str] | None, allow_local: bool
+) -> bool:
+    """True when the finding has at least one sighting in a stored file and EVERY such file is
+    served by a host outside the first-party scope. Removing a host from the session's scope
+    therefore hides its files' findings; adding it back brings them back. A sighting with no
+    stored file (an upload, a deleted asset) carries no host and does not vote. A confirmed secret
+    is exempt (a leaked key matters wherever it sits)."""
+    hosts = [h for h in asset_hosts if h]
+    if first_party is None or not hosts:
+        return False
+    return all(not egress.host_in_scope(h, first_party, allow_local=allow_local) for h in hosts)
 
 
 def _from_app_package(
@@ -253,11 +276,20 @@ def hidden_finding_ids(session: Session, run_id: str) -> dict[str, str]:
     # (third-party) — this runs per Sessions card, so no second query.
     hosts_by_finding: dict[str, set[str | None]] = {}
     occurrences_by_finding: dict[str, list[tuple[str | None, str | None]]] = {}
-    for finding_id, host, source_path in session.execute(
-        select(FindingOccurrence.finding_id, FindingOccurrence.host, FindingOccurrence.source_path)
+    asset_hosts_by_finding: dict[str, list[str | None]] = {}
+    for finding_id, host, source_path, asset_url in session.execute(
+        select(
+            FindingOccurrence.finding_id,
+            FindingOccurrence.host,
+            FindingOccurrence.source_path,
+            RunAsset.url,
+        )
         .join(Finding, Finding.id == FindingOccurrence.finding_id)
+        .outerjoin(RunAsset, RunAsset.id == FindingOccurrence.run_asset_id)
         .where(Finding.run_id == str(run_id))
     ).all():
+        if asset_url:
+            asset_hosts_by_finding.setdefault(str(finding_id), []).append(_static_host(asset_url))
         if host is not None:
             hosts_by_finding.setdefault(str(finding_id), set()).add(host)
         occurrences_by_finding.setdefault(str(finding_id), []).append((host, source_path))
@@ -283,6 +315,7 @@ def hidden_finding_ids(session: Session, run_id: str) -> dict[str, str]:
             allow_local=allow_local,
             occurrences=occurrences_by_finding.get(str(finding_id), ()),
             app_packages=app_packages,
+            asset_hosts=asset_hosts_by_finding.get(str(finding_id), ()),
         )
         if reason:
             hidden[str(finding_id)] = reason

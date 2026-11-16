@@ -196,10 +196,17 @@ export function GraphQLRoute() {
 }
 
 export function HostsRoute() {
-  const { hosts, technologies, loaded } = useRunData();
+  const { hosts, technologies, loaded, sessionId, refreshFindings } = useRunData();
   if (!loaded) return <NotReady title="Loading…" body="Fetching this run's hosts." />;
   if (!hosts) return <NotReady title="No hosts yet" body="Discovered hosts appear here once analysis has run." />;
-  return <HostsPage data={hosts} techUnknown={technologies?.detection_ran === false} />;
+  return (
+    <HostsPage
+      data={hosts}
+      techUnknown={technologies?.detection_ran === false}
+      sessionId={sessionId}
+      onScopeChanged={refreshFindings}
+    />
+  );
 }
 
 export function ThreatModelRoute() {

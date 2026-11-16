@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BulkDeleteResponse, BaseUrlRuleResult, DiffResponse, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SourcesIndexStatus, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
+  AssetsManifest, BaseUrlRule, BulkDeleteResponse, BaseUrlRuleResult, DiffResponse, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, SessionScope, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SourcesIndexStatus, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -277,6 +277,41 @@ export function getRunDiff(
 
 export function getTechnologies(tenantId: string, runId: string): Promise<TechnologiesResponse> {
   return request(`/runs/${encodeURIComponent(runId)}/technologies`, {}, tenantId);
+}
+
+export function getSessionScope(tenantId: string, sessionId: string): Promise<SessionScope> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/scope`, {}, tenantId);
+}
+
+export function addScopeHost(tenantId: string, sessionId: string, host: string): Promise<{ scope_hosts: string[] }> {
+  return request(`/sessions/${encodeURIComponent(sessionId)}/scope`, json("POST", { add: host }), tenantId);
+}
+
+// Hides the host's files and findings (read-time, reversible); never deletes.
+export function removeScopeHost(tenantId: string, sessionId: string, host: string): Promise<{ scope_hosts: string[] }> {
+  return request(
+    `/sessions/${encodeURIComponent(sessionId)}/scope/${encodeURIComponent(host)}`, { method: "DELETE" }, tenantId,
+  );
+}
+
+// Add or Ignore for a host whose scripts are held, undecided.
+export function decideHost(
+  tenantId: string, sessionId: string, host: string, decision: "add" | "ignore",
+): Promise<{ state: string; promoted: number; deleted: number }> {
+  return request(
+    `/sessions/${encodeURIComponent(sessionId)}/hosts/${encodeURIComponent(host)}/decision`,
+    json("POST", { decision }), tenantId,
+  );
+}
+
+// The explicit, irreversible delete of a removed host's files, sightings and findings.
+export function deleteHostContent(
+  tenantId: string, sessionId: string, host: string,
+): Promise<{ files: number; findings: number }> {
+  return request(
+    `/sessions/${encodeURIComponent(sessionId)}/hosts/${encodeURIComponent(host)}/content`,
+    { method: "DELETE" }, tenantId,
+  );
 }
 
 export function getHosts(tenantId: string, runId: string): Promise<HostsResponse> {

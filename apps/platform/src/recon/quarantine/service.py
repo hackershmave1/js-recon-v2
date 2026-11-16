@@ -33,6 +33,7 @@ from recon.config import get_settings
 from recon.db import models
 from recon.db.base import admin_session, tenant_session
 from recon.domain import TERMINAL_STATES, HostDecisionState, RunState
+from recon.fetch import egress
 from recon.observability import get_logger
 from recon.quarantine import blobs
 from recon.runs import capture_lifecycle, captured_versions
@@ -366,7 +367,10 @@ def _add_to_scope(session, session_id: str, host: str) -> None:
         )
     )
     scope = list(scope or [])
-    if host not in scope:
+    # A host an existing entry already covers (cdn.acme.io under acme.io) adds nothing.
+    if host not in scope and not egress.host_in_scope(
+        host, scope, allow_local=get_settings().allow_local_egress
+    ):
         scope.append(host)
         session.execute(
             update(models.EngagementSession)

@@ -151,3 +151,17 @@ def test_a_target_on_the_vendor_list_keeps_its_own_surface():
     own = expand_scope_for_display(["mixpanel.com"])
     assert why_hidden("endpoint", "GET /track", ["api.mixpanel.com"], own) is None
     assert why_hidden("endpoint", "GET /track", ["api.mixpanel.com"], FIRST_PARTY) == NOISE
+
+
+# #218: a finding whose every sighting is in a file served by a host outside the scope is hidden
+# (removing a host from the scope); one in-scope file keeps it shown; a secret is exempt.
+def test_findings_only_in_out_of_scope_files_are_off_scope():
+    off = ["cdn.removed.example"]
+    assert why_hidden("endpoint", "GET /api/x", [None], FIRST_PARTY, asset_hosts=off) == OFF_SCOPE
+    assert why_hidden("param", "q", [None], FIRST_PARTY, asset_hosts=off) == OFF_SCOPE
+    mixed = ["cdn.removed.example", "banking.crossriver.com"]
+    assert why_hidden("endpoint", "GET /api/x", [None], FIRST_PARTY, asset_hosts=mixed) is None
+    assert why_hidden("secret", "aws:sha256:ab", [None], FIRST_PARTY, asset_hosts=off) is None
+    assert why_hidden("endpoint", "GET /api/x", [None], FIRST_PARTY, asset_hosts=()) is None
+    assert why_hidden("endpoint", "GET /api/x", [None], None, asset_hosts=off) is None
+    assert why_hidden("endpoint", "GET /api/x", [None], FIRST_PARTY, asset_hosts=[None]) is None

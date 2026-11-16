@@ -36,9 +36,11 @@ from botocore.exceptions import ClientError
 from sqlalchemy import select
 
 from recon import storage
+from recon.config import get_settings
 from recon.db import models
 from recon.db.base import tenant_session
-from recon.findings import deobfuscate, engines, sourcemapper
+from recon.fetch import egress
+from recon.findings import deobfuscate, engines, sourcemapper, visibility
 from recon.probe import formatted_text, recovered_store
 from recon.runs import assets as run_assets
 
@@ -84,7 +86,9 @@ class SourceContent:
     formatted: bool
 
 
-def list_sources(tenant_id: str, run_id: str) -> list[SourceFile] | None:
+def list_sources(
+    tenant_id: str, run_id: str, *, include_hidden: bool = False
+) -> list[SourceFile] | None:
     """Every source file for a run, or ``None`` if the run is absent/invisible.
 
     Crawl runs (``run_asset`` rows exist) list one file per asset, named by its
@@ -93,6 +97,8 @@ def list_sources(tenant_id: str, run_id: str) -> list[SourceFile] | None:
     "source"``). Reads no bundle bytes (hence no size) to avoid an object-store
     GET per asset, and runs NO recovery subprocess (that is on-demand only)."""
     asset_rows = run_assets.list_for_run(tenant_id, run_id)
+    if asset_rows and not include_hidden:
+        asset_rows = _in_scope_rows(tenant_id, run_id, asset_rows)
     if asset_rows:
         files = [
             SourceFile(path=row.url, kind="asset", fetch_status=row.fetch_status)
@@ -112,6 +118,25 @@ def list_sources(tenant_id: str, run_id: str) -> list[SourceFile] | None:
         else [SourceFile(path=_UPLOAD_PATH, kind="upload", fetch_status="ok")]
     )
     return files + (_recovered_sources(tenant_id, run_id) or [])
+
+
+def _in_scope_rows(tenant_id: str, run_id: str, rows: list) -> list:
+    """The run's files minus those served by a host removed from the session's scope (#218): hidden
+    under "out of scope", not deleted, and back when the host is added again. With no scope known
+    nothing is hidden. A run whose every file is out of scope lists none, which is what it should
+    show (the Hosts page offers to add the host back)."""
+    with tenant_session(tenant_id) as session:
+        run = session.get(models.Run, run_id)
+        first_party = visibility.first_party_hosts(session, run) if run is not None else None
+    if first_party is None:
+        return rows
+    allow_local = get_settings().allow_local_egress
+    kept = []
+    for row in rows:
+        host = visibility._static_host(row.url)
+        if host is None or egress.host_in_scope(host, first_party, allow_local=allow_local):
+            kept.append(row)
+    return kept
 
 
 def _recovered_sources(tenant_id: str, run_id: str) -> list[SourceFile] | None:
