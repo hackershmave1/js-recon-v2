@@ -28,6 +28,7 @@ from recon.api import (
     sources_router,
     spec_router,
     tech_router,
+    third_party_rules_router,
     wrappers_router,
 )
 from recon.api.deps import get_redis
@@ -81,6 +82,7 @@ def create_app() -> FastAPI:
     # Mount a second time under /api so both the web SPA (/sessions/…) and the extension
     # (/api/sessions/…) reach the same handlers without duplicating route logic.
     app.include_router(llm_router.router, prefix="/api")
+    app.include_router(third_party_rules_router.router)
     app.include_router(threat_model_router.router)
     app.include_router(threat_model_router.router, prefix="/api")
 

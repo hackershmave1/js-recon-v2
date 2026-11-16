@@ -38,10 +38,10 @@ def is_noise_host(host: str | None, *, denylist: frozenset[str] = DEFAULT_NOISE_
     return any(normalized == entry or normalized.endswith("." + entry) for entry in denylist)
 
 
-def is_all_noise(hosts: set[str | None]) -> bool:
+def is_all_noise(hosts: set[str | None], *, denylist: frozenset[str] = DEFAULT_NOISE_HOSTS) -> bool:
     """Whether a finding should be hidden: it HAS at least one attributed host and EVERY
     attributed host is noise. A finding with no host (relative path), or seen on even one
     non-noise host (e.g. an analytics call that ALSO hits the target), is kept — the filter
     never drops a finding that carries real in-scope surface."""
     attributed = {h for h in hosts if h}
-    return bool(attributed) and all(is_noise_host(h) for h in attributed)
+    return bool(attributed) and all(is_noise_host(h, denylist=denylist) for h in attributed)

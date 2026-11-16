@@ -75,6 +75,11 @@ list of hosts and file patterns, plus the team's additions in workspace Settings
 entry never drops a host the researcher typed into the scope list. Different from the **ignore
 list**, which is per session and hosts only.
 
+The team's additions live in the `tenant_third_party_rule` table (migration 0038), edited in Settings >
+Third-party rules (`/settings/third-party-rules`). They only add: nothing switches a built-in entry off.
+The platform merges built-in plus team at read time (`recon.findings.visibility`); the extension
+downloads the merged list at sign-in and capture start and keeps its last saved copy.
+
 _Avoid_: "denylist" (the retired popup editor), "noise rules".
 
 ## Standalone session
