@@ -1111,7 +1111,7 @@ class JSExtractor {
       captureStart: async (req) => sendResponse(await this.listenAndRescan(() => { this.refreshTeamRules(); return this.capture.start({
         scope: req.scope, mode: req.mode, match: req.match,
         binding: { projectId: req.projectId || null, captureConfig: {}, overrideKeys: [] },
-      }); }))),
+      }); })),
       capturePause: async () => sendResponse(await this.capture.pause()),
       captureResume: async () => sendResponse(await this.listenAndRescan(() => this.capture.resume())),
       captureEnd: async () => sendResponse(await this.capture.end()),

@@ -4,8 +4,14 @@
 // test_team_rules.mjs and test_capture_quarantine_decisions.mjs; this pins that it is connected.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 const bg = readFileSync(new URL('../background.js', import.meta.url), 'utf8');
+// The worker loads unbundled, so a syntax slip in background.js leaves a dead worker that no other
+// source-text test notices (found in the R2 real run): parse it as a module.
+const parsed = spawnSync(process.execPath, ['--check', '--input-type=module'], { input: bg, encoding: 'utf8' });
+assert.equal(parsed.status, 0, `background.js does not parse: ${parsed.stderr}`);
+
 const body = (name) => {
   const start = bg.indexOf(name);
   assert.ok(start > 0, `${name} exists in background.js`);
