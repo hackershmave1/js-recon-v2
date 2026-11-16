@@ -13,6 +13,8 @@ re-validating in each handler.
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from psycopg2 import errorcodes
 from sqlalchemy.exc import DataError
@@ -31,5 +33,14 @@ async def _data_error(request: Request, exc: DataError) -> JSONResponse:
     return JSONResponse(status_code=404, content={"detail": "not found (malformed id)"})
 
 
+async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # The default 422 body repeats the submitted value in ``input``. For the handoff
+    # exchange that value is a (possibly live) credential: never echo it (ADR-0011).
+    if request.url.path == "/auth/handoff/exchange":
+        return JSONResponse(status_code=422, content={"detail": "invalid code"})
+    return await request_validation_exception_handler(request, exc)
+
+
 def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(DataError, _data_error)  # type: ignore[arg-type]
+    app.add_exception_handler(RequestValidationError, _validation_error)  # type: ignore[arg-type]

@@ -37,6 +37,9 @@ class AuthClaims:
     user_id: str
     tenant_id: str
     role: str
+    # Absolute expiry (epoch seconds). Handoff (ADR-0011) caps a code-derived session at the
+    # issuing token's expiry so chaining codes can never lengthen a session.
+    exp: int = 0
 
 
 def _b64url_encode(raw: bytes) -> str:
@@ -61,8 +64,10 @@ def mint(
     key: str,
     ttl_seconds: int,
     now: float | None = None,
+    expires_at: int | None = None,
 ) -> str:
-    """Sign a session token for ``user_id``/``tenant_id``/``role`` valid until now+ttl."""
+    """Sign a session token for ``user_id``/``tenant_id``/``role`` valid until now+ttl
+    (or until the absolute ``expires_at`` when given, which wins)."""
     issued = now if now is not None else time.time()
     payload = json.dumps(
         {
@@ -70,7 +75,7 @@ def mint(
             "sub": user_id,
             "t": tenant_id,
             "role": role,
-            "exp": int(issued + ttl_seconds),
+            "exp": expires_at if expires_at is not None else int(issued + ttl_seconds),
         },
         separators=(",", ":"),
     )
@@ -116,4 +121,4 @@ def verify(token: str, *, key: str, now: float | None = None) -> AuthClaims | No
         return None
     if (now if now is not None else time.time()) >= exp:
         return None
-    return AuthClaims(user_id=user_id, tenant_id=tenant_id, role=role)
+    return AuthClaims(user_id=user_id, tenant_id=tenant_id, role=role, exp=exp)
