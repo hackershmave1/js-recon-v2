@@ -161,3 +161,17 @@ export function analyzeLabel(analysis, scripts) {
   if (a.status === 'done') return `Analyzed ✓ · ${c.completed || 0} done`;
   return `Analyze ${plural(scripts || 0, 'script')}`;
 }
+
+// The "new site seen" prompt's explanation (ADR-0010). A site can be offered with nothing held (the
+// platform is not holding its scripts: one was not fetched yet, or the capture is older), or with
+// N scripts held for it, stored apart and not analyzed. Either way Add widens the capture's scope
+// to the site and its subdomains, so the prompt says so; it is never automatic.
+export function newSiteExplanation(site, held) {
+  const n = Number(held && held[site]) || 0;
+  const widen = `Add widens this capture's scope to ${site} and its subdomains.`;
+  if (n > 0) {
+    const noun = n === 1 ? 'script is' : 'scripts are';
+    return `${n} ${noun} held, not analyzed. ${widen}`;
+  }
+  return `Its scripts are not being captured. ${widen}`;
+}

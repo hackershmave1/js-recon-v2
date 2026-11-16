@@ -46,6 +46,20 @@ export class CaptureApi {
     return this.request('GET', `/api/capture/sessions?scope=${encodeURIComponent(scope)}`);
   }
 
+  // Quarantined scripts of ONE undecided host (ADR-0010), held by the platform apart from the run.
+  quarantineFiles({ sessionId, runId, host, files }) {
+    return this.request('POST', '/api/quarantine/files', { sessionId, runId, host, files });
+  }
+
+  // The researcher's Add or Ignore for one host (the platform's session id, not the extension's).
+  decideHost(platformSessionId, host, decision) {
+    return this.request(
+      'POST',
+      `/sessions/${encodeURIComponent(platformSessionId)}/hosts/${encodeURIComponent(host)}/decision`,
+      { decision },
+    );
+  }
+
   addScope(sessionId, host) {
     return this.request('POST', `/api/sessions/${encodeURIComponent(sessionId)}/scope`, { add: host });
   }

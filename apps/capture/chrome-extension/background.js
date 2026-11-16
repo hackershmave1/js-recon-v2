@@ -22,6 +22,10 @@ import { hookMatchPatterns, hostInScope } from './modules/hook-matches.js';
 import { authMarker, tokenExpiry } from './modules/token-validity.js';
 import { CaptureApi } from './modules/capture-api.js';
 import { CaptureLifecycle, badgeText } from './modules/capture-lifecycle.js';
+import { apexForHost, isNoiseHost } from './modules/capture-scope.js';
+import { ADMIT, admitScript } from './modules/script-admission.js';
+import { topFramePageHost } from './modules/top-frame-page.js';
+import { QuarantineQueue } from './modules/quarantine-queue.js';
 
 // Seed denylist shown in the redesigned popup Settings on first run.
 const DEFAULT_DENY_RULES = [
@@ -138,6 +142,14 @@ class JSExtractor {
       getObservations: () => this.session.observations,
       getProcessing: () => this.session.processingQueue.length + (this.processingInFlight || 0),
       scheduleRetry: () => { try { chrome.alarms.create('captureEndRetry', { delayInMinutes: 1 }); } catch (e) { /* no alarms here */ } },
+    });
+    // Scripts from hosts the researcher has not decided on (ADR-0010): fetched without cookies and
+    // held by the platform apart from the run, a leaf (no dependencies or maps), best effort.
+    this.quarantine = new QuarantineQueue({
+      fetchContent: (url) => this.contentFetcher.fetchQuarantined(url),
+      upload: ({ runId, sessionId, host, files }) =>
+        this.captureApi.quarantineFiles({ sessionId, runId, host, files }),
+      onHeld: (host) => { this.capture.noteHeld(host); this.updateBadge(); },
     });
     // Resolves when initialize() completes; the bootstrap replaces this with the real
     // init promise. Listener handlers await it so a cold-woken worker finishes loading
@@ -397,11 +409,14 @@ class JSExtractor {
   async handleRequest(details) {
     if (!this.isCapturing) return;
     if (this.isExtensionRequest(details)) return;
-    if (!this.isInScope(details.url)) {
-      // Out-of-scope SCRIPT (the webRequest listener filters types:["script"], so every drop here
-      // is a script the page loaded). Record the host as a discovery hint (D44) before dropping, so
-      // the popup can surface a CDN-apex/separate host that served app JS and offer a one-click add.
-      this.noteOutOfScopeScript(details.url);
+    // Never capture the recon workspace's own assets (the tool must not recon itself).
+    if (this.isWorkspaceUrl(details.url)) return;
+    // The ordered rule (ADR-0010, modules/script-admission.js): page, third party, scope, ignore
+    // list, then quarantine. The webRequest listener filters types:["script"], so every request
+    // here is a script the page loaded.
+    const verdict = await this.admitRequest(details);
+    if (verdict !== ADMIT.CAPTURE) {
+      this.handleNotCaptured(details, verdict);
       return;
     }
     if (this.shouldSkipUrl(details.url, details.documentUrl)) return;
@@ -417,6 +432,44 @@ class JSExtractor {
     });
 
     this.scheduleQueueProcessing();
+  }
+
+  // The facts of one script request, judged by the pure rule. The page comes from the TAB at
+  // admission (modules/top-frame-page.js), never from the request.
+  async admitRequest(details) {
+    const everything = this.settings.captureEverything === true;
+    const host = this.hostOf(details.url);
+    const pageHost = everything ? null : await topFramePageHost(details.tabId, chrome.tabs);
+    const pageKnown = pageHost !== null;
+    return admitScript({
+      captureEverything: everything,
+      pageKnown,
+      pageInScope: pageKnown && this.isInScope(`https://${pageHost}/`),
+      thirdPartyFile: matchesDenylist(details.url, this.settings.denyRules || [], this.settings.denyDefaultProfile !== false),
+      thirdPartyHost: isNoiseHost(host),
+      scriptInScope: this.isInScope(details.url),
+      ignored: this.capture.isIgnoredSite(host),
+    });
+  }
+
+  hostOf(url) {
+    try { return new URL(url).hostname.toLowerCase(); } catch (e) { return ''; }
+  }
+
+  // A script that is not captured. Offering the host (the "new site seen" prompt) still happens for
+  // an unknown host; a quarantined script is additionally held by the platform until the researcher
+  // decides, but only for a host actually on offer (the offer list is bounded).
+  handleNotCaptured(details, verdict) {
+    if (verdict === ADMIT.QUARANTINE || verdict === ADMIT.DROP_UNKNOWN_PAGE) {
+      this.noteOutOfScopeScript(details.url);
+    }
+    if (verdict !== ADMIT.QUARANTINE) return;
+    const host = this.hostOf(details.url);
+    const state = this.capture.state;
+    const runId = this.capture.runIdForEnqueue();
+    if (host && runId && state && state.newSites.includes(apexForHost(host))) {
+      this.quarantine.enqueue({ url: details.url, host, runId, sessionId: this.session.sessionId });
+    }
   }
 
   async processQueue() {

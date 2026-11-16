@@ -32,6 +32,7 @@ export function buildHomeViewModel({
     captureScope: capture ? scopeLabel(capture.scope) : '',
     captureSubtitle: capture ? liveSubtitle({ ...capture, elapsedMs }, files) : '',
     newSites: (capture && capture.newSites) || [],
+    held: (capture && capture.held) || {},
     ended: endedBanner(status.lastEnded),
     everyTab: settings.captureEverything === true,
     projects,
