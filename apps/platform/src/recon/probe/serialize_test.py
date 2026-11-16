@@ -305,3 +305,12 @@ def _endpoint_for(host):
         first_stage="analyzing",
         occurrences=[occ],
     )
+
+
+def test_unknown_method_is_a_placeholder_not_a_real_verb():
+    # #234: an endpoint whose verb is a runtime value must not be emitted as `curl -X ANY`; the
+    # researcher fills the verb in, like the other `<placeholders>`.
+    request = _req(method="ANY", operation="ANY /api/users")
+    curl = serialize.to_curl(request)
+    assert "curl -X '<METHOD>'" in curl and "ANY" not in curl.split("\n")[-1]
+    assert serialize.to_http(request).startswith("<METHOD> ")

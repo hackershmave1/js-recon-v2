@@ -15,6 +15,7 @@ import json
 import shlex
 from urllib.parse import urlsplit
 
+from recon.domain import UNKNOWN_METHOD
 from recon.probe.reconstruct import ReconstructedRequest
 
 _MAX_URL = 8192
@@ -102,11 +103,17 @@ def _auth_headers(request: ReconstructedRequest) -> list[tuple[str, str]]:
     return out
 
 
+def _verb_or_placeholder(method: str) -> str:
+    """The method for a request line. An unknown verb (a runtime value in the JS, #234) is a
+    `<METHOD>` placeholder to fill in, never an invented or `ANY` verb."""
+    return "<METHOD>" if method == UNKNOWN_METHOD else _control_free(method)[:_MAX_URL]
+
+
 def to_curl(request: ReconstructedRequest) -> str | None:
     if not request.probeable:
         return None
     # Sanitize method (attacker-controlled via JS literals)
-    method = _control_free(request.method)[:_MAX_URL]
+    method = _verb_or_placeholder(request.method)
     base, origin, _host = _request_parts(request)
     url = (base + origin)[:_MAX_URL]
     quoted_url = "'" + url.replace("'", "'\\''") + "'"
@@ -148,7 +155,7 @@ def to_http(request: ReconstructedRequest) -> str | None:
     if not request.probeable:
         return None
     base, origin, host = _request_parts(request)
-    method = _control_free(request.method)[:_MAX_URL]
+    method = _verb_or_placeholder(request.method)
     lines = [
         f"{method} {origin} HTTP/1.1",
         f"Host: {host}",

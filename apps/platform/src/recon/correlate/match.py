@@ -27,6 +27,8 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from recon.domain import UNKNOWN_METHOD
+
 _CLEAN_VAR = re.compile(r"^\$\{[^}]*\}$")  # a raw template var kept verbatim: ${baseDomainName}
 _PLACEHOLDER = re.compile(r"^\{[^}]*\}$")  # a normalized path param: {id}
 
@@ -117,8 +119,8 @@ def correlate(endpoints: list[Endpoint], requests: list[dict]) -> dict[str, str]
         url = req.get("url") or ""
         obs = _segments(urlsplit(url).path)
         for ep in endpoints:
-            if ep.method != method:
-                continue
+            if ep.method not in (method, UNKNOWN_METHOD):
+                continue  # an unknown verb ("ANY": a runtime value) matches any observed verb
             parsed = _parse_tail(ep.path)
             if parsed is None:
                 continue

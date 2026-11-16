@@ -96,3 +96,18 @@ def test_leading_var_absorbs_a_base_path_prefix():
 def test_empty_inputs():
     assert correlate([], [{"method": "GET", "url": "https://a.io/x"}]) == {}
     assert correlate([_ep("h", "GET", "/x")], []) == {}
+
+
+def test_unknown_method_endpoint_matches_an_observed_request_of_any_verb():
+    # #234: an endpoint whose verb is a runtime value ("ANY") is still evidence for the observed
+    # request on its path; a known verb must still match only its own.
+    endpoints = [_ep("h", "ANY", "/api/items")]
+    for verb in ("GET", "POST", "DELETE"):
+        requests = [{"method": verb, "url": "https://api.acme.io/api/items"}]
+        assert correlate(endpoints, requests) == {"h": "https://api.acme.io/api/items"}
+
+
+def test_known_method_still_requires_the_same_verb():
+    endpoints = [_ep("h", "GET", "/api/items")]
+    requests = [{"method": "POST", "url": "https://api.acme.io/api/items"}]
+    assert correlate(endpoints, requests) == {}

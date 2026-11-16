@@ -2152,3 +2152,58 @@ def test_unresolved_skeleton_keeps_the_holder_when_the_global_is_poisoned():
         'window.pspApiPath = f(); fetch(window.pspApiPath + "?page=" + t)', window_globals=_WG
     )
     assert [u.url for u in r.unresolved] == [":pspApiPath?page=EXPR"]
+
+
+# --- #234: a method that is present but not a literal is UNKNOWN, never GET ---------------------- #
+# `{method: t}` (a wrapper's own body), `type: r || "GET"`, `fetch(url, opts)`: the verb is a
+# runtime value. Defaulting to GET made a DELETE caller invisible. No method key at all is GET.
+
+
+def test_fetch_with_a_non_literal_method_is_unknown():
+    ep = _only("fetch('/api/x', {method: m})")
+    assert (ep.method, ep.url) == ("ANY", "/api/x")
+
+
+def test_fetch_with_an_options_variable_is_unknown():
+    ep = _only("fetch('/api/x', opts)")
+    assert ep.method == "ANY"
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ("{method: 'post'}", "POST"),
+        ("{credentials: 'include'}", "GET"),
+        ("{}", "GET"),
+    ],
+)
+def test_fetch_literal_or_absent_method_is_unchanged(options, expected):
+    assert _only(f"fetch('/api/x', {options})").method == expected
+
+
+def test_fetch_without_options_is_still_get():
+    assert _only("fetch('/api/x')").method == "GET"
+
+
+def test_axios_config_with_a_non_literal_method_is_unknown():
+    assert _only("axios({url: '/api/x', method: m})").method == "ANY"
+
+
+def test_jquery_ajax_non_literal_type_is_unknown():
+    assert _only("$.ajax({url: '/api/x', type: r || 'GET'})").method == "ANY"
+    assert _only("$.ajax({url: '/api/x', method: m})").method == "ANY"
+
+
+def test_jquery_ajax_a_literal_key_wins_over_a_dynamic_one():
+    assert _only("$.ajax({url: '/api/x', type: m, method: 'PUT'})").method == "PUT"
+
+
+def test_jquery_ajax_without_a_method_key_is_get():
+    assert _only("$.ajax({url: '/api/x'})").method == "GET"
+
+
+def test_unresolved_sink_with_a_non_literal_method_is_unknown():
+    r = extract("fetch(u, {method: m})")
+    assert [(e.method) for e in r.unresolved] == ["ANY"]
+    r = extract("fetch(u, {method: 'DELETE'})")
+    assert [(e.method) for e in r.unresolved] == ["DELETE"]
