@@ -259,6 +259,26 @@ def first_party_hosts(session: Session, run: Run) -> list[str] | None:
     return expand_scope_for_display(entries, allow_local=get_settings().allow_local_egress)
 
 
+def out_of_scope_asset_urls(session: Session, run: Run) -> set[str]:
+    """URLs of the run's files served by a host removed from the session's scope (#218).
+
+    The one definition behind every file count and the Sources list: those files are hidden under
+    "out of scope", not deleted. Empty when no scope is known (nothing to be out of). A file whose
+    host is templated or unparseable is never counted out."""
+    first_party = first_party_hosts(session, run)
+    if first_party is None:
+        return set()
+    allow_local = get_settings().allow_local_egress
+    hidden: set[str] = set()
+    for url in session.scalars(select(RunAsset.url).where(RunAsset.run_id == run.id)).all():
+        host = _static_host(url)
+        if host is not None and not egress.host_in_scope(
+            host, first_party, allow_local=allow_local
+        ):
+            hidden.add(url)
+    return hidden
+
+
 def hidden_finding_ids(session: Session, run_id: str) -> dict[str, str]:
     """Every hidden finding of the run, by id, with its reason (see the module docstring)."""
     run = session.get(Run, run_id)

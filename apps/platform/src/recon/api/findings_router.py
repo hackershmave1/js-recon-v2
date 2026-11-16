@@ -64,6 +64,9 @@ def get_run_findings(
         # The run's "Files" metric: JS files collected (queries.files_collected) — the same
         # number the Sessions list shows. NOT coverage.files (recovered analysis units).
         "files": result.files,
+        # Fetched files hidden because their host was removed from the scope (L1): the Overview
+        # says so beside the count, and the Sources page shows the same pair.
+        "files_hidden": result.files_hidden,
         # Design §6.4: null until a spec is attached to the run's session at all —
         # distinct from an attached spec whose buckets are all zero.
         "spec": _spec_summary_dict(result.spec_summary),

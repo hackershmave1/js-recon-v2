@@ -2,6 +2,7 @@ import { techStackHidden } from "../../shell/techVisibility";
 import { useNavigate, useParams } from "react-router";
 import type { FindingsResponse, Finding, HostsResponse, TechnologiesResponse } from "../../api/types";
 import { typeLabel } from "../../api/findingLabels";
+import { hiddenLabel, recoveredLabel } from "../../api/fileCounts";
 import { occLocation, primaryOccurrence } from "../../api/occurrenceSource";
 import { countType, computeAttributionPct, computeEndpoints, computeSecrets, computePartialNotes } from "./metrics";
 import "./overview.css";
@@ -80,9 +81,8 @@ export function OverviewPanel(
     { key: "files", label: "Files", section: "sources",
       value: files == null ? DASH : String(files),
       sub: c
-        ? c.sources_recovered > 0
-          ? `${c.sources_recovered} original sources recovered`
-          : "no source maps recovered"
+        ? [c.sources_recovered > 0 ? recoveredLabel(c.sources_recovered) : "no source maps recovered", hiddenLabel(data.files_hidden)]
+            .filter(Boolean).join(" · ")
         : "awaiting analysis" },
     { key: "endpoints", label: "Endpoints", section: "findings",
       value: String(surface),
