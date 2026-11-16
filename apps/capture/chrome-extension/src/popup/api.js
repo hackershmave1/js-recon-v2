@@ -66,6 +66,8 @@ export const captureDismissSite = (site) => send('captureDismissSite', { site })
 // "Done" on the "Capture ended" banner.
 export const captureDismissEnded = () => send('captureDismissEnded');
 export const testConnection = () => send('testConnection');
+// ADR-0011: the workspace URL to open, with a single-use handoff code in its fragment when signed in.
+export const workspaceUrl = (captureId) => send('workspaceUrl', { captureId });
 export const updateSettings = (settings) => send('updateSettings', { settings });
 // Central login: authenticate to the workspace so captures route to the operator's tenant.
 export const login = (username, password) => send('login', { username, password });

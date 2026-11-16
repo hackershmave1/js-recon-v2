@@ -86,6 +86,40 @@ export class WorkspaceClient {
     }
   }
 
+  // ADR-0011: the URL "Open in workspace" should open. When signed in, asks the platform for a
+  // single-use ~30 s handoff code and carries it in the URL FRAGMENT (never the query: a
+  // fragment is not sent to servers or logged) so the workspace signs the researcher in without a
+  // second password. The code is requested from, and attached to, the SAME resolved base, so it
+  // can only ever reach the origin that issued it. ANY failure (no token, offline, 429/503, a
+  // malformed reply) falls back to the bare URL, i.e. today's behaviour (the login screen).
+  // The code is never stored or logged here.
+  async workspaceOpenUrl(captureId) {
+    const target = new URL(this.resolveApiBase());
+    target.hash = '';
+    if (captureId) target.searchParams.set('capture', String(captureId));
+    const bare = target.toString();
+    if (!this.authHeaders().Authorization) return bare;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const resp = await fetch(this.resolveApiBase() + '/auth/handoff', {
+        method: 'POST',
+        headers: { ...this.authHeaders() },
+        signal: controller.signal
+      });
+      if (!resp.ok) return bare;
+      const data = await resp.json();
+      const code = data && data.code;
+      if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(code)) return bare;
+      target.hash = 'handoff=' + code;
+      return target.toString();
+    } catch (error) {
+      return bare;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async testConnection() {
     const target = this.resolveApiBase() + '/api/health';
     const controller = new AbortController();
