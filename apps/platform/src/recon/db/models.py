@@ -36,6 +36,7 @@ from recon.domain import (
     AssetStatus,
     BaseUrlRuleKind,
     FindingType,
+    HostDecisionState,
     JobState,
     QueueName,
     RunStage,
@@ -894,3 +895,68 @@ THREAT_MODEL_TABLES: tuple[str, ...] = ("session_threat_model", "threat")
 
 # LLM call records, RLS-enabled by migration 0031.
 LLM_CALL_TABLES: tuple[str, ...] = ("llm_call",)
+
+
+class HostDecision(Base):
+    """One researcher decision per (session, host) for a host whose scripts were quarantined
+    (ADR-0010). ``state`` moves by compare-and-set only: ``undecided -> added | ignored |
+    expired`` (recon.quarantine.service), so Add, Ignore and the expiry sweep cannot race. An
+    ``ignored`` row IS the session's ignore list entry; ``added`` records that the host joined
+    the session scope."""
+
+    __tablename__ = "host_decision"
+    __table_args__ = (
+        UniqueConstraint("session_id", "host", name="uq_host_decision_session_host"),
+        CheckConstraint(_enum_check("state", HostDecisionState), name="ck_host_decision_state"),
+        Index(
+            "ix_host_decision_expiry", "expires_at", postgresql_where=text("state = 'undecided'")
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("session.id", ondelete="CASCADE"), nullable=False
+    )
+    host: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=HostDecisionState.UNDECIDED.value
+    )
+    first_seen_at: Mapped[dt.datetime] = _now_col(nullable=False)
+    decided_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class QuarantinedAsset(Base):
+    """A script from an undecided host, stored APART from the run's assets: a separate table and
+    blob prefix (kind ``quarantine``), never a status on ``run_asset``, so no reader of run
+    assets can return it (ADR-0010). Not analyzed, a leaf: no source map or follow-up is kept.
+    Add promotes it into ``run_asset``; Ignore and expiry delete it."""
+
+    __tablename__ = "quarantined_asset"
+    __table_args__ = (
+        UniqueConstraint("run_id", "url", "sha256", name="uq_quarantined_asset_run_url_sha"),
+        Index("ix_quarantined_asset_session_host", "tenant_id", "session_id", "host"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("session.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("run.id", ondelete="CASCADE"), nullable=False
+    )
+    host: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_ref: Mapped[str] = mapped_column(Text, nullable=False)  # kind="quarantine" blob key
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+
+
+QUARANTINE_TABLES: tuple[str, ...] = ("host_decision", "quarantined_asset")

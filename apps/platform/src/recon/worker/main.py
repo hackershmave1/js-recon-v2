@@ -25,6 +25,7 @@ from recon.findings import analyze
 from recon.observability import bind_run, get_logger
 from recon.probe import source_index
 from recon.progress import heartbeat as progress
+from recon.quarantine import service as quarantine_service
 from recon.queue import retry, streams
 from recon.runs import capture_sweep, coordinator, failure, queries, service
 from recon.runs import state_machine as sm
@@ -455,6 +456,10 @@ def serve_forever(consumer: str | None = None) -> None:  # pragma: no cover
                 capture_sweep.sweep(redis)
             except Exception:  # noqa: BLE001 - a sweep failure must never stall job processing
                 log.exception("worker.capture_sweep_error")
+            try:
+                quarantine_service.sweep()  # expire undecided hosts past their 7 days (ADR-0010)
+            except Exception:  # noqa: BLE001 - never stall job processing
+                log.exception("worker.quarantine_sweep_error")
             run_once(redis, consumer)
         except Exception:  # noqa: BLE001 - keep the loop alive
             log.exception("worker.loop_error")

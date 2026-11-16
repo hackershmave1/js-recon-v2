@@ -96,8 +96,15 @@ downloads the scripts in one fetch pass. `fetch/egress.py` and ADR-0005 / REQ-P2
 
 ### Confirmation
 
-Not built yet. When it is, the ordered rule is one pure function with a test per rule, and these
-are enforced and tested:
+Platform side built in S1 (#210, `recon.quarantine`): separate table and blob prefix with a test
+that no reader returns it (`quarantine/readers_integration_test.py`, plus a structural test that
+no other module names the tables), reference-counted delete, the per-(session, host) compare-and-set
+decision record, the ingest-side ignore list, the 7-day expiry sweep and the caps. **Add after the
+capture ended** is defined: promotion inserts into the same run; a run that can still take a pass is
+scheduled (`analysis: scheduled`), a finished run rests and the caller re-runs it
+(`analysis: needs_rerun`). Still to build: the extension side (S2) and the Hosts page (S3).
+
+The ordered rule is one pure function with a test per rule, and these are enforced and tested:
 
 * quarantine lives in its own table and blob prefix, and a test asserts no existing reader
   returns it (including the run completeness check and tech detection);

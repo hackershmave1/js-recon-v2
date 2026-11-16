@@ -231,6 +231,14 @@ class Settings(BaseSettings):
     # version is analyzed. Capped per url: a script whose bytes change on every load (a nonce
     # or timestamp in config.js) would otherwise add an asset per page view.
     capture_max_versions_per_url: int = 10  # env: RECON_CAPTURE_MAX_VERSIONS_PER_URL
+    # Quarantine of scripts from hosts the researcher has not decided on (ADR-0010). The
+    # extension already bounds its hint list at 50 hosts. The values bound what an unapproved host
+    # can make the platform store: per host, then in total for one session.
+    quarantine_max_hosts_per_session: int = 50
+    quarantine_max_files_per_host: int = 200
+    quarantine_max_bytes_per_host: int = 50 * 1024 * 1024  # 50 MiB
+    quarantine_max_bytes_per_session: int = 200 * 1024 * 1024  # 200 MiB
+    quarantine_expiry_days: int = 7  # no decision this long -> the content is deleted
 
     # ---- LLM provider config (threat-model generation) ----
     # Fernet key (URL-safe base64, 32 bytes) used to encrypt API keys stored in
