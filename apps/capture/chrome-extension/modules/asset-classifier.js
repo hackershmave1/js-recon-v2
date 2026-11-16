@@ -6,6 +6,8 @@
 // counter returns a count only — never the matched values — so secrets are never
 // persisted or surfaced through the popup status/file APIs.
 
+import { FILE_PATTERNS } from './third-party-rules.js';
+
 const TRACKER_HOSTS = [
   'google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'segment.io',
   'segment.com', 'mixpanel.com', 'hotjar.com', 'facebook.net', 'fbcdn.net',
@@ -17,10 +19,15 @@ const LIB_HINTS = [
   /bootstrap/i, /\bd3[.-]/i, /moment/i, /polyfill/i, /\bvendors?[~.\-]/i, /runtime~/i
 ];
 
-// Built-in "default profile" denylist patterns (WordPress, analytics, ad & CDN noise).
+// Built-in "default profile" denylist patterns: the shared third-party FILE patterns (ADR-0010, generated
+// from the platform's third_party_rules.json). Host entries are no longer patterns here: the admission rule
+// (modules/script-admission.js) treats a known third-party HOST separately so it never drops a host the
+// researcher typed into the scope; a file pattern applies on any host.
 export const DEFAULT_PROFILE_PATTERNS = [
-  '/wp-content/plugins/*', '/wp-includes/*', '*.google-analytics.com',
-  '*.googletagmanager.com', '*.doubleclick.net', '*/gtag/js*', '*/jquery*.min.js'
+  ...FILE_PATTERNS,
+  // Kept as before: these three analytics hosts were always dropped by the default profile (also under
+  // "Capture every tab", which skips the admission rule), so that behaviour is unchanged.
+  '*.google-analytics.com', '*.googletagmanager.com', '*.doubleclick.net',
 ];
 
 function hostnameOf(url) {

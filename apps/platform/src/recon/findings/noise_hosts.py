@@ -20,111 +20,12 @@ extension's own default profile, unified app-wide, DEBT/QA #3).
 
 from __future__ import annotations
 
-# Exact host or dot-suffix match. Grouped by vendor class for maintenance; the runtime set is
-# the flat union below.
-_ANALYTICS = {
-    "google-analytics.com",
-    "googletagmanager.com",
-    "amplitude.com",
-    "mixpanel.com",
-    "mxpnl.com",  # Mixpanel's CDN (cdn.mxpnl.com)
-    "segment.com",
-    "segment.io",
-    "heapanalytics.com",
-    "hotjar.com",
-    "fullstory.com",
-    "mouseflow.com",
-    "quantserve.com",
-    "scorecardresearch.com",
-    "tealiumiq.com",
-    "tiqcdn.com",
-}
-_TELEMETRY = {
-    "sentry.io",
-    "sentry-cdn.com",
-    "ingest.sentry.io",
-    "bugsnag.com",
-    "datadoghq.com",
-    "datadoghq-browser-agent.com",
-    "newrelic.com",
-    "nr-data.net",
-    "cloudflareinsights.com",
-    "logrocket.com",
-    "logrocket.io",
-    "testfairy.com",
-}
-_ADS_MARKETING = {
-    "doubleclick.net",
-    "googlesyndication.com",
-    "googleadservices.com",
-    "adservice.google.com",
-    "braze.com",
-    "appboycdn.com",
-    "branch.io",
-    "addthis.com",
-    "optimizely.com",
-    "launchdarkly.com",
-    "intercom.io",
-    "intercomcdn.com",
-    "intercomassets.com",
-    "drift.com",
-    "zdassets.com",
-}
-_VENDOR_CDN = {
-    "gstatic.com",
-    "googleapis.com",
-    "gvt1.com",
-    "gvt2.com",
-    "google.com",
-    "stripe.com",
-    "stripe.network",
-    "js.stripe.com",
-    "recaptcha.net",
-    "facebook.com",
-    "facebook.net",
-    "fbcdn.net",
-    "connect.facebook.net",
-    "apple.com",
-    "apple.news",
-    "mozilla.org",
-    "wappalyzer.com",
-    # Public open-source CDNs — host-JS-libraries references, never the target's own API
-    "cdnjs.cloudflare.com",
-    "unpkg.com",
-    "jsdelivr.net",
-    "bootstrapcdn.com",
-    "fontawesome.com",
-    "use.typekit.net",
-    "use.fontawesome.com",
-    "ajax.googleapis.com",
-    "ajax.aspnetcdn.com",
-    "code.jquery.com",
-}
-# Web standards / specification bodies — URLs like https://www.w3.org/TR/WOFF/ appear in
-# JS source as namespace URIs, spec links, or typeof-check strings (e.g. SVG namespace).
-# These are never an API the target owns.
-_STANDARDS_REFERENCE = {
-    "w3.org",
-    "whatwg.org",
-    "ietf.org",
-    "rfc-editor.org",
-    "schema.org",
-    "json-ld.org",
-    "tc39.es",
-    "ecma-international.org",
-    "openapis.org",
-    "swagger.io",
-    "xml.org",
-    "xmlsoap.org",  # WSDL/SOAP namespace URIs
-    "xmlns.com",
-    "purl.org",  # persistent URL namespace URIs (Dublin Core etc.)
-    "dublincore.org",
-}
+from recon.findings import third_party_rules
 
-# The flat runtime denylist (single source of truth).
-DEFAULT_NOISE_HOSTS: frozenset[str] = frozenset(
-    _ANALYTICS | _TELEMETRY | _ADS_MARKETING | _VENDOR_CDN | _STANDARDS_REFERENCE
-)
+# The host list lives in third_party_rules.json (grouped by vendor class), shared with the capture
+# extension; this module keeps the matching helpers and the names callers already import. Exact host
+# or dot-suffix match.
+DEFAULT_NOISE_HOSTS: frozenset[str] = third_party_rules.HOSTS
 
 
 def is_noise_host(host: str | None, *, denylist: frozenset[str] = DEFAULT_NOISE_HOSTS) -> bool:
