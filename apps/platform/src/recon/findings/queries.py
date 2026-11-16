@@ -113,6 +113,8 @@ class FindingView:
     # D49: a deterministic 0-100 priority derived at read time from type + risk tags, so an
     # operator has a real sort key on a big run. `severity` carries the matching label.
     priority: int = 0
+    # L2: why that score — type base + the one risk tag that bumped it (priority.explain_priority).
+    priority_reason: dict[str, Any] | None = None
     triage: TriageView | None = None
     revealable: bool = False
     spec_status: SpecStatusView | None = None
@@ -911,6 +913,7 @@ def _finding_view(
         first_stage=finding.first_stage,
         occurrences=occurrences,
         priority=score,
+        priority_reason=priority.derive_priority_reason(finding.type, finding.attributes or {}),
         triage=_triage_view(triage_row),
         revealable=revealable,
         spec_status=_spec_status_view(spec_status_row),

@@ -50,3 +50,23 @@ export function occLocation(o: Occurrence): string | null {
 export function primaryOccurrence(f: Finding): Occurrence | undefined {
   return f.occurrences.find((o) => recoveredPath(o) !== null) ?? f.occurrences[0];
 }
+
+// A secret sighted in the minified bundle AND in its source-map-recovered original is one
+// place in the code, but the analyzer stores two occurrences. Fold each bundle-only sighting
+// into a recovered one from the SAME asset, one-to-one (so two bundle sightings and one
+// recovered original still leave two lines). The recovered line shows the bundle as its owner.
+export function mergeBundleAndRecovered(occurrences: Occurrence[]): Occurrence[] {
+  const recoveredPerAsset = new Map<string, number>();
+  for (const o of occurrences) {
+    if (recoveredPath(o) !== null && o.asset_url) {
+      recoveredPerAsset.set(o.asset_url, (recoveredPerAsset.get(o.asset_url) ?? 0) + 1);
+    }
+  }
+  return occurrences.filter((o) => {
+    if (recoveredPath(o) !== null || !o.asset_url) return true;
+    const left = recoveredPerAsset.get(o.asset_url) ?? 0;
+    if (left === 0) return true;
+    recoveredPerAsset.set(o.asset_url, left - 1);
+    return false;
+  });
+}

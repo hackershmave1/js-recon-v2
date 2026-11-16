@@ -145,3 +145,10 @@
 .diff-li { display: flex; align-items: center; gap: 8px; padding: 7px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .diff-li:last-child { border-bottom: none; }
 .diff-val { color: var(--text); font-family: var(--font-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+
+/* L2: the four plain-language sections under a finding's header. */
+.fd-explain { margin: 8px 0; }
+.fd-explain section { margin: 6px 0; }
+.fd-explain h4 { margin: 0 0 2px; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); }
+.fd-explain p, .fd-explain ul { margin: 0; }
+.fd-explain ul { padding-left: 18px; }
