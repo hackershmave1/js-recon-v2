@@ -13,10 +13,11 @@ Four operations, each ONE transaction, each safe against the others:
   content deleted), by the same compare-and-set.
 * Deleting content is reference-counted within the run (:mod:`recon.quarantine.blobs`).
 
-Add after the capture has ended: promotion inserts the rows into the SAME run whatever its state.
-A run that can still take a pass is scheduled for one (``analysis: "scheduled"``); a finished run
-rests where it is and the caller re-runs it (``analysis: "needs_rerun"``), so a sealed run never
-changes silently.
+Add after the capture has ended: a run that can still take a pass gets the scripts inserted and is
+scheduled for one (``analysis: "scheduled"``). A FINISHED run is an immutable snapshot and never
+changes silently, so the scripts go into a new FOLLOW-UP run of the same session, which is ended at
+once so the worker analyzes it with no button to press (``analysis: "followup:<run id>"``). The
+follow-up holds only the added host's scripts: its findings appear as a second run of the session.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import datetime as dt
 import hashlib
 from dataclasses import dataclass, field
 
+from redis import Redis
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -33,6 +35,7 @@ from recon.config import get_settings
 from recon.db import models
 from recon.db.base import admin_session, tenant_session
 from recon.domain import TERMINAL_STATES, HostDecisionState, RunState
+from recon.events.log import record_event
 from recon.fetch import egress
 from recon.observability import get_logger
 from recon.quarantine import blobs
@@ -77,7 +80,9 @@ class DecisionResult:
     state: str | None = None  # the decision's state after the call (the winner's, on conflict)
     promoted: int = 0
     deleted: int = 0
-    analysis: dict[str, str] = field(default_factory=dict)  # run id -> scheduled | needs_rerun
+    # source run id -> scheduled | followup:<new run id> | needs_rerun (a follow-up that could not start)
+    analysis: dict[str, str] = field(default_factory=dict)
+    followup_runs: list[str] = field(default_factory=list)  # new runs to end (analyze) after commit
     # K1: the run whose crawl referenced this host's scripts, set only on the Add that won. The
     # caller re-crawls it: the host is now in scope, so the unchanged guard fetches the scripts.
     recrawl_run_id: str | None = None
@@ -200,7 +205,9 @@ def admit(
     return results
 
 
-def decide(*, tenant_id: str, session_id: str, host: str, decision: str) -> DecisionResult:
+def decide(
+    *, tenant_id: str, session_id: str, host: str, decision: str, redis: Redis | None = None
+) -> DecisionResult:
     """The researcher's ``"add"`` or ``"ignore"`` for one undecided host."""
     host = normalize_host(host)
     if decision not in ("add", "ignore"):
@@ -242,7 +249,24 @@ def decide(*, tenant_id: str, session_id: str, host: str, decision: str) -> Deci
             result.deleted, keys_to_delete = _delete_content(session, tenant_id, session_id, host)
     result.deleted = result.deleted or len(keys_to_delete)
     _delete_after_commit(keys_to_delete)
+    _start_followups(redis, tenant_id, result)
     return result
+
+
+def _start_followups(redis: Redis | None, tenant_id: str, result: DecisionResult) -> None:
+    """End each follow-up run (analyze it, then finish it). Best effort: the Add already happened,
+    so a failure leaves the run in place and says ``needs_rerun`` instead of failing the request."""
+    for source_run, outcome in list(result.analysis.items()):
+        if not outcome.startswith("followup:"):
+            continue
+        run_id = outcome.split(":", 1)[1]
+        try:
+            if redis is None:
+                raise RuntimeError("no queue connection")
+            capture_lifecycle.end_capture(redis, tenant_id, run_id, observations=[])
+        except Exception:  # noqa: BLE001 - never turn a committed Add into an error
+            log.exception("quarantine.followup_failed", run_id=run_id)
+            result.analysis[source_run] = "needs_rerun"
 
 
 def note_referenced(
@@ -462,7 +486,11 @@ def _promote(
     for row in rows:
         by_run.setdefault(str(row.run_id), []).append(row)
     promoted = 0
-    for run_id, assets in by_run.items():
+    for source_run, assets in by_run.items():
+        state = session.scalar(select(models.Run.state).where(models.Run.id == source_run))
+        finished = state is None or RunState(state) in TERMINAL_STATES
+        # A finished run is an immutable snapshot: the scripts go to a new follow-up run instead.
+        run_id = _new_followup_run(session, tenant_id, session_id) if finished else source_run
         captured = []
         for asset in assets:
             data = storage.get_blob(asset.content_ref)
@@ -476,14 +504,35 @@ def _promote(
             max_versions=settings.capture_max_versions_per_url,
         )
         promoted += len(captured) - len(added.capped) - len(added.vanished)
-        state = session.scalar(select(models.Run.state).where(models.Run.id == run_id))
-        if state is not None and RunState(state) not in TERMINAL_STATES:
-            capture_lifecycle.note_batch(session, run_id)  # schedule the next analysis pass
-            result.analysis[run_id] = "scheduled"
+        if finished:
+            result.analysis[source_run] = f"followup:{run_id}"
         else:
-            result.analysis[run_id] = "needs_rerun"
+            capture_lifecycle.note_batch(session, run_id)  # schedule the next analysis pass
+            result.analysis[source_run] = "scheduled"
     keys = _delete_rows_then_keys(session, tenant_id, rows)
     return promoted, keys
+
+
+def _new_followup_run(session, tenant_id: str, session_id: str) -> str:
+    """A sealed (no capture marker) run of the session to hold scripts added after a capture ended.
+    It starts QUEUED with no job; ending it after commit makes the worker analyze its files."""
+    run = models.Run(
+        tenant_id=tenant_id,
+        session_id=session_id,
+        state=RunState.QUEUED.value,
+        target=None,
+        capture_external_id=None,
+    )
+    session.add(run)
+    session.flush()
+    record_event(
+        session,
+        tenant_id=tenant_id,
+        run_id=str(run.id),
+        event_type="run.created",
+        payload={"target": None, "followup": True},
+    )
+    return str(run.id)
 
 
 def _delete_content(session, tenant_id: str, session_id: str, host: str) -> tuple[int, list[str]]:
