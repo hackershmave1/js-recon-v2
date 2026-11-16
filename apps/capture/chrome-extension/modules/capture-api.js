@@ -46,6 +46,12 @@ export class CaptureApi {
     return this.request('GET', `/api/capture/sessions?scope=${encodeURIComponent(scope)}`);
   }
 
+  // Continue adopts a session started in the workspace (ADR-0012): the server mints its extension id,
+  // once. 409 already_adopted / conflict / archived means another extension or the workspace got there.
+  adopt(platformSessionId) {
+    return this.request('POST', `/api/capture/sessions/${encodeURIComponent(platformSessionId)}/adopt`, {});
+  }
+
   // Quarantined scripts of ONE undecided host (ADR-0010), held by the platform apart from the run.
   quarantineFiles({ sessionId, runId, host, files }) {
     return this.request('POST', '/api/quarantine/files', { sessionId, runId, host, files });

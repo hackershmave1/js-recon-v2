@@ -11,21 +11,53 @@ labels": that apex guess would merge unrelated targets under a shared suffix (``
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from recon.config import get_settings
 from recon.db.base import tenant_session
 from recon.db.models import EngagementSession, Run
 from recon.fetch import egress
+from recon.observability import get_logger
 from recon.sessions import run_stats
+
+log = get_logger("recon.sessions.capture_scope")
 
 MAX_MATCHES = 10  # each match costs a run_stats scan; the popup lists a handful at most
 
 
 class InvalidScopeEntry(ValueError):
     """Not a usable host: the API maps it to 422."""
+
+
+class AdoptRefused(Exception):
+    """Adopt did not happen. ``reason`` is one of ``not_found`` (also another tenant's session),
+    ``archived``, ``already_adopted`` or ``conflict``; it never carries the existing id."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class WorkspaceMatch:
+    """A session started in the workspace (no extension id yet) that Continue could adopt."""
+
+    session_id: str
+    engagement_id: str | None
+    name: str | None
+    runs: int
+    last_run_at: str | None
+
+
+@dataclass(frozen=True)
+class Adopted:
+    session_id: str
+    external_id: str
+    engagement_id: str | None
 
 
 @dataclass(frozen=True)
@@ -69,8 +101,17 @@ def sessions_for_scope(tenant_id: str, entry: str) -> list[ScopeMatch]:
         ).all()
         matches = []
         for row in sessions:
+            # Capture runs only: an adopted workspace session also holds its crawl (or upload) run,
+            # which is not a capture ("capture 3" in the popup would otherwise count it).
             runs = db.scalars(
-                select(Run).where(Run.session_id == row.id).order_by(Run.created_at.desc())
+                select(Run)
+                .where(
+                    Run.session_id == row.id,
+                    Run.target.is_(None),
+                    Run.input_ref.is_(None),
+                    Run.crawl_mode.is_(None),
+                )
+                .order_by(Run.created_at.desc())
             ).all()
             stats = run_stats.run_stats(db, runs)
             largest = max(
@@ -98,6 +139,95 @@ def sessions_for_scope(tenant_id: str, entry: str) -> list[ScopeMatch]:
                 )
             )
         return matches
+
+
+def workspace_sessions_for_scope(tenant_id: str, entry: str) -> list[WorkspaceMatch]:
+    """Sessions of this tenant started in the workspace (no extension id, not archived) whose
+    scope holds ``entry``: what Continue may adopt (ADR-0012). No id is shown: there is none."""
+    host = _normalize(entry)
+    if host is None:
+        return []
+    with tenant_session(tenant_id) as db:
+        rows = db.scalars(
+            select(EngagementSession)
+            .where(
+                EngagementSession.scope_hosts.contains([host]),
+                EngagementSession.archived_at.is_(None),
+                EngagementSession.external_id.is_(None),
+            )
+            .order_by(EngagementSession.created_at.desc())
+            .limit(MAX_MATCHES)
+        ).all()
+        out = []
+        for row in rows:
+            runs = db.scalars(
+                select(Run.created_at)
+                .where(Run.session_id == row.id)
+                .order_by(Run.created_at.desc())
+            ).all()
+            out.append(
+                WorkspaceMatch(
+                    session_id=str(row.id),
+                    engagement_id=str(row.engagement_id) if row.engagement_id else None,
+                    name=row.name,
+                    runs=len(runs),
+                    last_run_at=runs[0].isoformat() if runs else None,
+                )
+            )
+        return out
+
+
+def _adopt_once(tenant_id: str, session_id: str) -> Adopted | None:
+    """The one write: give a session with NO id a fresh one. Compare-and-set on the row, so of
+    several concurrent callers exactly one matches (READ COMMITTED re-checks the WHERE after the
+    row lock); nothing but ``external_id`` is ever set."""
+    minted = str(uuid.uuid4())
+    with tenant_session(tenant_id) as db:
+        row = db.execute(
+            update(EngagementSession)
+            .where(
+                EngagementSession.id == session_id,
+                EngagementSession.external_id.is_(None),
+                EngagementSession.archived_at.is_(None),
+            )
+            .values(external_id=minted)
+            .returning(EngagementSession.id, EngagementSession.engagement_id)
+        ).first()
+    if row is None:
+        return None
+    return Adopted(str(row.id), minted, str(row.engagement_id) if row.engagement_id else None)
+
+
+def adopt_workspace_session(tenant_id: str, session_id: str, *, actor: str) -> Adopted:
+    """Continue adopts a workspace session (ADR-0012). Raises :class:`AdoptRefused`."""
+    try:
+        uuid.UUID(str(session_id))
+    except ValueError:
+        raise AdoptRefused("not_found") from None
+    for _ in range(2):  # the second pass only covers a concurrent un-archive or a uuid clash
+        try:
+            adopted = _adopt_once(tenant_id, session_id)
+        except IntegrityError:
+            continue  # a fresh transaction and a fresh id
+        if adopted is not None:
+            # The audit trail (D48: no session event table). The id is a capability: not logged.
+            log.info(
+                "session.adopted",
+                actor=actor,
+                tenant_id=tenant_id,
+                session_id=adopted.session_id,
+                engagement_id=adopted.engagement_id,
+            )
+            return adopted
+        with tenant_session(tenant_id) as db:
+            row = db.get(EngagementSession, session_id)
+            if row is None:
+                raise AdoptRefused("not_found")
+            if row.external_id is not None:
+                raise AdoptRefused("already_adopted")
+            if row.archived_at is not None:
+                raise AdoptRefused("archived")
+    raise AdoptRefused("conflict")
 
 
 def _pruned(scope: list[str]) -> list[str]:
