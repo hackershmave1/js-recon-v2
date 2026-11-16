@@ -110,4 +110,17 @@ describe("FindingDetail", () => {
     show(finding({ finding_hash: "h3", spec_status: { status: "unresolved", reason: null, matched_operation: null } }));
     expect(screen.getByText("unresolved")).toHaveClass("chip-unresolved");
   });
+  it("names the host of each occurrence, so a finding seen on two hosts shows both", () => {
+    show(finding({ value: "/api/event", occurrences: [
+      occ({ host: "app.acme.io", source_path: "app.js" }),
+      occ({ host: "plausible.io", source_path: "vendor.js" }),
+    ] }));
+    expect(screen.getByText(/app\.acme\.io/)).toBeInTheDocument();
+    expect(screen.getByText(/plausible\.io/)).toBeInTheDocument();
+  });
+
+  it("omits the host label for a relative (host-less) occurrence", () => {
+    show(finding({ occurrences: [occ({ host: null })] }));
+    expect(screen.queryByTestId("occ-host")).toBeNull();
+  });
 });

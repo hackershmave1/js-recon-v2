@@ -312,7 +312,9 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
             <ul className="fp-list">
               {sorted.slice(0, limit).map((f) => {
                 const cls = f.spec_status?.status ?? "unclassified";
-                const host = f.occurrences.find((o) => o.host)?.host;
+                const hosts = [...new Set(f.occurrences.map((o) => o.host).filter((h): h is string => !!h))];
+                const host = hosts[0];
+                const hostLabel = hosts.length > 1 ? `${host} +${hosts.length - 1}` : host;
                 const triage = f.triage?.status ?? "untriaged";
                 const sight = sightingsLabel(f.sightings);
                 // #6: the unconfirmed lane's value is a placeholder (`GET EXPR`, `POST :serverUrl`)
@@ -344,7 +346,7 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                           title={alsoSeenAs(f).length > 0 ? `Also seen as: ${alsoSeenAs(f).join(", ")}` : undefined}>
                           {shownValue(f)}
                         </span>
-                        {host && <span className="fp-host" title={host}>{host}</span>}
+                        {host && <span className="fp-host" title={hosts.join(", ")}>{hostLabel}</span>}
                         {riskTags(f).map((t) => (
                           <span key={t} className={`fp-risk fp-risk-${t}`}
                             title={`Risk: ${t}`}>{t}</span>

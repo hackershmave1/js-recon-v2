@@ -93,15 +93,47 @@ def test_a_local_lab_target_in_scope_is_shown():
     assert why_hidden(ROUTE, "http://localhost:3000/app", [None], local, allow_local=True) is None
 
 
-def test_the_scope_rule_never_hides_an_api_call():
-    # A third-party API the app calls is attack surface; only analytics noise hides endpoints.
+# #240 (a deliberate reversal of "the scope rule never hides an API call"): an endpoint whose EVERY
+# occurrence is on a real out-of-scope host is the third party's surface, not the target's, so it
+# is hidden like an off-scope page route. Reversible (`include_hidden`); an occurrence the app
+# itself makes (in scope, or relative = its own origin) keeps the whole finding shown.
+_ENDPOINT_TYPES = ["endpoint", "endpoint_suspected", "endpoint_unresolved", "endpoint_generic"]
+
+
+@pytest.mark.parametrize("finding_type", _ENDPOINT_TYPES)
+def test_an_endpoint_only_on_out_of_scope_hosts_is_off_scope(finding_type):
+    assert why_hidden(finding_type, "/api/oembed.json", ["vimeo.com"], FIRST_PARTY) == OFF_SCOPE
     assert (
-        why_hidden(
-            "endpoint", "GET https://api.stripe-like.io/v1", ["api.stripe-like.io"], FIRST_PARTY
-        )
-        is None
+        why_hidden(finding_type, "/api/x", ["vimeo.com", "plausible.io"], FIRST_PARTY) == OFF_SCOPE
     )
-    assert why_hidden("endpoint", "GET https://x", [None], FIRST_PARTY) is None
+
+
+@pytest.mark.parametrize("finding_type", _ENDPOINT_TYPES)
+def test_one_in_scope_occurrence_keeps_the_whole_endpoint_shown(finding_type):
+    hosts = ["banking.crossriver.com", "plausible.io"]
+    assert why_hidden(finding_type, "/api/event", hosts, FIRST_PARTY) is None
+
+
+@pytest.mark.parametrize("finding_type", _ENDPOINT_TYPES)
+def test_a_relative_call_is_the_apps_own_origin_and_stays_shown(finding_type):
+    assert why_hidden(finding_type, "/api/x", [None], FIRST_PARTY) is None
+    assert why_hidden(finding_type, "/api/x", ["vimeo.com", None], FIRST_PARTY) is None
+
+
+def test_an_endpoint_is_not_off_scope_when_nothing_is_known_about_scope():
+    assert why_hidden("endpoint_suspected", "/api/x", ["vimeo.com"], None) is None
+
+
+def test_a_secret_or_param_is_never_hidden_by_the_endpoint_scope_rule():
+    assert why_hidden("secret", "aws:sha256:ab", ["vimeo.com"], FIRST_PARTY) is None
+    assert why_hidden("param", "q", ["vimeo.com"], FIRST_PARTY) is None
+
+
+def test_an_endpoint_on_a_dynamic_host_is_left_to_the_junk_rules_not_off_scope():
+    assert why_hidden("endpoint", "GET https://x", ["x"], FIRST_PARTY) is None
+
+
+def test_analytics_noise_still_wins_for_an_endpoint():
     assert (
         why_hidden(
             "endpoint", "GET https://api.mixpanel.com/track", ["api.mixpanel.com"], FIRST_PARTY
