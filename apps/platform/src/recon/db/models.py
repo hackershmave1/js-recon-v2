@@ -967,3 +967,31 @@ class QuarantinedAsset(Base):
 
 
 QUARANTINE_TABLES: tuple[str, ...] = ("host_decision", "quarantined_asset")
+
+
+class TenantThirdPartyRule(Base):
+    """One team addition to the built-in third-party rules (ADR-0010, R2): a HOST (a script from it
+    is dropped, unless the researcher typed that host into the scope) or a FILE pattern (applies on
+    any host). Additions only: there is no way to switch a built-in entry off. ``created_by`` is the
+    signed-in user who added it; SET NULL on user delete, like ``tenant_llm_config.configured_by``."""
+
+    __tablename__ = "tenant_third_party_rule"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "kind", "value", name="uq_tenant_third_party_rule_value"),
+        CheckConstraint("kind IN ('host', 'file_pattern')", name="ck_tenant_third_party_rule_kind"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), **_UUID_PK)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = _now_col(nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("app_user.id", ondelete="SET NULL")
+    )
+
+
+# Team third-party rules, RLS-enabled by migration 0038.
+THIRD_PARTY_RULE_TABLES: tuple[str, ...] = ("tenant_third_party_rule",)
