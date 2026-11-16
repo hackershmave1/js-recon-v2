@@ -141,6 +141,20 @@ describe("FindingsPage", () => {
     expect(screen.getByText("also seen: 3 capture")).toBeInTheDocument();
   });
 
+  it("shows every host a finding was seen on: the first, then a +N count with the full list", () => {
+    withFindings([f({ finding_hash: "m", value: "/api/event", occurrences: [
+      occ({ host: "app.acme.io" }), occ({ host: "plausible.io" }), occ({ host: "plausible.io" }),
+    ] })]);
+    const chip = screen.getByText("app.acme.io +1");
+    expect(chip).toHaveAttribute("title", "app.acme.io, plausible.io");
+  });
+
+  it("shows a single host as before, with no count", () => {
+    withFindings([f({ finding_hash: "s", value: "/api/x", occurrences: [occ({ host: "api.acme.io" }), occ({ host: "api.acme.io" })] })]);
+    const chip = document.querySelector(".fp-host") as HTMLElement;
+    expect(chip.textContent).toBe("api.acme.io");
+  });
+
   it("shows no sightings badge for a finding unique to the run (all-zero)", () => {
     withFindings([f({ finding_hash: "x", value: "GET /solo", sightings: { capture: 0, platform: 0 } })]);
     expect(screen.queryByText(/also seen/)).toBeNull();

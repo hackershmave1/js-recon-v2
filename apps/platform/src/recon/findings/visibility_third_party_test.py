@@ -37,11 +37,16 @@ def test_an_in_scope_host_keeps_it_visible():
     assert _why("endpoint", [("api.acme.io", LIB)]) is None
 
 
-def test_any_app_or_bundle_occurrence_keeps_it_visible():
-    assert _why("endpoint", [("featureassets.org", LIB), ("featureassets.org", APP)]) is None
-    assert _why("endpoint", [("featureassets.org", LIB), ("featureassets.org", "input.js")]) is None
-    assert _why("endpoint", [("featureassets.org", LIB), ("featureassets.org", None)]) is None
-    assert _why("endpoint", [("featureassets.org", "https://acme.io/app.js")]) is None  # a bundle
+def test_any_app_or_bundle_occurrence_keeps_it_from_being_third_party():
+    # An app or bundle occurrence means it is not ONLY package code, so never `third_party`. Its
+    # host is still outside the scope, so since #240 it is `off_scope` instead (reversible).
+    for occurrences in (
+        [("featureassets.org", LIB), ("featureassets.org", APP)],
+        [("featureassets.org", LIB), ("featureassets.org", "input.js")],
+        [("featureassets.org", LIB), ("featureassets.org", None)],
+        [("featureassets.org", "https://acme.io/app.js")],
+    ):
+        assert _why("endpoint", occurrences) == visibility.OFF_SCOPE
 
 
 def test_confirmed_secrets_are_never_hidden_as_third_party():

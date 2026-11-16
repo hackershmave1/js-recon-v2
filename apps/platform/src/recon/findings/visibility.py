@@ -16,9 +16,11 @@ Reasons:
 - ``junk_or_dynamic`` (page routes): an absolute URL with no real host — a single label
   (``https://x``), a template (``https://${e}``), loopback, an IP — the same
   ``egress.attributed_host`` bar scope uses.
-- ``off_scope`` (page routes): a real host that is not first-party (a library doc link, a schema
-  id, a third-party site). A third-party API call the app makes is real attack surface, so the
-  scope rule applies to page routes only.
+- ``off_scope`` (page routes AND endpoints): a real host that is not first-party (a library doc
+  link, a schema id, a third-party site; for an endpoint, EVERY occurrence is on such a host).
+  Endpoints joined this rule in #240, reversing the earlier "a third-party API call is attack
+  surface" stance: the finding list answers "what does THIS app's backend expose", and the hide is
+  reversible (``include_hidden``). One in-scope or relative occurrence keeps an endpoint shown.
 - ``third_party`` (any type but a confirmed ``secret``): EVERY occurrence comes from a third-party
   package file (GLOSSARY: Third-party code — ``recon.findings.origin``), and none of them is a call
   to the target itself: a relative call (no host — the app's own origin, e.g. an auth library's
@@ -82,7 +84,8 @@ def why_hidden(
 
     ``first_party`` is the run's expanded first-party host list, or ``None`` when nothing is
     known about it (an upload with no scope) — then only junk and noise are hidden."""
-    attributed: set[str | None] = {h for h in occurrence_hosts if h}
+    hosts = list(occurrence_hosts)
+    attributed: set[str | None] = {h for h in hosts if h}
     own = (
         bool(first_party)
         and bool(attributed)
@@ -94,6 +97,10 @@ def why_hidden(
         return NOISE
     if _third_party(finding_type, occurrences, first_party, app_packages, allow_local=allow_local):
         return THIRD_PARTY
+    if finding_type in _ENDPOINT_TYPES:
+        if _from_app_package(occurrences, app_packages):
+            return None  # the researcher said this package is app code: its calls stay shown
+        return OFF_SCOPE if _only_off_scope_hosts(hosts, first_party, allow_local) else None
     if finding_type != FindingType.PAGE_ROUTE.value:
         return None
     url = "https:" + value if value.startswith("//") else value  # protocol-relative = absolute
@@ -107,6 +114,44 @@ def why_hidden(
     if first_party is not None:
         return OFF_SCOPE
     return None
+
+
+# The endpoint finding types the off-scope rule covers (#240).
+_ENDPOINT_TYPES = frozenset(
+    {
+        FindingType.ENDPOINT.value,
+        FindingType.ENDPOINT_SUSPECTED.value,
+        FindingType.ENDPOINT_UNRESOLVED.value,
+        FindingType.ENDPOINT_GENERIC.value,
+    }
+)
+
+
+def _from_app_package(
+    occurrences: Iterable[tuple[str | None, str | None]], app_packages: Iterable[str]
+) -> bool:
+    """Any occurrence lives in a package file the researcher marked as app code (``app_packages``)."""
+    packages = list(app_packages)
+    return any(
+        path and origin.package_of(path) is not None and not origin.is_third_party(path, packages)
+        for _host, path in occurrences
+    )
+
+
+def _only_off_scope_hosts(
+    hosts: list[str | None], first_party: list[str] | None, allow_local: bool
+) -> bool:
+    """True when the endpoint's EVERY occurrence is on a real host outside the first-party scope.
+    One in-scope occurrence, or a relative one (no host = the app's own origin), keeps it shown;
+    a host that is not a real one (`x`, a template) is the junk rules' call, not this one."""
+    if first_party is None or not hosts:
+        return False
+    return all(
+        host is not None
+        and egress.attributed_host("https://" + host) is not None
+        and not egress.host_in_scope(host, first_party, allow_local=allow_local)
+        for host in hosts
+    )
 
 
 def _third_party(

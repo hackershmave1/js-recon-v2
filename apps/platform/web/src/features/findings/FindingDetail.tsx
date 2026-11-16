@@ -42,6 +42,8 @@ export function FindingDetail({ finding, runId, onJumpToSource }: {
           const at = occJump(o);
           // Same rendered text whether or not it's clickable — kept in one place.
           const text = <>
+            {/* The host this occurrence talks to: a finding seen on two hosts must say so. */}
+            {o.host && <span className="fd-occ-host" data-testid="occ-host">{o.host} · </span>}
             {primary}{at ? `:${at.approximate ? "~" : ""}${at.line}` : ""}
             {/* Owning bundle, shown only alongside a distinct recovered path. */}
             {bundle ? ` · ${bundle}` : ""}
