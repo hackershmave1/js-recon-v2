@@ -688,7 +688,12 @@ def _cross_run_sightings(
     # `platform` via the else branch.
     origin = case(
         (
-            and_(EngagementSession.external_id.is_not(None), Run.input_ref.is_(None)),
+            # target IS NULL: an adopted workspace session (ADR-0012) keeps its crawl run `platform`.
+            and_(
+                EngagementSession.external_id.is_not(None),
+                Run.input_ref.is_(None),
+                Run.target.is_(None),
+            ),
             "capture",
         ),
         else_="platform",

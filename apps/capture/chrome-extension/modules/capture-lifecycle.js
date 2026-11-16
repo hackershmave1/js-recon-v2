@@ -163,10 +163,28 @@ export class CaptureLifecycle {
       // the next Start simply rotates/adopts again. The engagement's capture config is not
       // re-applied here (Start is about scope and session, not per-engagement capture settings).
       if (mode === 'continue') {
-        if (!match || !match.external_id) return { ok: false, error: 'no_match' };
-        await this.captureSession.adopt(match.external_id, {
-          binding: { projectId: match.engagement_id || null, captureConfig: {}, overrideKeys: [] },
+        if (!match || (!match.external_id && !match.workspace_session_id)) return { ok: false, error: 'no_match' };
+        let externalId = match.external_id;
+        let engagementId = match.engagement_id || null;
+        if (!externalId) {
+          // A session started in the workspace (ADR-0012): the server gives it an extension id,
+          // once. It runs here, inside the serialized Start and AFTER the capture_in_progress check
+          // above, so a refused Start never burns an adopt. NOTE: the id is permanent; if the
+          // capture/start below then fails, the session simply appears in the normal Continue list.
+          const adopted = await this.api.adopt(match.workspace_session_id);
+          if (!adopted.ok || !adopted.data || !adopted.data.externalId) {
+            const code = adopted.data && adopted.data.detail && adopted.data.detail.error;
+            if (adopted.status === 401) return { ok: false, error: 'session_expired' };
+            if (adopted.status === 409) return { ok: false, error: 'already_adopted', code };
+            return { ok: false, error: adopted.status === 404 ? 'no_match' : (adopted.error || 'adopt_failed') };
+          }
+          externalId = adopted.data.externalId;
+          engagementId = adopted.data.engagementId || null;
+        }
+        await this.captureSession.adopt(externalId, {
+          binding: { projectId: engagementId, captureConfig: {}, overrideKeys: [] },
         });
+        match = { ...match, external_id: externalId, engagement_id: engagementId };
       } else {
         await this.captureSession.startNew({ binding: binding || null });
       }
