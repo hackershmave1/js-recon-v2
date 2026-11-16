@@ -46,7 +46,7 @@ export function badgeText({ capturing, files, newSites }) {
 export class CaptureLifecycle {
   constructor({
     local, session, api, captureSession, uploader, applyGate, getObservations, getProcessing,
-    scheduleRetry, now, sleep,
+    scheduleRetry, now, sleep, teamRulesChanged,
   }) {
     this.local = local;                    // chrome.storage.local-shaped
     this.sessionStorage = session;         // chrome.storage.session-shaped (boot marker)
@@ -59,6 +59,8 @@ export class CaptureLifecycle {
     this.getProcessing = getProcessing || (() => 0);
     // Arms a later retry of a pending End (a chrome.alarm): the worker may stay alive for hours.
     this.scheduleRetry = scheduleRetry || (() => {});
+    // Called after the team's third-party list changed on the platform (the worker re-downloads it).
+    this.teamRulesChanged = teamRulesChanged || (() => {});
     this.now = now || (() => Date.now());
     this.sleep = sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.state = null;                     // the current capture, or null
@@ -384,17 +386,35 @@ export class CaptureLifecycle {
   }
 
   dismissSite(site) {
+    return this.serialize(() => this.dismissLocked(site));
+  }
+
+  // "Ignore for all my sessions" (ADR-0010): the site's apex host joins the TEAM's third-party list on
+  // the platform (every session, every teammate), then this capture ignores it as dismissSite does. A
+  // refused or failed team add changes nothing, so the site stays offered; "already there" (409) is fine.
+  ignoreForAll(site) {
     return this.serialize(async () => {
       if (!this.state) return { ok: false, error: 'no_capture' };
-      this.state.newSites = this.state.newSites.filter((h) => h !== site);
-      this.state.dismissedSites = [...new Set([...(this.state.dismissedSites || []), site])];
-      // Ignore: the platform deletes what it holds and refuses this host's scripts from now on. A
-      // failed call is not fatal: the held content expires on its own after 7 days.
-      const failed = await this.decideHeld(site, 'ignore');
-      if (this.state.held) delete this.state.held[site];
-      await this.persist();
-      return failed ? { ok: true, decisionPending: true } : { ok: true };
+      const res = await this.api.addTeamRule('host', apexForHost(site));
+      if (!res.ok && res.status !== 409) {
+        const detail = res.data && typeof res.data.detail === 'string' ? res.data.detail : '';
+        return { ok: false, error: res.status === 401 ? 'session_expired' : (detail || res.error || 'failed') };
+      }
+      try { this.teamRulesChanged(); } catch (e) { /* the download is best effort */ }
+      return this.dismissLocked(site);
     });
+  }
+
+  async dismissLocked(site) {
+    if (!this.state) return { ok: false, error: 'no_capture' };
+    this.state.newSites = this.state.newSites.filter((h) => h !== site);
+    this.state.dismissedSites = [...new Set([...(this.state.dismissedSites || []), site])];
+    // Ignore: the platform deletes what it holds and refuses this host's scripts from now on. A
+    // failed call is not fatal: the held content expires on its own after 7 days.
+    const failed = await this.decideHeld(site, 'ignore');
+    if (this.state.held) delete this.state.held[site];
+    await this.persist();
+    return failed ? { ok: true, decisionPending: true } : { ok: true };
   }
 
   addToScope(host) {

@@ -104,6 +104,7 @@ export function NewSiteBanner({ vm }) {
       <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
         <button onClick={() => f.addSite(site)} disabled={!!f.busy} style={smallBtn(true)}>Add to scope</button>
         <button onClick={() => f.dismissSite(site)} disabled={!!f.busy} title="Not part of this target: stop asking about it" style={smallBtn(false)}>Ignore this site</button>
+        <button onClick={() => f.ignoreSiteForAll(site)} disabled={!!f.busy} title="Add it to your team's third-party list: dropped in every session" style={smallBtn(false)}>Ignore for all my sessions</button>
       </div>
       <button onClick={() => f.endAndStartNew(site)} disabled={!!f.busy} style={{
         border: 'none', background: 'none', color: C.faint, cursor: 'pointer', fontSize: '10.5px', padding: '8px 0 0', textAlign: 'left'

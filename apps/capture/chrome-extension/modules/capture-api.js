@@ -66,6 +66,15 @@ export class CaptureApi {
     );
   }
 
+  // The team's third-party rules (ADR-0010, R2): the merged list to download, and one host to add.
+  teamRulesMerged() {
+    return this.request('GET', '/settings/third-party-rules/merged');
+  }
+
+  addTeamRule(kind, value) {
+    return this.request('POST', '/settings/third-party-rules', { kind, value });
+  }
+
   addScope(sessionId, host) {
     return this.request('POST', `/api/sessions/${encodeURIComponent(sessionId)}/scope`, { add: host });
   }

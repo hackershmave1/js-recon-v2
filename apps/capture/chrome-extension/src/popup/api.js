@@ -63,6 +63,8 @@ export const captureEnd = () => send('captureEnd');
 // The "New site seen" banner: add the site to the session's scope, or stop asking about it.
 export const captureAddScope = (host) => send('captureAddScope', { host });
 export const captureDismissSite = (site) => send('captureDismissSite', { site });
+// Same, and add the site to the TEAM's third-party list (every session): workspace Settings lists it.
+export const captureIgnoreForAll = (site) => send('captureIgnoreForAll', { site });
 // "Done" on the "Capture ended" banner.
 export const captureDismissEnded = () => send('captureDismissEnded');
 export const testConnection = () => send('testConnection');

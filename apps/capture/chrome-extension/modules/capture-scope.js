@@ -11,6 +11,7 @@
 //   never raise the "new site seen" badge.
 
 import { NOISE_HOSTS } from './third-party-rules.js';
+import { teamHosts } from './team-rules.js';
 
 export const SHARED_SUFFIXES = new Set([
   'co.uk', 'org.uk', 'gov.uk', 'ac.uk', 'co.jp', 'com.au', 'com.br', 'co.in', 'co.za', 'github.io',
@@ -53,6 +54,10 @@ export function isNoiseHost(host) {
   const h = cleanHost(host);
   if (!h) return false;
   for (const entry of NOISE_HOSTS) {
+    if (h === entry || h.endsWith('.' + entry)) return true;
+  }
+  // The team's additions (workspace Settings): only ever ADD to what is dropped.
+  for (const entry of teamHosts()) {
     if (h === entry || h.endsWith('.' + entry)) return true;
   }
   return false;
