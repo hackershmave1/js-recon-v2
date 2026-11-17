@@ -59,3 +59,83 @@ def test_js_texts_by_host_skips_off_host_and_unfetched_assets(
     out = tp._js_texts_by_host("t", "r", hosts={"acme.io"})
 
     assert out == {"acme.io": ["console.log(1)"]}
+
+
+# --- D77: a run's signal is the MERGE of every fingerprint.signal event --------------
+# The extension ingest writes one signal per uploaded batch (and a redelivered crawl
+# fetch writes a second, partial one), so "latest blob only" would drop all but the
+# last batch's hosts/headers.
+
+
+def test_merge_signals_unions_hosts_and_lists_and_later_headers_win() -> None:
+    first = {
+        "acme.io": {
+            "headers": {"server": "nginx/1.24", "x-powered-by": "Express"},
+            "scripts": ["https://acme.io/a.js"],
+            "meta": [],
+            "cookies": ["sid"],
+        }
+    }
+    second = {
+        "acme.io": {
+            "headers": {"server": "nginx/1.25.3"},
+            "scripts": ["https://acme.io/a.js", "https://acme.io/b.js"],
+            "meta": ["WordPress 6.4"],
+            "cookies": ["sid", "XSRF-TOKEN"],
+        },
+        "cdn.acme.io": {"headers": {}, "scripts": ["https://cdn.acme.io/x.js"]},
+    }
+
+    merged = tp._merge_signals([first, second])
+
+    assert merged["acme.io"] == {
+        "headers": {"server": "nginx/1.25.3", "x-powered-by": "Express"},
+        "scripts": ["https://acme.io/a.js", "https://acme.io/b.js"],
+        "meta": ["WordPress 6.4"],
+        "cookies": ["sid", "XSRF-TOKEN"],
+    }
+    assert merged["cdn.acme.io"] == {
+        "headers": {},
+        "scripts": ["https://cdn.acme.io/x.js"],
+        "meta": [],
+        "cookies": [],
+    }
+
+
+def test_merge_signals_ignores_malformed_entries() -> None:
+    merged = tp._merge_signals(
+        [
+            {"acme.io": "not a dict", "ok.io": {"headers": ["x"], "scripts": "y"}},
+            ["not", "a", "dict"],  # type: ignore[list-item]
+        ]
+    )
+
+    assert merged == {"ok.io": {"headers": {}, "scripts": [], "meta": [], "cookies": []}}
+
+
+def test_load_signal_merges_every_distinct_ref_within_the_byte_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    blobs = {
+        "ref-1": json.dumps({"a.io": {"headers": {"server": "nginx"}}}).encode(),
+        "ref-2": json.dumps({"b.io": {"headers": {"server": "Apache"}}}).encode(),
+        "ref-big": b"x" * 50,  # over the remaining budget: dropped, not merged
+    }
+    reads: list[str] = []
+
+    def get_blob(ref: str) -> bytes:
+        reads.append(ref)
+        return blobs[ref]
+
+    monkeypatch.setattr(
+        tp, "_signal_refs", lambda tenant_id, run_id: ["ref-1", "ref-2", "ref-1", "ref-big"]
+    )
+    monkeypatch.setattr(tp.storage, "get_blob", get_blob)
+    monkeypatch.setattr(tp, "_MAX_SIGNAL_BYTES", len(blobs["ref-1"]) + len(blobs["ref-2"]) + 10)
+
+    signal = tp._load_fingerprint_signal("t", "r")
+
+    assert set(signal) == {"a.io", "b.io"}
+    assert reads.count("ref-1") == 1  # a retried batch's duplicate ref is read once

@@ -1,8 +1,8 @@
 """Analyze's best-effort per-host tech-detection fingerprint pass (Task 8).
 
-Runs AFTER per-asset analysis (Vespasian/Kingfisher): loads the run's ONE
-``fingerprint-signal`` blob (Tasks 6/7 — allowlisted headers/scripts/meta/cookies
-per host), matches it against the vendored dataset via ``techdetect.detect``
+Runs AFTER per-asset analysis (Vespasian/Kingfisher): loads and merges the run's
+``fingerprint-signal`` blobs (Tasks 6/7, plus one per extension upload batch, D77 —
+allowlisted headers/scripts/meta/cookies per host), matches it against the vendored dataset via ``techdetect.detect``
 (Tasks 2-5), and upserts ``run_technology`` per ``(run_id, host, name)`` (T3).
 
 This module raises normally — a ``ControlInterrupt`` (REQ-A4) from a mid-pass
@@ -40,7 +40,7 @@ _MAX_JS_BYTES_PER_HOST = 2_000_000  # cap on JS fed to the scripts-field matcher
 
 
 def run_fingerprint_pass(redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None) -> None:
-    """Detect per-host technologies from the run's fingerprint-signal blob and upsert
+    """Detect per-host technologies from the run's (merged) fingerprint signal and upsert
     ``run_technology`` (T3). Heartbeats + checks control between hosts (REQ-A4). A
     run with no fingerprint-signal event (no crawl/capture producer ran, or a legacy
     upload run) is a silent no-op — there is nothing to detect."""
@@ -82,25 +82,63 @@ def run_fingerprint_pass(redis: Redis, *, tenant_id: str, run_id: str, job_id: s
 
 
 def _load_fingerprint_signal(tenant_id: str, run_id: str) -> dict[str, Any]:
-    """The latest ``fingerprint.signal`` blob for the run as ``{host: HostSignal}``,
-    size-capped; ``{}`` if absent/oversized/invisible."""
+    """The run's fingerprint signal as ``{host: HostSignal}``: the MERGE of every
+    ``fingerprint.signal`` event's blob, oldest first, so a later batch's header value
+    wins. ``{}`` if none is visible.
+
+    Merged, not latest-only (DEBT D77): the extension ingest writes one signal per
+    uploaded batch, and a redelivered crawl fetch writes a second, partial one — a
+    latest-only read kept just the last batch's hosts. A retried batch repeats a
+    content-addressed ref, read once. ``_MAX_SIGNAL_BYTES`` bounds the TOTAL loaded: a
+    blob that would exceed what is left is dropped (logged) and the rest still merge."""
+    blobs: list[dict[str, Any]] = []
+    loaded = 0
+    for ref in dict.fromkeys(_signal_refs(tenant_id, run_id)):
+        raw = storage.get_blob(ref)
+        if loaded + len(raw) > _MAX_SIGNAL_BYTES:
+            log.warning("analyze.fingerprint_signal_oversized", run_id=run_id, bytes=len(raw))
+            continue
+        loaded += len(raw)
+        data = json.loads(raw.decode("utf-8"))
+        if isinstance(data, dict):
+            blobs.append(data)
+    return _merge_signals(blobs)
+
+
+def _signal_refs(tenant_id: str, run_id: str) -> list[str]:
+    """Every ``fingerprint.signal`` event's blob ref for the run, oldest first."""
     with tenant_session(tenant_id) as session:
-        payload = session.scalar(
+        payloads = session.scalars(
             select(RunEvent.payload)
             .where(RunEvent.run_id == str(run_id), RunEvent.type == "fingerprint.signal")
-            .order_by(RunEvent.id.desc())
-        )
-    if not payload:
-        return {}
-    ref = payload.get("signal_ref")
-    if not ref:
-        return {}
-    raw = storage.get_blob(ref)
-    if len(raw) > _MAX_SIGNAL_BYTES:
-        log.warning("analyze.fingerprint_signal_oversized", run_id=run_id, bytes=len(raw))
-        return {}
-    data = json.loads(raw.decode("utf-8"))
-    return data if isinstance(data, dict) else {}
+            .order_by(RunEvent.id)
+        ).all()
+    return [p["signal_ref"] for p in payloads if isinstance(p, dict) and p.get("signal_ref")]
+
+
+def _merge_signals(blobs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Fold host-keyed signals into one: hosts union, ``headers`` later-wins, the list
+    fields (scripts/meta/cookies) order-preserving unions. A malformed host entry or
+    field is skipped — the blob is our own, but the extension's half of it came from an
+    untrusted client."""
+    merged: dict[str, dict[str, Any]] = {}
+    for blob in blobs:
+        if not isinstance(blob, dict):
+            continue
+        for host, host_signal in blob.items():
+            if not isinstance(host_signal, dict):
+                continue
+            entry = merged.setdefault(
+                host, {"headers": {}, "scripts": [], "meta": [], "cookies": []}
+            )
+            headers = host_signal.get("headers")
+            if isinstance(headers, dict):
+                entry["headers"].update(headers)
+            for field in ("scripts", "meta", "cookies"):
+                values = host_signal.get(field)
+                if isinstance(values, list):
+                    entry[field].extend(v for v in values if v not in entry[field])
+    return merged
 
 
 def _js_texts_by_host(tenant_id: str, run_id: str, *, hosts: set[str]) -> dict[str, list[str]]:

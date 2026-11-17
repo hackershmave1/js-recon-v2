@@ -713,7 +713,7 @@ reads keep only the resolved value, not the declarator node.
 **Fix:** carry the declarator's byte span on the declared `RawEndpoint` (as `mark_start_byte` /
 `mark_end_byte`), so `analyze._endpoint_view` locates it like any other endpoint.
 
-### 2026-11-04 QA run (recon-range) — OPEN (D77)
+### 2026-11-04 QA run (recon-range) — RESOLVED (D77)
 
 #### D77 · Extension captures never get technology detection [M]  ·  recall
 
@@ -727,4 +727,13 @@ while the run is active) instead of a misleading 0 (`detection_ran`).
 **Fix:** the extension already uploads each file's response `headers` and URL; build the same
 fingerprint-signal from the run's captured files at analyze time (allowlist the same headers), so the
 existing pass runs unchanged.
+
+> ✅ **RESOLVED** (2026-11-17, #269). No extension change: `/api/save-files` builds a per-batch
+> fingerprint signal from each stored file's uploaded `headers` + URL (`capture/ingest_signal.py`,
+> the same `_allowlisted_headers`/`_cookie_names` choke point as the crawl/capture producers) and
+> records its `fingerprint.signal` event in the batch's own row transaction. The analyze pass now
+> MERGES every `fingerprint.signal` blob of a run (oldest first, headers later-wins, total bytes
+> capped) instead of reading the latest only — which also closes the crawl's redelivered-fetch
+> partial-signal caveat. Still no `meta` for extension runs (it uploads scripts, not the HTML
+> document); uploads and legacy single-URL runs still have no signal.
 
