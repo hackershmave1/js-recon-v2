@@ -17,7 +17,7 @@ Effort: S (hours) · M (a day-ish) · L (multi-day).
 ## Priority (agreed 2026-11-17, #214)
 
 **Now** - wrong or missing results, or the capture path misleads you:
-- **D69 + D70** (#267): session-rotation races can bleed captures into the wrong engagement or session; tiny fixes, do together.
+- ~~**D69 + D70** (#267)~~ ✅ resolved by PR #277: session-rotation races could bleed captures into the wrong engagement or session. Its review found **D86** (old-session outbox files upload with the new binding), not yet ranked.
 - **D80** (#268): webpack module identity breaks recall on the most common bundler; the scoped fix is known.
 - **D77** (#269): every extension capture shows "no tech stack", and the extension is now the main capture path.
 - **D64** (#270): the threat model is generic without call-site code; the design is already decided.
@@ -167,11 +167,13 @@ Since the LLM call records (D72 section), the same race is visible: the old task
 overwrite the re-triggered run's threats while the Threat Model tab shows the new run's call details. Also
 guard those writes with `WHERE llm_call_id = <this run's call>`.
 
-### 2026-11-02 capture history fix + CaptureSession refactor — OPEN (D69–D70)
+### 2026-11-02 capture history fix + CaptureSession refactor — RESOLVED (D69, D70) · OPEN (D86)
 
 Left on purpose when the past-sessions findings count was fixed (session-keyed cache + tenant-tagged rows).
 
 #### D69 · "New session" leaves the old binding persisted while it rotates [S]  ·  correctness
+
+> ✅ **RESOLVED** (PR #277, issue #267). Wider than recorded: Continue (`adopt`) and logout / tenant change (`startStandalone`) had the same two-write window. `SessionStore.save/rotate` now write the binding in the SAME `storage.set` as the id (one LevelDB write batch in Chromium; standalone writes a null binding), and `CaptureSession._switchTo` swaps the live id and uploader binding with no await between. `tests/test_session_rotation_races.mjs` cold-starts from storage after every write of each transition.
 
 `CaptureSession.startNew` rotates (and persists) the new session id before it overwrites
 `pendingSessionConfig`. A worker respawn in that window restores the new id with the previous session's
@@ -183,6 +185,8 @@ next `startNew` write re-binds) instead of "wrongly bound".
 
 #### D70 · A batch already taken off the processing queue can be stamped with the new session id [S]  ·  correctness
 
+> ✅ **RESOLVED** (PR #277, issue #267). `CaptureSession.takeBatch` stamps each item with the id it was taken under (a dependency inherits its parent's); `processQueue` skips items whose session is no longer current, and `processFile` files under `item.sessionId`, re-checking after its last await and after the outbox enqueue. Tested with the real `processQueue` and a rotation mid-batch.
+
 `processQueue` splices up to 10 requests into a local batch (`background.js` `processQueue`) and stamps
 each file with `this.session.sessionId` as it processes it. A rotation mid-batch empties the queue but not
 that local batch, so its remaining files land in the new session. The "drop stragglers before rotating"
@@ -190,6 +194,18 @@ comment overstated this.
 
 **Fix:** capture the session id when the batch is taken, and drop (or stamp with that id) files whose
 session rotated mid-batch.
+
+#### D86 · Old-session files still in the outbox upload with the NEW session's binding [S]  ·  correctness
+
+`BatchUploader` adds `configMetadata()` (projectId, captureConfig) from its LIVE `this.config` at upload
+time (`batch-uploader.js` `...this.configMetadata()`), not from each file. Files of session A can still be
+in the outbox after `startNew` switches the binding to B: `flushAll` stops early on a transient failure, or
+`processFile` enqueued one during the `await flushAll()`. They then go out as session A with engagement
+B's projectId. Harmless when A already exists on the server (the binding is create-only), wrong when it
+doesn't. Same class as D69; found by the D69/D70 code review (PR #277).
+
+**Fix:** stamp the binding on each file at enqueue (as `runId` already is) and keep batches from mixing
+bindings, or drain the outbox fully before switching.
 
 ### 2026-09-03 review swarm — OPEN (D44, D46, D54: partial)
 
