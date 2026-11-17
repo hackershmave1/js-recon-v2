@@ -136,6 +136,8 @@ def get_run_findings(
                         # Exact range in the served source; null = no exact location.
                         "loc": asdict(occurrence.loc) if occurrence.loc else None,
                         "approximate_line": occurrence.approximate_line,
+                        # Display-only page source of an unresolved URL (#235); null otherwise.
+                        "url_source": occurrence.url_source,
                     }
                     for occurrence in finding.occurrences
                 ],
