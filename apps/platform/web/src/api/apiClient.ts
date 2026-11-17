@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BulkDeleteResponse, BaseUrlRuleResult, DiffResponse, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, SessionScope, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SourcesIndexStatus, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
+  AssetsManifest, BaseUrlRule, BulkDeleteResponse, BaseUrlRuleResult, DeleteEngagementResponse, DiffResponse, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, SessionScope, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SourcesIndexStatus, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -168,6 +168,11 @@ export function createEngagement(
   body: { name: string; in_scope_domains?: string[]; out_of_scope_domains?: string[] },
 ): Promise<Engagement> {
   return request("/engagements", json("POST", body), tenantId);
+}
+
+// Deleting an engagement detaches its sessions (they become standalone); nothing is deleted.
+export function deleteEngagement(tenantId: string, engagementId: string): Promise<DeleteEngagementResponse> {
+  return request(`/engagements/${encodeURIComponent(engagementId)}`, { method: "DELETE" }, tenantId);
 }
 
 export function uploadRun(tenantId: string, form: FormData): Promise<RunRef> {

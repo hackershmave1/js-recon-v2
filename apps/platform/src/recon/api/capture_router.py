@@ -37,6 +37,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Header, HTTPException
+from psycopg2 import errorcodes
 from pydantic import BaseModel, Field
 from redis import Redis
 from sqlalchemy import exists, select, text, update
@@ -266,7 +267,15 @@ def _create_capture_session(
             authorized_by="chrome-extension-capture",
             engagement_id=engagement_id,
         )
-    except sessions_service.SessionInvalid:
+    except (sessions_service.SessionInvalid, IntegrityError) as exc:
+        # An FK violation here means the engagement was deleted between create_session's
+        # existence check and its INSERT (issue #262): bind nothing rather than 500. Any other
+        # IntegrityError (the external_id unique race) is _get_or_create_session's to resolve.
+        if isinstance(exc, IntegrityError) and (
+            engagement_id is None
+            or getattr(exc.orig, "pgcode", None) != errorcodes.FOREIGN_KEY_VIOLATION
+        ):
+            raise
         log.warning(
             "capture.session.engagement_ignored",
             session=ext_session_id,

@@ -9,7 +9,8 @@ A researcher's ongoing runtime-JS capture of one target in the browser extension
 **capture session id** (`sessionId`). It holds every **capture** of that target ("Continue" adds a
 capture to it). The platform binds it to at most one **engagement**, immutably, so changing the
 engagement means starting a new capture session, and a tenant change starts a fresh, unbound
-(**standalone**) one. Owned by `CaptureSession`
+(**standalone**) one. The binding is never re-pointed; it only ends when its engagement is
+deleted, which **detaches** the session (it becomes standalone and keeps all its runs). Owned by `CaptureSession`
 (`apps/capture/chrome-extension/modules/capture-session.js`).
 
 _Avoid_: "run" for the session (a session holds many).

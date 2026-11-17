@@ -157,6 +157,20 @@
 .eng-switch-opt:hover { background: var(--card); }
 .eng-switch-opt.sel { color: var(--accent); background: var(--accent-soft); }
 .eng-switch-opt-name { font-weight: 600; }
+/* An engagement row: pick it, or delete it (#262). On a pointer device the trash shows on
+   hover/focus so the menu reads as a picker first; it stays reachable by keyboard. */
+.eng-switch-row { display: flex; align-items: center; gap: 2px; }
+.eng-switch-row .eng-switch-opt { flex: 1; min-width: 0; }
+.eng-switch-opt-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.eng-switch-del {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; border: none; background: none; border-radius: var(--r);
+  color: var(--faint); opacity: 0;
+}
+.eng-switch-row:hover .eng-switch-del, .eng-switch-row:focus-within .eng-switch-del { opacity: 1; color: var(--text-2); }
+@media (hover: none) { .eng-switch-del { opacity: 1; } } /* touch: no hover to reveal it */
+.eng-switch-del:hover { color: var(--danger); background: var(--card); }
+.eng-del-error { color: var(--danger); font-size: 12.5px; margin: 4px 0 8px; }
 .eng-switch-opt-scope { font-family: var(--font-mono); font-size: 10px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .eng-switch-new {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; margin-top: 2px;
