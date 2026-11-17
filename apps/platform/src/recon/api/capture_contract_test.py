@@ -46,8 +46,19 @@ def test_health_reports_contract_version(capture_client):
         "contractVersion": capture_router.CAPTURE_CONTRACT_VERSION,
         # Additive (the extension ignores the body): the dev-only local-targets switch.
         "allowLocalTargets": False,
+        # Additive: the runtime-capture kill-switch, read by New Recon to show the option.
+        "captureMode": False,
+        # Additive: the crawl fetch-size default + override ceiling (New Recon's Advanced fold).
+        "maxFetchBytes": get_settings().max_fetch_bytes,
+        "maxFetchBytesCeiling": get_settings().max_fetch_bytes_ceiling,
     }
     assert isinstance(capture_router.CAPTURE_CONTRACT_VERSION, str)
+
+
+def test_health_reports_capture_mode_switch(capture_client, monkeypatch):
+    monkeypatch.setenv("RECON_ENABLE_CAPTURE_MODE", "true")
+    get_settings.cache_clear()
+    assert capture_client.get("/api/health").json()["captureMode"] is True
 
 
 def test_save_files_response_envelope(capture_client):
