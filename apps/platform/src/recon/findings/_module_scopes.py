@@ -71,9 +71,10 @@ def module_require_name(function: Node) -> str:
     return (require.text or b"").decode("utf-8", "replace") if require is not None else ""
 
 
-def is_require_alias(value: Node, require_name: str | None) -> bool:
-    """``value`` is ``require(<numeric id>)`` for this module's require parameter."""
-    if not require_name or value.type != "call_expression":
+def is_require_alias(value: Node, require_name: str | None, poisoned: Container[str]) -> bool:
+    """``value`` is ``require(<numeric id>)`` for this module's require parameter — which must
+    itself be unambiguous (a nested ``function f(n){…}`` or an ``n = …`` write poisons it)."""
+    if not require_name or require_name in poisoned or value.type != "call_expression":
         return False
     fn = value.child_by_field_name("function")
     args = value.child_by_field_name("arguments")
@@ -102,12 +103,48 @@ def member_write_key(left: Node | None) -> str | None:
     else:
         index = left.child_by_field_name("index")
         name = None
-        if index is not None and index.type == "string" and index.named_child_count <= 1:
+        # `X["P"]` or a substitution-free template index: one string fragment at most.
+        if (
+            index is not None
+            and index.type in ("string", "template_string")
+            and index.named_child_count <= 1
+        ):
             fragment = index.named_child(0)
-            name = fragment.text if fragment is not None else b""
+            if fragment is None:
+                name = b""
+            elif fragment.type == "string_fragment":
+                name = fragment.text
     if name is None:
         return None
     return f"{(obj.text or b'').decode('utf-8', 'replace')}.{name.decode('utf-8', 'replace')}"
+
+
+# Where an assignment-like node keeps its write target(s) — read top-down, one level, so the
+# cost is O(children) per node (no `.parent` probing; DoS).
+_TARGET_FIELDS = {
+    "assignment_expression": "left",
+    "augmented_assignment_expression": "left",
+    "for_in_statement": "left",
+    "assignment_pattern": "left",
+    "object_assignment_pattern": "left",
+    "pair_pattern": "value",
+}
+
+
+def member_write_targets(node: Node) -> Iterator[str]:
+    """The ``X.P`` keys ``node`` writes: an assignment / for-of target, or a member element of a
+    destructuring pattern (``[a.A] = …``, ``({x: a.A} = o)``)."""
+    candidates: list[Node | None]
+    if node.type in ("array_pattern", "rest_pattern"):
+        candidates = list(node.named_children)
+    elif node.type in _TARGET_FIELDS:
+        candidates = [node.child_by_field_name(_TARGET_FIELDS[node.type])]
+    else:
+        return
+    for candidate in candidates:
+        key = member_write_key(candidate)
+        if key is not None:
+            yield key
 
 
 class ScopeCursor:
@@ -211,21 +248,25 @@ class ScopeBindings:
     require_name: str | None = None
     require_aliases: set[str] = field(default_factory=set)
 
-    def _is_proven(self, key: str, member_writes: AbstractSet[str]) -> bool:
+    # `X.P` keys this scope writes (see `member_write_targets`).
+    member_writes: set[str] = field(default_factory=set)
+
+    def _is_proven(self, key: str) -> bool:
         """A plain name always; a member-chain factory `t.A` only when `t` is this module's own
-        `t = require(<id>)` alias (bound once) and nothing in the FILE writes `t.A`/`t["A"]` —
-        so `t.A` is "export A of module <id>", which webpack defines getter-only (`require.d`).
-        Outside every module there is no require alias, so no member factory is claimed."""
+        `t = require(<id>)` alias (bound once) and the module never writes `t.A`/`t["A"]` — so
+        `t.A` is "export A of module <id>", which webpack defines getter-only (`require.d`).
+        The alias is module-local, so no other scope can write through it. Outside every module
+        there is no require alias, so no member factory is claimed."""
         if "." not in key:
             return True
         receiver = key.split(".", 1)[0]
-        return receiver in self.require_aliases and key not in member_writes
+        return receiver in self.require_aliases and key not in self.member_writes
 
-    def proven_instances(self, member_writes: AbstractSet[str]) -> dict[str, str | None]:
-        return {k: v for k, v in self.instances.items() if self._is_proven(k, member_writes)}
+    def proven_instances(self) -> dict[str, str | None]:
+        return {k: v for k, v in self.instances.items() if self._is_proven(k)}
 
-    def proven_inferred(self, member_writes: AbstractSet[str]) -> frozenset[str]:
-        return frozenset(k for k in self.inferred_instances if self._is_proven(k, member_writes))
+    def proven_inferred(self) -> frozenset[str]:
+        return frozenset(k for k in self.inferred_instances if self._is_proven(k))
 
     def proven_wrappers(self) -> dict[str, InferredWrapper]:
         return {key: w for key, w in self.wrappers.items() if w is not None}
@@ -248,7 +289,6 @@ def module_scope(
     outer_env: BaseEnv,
     outer: OuterLayer,
     has_with: bool,
-    member_writes: AbstractSet[str],
 ) -> ModuleScope:
     """One module's env: its own bindings first, then the outer region's. The two never share a
     key: an outer binding is kept only when its name is bound once in the WHOLE file, so no
@@ -259,11 +299,9 @@ def module_scope(
     )
     env = replace(
         outer_env,
-        instances=ChainMap(bindings.proven_instances(member_writes), outer.instances),
+        instances=ChainMap(bindings.proven_instances(), outer.instances),
         const_prefixes=ChainMap(local_consts, outer.const_prefixes),
-        inferred_instances=LayeredSet(
-            bindings.proven_inferred(member_writes), outer.inferred_instances
-        ),
+        inferred_instances=LayeredSet(bindings.proven_inferred(), outer.inferred_instances),
         wrappers=ChainMap(bindings.proven_wrappers(), outer.wrappers),
     )
     return ModuleScope(start=span[0], end=span[1], env=env, local_consts=local_consts)

@@ -1914,12 +1914,24 @@ _CLIENT = 'const c=a.A.create({baseURL:"https://api.example.test"});'
         # The alias's export is written somewhere in the file (dotted or string-indexed).
         _chunk("var a=n(690);" + _CLIENT + 'a.A=store;a.A.delete("/session")'),
         _chunk("var a=n(690);" + _CLIENT + 'a["A"]=new Map();a.A.delete("/session")'),
-        _chunk("var a=n(690);" + _CLIENT + 'a.A.delete("/session")', "a.A=mk()"),
+        _chunk("var a=n(690);" + _CLIENT + "[a.A]=[mk()];" + 'a.A.delete("/session")'),
+        _chunk("var a=n(690);" + _CLIENT + "({x:a.A}=o);" + 'a.A.delete("/session")'),
+        _chunk("var a=n(690);" + _CLIENT + "for(a.A of xs);" + 'a.A.delete("/session")'),
+        _chunk("var a=n(690);" + _CLIENT + "a[`A`]=mk();" + 'a.A.delete("/session")'),
+        # The require parameter itself is shadowed or reassigned (re-review 2026-11-17).
+        _chunk("function f(n){var a=n(690);" + _CLIENT + 'a.A.delete("/session")}f(mk)'),
+        _chunk("n=function(){return store};var a=n(690);" + _CLIENT + 'a.A.delete("/session")'),
         "var a=n(690);" + _CLIENT + 'a.A=store;a.A.delete("/session")',
     ],
 )
 def test_a_member_chain_factory_without_a_proven_require_alias_is_not_claimed(src):
     assert ("DELETE", "/session") not in _eps(src)
+
+
+def test_a_sibling_module_writing_its_own_alias_export_does_not_unclaim_this_one():
+    # The alias is module-local: module 101's `a.A = …` writes ITS `a`, not module 100's.
+    src = _chunk("var a=n(690);" + _CLIENT + 'a.A.delete("/session")', "var a=n(5);a.A=mk()")
+    assert ("DELETE", "/session") in _eps(src)
 
 
 def test_a_create_result_that_behaves_like_a_collection_is_not_a_client():

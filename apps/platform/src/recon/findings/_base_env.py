@@ -34,7 +34,7 @@ from recon.findings._module_scopes import (
     ScopeBindings,
     ScopeCursor,
     is_require_alias,
-    member_write_key,
+    member_write_targets,
     module_function,
     module_require_name,
     module_scope,
@@ -240,10 +240,6 @@ def collect_base_env(
         ScopeBindings(poisoned=counts.poison(i), require_name=counts.requires[i])
         for i in range(len(counts.spans))
     ]
-    # Every `X.P = …` / `X["P"] = …` target in the FILE: a member-chain factory `X.P` that is
-    # written anywhere is never claimed as a client (review 2026-11-17: a sibling module or the
-    # outer region may overwrite it).
-    member_writes: set[str] = set()
     cursor = ScopeCursor(counts.spans)
     default_base: str | None = None
     # `with (obj) { … }` rebinds every free name inside the block against `obj` at runtime, which
@@ -268,10 +264,9 @@ def collect_base_env(
             _inferred.observe(
                 node, outer.poisoned, outer.instances, outer.inferred_instances, outer.wrappers
             )
-        if node.type in ("assignment_expression", "augmented_assignment_expression"):
-            written = member_write_key(node.child_by_field_name("left"))
-            if written is not None:
-                member_writes.add(written)
+        # Every `X.P` / `X["P"]` write target in this scope (an assignment, a destructuring or
+        # for-of target): a member-chain factory `X.P` the scope writes is never claimed.
+        scope.member_writes.update(member_write_targets(node))
         if node.type == "with_statement":
             has_with = True
         elif node.type == "variable_declarator":
@@ -282,7 +277,7 @@ def collect_base_env(
             name = _text(name_node)
             if name in scope.poisoned:
                 continue  # bound/reassigned/shadowed >once -> ambiguous, never resolved (0-FP)
-            if is_require_alias(value, scope.require_name):
+            if is_require_alias(value, scope.require_name, scope.poisoned):
                 scope.require_aliases.add(name)  # `t = require(690)`, bound once in its module
             if _is_axios_create(value):
                 scope.instances[name] = _base_url_arg(value)
@@ -323,9 +318,9 @@ def collect_base_env(
     merged_window = {} if has_with else _merge_window_globals(local_window, window_globals)
     const_prefixes = {} if has_with else resolve_local_consts(outer.raw_consts, merged_window)
     outer_layer = OuterLayer(
-        instances=outer.proven_instances(member_writes),
+        instances=outer.proven_instances(),
         const_prefixes=const_prefixes,
-        inferred_instances=outer.proven_inferred(member_writes),
+        inferred_instances=outer.proven_inferred(),
         wrappers=outer.proven_wrappers(),
     )
     outer_env = BaseEnv(
@@ -340,7 +335,7 @@ def collect_base_env(
     if not modules:
         return outer_env
     scopes = tuple(
-        module_scope(span, bindings, outer_env, outer_layer, has_with, member_writes)
+        module_scope(span, bindings, outer_env, outer_layer, has_with)
         for span, bindings in zip(counts.spans, modules, strict=True)
     )
     return replace(outer_env, scopes=scopes)
