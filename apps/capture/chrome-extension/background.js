@@ -474,9 +474,13 @@ class JSExtractor {
   async processQueue() {
     if (this.session.processingQueue.length === 0) return;
 
-    const batch = this.session.processingQueue.splice(0, 10);
-    
+    // Each item keeps the session id it was taken under; once New session / Continue / logout
+    // replaced that id, its items are skipped, not filed into the new session (D70). `continue`,
+    // not `break`: a stale dependency at the head must not drop current items behind it.
+    const batch = this.session.takeBatch(10);
+
     for (const item of batch) {
+      if (!this.session.isCurrent(item.sessionId)) continue;
       this.processingInFlight = (this.processingInFlight || 0) + 1;
       try {
         await this.processFile(item);
@@ -662,6 +666,10 @@ class JSExtractor {
 
     const contentHash = await this.calculateHash(content);
 
+    // The last await before filing: a rotation while this file was fetched/hashed means it belongs
+    // to a session that is gone (its batches already flushed), so it is dropped (DEBT D70).
+    if (!this.session.isCurrent(item.sessionId)) return;
+
     // Version-aware deduplication - check if we already have this exact content
     if (this.session.capturedHashes.has(contentHash)) {
       const existingCapture = this.session.capturedHashes.get(contentHash);
@@ -682,7 +690,7 @@ class JSExtractor {
     const fileObject = {
       url: url,
       contentHash: contentHash,
-      sessionId: this.session.sessionId,
+      sessionId: item.sessionId,
       tabId: tabId,
       frameId: frameId,
       capturedAt: new Date().toISOString(),
@@ -729,6 +737,10 @@ class JSExtractor {
     await this.batchUploader.enqueue(fileObject);
     // Durable pending work now exists — ensure the cold-respawn flush alarm is armed.
     this.reconcileFlushAlarm(true);
+    // A rotation during that await already cleared this session's state: the file is queued
+    // under its own id, but its dedup entry, counters and dependencies must not leak into the
+    // session that replaced it (DEBT D70).
+    if (!this.session.isCurrent(item.sessionId)) return;
 
     // Persist the dedup entry so a respawn won't re-fetch/re-hash/re-upload this file. Safe after
     // enqueue: the file is already durably queued, so a crash before this line just re-uploads it
@@ -763,6 +775,7 @@ class JSExtractor {
             initiator: url
           },
           runId: item.runId,  // a dependency belongs to its parent's capture
+          sessionId: item.sessionId,  // ... and its parent's session (dropped if that rotated)
           tabId,
           frameId
         });

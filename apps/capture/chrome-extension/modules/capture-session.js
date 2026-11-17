@@ -2,8 +2,10 @@
 // dedup set, observations, counters and the engagement binding — plus their persistence and the
 // three transitions between sessions. The orderings inside those transitions are load-bearing
 // (apps/capture/CLAUDE.md): flush the old id's batches before rotating, drop stragglers before a
-// new id exists, and on a tenant change unbind and drop the outbox so one tenant's captures never
-// flush under another's token. Dependencies are injected so the orderings are tested at runtime.
+// new id exists, persist the new id and its binding in ONE storage write (a respawn never pairs the
+// new id with the old engagement, D69), and on a tenant change unbind and drop the outbox so one
+// tenant's captures never flush under another's token. Dependencies are injected so the orderings
+// are tested at runtime (tests/test_capture_session.mjs, tests/test_session_rotation_races.mjs).
 //
 // ponytail: state is exposed as public fields because processFile (background.js) still writes
 // them directly; narrow this interface when the capture pipeline is deepened.
@@ -53,14 +55,11 @@ export class CaptureSession {
   // means a new id.
   async startNew({ binding }) {
     // Drop not-yet-processed captures BEFORE rotating so a queued straggler can't be stamped with
-    // the new id; flush already-built batches under the old id first. NOTE(DEBT D70): a batch
-    // processQueue already spliced out is not covered and can still be stamped with the new id.
+    // the new id; flush already-built batches under the old id first. A batch processQueue already
+    // took keeps the id it was taken under and stops at the rotation (takeBatch / isCurrent, D70).
     this.processingQueue = [];
     await this.uploader.flushAll();
-    this.sessionId = await this.sessionStore.rotate();
-    this._clear();
-    await this.storage.set({ [BINDING_KEY]: binding });
-    this.uploader.setConfig(binding);
+    this._switchTo(await this.sessionStore.rotate({ [BINDING_KEY]: binding }), binding);
   }
 
   // "Continue": take over an EXISTING session (its id and its engagement binding — the platform
@@ -69,10 +68,22 @@ export class CaptureSession {
   async adopt(sessionId, { binding } = {}) {
     this.processingQueue = [];
     await this.uploader.flushAll();
-    this.sessionId = await this.sessionStore.save(sessionId);
-    this._clear();
-    await this.storage.set({ [BINDING_KEY]: binding });
-    this.uploader.setConfig(binding);
+    this._switchTo(await this.sessionStore.save(sessionId, { [BINDING_KEY]: binding }), binding);
+  }
+
+  // Take up to `size` queued requests to process. A dependency keeps its parent's session id; any
+  // other item gets the id current when it is taken. Every transition empties the queue first, so
+  // that is the id it was queued under, or (queued while the transition was flushing) the new
+  // session it was admitted into (DEBT D70).
+  takeBatch(size) {
+    const sessionId = this.sessionId;
+    return this.processingQueue.splice(0, size).map((item) => (item.sessionId ? item : { ...item, sessionId }));
+  }
+
+  // False once a transition replaced `sessionId`: work taken under it must not be filed into the
+  // session that replaced it.
+  isCurrent(sessionId) {
+    return sessionId === this.sessionId;
   }
 
   // A new capture in the SAME session (Continue, or Start right after a rotation): dedup is per
@@ -85,14 +96,13 @@ export class CaptureSession {
   // tenant's session never lands in the list another tenant reads.
   async startStandalone({ dropOutbox = false } = {}) {
     this.processingQueue = [];
-    this.sessionId = await this.sessionStore.rotate();
-    this._clear();
-    // Clear the live binding AND the persisted snapshot, or a respawn re-binds the old engagement.
-    this.uploader.setConfig(null);
+    // Unbind the live binding AND the persisted snapshot together with the id, or a respawn
+    // re-binds the old (possibly other tenant's) engagement. restore() reads null as unbound.
+    this._switchTo(await this.sessionStore.rotate({ [BINDING_KEY]: null }), null);
     try {
       await this.storage.remove(BINDING_KEY);
     } catch (e) {
-      // best-effort; the in-memory setConfig(null) already unbound the live uploader.
+      // best-effort tidy-up; the null written with the id already unbinds it.
     }
     // Tenant change only: the outbox drains under whatever token is CURRENT, so the previous
     // tenant's queued JS would otherwise flush under the new tenant's token. Losing a few unsent
@@ -146,6 +156,14 @@ export class CaptureSession {
       this._obsPersistTimer = null;
       this.persistObservations();
     }, PERSIST_DEBOUNCE_MS);
+  }
+
+  // The live id and the live binding change together, with no await between them, so nothing
+  // running while a transition is suspended sees the new id with the old binding (DEBT D69).
+  _switchTo(sessionId, binding) {
+    this.sessionId = sessionId;
+    this.uploader.setConfig(binding);
+    this._clear();
   }
 
   // Shared by all three transitions: everything captured under the current id goes.

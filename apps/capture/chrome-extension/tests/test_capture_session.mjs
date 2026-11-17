@@ -20,7 +20,13 @@ function makeSession({ storage = fakeStorage(), settings = {}, dedupEntries = []
   const sessionStore = {
     generate: () => 'placeholder',
     async loadOrCreate() { calls.push('session.load'); return 's0'; },
-    async rotate() { calls.push('session.rotate'); return `s${++n}`; },
+    // Like SessionStore: whatever travels with the id is written in the same storage write.
+    async rotate(alongside = {}) {
+      calls.push('session.rotate');
+      const id = `s${++n}`;
+      await storage.set({ ...alongside, reconSessionId: id });
+      return id;
+    },
   };
   const dedupStore = {
     async getAll() { return dedupEntries; },
@@ -56,8 +62,8 @@ async function test_start_new_flushes_then_rotates_and_binds() {
   const binding = { projectId: 'p1', captureConfig: {}, overrideKeys: [] };
   await session.startNew({ binding });
 
-  // Flush the old session's batches before its id is gone; bind last.
-  assert.deepEqual(calls, ['uploader.flushAll', 'session.rotate', 'dedup.clear', 'auth.clear', 'uploader.setConfig:p1']);
+  // Flush the old session's batches before its id is gone; the live binding switches with the id.
+  assert.deepEqual(calls, ['uploader.flushAll', 'session.rotate', 'uploader.setConfig:p1', 'dedup.clear', 'auth.clear']);
   assert.equal(session.sessionId, 's1');
   assert.equal(session.capturedFiles.size, 0);
   assert.equal(session.capturedHashes.size, 0);
@@ -75,7 +81,7 @@ async function test_start_standalone_unbinds_and_optionally_drops_outbox() {
   calls.length = 0;
 
   await session.startStandalone({ dropOutbox: false });
-  assert.deepEqual(calls, ['session.rotate', 'dedup.clear', 'auth.clear', 'uploader.setConfig:null']);
+  assert.deepEqual(calls, ['session.rotate', 'uploader.setConfig:null', 'dedup.clear', 'auth.clear']);
   assert.equal(storage.data.pendingSessionConfig, undefined, 'a respawn cannot re-bind the old engagement');
   assert.equal(session.processingStats.failedFiles, 0, 'no stale failure state after a tenant switch');
 
@@ -84,7 +90,8 @@ async function test_start_standalone_unbinds_and_optionally_drops_outbox() {
   calls.length = 0;
   await session.startStandalone({ dropOutbox: true });
   // Unbind live AND persisted before dropping the outbox, as the tenant-change path requires.
-  assert.deepEqual(calls.slice(-3), ['uploader.setConfig:null', 'storage.remove:binding', 'uploader.clearOutbox']);
+  assert.deepEqual(calls.slice(-2), ['storage.remove:binding', 'uploader.clearOutbox']);
+  assert.ok(calls.indexOf('uploader.setConfig:null') < calls.indexOf('storage.remove:binding'));
 }
 
 async function test_restore_rehydrates_state_and_binding() {

@@ -27,8 +27,12 @@ export class SessionStore {
     return typeof id === 'string' && id ? id : null;
   }
 
-  async save(id) {
-    await this.storage.set({ [this.key]: id });
+  // `alongside` is written in the SAME storage.set as the id, so a worker torn down mid-transition
+  // sees both keys or neither (DEBT D69). NOTE: this is Chromium's implementation, not a documented
+  // chrome.storage promise: LeveldbValueStore::Set puts every key of one set() in one
+  // leveldb::WriteBatch. The id goes last so an `alongside` key can never overwrite it.
+  async save(id, alongside = {}) {
+    await this.storage.set({ ...alongside, [this.key]: id });
     return id;
   }
 
@@ -40,7 +44,7 @@ export class SessionStore {
   }
 
   // Explicit "new session" — a fresh id that replaces the persisted one.
-  async rotate() {
-    return this.save(this.generate());
+  async rotate(alongside = {}) {
+    return this.save(this.generate(), alongside);
   }
 }
