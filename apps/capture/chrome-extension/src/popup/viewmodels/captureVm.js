@@ -29,6 +29,12 @@ export function typedScope(text) {
   return normalizeRootDomains([text])[0] || '';
 }
 
+// Start capture is offered only once a scope is picked: before that it is not rendered at all
+// (a disabled bright button drew the eye away from the one thing to do: set a scope).
+export function showStartAction(scopeDraft) {
+  return Boolean(scopeDraft);
+}
+
 export function scopeLabel(scope) {
   const list = Array.isArray(scope) ? scope : [scope];
   return list.filter(Boolean).map((e) => (takesSubdomains(e) ? `${e} + subdomains` : e)).join(', ');
