@@ -177,7 +177,7 @@ def test_running_row_is_not_reclaimed(tenant, monkeypatch):
     sid = _session(tenant)
     llm_service.save_config(tenant, sid, "anthropic", "claude-x", "k")
     tm_service.trigger_generation(tenant, sid)
-    tm_service._set_status(tenant, sid, "running")
+    tm_service.store.set_status(tenant, sid, "running")
     asyncio.run(tm_service.run_generation(tenant, sid))
     assert seen == []
     assert tm_service.get_threat_model(tenant, sid)["status"] == "running"

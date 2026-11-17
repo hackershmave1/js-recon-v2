@@ -104,12 +104,37 @@ turned off. Bounded by the seed guard, `-field-scope rdn` and the `_revalidate` 
 requests are the documented residual. **Fix:** filter `scope_hosts` through `egress.is_valid_scope_entry`
 with the current flag in `build_argv`.
 
-### 2026-09-08 swarm review — OPEN (D64)
+### 2026-09-08 swarm review — RESOLVED (D64 Phase 1) · Phase 2 open
 
 Three-agent architecture swarm (token-budget / agent-tool-call / codebase-audit) commissioned to design
 threat model code-context enrichment. Unanimous verdict documented below.
 
 #### D64 · Threat model sees endpoint URLs but not the code — LLM produces generic threats [M]  ·  correctness — Tier 1
+
+> ✅ **Phase 1 RESOLVED** (2026-11-17, #270). `threat_model/context.py:_assemble_context` now adds a
+> `## Code Context` section: `code_sites.read_sites` reads FindingOccurrence → RunAsset for one exactly
+> located sighting per shown endpoint, `code_context.render_code_context` cuts a window of the SERVED text
+> (`probe.sources.get_source_content`, the text the Sources tab shows, so `view_line` lands on the same
+> lines) and the prompt gets it. Bounds: ±12 lines, 240 chars a line (a minified line is clipped around the
+> call site), 3,000 chars a window, 25 windows, 25 files, 32,000 chars total; neighbouring windows never
+> repeat a line and sites inside one window share it. Ranking is DEBT's: write methods / sensitive segments,
+> then path ids, then auth attributes; sites on one minified line get their own column windows. Secret
+> fence (`secret_mask.py`): every secret sighting of the run (hidden ones too) is read back from the served
+> text and checked against its finding hash (`code_sites.verify_secret`), then each window masks those
+> sightings AND every other copy of every secret value in any file (a token reused in a header has no
+> sighting of its own). If any secret cannot be read back exactly (no exact location, unreadable file, hash
+> mismatch, over the file cap), the whole section is left out. A missing endpoint blob costs only its
+> windows; any error in this step leaves the prompt as before, never fails the threat model. Residual risk,
+> by design: a secret Kingfisher never detected (e.g. the low-confidence lane when not opted in) is quoted as
+> it appears in the code, and so is an escaped or re-encoded copy (`\/`, `\u00xx`, base64) of a detected
+> one; a very short value over-masks; one unlocated secret drops the section run-wide (logged as
+> `fenced_files`). Follow-ups: on a minified line, site visibility compares unmasked to masked columns (can
+> mislabel a window, never leaks); each load can re-list `asset_keys` and, on a cache miss, recover a
+> source-map original on demand, and up to 25 texts stay in memory while windows are cut. Deviations from the plan: windows come from
+> `view_line` in the served text, not the raw `line`; pre-0032 rows (`view_line` NULL) and `evidence` are
+> not used, since neither can be placed for the secret fence. Context assembly now runs in a thread
+> (`asyncio.to_thread`), since it reads the object store. The system prompt marks the section as untrusted
+> target code. Still open: Phase 2 below, and the live before/after LLM comparison (not run in #270, see the PR).
 
 The threat model LLM receives endpoint URLs, secret counts, tech stack, and GraphQL operation names
 (`threat_model/service.py:_assemble_context`). It has no visibility into *how* endpoints are called —
@@ -333,6 +358,10 @@ additions minimal, but the files need splitting by responsibility (e.g. threat-m
 generation vs serialization; models per domain).
 
 **Fix:** split one file per PR, starting with `threat_model/service.py`.
+
+> **Progress (2026-11-17, #270):** `threat_model/service.py` (664) is split into `service.py` (orchestration),
+> `context.py`, `store.py`, `prompt.py`, `schemas.py`, plus the new `code_context.py`, `code_types.py`, `code_sites.py`, `secret_mask.py`; all
+> under 300. Still over: `db/models.py`, `sessions/service.py`.
 
 ### 2026-11-07 Capture lifecycle — OPEN (D82, D83, D84)
 
