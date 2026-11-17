@@ -61,3 +61,20 @@
 
 .nr-error { margin: 0 0 12px; font-size: 12.5px; }
 .nr-submit { width: 100%; margin-top: 4px; padding: 9px; font-size: 13.5px; }
+
+/* New Recon page layout: the form plus a short guide beside it, so the page uses the
+   width instead of one small card in empty space. Stacks to one column on narrow
+   screens. Scoped to .nr-page so the Edit & re-run panel (also .nr-form) keeps its card. */
+.nr-page { margin: 12px 0; display: grid; grid-template-columns: minmax(0, 640px) minmax(240px, 340px); gap: 20px; align-items: start; }
+.nr-page > .nr-form { max-width: none; margin: 0; }
+.nr-guide { margin: 0; padding: 18px 20px; position: sticky; top: 12px; }
+.nr-guide-title { font-family: var(--font-display); font-size: 14px; font-weight: 700; margin: 0 0 6px; }
+.nr-guide-lead { font-size: 12.5px; line-height: 1.55; color: var(--text-2); margin: 0 0 14px; }
+.nr-guide-list { margin: 0; padding: 14px 0 0; border-top: 1px solid var(--border); }
+.nr-guide-list dt { font-size: 12.5px; font-weight: 600; color: var(--text); margin: 0 0 2px; }
+.nr-guide-list dd { font-size: 12px; line-height: 1.5; color: var(--muted); margin: 0 0 12px; }
+.nr-guide-list dd:last-child { margin-bottom: 0; }
+@media (max-width: 900px) {
+  .nr-page { grid-template-columns: minmax(0, 1fr); }
+  .nr-guide { position: static; }
+}

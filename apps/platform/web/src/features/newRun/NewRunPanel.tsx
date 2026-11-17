@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type React from "react";
 import { useNavigate } from "react-router";
 import { useTenant } from "../../tenant/TenantContext";
-import { createSession, startRun, uploadRun } from "../../api/apiClient";
+import { createSession, getServerHealth, startRun, uploadRun } from "../../api/apiClient";
 import { ApiError } from "../../api/apiClient";
 import { ENGAGEMENT_STORAGE_KEY } from "../sessions/engagementFilter";
+import { NewRunGuide } from "./NewRunGuide";
 import "./newRun.css";
 
 const UploadIcon = () => (
@@ -38,7 +39,8 @@ export function addScopeHost(hosts: string[], raw: string): string[] {
 export function NewRunPanel() {
   const { tenantId } = useTenant();
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"upload" | "crawl">("upload");
+  // Crawling a domain is the common path, so it is the default; upload is secondary.
+  const [mode, setMode] = useState<"upload" | "crawl">("crawl");
   const [scopeHosts, setScopeHosts] = useState<string[]>([]);
   const [scopeInput, setScopeInput] = useState("");
   const [authorizedBy, setAuthorizedBy] = useState("");
@@ -49,6 +51,17 @@ export function NewRunPanel() {
   const [scanSuspected, setScanSuspected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Runtime capture is a server kill-switch (RECON_ENABLE_CAPTURE_MODE): offer it only when
+  // the server says it is on, like the Tech stack tab that appears only when it applies.
+  // Hidden while loading or if the probe fails; POST /runs still rejects it when off.
+  const [captureAvailable, setCaptureAvailable] = useState(false);
+  useEffect(() => {
+    let live = true;
+    getServerHealth()
+      .then((h) => { if (live) setCaptureAvailable(h.captureMode === true); })
+      .catch(() => { if (live) setCaptureAvailable(false); });
+    return () => { live = false; };
+  }, []);
 
   // Scope is optional now (S4): a crawl with no scope defaults to the target's
   // host + subdomains server-side (S3); an upload needs no scope at all. So the
@@ -98,7 +111,7 @@ export function NewRunPanel() {
         // NewRunPanel tests assert the lean body for a normal crawl.
         const run = await startRun(tenantId, {
           session_id: session.session_id, target: domain.trim(),
-          ...(capture ? { capture: true } : {}),
+          ...(capture && captureAvailable ? { capture: true } : {}),
           ...(scanSuspected ? { scan_suspected: true } : {}),
         });
         navigate(`/runs/${run.run_id}`);
@@ -122,100 +135,108 @@ export function NewRunPanel() {
     : "Optional for uploads.";
 
   return (
-    <form className="card nr-form" onSubmit={submit}>
-      <h2 className="nr-title">New recon run</h2>
-      <p className="muted nr-sub">Point the analyzer at a JavaScript file or a live domain. Naming who authorized this is the authorization acknowledgment.</p>
+    <div className="nr-page">
+      <form className="card nr-form" onSubmit={submit}>
+        <h2 className="nr-title">New recon run</h2>
+        <p className="muted nr-sub">Point the analyzer at a JavaScript file or a live domain. Naming who authorized this is the authorization acknowledgment.</p>
 
-      <div className="nr-modes" role="radiogroup" aria-label="Run mode">
-        <label className={mode === "upload" ? "is-active" : ""}>
-          <input type="radio" name="mode" value="upload" checked={mode === "upload"}
-            onChange={() => setMode("upload")} />
-          <UploadIcon /> Upload a file
-        </label>
-        <label className={mode === "crawl" ? "is-active" : ""}>
-          <input type="radio" name="mode" value="crawl" checked={mode === "crawl"}
-            onChange={() => setMode("crawl")} />
-          <GlobeIcon /> Crawl a domain
-        </label>
-      </div>
+        <div className="nr-modes" role="radiogroup" aria-label="Run mode">
+          <label className={mode === "crawl" ? "is-active" : ""}>
+            <input type="radio" name="mode" value="crawl" checked={mode === "crawl"}
+              onChange={() => setMode("crawl")} />
+            <GlobeIcon /> Crawl a domain
+          </label>
+          <label className={mode === "upload" ? "is-active" : ""}>
+            <input type="radio" name="mode" value="upload" checked={mode === "upload"}
+              onChange={() => setMode("upload")} />
+            <UploadIcon /> Upload a file
+          </label>
+        </div>
 
-      {mode === "upload" ? (
-        <div className="nr-field">
-          <label htmlFor="file">JavaScript file</label>
-          <label
-            className={"nr-drop" + (dragOver ? " over" : "") + (file ? " has-file" : "")}
-            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={onDrop}>
-            <span className="nr-drop-icon" aria-hidden="true"><UploadIcon /></span>
-            {file ? (
-              <span className="nr-drop-file">
-                <span className="nr-drop-name">{file.name}</span>
-                <span className="nr-drop-size">{formatBytes(file.size)} · click to replace</span>
-              </span>
-            ) : (
-              <span className="nr-drop-cta">
-                <span className="nr-drop-lead">Drop a <code>.js</code> file, or <span className="nr-drop-browse">browse</span></span>
-                <span className="nr-drop-sub">.js · .mjs</span>
-              </span>
+        {mode === "upload" ? (
+          <div className="nr-field">
+            <label htmlFor="file">JavaScript file</label>
+            <label
+              className={"nr-drop" + (dragOver ? " over" : "") + (file ? " has-file" : "")}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={onDrop}>
+              <span className="nr-drop-icon" aria-hidden="true"><UploadIcon /></span>
+              {file ? (
+                <span className="nr-drop-file">
+                  <span className="nr-drop-name">{file.name}</span>
+                  <span className="nr-drop-size">{formatBytes(file.size)} · click to replace</span>
+                </span>
+              ) : (
+                <span className="nr-drop-cta">
+                  <span className="nr-drop-lead">Drop a <code>.js</code> file, or <span className="nr-drop-browse">browse</span></span>
+                  <span className="nr-drop-sub">.js · .mjs</span>
+                </span>
+              )}
+              <input id="file" type="file" accept=".js,.mjs,text/javascript" className="nr-file-native"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            </label>
+          </div>
+        ) : (
+          <>
+            <div className="nr-field"><label htmlFor="domain">Domain</label>
+              <input id="domain" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="acme.io" /></div>
+            {captureAvailable && (
+              <label className="nr-capture">
+                <input type="checkbox" checked={capture} onChange={(e) => setCapture(e.target.checked)} />
+                <span className="nr-capture-text">
+                  <span className="nr-capture-title">Runtime capture <span className="nr-beta">beta</span></span>
+                  <span className="muted nr-capture-hint">Also open the site in a headless browser to catch JavaScript that only appears while it runs: workers, injected and eval&apos;d code the crawl can&apos;t see.</span>
+                </span>
+              </label>
             )}
-            <input id="file" type="file" accept=".js,.mjs,text/javascript" className="nr-file-native"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-          </label>
-        </div>
-      ) : (
-        <>
-          <div className="nr-field"><label htmlFor="domain">Domain</label>
-            <input id="domain" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="acme.io" /></div>
-          <label className="nr-capture">
-            <input type="checkbox" checked={capture} onChange={(e) => setCapture(e.target.checked)} />
-            <span className="nr-capture-text">
-              <span className="nr-capture-title">Runtime capture <span className="nr-beta">beta</span></span>
-              <span className="muted nr-capture-hint">Execute the page in a headless browser to capture runtime JS — workers, injected, and eval&apos;d code the static crawl can&apos;t see. Must be enabled server-side.</span>
-            </span>
-          </label>
-        </>
-      )}
-
-      <div className="nr-field">
-        <label htmlFor="scope">Scope hosts</label>
-        {scopeHosts.length > 0 && (
-          <ul className="nr-chips" aria-label="Scope hosts">
-            {scopeHosts.map((host) => (
-              <li key={host} className="chip nr-chip">
-                <span className="nr-chip-label">{host}</span>
-                <button type="button" className="nr-chip-x" aria-label={`Remove ${host}`}
-                  onClick={() => setScopeHosts((prev) => prev.filter((h) => h !== host))}>×</button>
-              </li>
-            ))}
-          </ul>
+          </>
         )}
-        <div className="nr-scope-add">
-          <input id="scope" value={scopeInput} placeholder="example.com  (or *.example.com)"
-            onChange={(e) => setScopeInput(e.target.value)} onKeyDown={onScopeKeyDown} />
-          <button type="button" className="nr-add" onClick={addHost}
-            disabled={scopeInput.trim() === ""}>Add</button>
+
+        <div className="nr-field">
+          <label htmlFor="scope">Scope hosts</label>
+          {scopeHosts.length > 0 && (
+            <ul className="nr-chips" aria-label="Scope hosts">
+              {scopeHosts.map((host) => (
+                <li key={host} className="chip nr-chip">
+                  <span className="nr-chip-label">{host}</span>
+                  <button type="button" className="nr-chip-x" aria-label={`Remove ${host}`}
+                    onClick={() => setScopeHosts((prev) => prev.filter((h) => h !== host))}>×</button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="nr-scope-add">
+            <input id="scope" value={scopeInput} placeholder="example.com  (or *.example.com)"
+              onChange={(e) => setScopeInput(e.target.value)} onKeyDown={onScopeKeyDown} />
+            <button type="button" className="nr-add" onClick={addHost}
+              disabled={scopeInput.trim() === ""}>Add</button>
+          </div>
+          <p className="muted nr-hint">{scopeHint}</p>
         </div>
-        <p className="muted nr-hint">{scopeHint}</p>
-      </div>
 
-      <label className="nr-capture">
-        <input type="checkbox" checked={scanSuspected}
-          onChange={(e) => setScanSuspected(e.target.checked)} />
-        <span className="nr-capture-text">
-          <span className="nr-capture-title">Scan for suspected secrets</span>
-          <span className="muted nr-capture-hint">Also run a broader, low-confidence secret pass (~50% false positives) — surfaced as a separate &quot;suspected&quot; lane, kept out of the confirmed count.</span>
-        </span>
-      </label>
+        <label className="nr-capture">
+          <input type="checkbox" checked={scanSuspected}
+            onChange={(e) => setScanSuspected(e.target.checked)} />
+          <span className="nr-capture-text">
+            <span className="nr-capture-title">Also run a broader secret scan</span>
+            <span className="muted nr-capture-hint">A second scan that finds more possible secrets, but about half of what it flags is not a real secret. Its results go in a separate &quot;suspected secret&quot; list and never count as confirmed secrets.</span>
+          </span>
+        </label>
 
-      <div className="nr-field"><label htmlFor="auth">Authorized by</label>
-        <input id="auth" value={authorizedBy} placeholder="your name / ticket"
-          onChange={(e) => setAuthorizedBy(e.target.value)} /></div>
+        {/* NOTE: an "Advanced" fold (e.g. max fetch size, source-map upload) goes here, between
+            the options and the authorization field, once its settings are built (#263). */}
 
-      {error && <p className="sev-high nr-error">{error}</p>}
-      <button type="submit" className="btn-primary nr-submit" disabled={!ready || busy}>
-        {busy ? "Starting…" : mode === "crawl" ? "Crawl domain" : "Analyze file"}
-      </button>
-    </form>
+        <div className="nr-field"><label htmlFor="auth">Authorized by</label>
+          <input id="auth" value={authorizedBy} placeholder="your name / ticket"
+            onChange={(e) => setAuthorizedBy(e.target.value)} /></div>
+
+        {error && <p className="sev-high nr-error">{error}</p>}
+        <button type="submit" className="btn-primary nr-submit" disabled={!ready || busy}>
+          {busy ? "Starting…" : mode === "crawl" ? "Crawl domain" : "Analyze file"}
+        </button>
+      </form>
+      <NewRunGuide mode={mode} captureAvailable={captureAvailable} />
+    </div>
   );
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { NewRunPanel, addScopeHost } from "./NewRunPanel";
@@ -10,15 +10,25 @@ const navigate = vi.fn();
 vi.mock("react-router", async (orig) => ({ ...(await orig() as object), useNavigate: () => navigate }));
 
 const TENANT = "123e4567-e89b-12d3-a456-426614174000";
-beforeEach(() => { vi.restoreAllMocks(); localStorage.setItem("recon.tenantId", TENANT); });
+beforeEach(() => {
+  vi.restoreAllMocks();
+  localStorage.setItem("recon.tenantId", TENANT);
+  // Default server: runtime capture off (the shipped default, RECON_ENABLE_CAPTURE_MODE unset).
+  vi.spyOn(api, "getServerHealth").mockResolvedValue({ status: "ok", captureMode: false });
+});
 
 function renderPanel() {
   return render(<MemoryRouter><TenantProvider><NewRunPanel /></TenantProvider></MemoryRouter>);
 }
 
+async function chooseUpload() {
+  await userEvent.click(screen.getByRole("radio", { name: /upload/i }));
+}
+
 describe("NewRunPanel", () => {
   it("gates submit on authorized-by and a file — scope is optional (S4)", async () => {
     renderPanel();
+    await chooseUpload();
     const submit = screen.getByRole("button", { name: /analyze/i });
     expect(submit).toBeDisabled();
     await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
@@ -32,6 +42,7 @@ describe("NewRunPanel", () => {
     vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: ["example.com"], authorization_ack: true });
     vi.spyOn(api, "uploadRun").mockResolvedValue({ run_id: "run-9", state: "queued" });
     renderPanel();
+    await chooseUpload();
     // A typed-but-not-added host is still folded into the scope on submit.
     await userEvent.type(screen.getByLabelText(/scope host/i), "example.com");
     await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
@@ -47,10 +58,33 @@ describe("NewRunPanel", () => {
     expect(navigate).toHaveBeenCalledWith("/runs/run-9");
   });
 
-  it("defaults to upload mode", () => {
+  it("defaults to crawl mode — crawling a domain is the common path (#263)", () => {
     renderPanel();
-    expect(screen.getByRole("radio", { name: /upload/i })).toBeChecked();
-    expect(screen.getByLabelText(/javascript file/i)).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /crawl/i })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /upload/i })).not.toBeChecked();
+    expect(screen.getByLabelText("Domain")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/javascript file/i)).not.toBeInTheDocument();
+  });
+
+  it("hides runtime capture when the server reports capture mode off", async () => {
+    renderPanel();
+    await waitFor(() => expect(api.getServerHealth).toHaveBeenCalled());
+    expect(screen.queryByRole("checkbox", { name: /runtime capture/i })).not.toBeInTheDocument();
+  });
+
+  it("hides runtime capture when the health probe fails", async () => {
+    vi.mocked(api.getServerHealth).mockRejectedValue(new Error("offline"));
+    renderPanel();
+    await waitFor(() => expect(api.getServerHealth).toHaveBeenCalled());
+    expect(screen.queryByRole("checkbox", { name: /runtime capture/i })).not.toBeInTheDocument();
+  });
+
+  it("shows runtime capture on the crawl tab when the server reports capture mode on", async () => {
+    vi.mocked(api.getServerHealth).mockResolvedValue({ status: "ok", captureMode: true });
+    renderPanel();
+    expect(await screen.findByRole("checkbox", { name: /runtime capture/i })).toBeInTheDocument();
+    await chooseUpload(); // a crawl-only option: not offered for an upload
+    expect(screen.queryByRole("checkbox", { name: /runtime capture/i })).not.toBeInTheDocument();
   });
 
   it("crawl mode gates submit on the domain, not on scope", async () => {
@@ -82,16 +116,16 @@ describe("NewRunPanel", () => {
   it("crawl with runtime capture checked sends capture:true", async () => {
     vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: ["acme.io"], authorization_ack: true });
     vi.spyOn(api, "startRun").mockResolvedValue({ run_id: "run-cap", state: "queued" });
+    vi.mocked(api.getServerHealth).mockResolvedValue({ status: "ok", captureMode: true });
     renderPanel();
-    await userEvent.click(screen.getByRole("radio", { name: /crawl/i }));
     await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
     await userEvent.type(screen.getByLabelText("Domain"), "acme.io");
-    await userEvent.click(screen.getByRole("checkbox", { name: /runtime capture/i }));
+    await userEvent.click(await screen.findByRole("checkbox", { name: /runtime capture/i }));
     await userEvent.click(screen.getByRole("button", { name: /crawl/i }));
     expect(api.startRun).toHaveBeenCalledWith(TENANT, { session_id: "s1", target: "acme.io", capture: true });
   });
 
-  it("crawl with 'scan for suspected secrets' checked sends scan_suspected:true", async () => {
+  it("crawl with the broader secret scan checked sends scan_suspected:true", async () => {
     // D33-B: the opt-in flows to startRun only when checked (default body stays lean).
     vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: ["acme.io"], authorization_ack: true });
     vi.spyOn(api, "startRun").mockResolvedValue({ run_id: "run-sus", state: "queued" });
@@ -99,7 +133,7 @@ describe("NewRunPanel", () => {
     await userEvent.click(screen.getByRole("radio", { name: /crawl/i }));
     await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
     await userEvent.type(screen.getByLabelText("Domain"), "acme.io");
-    await userEvent.click(screen.getByRole("checkbox", { name: /suspected secrets/i }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /broader secret scan/i }));
     await userEvent.click(screen.getByRole("button", { name: /crawl/i }));
     expect(api.startRun).toHaveBeenCalledWith(TENANT, { session_id: "s1", target: "acme.io", scan_suspected: true });
   });

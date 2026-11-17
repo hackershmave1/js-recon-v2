@@ -91,8 +91,9 @@ export async function exchangeHandoffCode(code: string): Promise<LoginResult> {
   return res.json() as Promise<LoginResult>;
 }
 
-// The capture health probe (public): carries the stack's local-targets switch.
-export interface ServerHealth { status: string; allowLocalTargets?: boolean; }
+// The capture health probe (public): carries the stack's local-targets switch and the
+// runtime-capture switch (New Recon shows "Runtime capture" only when captureMode is true).
+export interface ServerHealth { status: string; allowLocalTargets?: boolean; captureMode?: boolean; }
 export async function getServerHealth(): Promise<ServerHealth> {
   const res = await fetch("/api/health", { headers: { Accept: "application/json" } });
   if (!res.ok) throw new ApiError(res.status, await readErrorDetail(res));
