@@ -38,8 +38,8 @@ A human may confirm it before it changes the finding's triage state.
   2026-10-07) and per-call records of prompt, response, latency and cost (`llm/calls.py`).
 * Threat-model generation, which already assembles findings into a prompt.
 * Per-finding triage statuses and controls in the workspace.
-* `DEBT.md` D49 and D50 (findings prioritization and triage at scale) cover the non-AI side of
-  the same problem.
+* D49 and D50 (findings prioritization and triage at scale, since resolved and pruned from `DEBT.md`;
+  see git history) cover the non-AI side of the same problem.
 
 ## Prerequisites before picking this up
 
