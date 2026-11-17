@@ -22,6 +22,18 @@ assert.match(notCaptured, /state\.newSites\.includes\(apexForHost\(host\)\)/, 'o
 assert.match(notCaptured, /this\.quarantine\.enqueue\(/);
 assert.ok(!/processingQueue/.test(notCaptured), 'a quarantined script never enters the capture queue');
 
+// Dependency children (import / import() / require / deps arrays found in a captured script) are
+// followed only through the same rule (DEBT D44a): no child reaches the queue without CAPTURE.
+const deps = slice('    for (const dep of dependencies) {', '  extractMetadata(details');
+const gate = deps.indexOf('if (this.admitDependencyUrl(depUrl) !== ADMIT.CAPTURE) {');
+assert.ok(gate >= 0, 'every dependency child is judged by the rule');
+assert.ok(gate < deps.indexOf('processingQueue.push'), 'the rule runs before the child is queued');
+assert.equal((deps.match(/processingQueue\.push/g) || []).length, 1, 'no other way into the queue');
+const admitDep = slice('  admitDependencyUrl(url) {', '  // A script that is not captured.');
+assert.match(admitDep, /scriptInScope: this\.isInScope\(url\)/);
+assert.match(admitDep, /ignored: this\.capture\.isIgnoredSite\(host\)/);
+assert.match(admitDep, /thirdPartyHost: isNoiseHost\(host\)/);
+
 assert.match(bg, /fetchContent: \(url\) => this\.contentFetcher\.fetchQuarantined\(url\)/);
 
 // The manifest already grants what tabs.get needs for `url` (host permissions).
