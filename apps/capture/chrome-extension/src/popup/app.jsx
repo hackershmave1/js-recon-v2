@@ -25,13 +25,6 @@ function basename(url) {
   }
 }
 
-function ruleTag(pattern) {
-  if (/wp-|cms/i.test(pattern)) return 'CMS';
-  if (/analytics|doubleclick|segment|gtag|track/i.test(pattern)) return 'TRACK';
-  if (/\.js$/i.test(pattern)) return 'LIB';
-  return 'HOST';
-}
-
 export function App() {
   const [view, setView] = useState('home');
   const [status, setStatus] = useState({ isCapturing: false, fileCount: 0, mapsCount: 0, secretCount: 0 });
@@ -48,7 +41,6 @@ export function App() {
   // 401/403 upload pause (DEBT D41). Cleared on a successful sign-in. A same-tenant re-login
   // refreshes the token WITHOUT rotating the capture session, so the buffered outbox resumes.
   const [forceLogin, setForceLogin] = useState(false);
-  const [newRule, setNewRule] = useState('');
   // Decoupled analysis: status of the on-demand backend job + its per-file progress,
   // which drives the captures feed's ingested→analyzing→analyzed lifecycle.
   const [analysis, setAnalysis] = useState(IDLE_ANALYSIS);
@@ -262,19 +254,6 @@ export function App() {
     }
   }
 
-  function addRule() {
-    const p = newRule.trim();
-    if (!p) return;
-    const rules = [...(settings?.denyRules || []), { tag: ruleTag(p), pattern: p }];
-    patchSettings({ denyRules: rules });
-    setNewRule('');
-    showToast('Rule added');
-  }
-
-  function removeRule(i) {
-    patchSettings({ denyRules: (settings?.denyRules || []).filter((_, j) => j !== i) });
-  }
-
   if (!settings) {
     return <div style={{ padding: '40px', textAlign: 'center', color: C.faint, fontSize: '12px' }}>Loading…</div>;
   }
@@ -366,7 +345,6 @@ export function App() {
     connState, latency, testConnection,
     settings, status,
     signOut, patchSettings,
-    newRule, setNewRule, addRule, removeRule,
     version: api.extensionVersion(),
   });
 

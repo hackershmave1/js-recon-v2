@@ -1,7 +1,7 @@
 // team-rules.js — the team's additions to the built-in third-party rules (ADR-0010, R2).
 //
 // The platform is the one home of the team's rules (workspace Settings). The extension keeps the last
-// copy it downloaded in memory (read by capture-scope.isNoiseHost and asset-classifier.matchesDenylist)
+// copy it downloaded in memory (read by capture-scope.isNoiseHost and asset-classifier.matchesThirdPartyFile)
 // and in chrome.storage.local, so a restarted worker or a failed download still has it. The built-in
 // list is compiled in (modules/third-party-rules.js) and is never touched here: a team entry can only
 // ADD to what is dropped. Pure (no chrome global): storage and the download are injected.

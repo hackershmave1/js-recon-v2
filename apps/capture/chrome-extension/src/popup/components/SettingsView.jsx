@@ -1,13 +1,13 @@
 // SettingsView.jsx — inline settings screen (replaces the old options.html page).
-// Sections: Connection, Capture rules, Noise denylist, About. Mirrors the
+// Sections: Connection, Capture rules, About. Third-party rules live in the workspace (Settings). Mirrors the
 // "RECON Capture" prototype SETTINGS view. Sign-IN lives in LoginView (the gate); Settings only
 // shows the signed-in account summary, since it is reachable only when already signed in.
 import { useState } from 'preact/hooks';
-import { C, F, TAG_COLOR } from '../theme.js';
+import { C, F } from '../theme.js';
 import { Switch } from './ui.jsx';
 import {
-  BackIcon, SearchIcon, LinkIcon, GlobeIcon, EyeOffIcon,
-  PulseIcon, SpinnerIcon, CloseIcon
+  BackIcon, SearchIcon, LinkIcon, GlobeIcon,
+  PulseIcon, SpinnerIcon
 } from '../icons.jsx';
 
 const inputStyle = {
@@ -172,20 +172,6 @@ export function SettingsView({ vm }) {
               </div>
             </div>
           )}
-          <Label mb={8}>Out-of-scope assets</Label>
-          <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
-            {[{ k: 'tag', l: 'Tag' }, { k: 'mute', l: 'Mute' }, { k: 'exclude', l: 'Exclude' }].map((o) => {
-              const on = vm.outOfScopeMode === o.k;
-              return (
-                <button key={o.k} onClick={() => vm.setOutOfScopeMode(o.k)} style={{
-                  flex: 1, padding: '8px', borderRadius: '8px',
-                  border: `1px solid ${on ? C.lime : C.lineStrong}`,
-                  background: on ? C.lime : 'transparent', color: on ? C.onLime : C.muted,
-                  cursor: 'pointer', fontSize: '11.5px', fontWeight: 600
-                }}>{o.l}</button>
-              );
-            })}
-          </div>
           {/* Max is 10 MB, not the mockup's 25: the backend hard-rejects any file
               over 10 MB (SecurityValidator.MAX_JS_CONTENT_SIZE), so allowing more
               here would only produce assets the server 422s. */}
@@ -209,48 +195,6 @@ export function SettingsView({ vm }) {
             </span>
             <Switch on={vm.captureResponseBodies} />
           </button>
-        </Card>
-
-        {/* NOISE DENYLIST */}
-        <SectionHeader icon={<EyeOffIcon />}>NOISE DENYLIST</SectionHeader>
-        <Card>
-          <button onClick={vm.toggleDefaultProfile} style={{
-            width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '0 0 12px',
-            border: 'none', background: 'none', cursor: 'pointer', borderBottom: `1px solid ${C.line}`, marginBottom: '12px'
-          }}>
-            <span style={{ flex: 1, textAlign: 'left' }}>
-              <span style={{ display: 'block', fontSize: '12.5px', color: C.text, fontWeight: 600 }}>Default profile</span>
-              <span style={{ display: 'block', fontSize: '10.5px', color: C.faint }}>WordPress, analytics, ad &amp; CDN libraries</span>
-            </span>
-            <Switch on={vm.denyDefaultProfile} />
-          </button>
-          {vm.denyRules.map((r, i) => {
-            const tag = TAG_COLOR[r.tag] || TAG_COLOR.HOST;
-            return (
-              <div key={`${r.tag}-${r.pattern}-${i}`} style={{
-                display: 'flex', alignItems: 'center', gap: '9px', padding: '7px 9px',
-                background: C.inset, border: `1px solid ${C.line}`, borderRadius: '8px', marginBottom: '6px'
-              }}>
-                <span style={{ fontSize: '8.5px', fontWeight: 700, color: tag.c, background: tag.bg, padding: '2px 6px', borderRadius: '5px', flex: '0 0 auto' }}>{r.tag}</span>
-                <span style={{ flex: 1, minWidth: 0, fontFamily: F.mono, fontSize: '11.5px', color: C.textSoft, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.pattern}</span>
-                <button class="pp-rule-remove" onClick={() => vm.removeRule(i)} aria-label="Remove rule" style={{
-                  flex: '0 0 auto', width: '22px', height: '22px', borderRadius: '6px', border: 'none',
-                  background: 'none', color: C.faint, cursor: 'pointer', display: 'flex',
-                  alignItems: 'center', justifyContent: 'center'
-                }}><CloseIcon /></button>
-              </div>
-            );
-          })}
-          <div style={{ display: 'flex', gap: '7px', marginTop: '9px' }}>
-            <input value={vm.newRule} onInput={(e) => vm.setNewRule(e.target.value)}
-                   onKeyDown={(e) => { if (e.key === 'Enter') vm.addRule(); }}
-                   placeholder="*.doubleclick.net  or  /wp-content/*"
-                   style={{ ...inputStyle, flex: 1, minWidth: 0, fontSize: '11.5px', padding: '8px 10px' }} />
-            <button onClick={vm.addRule} style={{
-              flex: '0 0 auto', padding: '0 13px', borderRadius: '8px', border: 'none',
-              background: C.lime, color: C.onLime, cursor: 'pointer', fontSize: '12px', fontWeight: 700
-            }}>Add</button>
-          </div>
         </Card>
 
         {/* ABOUT */}

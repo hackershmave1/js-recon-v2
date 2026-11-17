@@ -6,7 +6,6 @@ export function buildSettingsViewModel({
   settings, status,
   signOut,
   patchSettings,
-  newRule, setNewRule, addRule, removeRule,
   version,
 }) {
   return {
@@ -23,19 +22,10 @@ export function buildSettingsViewModel({
     // "Capture every tab" overrides the capture's scope while on (the scope still names the session).
     captureEverything: settings.captureEverything === true,
     setCaptureEverything: (on) => patchSettings({ captureEverything: on === true }),
-    outOfScopeMode: settings.outOfScopeMode || 'tag',
-    setOutOfScopeMode: (m) => patchSettings({ outOfScopeMode: m }),
     maxAssetMb: settings.maxAssetMb || 10,
     setMaxAssetMb: (n) => patchSettings({ maxAssetMb: n }),
     captureResponseBodies: settings.captureResponseBodies === true,
     toggleResponseBodies: () => patchSettings({ captureResponseBodies: !(settings.captureResponseBodies === true) }),
-    denyDefaultProfile: settings.denyDefaultProfile !== false,
-    toggleDefaultProfile: () => patchSettings({ denyDefaultProfile: !(settings.denyDefaultProfile !== false) }),
-    denyRules: settings.denyRules || [],
-    removeRule,
-    newRule,
-    setNewRule,
-    addRule,
     // LLM provider config
     version,
   };

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {
-  classifyAsset, isThirdParty, matchesPattern, matchesDenylist, countSecrets
+  classifyAsset, isThirdParty, matchesPattern, matchesThirdPartyFile, countSecrets
 } from '../modules/asset-classifier.js';
 
 // classification
@@ -22,12 +22,11 @@ assert.equal(matchesPattern('https://x.doubleclick.net/a.js', '*.doubleclick.net
 assert.equal(matchesPattern('https://acme.io/wp-content/x.js', '/wp-content/*'), true);
 assert.equal(matchesPattern('https://acme.io/app/x.js', '/wp-content/*'), false);
 
-// denylist (default profile)
-assert.equal(matchesDenylist('https://x.doubleclick.net/ad.js', [], true), true);
-assert.equal(matchesDenylist('https://acme.io/wp-content/plugins/p.js', [], true), true);
-assert.equal(matchesDenylist('https://app.acme.io/main.js', [], true), false);
+// built-in third-party file patterns
+assert.equal(matchesThirdPartyFile('https://x.doubleclick.net/ad.js'), true);
+assert.equal(matchesThirdPartyFile('https://acme.io/wp-content/plugins/p.js'), true);
+assert.equal(matchesThirdPartyFile('https://app.acme.io/main.js'), false);
 // custom rule, default profile off
-assert.equal(matchesDenylist('https://app.acme.io/track.js', [{ pattern: '*/track.js' }], false), true);
 
 // secret counter — count only, dedupe
 assert.equal(countSecrets('const apiKey = "abc123secretvalue";'), 1);

@@ -48,7 +48,6 @@ export function buildHomeViewModel({
     analyzeNow,
     canAnalyze,
     toggles: [
-      { key: 'muteNoise', label: 'Mute plugins & trackers', on: settings.muteNoise === true },
       { key: 'captureAuthContext', label: 'Capture auth context', on: settings.captureAuthContext !== false },
     ],
     openSettings,
