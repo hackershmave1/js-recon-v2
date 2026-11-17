@@ -75,7 +75,7 @@ describe("app routes", () => {
     // attaches to it. This renders the REAL app-root stack (AppProviders), so removing
     // EngagementFilterProvider from it (reintroducing the bug) fails HERE, not silently.
     await userEvent.click(await screen.findByRole("button", { name: /all engagements/i }));
-    await userEvent.click(await screen.findByRole("menuitem", { name: /starbucks security review/i }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /^starbucks security review$/i }));
     expect(localStorage.getItem(ENGAGEMENT_STORAGE_KEY)).toBe("eng-1");
   });
 

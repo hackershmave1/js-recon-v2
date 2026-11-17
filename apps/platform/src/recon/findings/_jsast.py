@@ -165,6 +165,10 @@ class RawEndpoint:
     # Provenance for an endpoint recovered through an INFERRED one-hop wrapper (QA #4): the
     # wrapper's callee (`t.getJSON`). Distinct from `wrapper`, which means "taught by an analyst".
     inferred_wrapper: str | None = None
+    # Display-only (#235): where in the PAGE an unresolved URL comes from (`{attr:data-url}`,
+    # `{stimulus:url}`, `{form:action}`). Never part of `url`, the finding value or any hash, so
+    # identity and triage are unchanged; it rides on the occurrence (recon.findings._url_source).
+    url_source: str | None = None
 
 
 @dataclass

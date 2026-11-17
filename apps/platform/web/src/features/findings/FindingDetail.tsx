@@ -4,6 +4,7 @@ import { TriageControls } from "./TriageControls";
 import { RevealButton } from "./RevealButton";
 import { mergeBundleAndRecovered, occJump, occSource } from "../../api/occurrenceSource";
 import { FindingExplain } from "./FindingExplain";
+import { URL_SOURCE_LABEL } from "./urlSource";
 
 // `onJumpToSource` is optional (the shared ApiSpec drawer omits it): when present,
 // an occurrence with a source location becomes a button that reveals it in Sources.
@@ -56,6 +57,12 @@ export function FindingDetail({ finding, runId, onJumpToSource }: {
             {o.evidence && !isSecret
               ? ` — ${o.evidence.length > 200 ? o.evidence.slice(0, 200) + "…" : o.evidence}`
               : ""}
+            {/* #235: each occurrence keeps its own page source (merged sites may differ). */}
+            {o.url_source && (
+              <span className="fd-occ-urlsrc" data-testid="occ-url-source">
+                {` · ${URL_SOURCE_LABEL}: `}<code>{o.url_source}</code>
+              </span>
+            )}
             {o.engine ? ` [${o.engine}]` : ""}
             {at?.approximate ? " · approximate location — re-run for the exact spot" : ""}
             {!at && (o.source_path || o.asset_url) ? " · no exact location" : ""}

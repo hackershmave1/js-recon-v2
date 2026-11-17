@@ -26,7 +26,7 @@ const ENGAGEMENT: Engagement = {
 
 async function pickStarbucks() {
   await userEvent.click(await screen.findByRole("button", { name: /all engagements/i }));
-  await userEvent.click(await screen.findByRole("menuitem", { name: /starbucks security review/i }));
+  await userEvent.click(await screen.findByRole("menuitem", { name: /^starbucks security review$/i }));
 }
 
 describe("EngagementFilterProvider", () => {

@@ -1,5 +1,5 @@
 import type {
-  AssetsManifest, BaseUrlRule, BulkDeleteResponse, BaseUrlRuleResult, DiffResponse, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, SessionScope, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SourcesIndexStatus, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
+  AssetsManifest, BaseUrlRule, BulkDeleteResponse, BaseUrlRuleResult, DeleteEngagementResponse, DiffResponse, Engagement, EngagementsListResponse, FindingsResponse, HostsResponse, SessionScope, RequestsResponse, RunConfig, RunRef, RunStatus, RunControlResult, SessionDetail, SessionsListResponse, SessionRunsResponse, SessionView, SourceContent, SourcesResponse, SourceSearchResponse, SourcesIndexStatus, SpecSummary, TechnologiesResponse, Triage, WrapperRule, WrapperRuleResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -91,8 +91,13 @@ export async function exchangeHandoffCode(code: string): Promise<LoginResult> {
   return res.json() as Promise<LoginResult>;
 }
 
-// The capture health probe (public): carries the stack's local-targets switch.
-export interface ServerHealth { status: string; allowLocalTargets?: boolean; }
+// The capture health probe (public): carries the stack's local-targets switch, the
+// runtime-capture switch (New Recon shows "Runtime capture" only when captureMode is true)
+// and the crawl fetch-size default + per-run ceiling (New Recon's Advanced fold).
+export interface ServerHealth {
+  status: string; allowLocalTargets?: boolean; captureMode?: boolean;
+  maxFetchBytes?: number; maxFetchBytesCeiling?: number;
+}
 export async function getServerHealth(): Promise<ServerHealth> {
   const res = await fetch("/api/health", { headers: { Accept: "application/json" } });
   if (!res.ok) throw new ApiError(res.status, await readErrorDetail(res));
@@ -170,6 +175,11 @@ export function createEngagement(
   return request("/engagements", json("POST", body), tenantId);
 }
 
+// Deleting an engagement detaches its sessions (they become standalone); nothing is deleted.
+export function deleteEngagement(tenantId: string, engagementId: string): Promise<DeleteEngagementResponse> {
+  return request(`/engagements/${encodeURIComponent(engagementId)}`, { method: "DELETE" }, tenantId);
+}
+
 export function uploadRun(tenantId: string, form: FormData): Promise<RunRef> {
   return request("/runs/upload", { method: "POST", body: form }, tenantId);
 }
@@ -178,8 +188,12 @@ export function startRun(
   // `capture` opts the run into the runtime CDP capture stage (executed JS: workers,
   // injected, eval'd). Omitted unless true; the server 400s if capture mode is off.
   // `scan_suspected` opts into the D33-B low-confidence "suspected secret" recall lane.
+  // `max_fetch_bytes` overrides the per-file fetch cap (server default when omitted).
   tenantId: string,
-  body: { session_id: string; target: string; capture?: boolean; scan_suspected?: boolean },
+  body: {
+    session_id: string; target: string; capture?: boolean; scan_suspected?: boolean;
+    max_fetch_bytes?: number;
+  },
 ): Promise<RunRef> {
   return request("/runs", json("POST", body), tenantId);
 }

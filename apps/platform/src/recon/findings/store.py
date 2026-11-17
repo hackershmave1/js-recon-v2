@@ -44,6 +44,9 @@ class Occurrence:
     # Exact display location (recon.findings.located). NOT identity: line/col/offset_* keep the
     # detector's own coordinates so a re-extract never duplicates an occurrence.
     view: ViewLoc | None = None
+    # Display-only (#235): the page attribute / Stimulus value / form field an unresolved URL is
+    # read from (`{attr:data-url}`). NOT identity, like `view`: adding it never re-keys a row.
+    url_source: str | None = None
 
     def _identity(self) -> dict[str, object]:
         # line/col are part of identity so two sightings stay distinct even when
@@ -254,6 +257,7 @@ def record_finding(
             view_end_line=view.end_line if view else None,
             view_end_col=view.end_col if view else None,
             evidence=occurrence.evidence,
+            url_source=occurrence.url_source,
             engine=occurrence.engine,
             confidence=occurrence.confidence,
             verified=occurrence.verified,

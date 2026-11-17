@@ -35,6 +35,8 @@ export interface Occurrence {
   loc?: ViewLoc | null;
   // A run analyzed before exact locations: its old line, shown only as "approximate".
   approximate_line?: number | null;
+  // #235: where in the page an unresolved URL is read from (`{attr:data-url}`); display-only.
+  url_source?: string | null;
 }
 // 1-based line counting newlines only; 0-based columns in UTF-16 code units (JS string indices);
 // end exclusive.
@@ -255,8 +257,13 @@ export interface Engagement {
   engagement_id: string; name: string;
   in_scope_domains: string[]; out_of_scope_domains: string[];
   created_at: string; updated_at: string;
+  // Sessions it groups (archived included) = what a delete would detach (#262). Optional for
+  // older servers, where the confirm can't name a number.
+  session_count?: number;
 }
 export interface EngagementsListResponse { count: number; engagements: Engagement[]; }
+// DELETE /engagements/{id}: its sessions move to "No engagement"; none are deleted.
+export interface DeleteEngagementResponse { engagement_id: string; detached_sessions: number; }
 // Tech detection: one detected technology (recon.findings.queries.TechnologyView).
 // `version` is null when not statically derivable (Phase 1 honesty — T12).
 export interface Technology {

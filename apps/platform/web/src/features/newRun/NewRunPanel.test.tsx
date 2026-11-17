@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { NewRunPanel, addScopeHost } from "./NewRunPanel";
+import { MIB, parseFetchCap } from "./NewRunAdvanced";
 import { TenantProvider } from "../../tenant/TenantContext";
 import * as api from "../../api/apiClient";
 
@@ -10,15 +11,25 @@ const navigate = vi.fn();
 vi.mock("react-router", async (orig) => ({ ...(await orig() as object), useNavigate: () => navigate }));
 
 const TENANT = "123e4567-e89b-12d3-a456-426614174000";
-beforeEach(() => { vi.restoreAllMocks(); localStorage.setItem("recon.tenantId", TENANT); });
+beforeEach(() => {
+  vi.restoreAllMocks();
+  localStorage.setItem("recon.tenantId", TENANT);
+  // Default server: runtime capture off (the shipped default, RECON_ENABLE_CAPTURE_MODE unset).
+  vi.spyOn(api, "getServerHealth").mockResolvedValue({ status: "ok", captureMode: false });
+});
 
 function renderPanel() {
   return render(<MemoryRouter><TenantProvider><NewRunPanel /></TenantProvider></MemoryRouter>);
 }
 
+async function chooseUpload() {
+  await userEvent.click(screen.getByRole("radio", { name: /upload/i }));
+}
+
 describe("NewRunPanel", () => {
   it("gates submit on authorized-by and a file — scope is optional (S4)", async () => {
     renderPanel();
+    await chooseUpload();
     const submit = screen.getByRole("button", { name: /analyze/i });
     expect(submit).toBeDisabled();
     await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
@@ -32,6 +43,7 @@ describe("NewRunPanel", () => {
     vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: ["example.com"], authorization_ack: true });
     vi.spyOn(api, "uploadRun").mockResolvedValue({ run_id: "run-9", state: "queued" });
     renderPanel();
+    await chooseUpload();
     // A typed-but-not-added host is still folded into the scope on submit.
     await userEvent.type(screen.getByLabelText(/scope host/i), "example.com");
     await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
@@ -47,10 +59,35 @@ describe("NewRunPanel", () => {
     expect(navigate).toHaveBeenCalledWith("/runs/run-9");
   });
 
-  it("defaults to upload mode", () => {
+  it("defaults to crawl mode — crawling a domain is the common path (#263)", () => {
     renderPanel();
-    expect(screen.getByRole("radio", { name: /upload/i })).toBeChecked();
-    expect(screen.getByLabelText(/javascript file/i)).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /crawl/i })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /upload/i })).not.toBeChecked();
+    expect(screen.getByLabelText("Domain")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/javascript file/i)).not.toBeInTheDocument();
+  });
+
+  it("hides runtime capture when the server reports capture mode off", async () => {
+    renderPanel();
+    await waitFor(() => expect(api.getServerHealth).toHaveBeenCalled());
+    await act(async () => {}); // let the probe's promise settle before asserting the result
+    expect(screen.queryByRole("checkbox", { name: /runtime capture/i })).not.toBeInTheDocument();
+  });
+
+  it("hides runtime capture when the health probe fails", async () => {
+    vi.mocked(api.getServerHealth).mockRejectedValue(new Error("offline"));
+    renderPanel();
+    await waitFor(() => expect(api.getServerHealth).toHaveBeenCalled());
+    await act(async () => {}); // let the probe's promise settle before asserting the result
+    expect(screen.queryByRole("checkbox", { name: /runtime capture/i })).not.toBeInTheDocument();
+  });
+
+  it("shows runtime capture on the crawl tab when the server reports capture mode on", async () => {
+    vi.mocked(api.getServerHealth).mockResolvedValue({ status: "ok", captureMode: true });
+    renderPanel();
+    expect(await screen.findByRole("checkbox", { name: /runtime capture/i })).toBeInTheDocument();
+    await chooseUpload(); // a crawl-only option: not offered for an upload
+    expect(screen.queryByRole("checkbox", { name: /runtime capture/i })).not.toBeInTheDocument();
   });
 
   it("crawl mode gates submit on the domain, not on scope", async () => {
@@ -82,16 +119,16 @@ describe("NewRunPanel", () => {
   it("crawl with runtime capture checked sends capture:true", async () => {
     vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: ["acme.io"], authorization_ack: true });
     vi.spyOn(api, "startRun").mockResolvedValue({ run_id: "run-cap", state: "queued" });
+    vi.mocked(api.getServerHealth).mockResolvedValue({ status: "ok", captureMode: true });
     renderPanel();
-    await userEvent.click(screen.getByRole("radio", { name: /crawl/i }));
     await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
     await userEvent.type(screen.getByLabelText("Domain"), "acme.io");
-    await userEvent.click(screen.getByRole("checkbox", { name: /runtime capture/i }));
+    await userEvent.click(await screen.findByRole("checkbox", { name: /runtime capture/i }));
     await userEvent.click(screen.getByRole("button", { name: /crawl/i }));
     expect(api.startRun).toHaveBeenCalledWith(TENANT, { session_id: "s1", target: "acme.io", capture: true });
   });
 
-  it("crawl with 'scan for suspected secrets' checked sends scan_suspected:true", async () => {
+  it("crawl with the broader secret scan checked sends scan_suspected:true", async () => {
     // D33-B: the opt-in flows to startRun only when checked (default body stays lean).
     vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: ["acme.io"], authorization_ack: true });
     vi.spyOn(api, "startRun").mockResolvedValue({ run_id: "run-sus", state: "queued" });
@@ -99,9 +136,74 @@ describe("NewRunPanel", () => {
     await userEvent.click(screen.getByRole("radio", { name: /crawl/i }));
     await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
     await userEvent.type(screen.getByLabelText("Domain"), "acme.io");
-    await userEvent.click(screen.getByRole("checkbox", { name: /suspected secrets/i }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /broader secret scan/i }));
     await userEvent.click(screen.getByRole("button", { name: /crawl/i }));
     expect(api.startRun).toHaveBeenCalledWith(TENANT, { session_id: "s1", target: "acme.io", scan_suspected: true });
+  });
+
+  it("Advanced: shows the server's fetch-cap default and sends a typed cap as max_fetch_bytes", async () => {
+    vi.mocked(api.getServerHealth).mockResolvedValue(
+      { status: "ok", captureMode: false, maxFetchBytes: 20 * MIB, maxFetchBytesCeiling: 32 * MIB });
+    vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: ["acme.io"], authorization_ack: true });
+    vi.spyOn(api, "startRun").mockResolvedValue({ run_id: "run-cap", state: "queued" });
+    renderPanel();
+    await userEvent.click(screen.getByText("Advanced", { selector: "summary" }));
+    const cap = screen.getByLabelText(/max file size to fetch/i);
+    await waitFor(() => expect(cap).toHaveAttribute("placeholder", "20 (default)"));
+    expect(screen.getByText(/default \(20 MiB; at most 32 MiB\)/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
+    await userEvent.type(screen.getByLabelText("Domain"), "acme.io");
+    await userEvent.type(cap, "25");
+    await userEvent.click(screen.getByRole("button", { name: /crawl/i }));
+    expect(api.startRun).toHaveBeenCalledWith(TENANT,
+      { session_id: "s1", target: "acme.io", max_fetch_bytes: 25 * MIB });
+  });
+
+  it("Advanced: a fetch cap above the server ceiling blocks submit", async () => {
+    vi.mocked(api.getServerHealth).mockResolvedValue(
+      { status: "ok", maxFetchBytes: 20 * MIB, maxFetchBytesCeiling: 32 * MIB });
+    renderPanel();
+    await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
+    await userEvent.type(screen.getByLabelText("Domain"), "acme.io");
+    await userEvent.click(screen.getByText("Advanced", { selector: "summary" }));
+    const cap = screen.getByLabelText(/max file size to fetch/i);
+    await waitFor(() => expect(cap).toHaveAttribute("max", "32"));
+    await userEvent.type(cap, "33");
+    expect(screen.getByRole("button", { name: /crawl/i })).toBeDisabled();
+    expect(cap).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText(/check advanced/i)).toBeInTheDocument(); // explained even if folded
+  });
+
+  it("Advanced: a chosen source map is cleared when switching to crawl", async () => {
+    vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: [], authorization_ack: true });
+    vi.spyOn(api, "uploadRun").mockResolvedValue({ run_id: "run-x", state: "queued" });
+    renderPanel();
+    await chooseUpload();
+    await userEvent.click(screen.getByText("Advanced", { selector: "summary" }));
+    await userEvent.upload(screen.getByLabelText(/source map/i),
+      new File(["{}"], "old.js.map", { type: "application/json" }));
+    expect(screen.getByText(/old\.js\.map will be sent/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: /crawl/i }));
+    await chooseUpload();
+    expect(screen.queryByText(/old\.js\.map will be sent/)).not.toBeInTheDocument();
+  });
+
+  it("Advanced: an upload sends the optional source map as the `map` field", async () => {
+    vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: [], authorization_ack: true });
+    vi.spyOn(api, "uploadRun").mockResolvedValue({ run_id: "run-map", state: "queued" });
+    renderPanel();
+    await chooseUpload();
+    expect(screen.queryByLabelText(/max file size to fetch/i)).not.toBeInTheDocument(); // crawl-only
+    await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
+    await userEvent.upload(screen.getByLabelText(/javascript file/i),
+      new File(["x"], "app.js", { type: "text/javascript" }));
+    await userEvent.click(screen.getByText("Advanced", { selector: "summary" }));
+    const map = new File(["{}"], "app.js.map", { type: "application/json" });
+    await userEvent.upload(screen.getByLabelText(/source map/i), map);
+    await userEvent.click(screen.getByRole("button", { name: /analyze/i }));
+    const form = vi.mocked(api.uploadRun).mock.calls[0][1];
+    expect(form.get("map")).toBeInstanceOf(File);
+    expect((form.get("map") as File).name).toBe("app.js.map");
   });
 
   it("adds a scope host on Enter without submitting the form", async () => {
@@ -132,6 +234,19 @@ describe("NewRunPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: /crawl/i }));
     expect(api.createSession).toHaveBeenCalledWith(TENANT,
       { scope_hosts: ["static.acme.io"], authorized_by: "tester", target: "acme.io" });
+  });
+});
+
+describe("parseFetchCap (MiB as typed -> bytes for max_fetch_bytes)", () => {
+  it("treats blank as the server default (field omitted)", () => {
+    expect(parseFetchCap("  ", 32 * MIB)).toBeNull();
+  });
+  it("converts MiB to bytes within the ceiling", () => {
+    expect(parseFetchCap("25", 32 * MIB)).toBe(25 * MIB);
+    expect(parseFetchCap("32", 32 * MIB)).toBe(32 * MIB);
+  });
+  it("rejects zero, negatives, junk and values over the ceiling", () => {
+    for (const bad of ["0", "-1", "abc", "33", "1.5"]) expect(parseFetchCap(bad, 32 * MIB)).toBe("invalid");
   });
 });
 

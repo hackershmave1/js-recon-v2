@@ -403,6 +403,9 @@ class FindingOccurrence(Base):
     view_end_line: Mapped[int | None] = mapped_column(Integer)
     view_end_col: Mapped[int | None] = mapped_column(Integer)
     evidence: Mapped[str | None] = mapped_column(Text)
+    # Where in the page an unresolved URL comes from (`{attr:data-url}`, #235). Display-only:
+    # never part of occurrence_hash, so old and new rows of one sighting still dedupe.
+    url_source: Mapped[str | None] = mapped_column(Text)
     engine: Mapped[str | None] = mapped_column(String(32))
     confidence: Mapped[str | None] = mapped_column(String(16))
     verified: Mapped[bool | None] = mapped_column(Boolean)

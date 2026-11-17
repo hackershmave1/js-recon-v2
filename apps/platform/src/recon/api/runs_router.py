@@ -48,6 +48,19 @@ class StartRunBody(BaseModel):
     # D33-B opt-in: also run the low-confidence "suspected secret" recall lane
     # (~50% FP, a separate surface). Off by default — the precision lane is unchanged.
     scan_suspected: bool = False
+    # Optional per-run fetch-size cap (New Recon's Advanced fold), same rules as re-run:
+    # floored > 0 (a non-positive cap would fail open, REQ-Q5) and <= the ceiling.
+    max_fetch_bytes: int | None = Field(default=None, gt=0)
+
+
+def _reject_fetch_cap_over_ceiling(max_fetch_bytes: int | None) -> None:
+    """Reject a cap above the ceiling with a clean 422 rather than persist a value that is
+    clamped at read time anyway AND can overflow the column (a huge MiB entry)."""
+    ceiling = get_settings().max_fetch_bytes_ceiling
+    if max_fetch_bytes is not None and max_fetch_bytes > ceiling:
+        raise HTTPException(
+            status_code=422, detail=f"fetch cap may not exceed {ceiling // (1024 * 1024)} MiB"
+        )
 
 
 class RerunBody(BaseModel):
@@ -73,6 +86,7 @@ def start_run(
     tenant_id: str = Depends(get_tenant_id),
     redis: Redis = Depends(get_redis),
 ) -> dict:
+    _reject_fetch_cap_over_ceiling(body.max_fetch_bytes)
     session = sessions_service.get_session(tenant_id, body.session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -111,6 +125,7 @@ def start_run(
         session_id=body.session_id,
         target=body.target,
         crawl_mode="capture" if body.capture else None,
+        max_fetch_bytes=body.max_fetch_bytes,
         scan_suspected_secrets=body.scan_suspected,
     )
     return {"run_id": view.id, "state": view.state}
@@ -184,13 +199,7 @@ def edit_and_rerun_run(
     source; the rest are inherited. A scope change forks a fresh session and REQUIRES a
     new ``authorized_by`` (the operator re-attests the possibly-widened scope, MF1)."""
     fields = body.model_fields_set
-    ceiling = get_settings().max_fetch_bytes_ceiling
-    if body.max_fetch_bytes is not None and body.max_fetch_bytes > ceiling:
-        # Reject above the ceiling with a clean 422 rather than persist a value that is
-        # clamped at read time anyway AND can overflow the column (a huge MiB entry).
-        raise HTTPException(
-            status_code=422, detail=f"fetch cap may not exceed {ceiling // (1024 * 1024)} MiB"
-        )
+    _reject_fetch_cap_over_ceiling(body.max_fetch_bytes)
     edits: dict[str, object] = {}
     if "target" in fields:
         edits["target"] = body.target

@@ -37,6 +37,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Header, HTTPException
+from psycopg2 import errorcodes
 from pydantic import BaseModel, Field
 from redis import Redis
 from sqlalchemy import exists, select, text, update
@@ -104,6 +105,13 @@ def capture_health() -> dict:
         # The dev-only local-targets switch (RECON_ALLOW_LOCAL_EGRESS), so a client can show
         # whether `localhost` can be crawled / counted as declared scope on this server.
         "allowLocalTargets": get_settings().allow_local_egress,
+        # The runtime-capture kill-switch (RECON_ENABLE_CAPTURE_MODE), so New Recon offers the
+        # "Runtime capture" option only where a crawl run can use it (POST /runs still 400s).
+        "captureMode": get_settings().enable_capture_mode,
+        # The crawl fetch-size default and the per-run override ceiling, so New Recon's
+        # Advanced fold shows this server's real values instead of a hardcoded guess.
+        "maxFetchBytes": get_settings().max_fetch_bytes,
+        "maxFetchBytesCeiling": get_settings().max_fetch_bytes_ceiling,
     }
 
 
@@ -266,7 +274,15 @@ def _create_capture_session(
             authorized_by="chrome-extension-capture",
             engagement_id=engagement_id,
         )
-    except sessions_service.SessionInvalid:
+    except (sessions_service.SessionInvalid, IntegrityError) as exc:
+        # An FK violation here means the engagement was deleted between create_session's
+        # existence check and its INSERT (issue #262): bind nothing rather than 500. Any other
+        # IntegrityError (the external_id unique race) is _get_or_create_session's to resolve.
+        if isinstance(exc, IntegrityError) and (
+            engagement_id is None
+            or getattr(exc.orig, "pgcode", None) != errorcodes.FOREIGN_KEY_VIOLATION
+        ):
+            raise
         log.warning(
             "capture.session.engagement_ignored",
             session=ext_session_id,

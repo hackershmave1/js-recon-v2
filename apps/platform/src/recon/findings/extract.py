@@ -72,6 +72,7 @@ from recon.findings._jsast import (
     _text_if_short,
     _walk,
 )
+from recon.findings._url_source import url_source_token
 from recon.findings._wrapper_calls import record_wrapper_call
 from recon.findings.wrappers import WrapperRule, wrapper_callees
 
@@ -285,17 +286,16 @@ def _record_unresolved(
     unchanged — the call IS unattributed) AND emits a best-effort ``_collapse_url``
     skeleton row so the call is visible to the analyst instead of silently dropped."""
     result.unattributed += 1
-    result.unresolved.append(
-        _endpoint(
-            kind,
-            method,
-            _collapse_url(url_node, 0, result.window_globals),
-            [],
-            call,
-            wrapper=wrapper,
-            mark=url_node,
-        )
+    row = _endpoint(
+        kind,
+        method,
+        _collapse_url(url_node, 0, result.window_globals),
+        [],
+        call,
+        wrapper=wrapper,
+        mark=url_node,
     )
+    result.unresolved.append(replace(row, url_source=url_source_token(url_node)))
 
 
 def _record_generic(call: Node, prop: str, result: Extraction) -> None:
@@ -312,9 +312,8 @@ def _record_generic(call: Node, prop: str, result: Extraction) -> None:
     skeleton = _collapse_url(args[0] if args else None)
     if not _looks_like_api_path(skeleton):
         return
-    result.generic.append(
-        _endpoint("generic", prop.upper(), skeleton, [], call, mark=args[0] if args else None)
-    )
+    row = _endpoint("generic", prop.upper(), skeleton, [], call, mark=args[0] if args else None)
+    result.generic.append(replace(row, url_source=url_source_token(args[0])))
 
 
 # --- page routes (Phase 2): href/src/action, nav sinks, off-sink URL literals ------------
