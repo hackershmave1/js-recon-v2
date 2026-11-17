@@ -104,6 +104,9 @@ def capture_health() -> dict:
         # The dev-only local-targets switch (RECON_ALLOW_LOCAL_EGRESS), so a client can show
         # whether `localhost` can be crawled / counted as declared scope on this server.
         "allowLocalTargets": get_settings().allow_local_egress,
+        # The runtime-capture kill-switch (RECON_ENABLE_CAPTURE_MODE), so New Recon offers the
+        # "Runtime capture" option only where a crawl run can use it (POST /runs still 400s).
+        "captureMode": get_settings().enable_capture_mode,
     }
 
 
