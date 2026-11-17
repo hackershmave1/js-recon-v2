@@ -10,6 +10,13 @@ from recon.db.base import tenant_session
 from recon.db.models import EngagementSession, Finding, Run, RunTechnology, SessionSpec
 from recon.domain import FindingType, RunState
 from recon.findings import normalize, visibility
+from recon.observability import get_logger
+from recon.threat_model import code_context, code_sites
+
+log = get_logger("recon.threat_model.context")
+
+# D64: the call-site code windows' bounds (lines, chars, snippets, files, total budget).
+CODE_BUDGET = code_context.CodeBudget()
 
 # Runs with readable findings: the terminal states plus a capture resting between passes.
 _TERMINAL_STATES = frozenset(
@@ -123,6 +130,11 @@ def _assemble_context(tenant_id: str, session_id: str) -> _Context:
             .where(RunTechnology.run_id == run_id)
             .order_by(RunTechnology.name)
         ).all()
+        try:
+            call_sites, secret_spans = code_sites.read_sites(db, run_id, hidden)
+        except Exception:
+            log.warning("threat_model.code_context_failed", run_id=run_id, exc_info=True)
+            call_sites, secret_spans = [], []
         techs = [f"{name} {version}" if version else name for name, version, _ in tech_rows]
 
         # OpenAPI spec summary.
@@ -192,5 +204,33 @@ def _assemble_context(tenant_id: str, session_id: str) -> _Context:
         ]
     else:
         lines += ["## OpenAPI Spec", "No spec uploaded for this session.", ""]
+
+    # D64: the code around each call site, read from the object store after the DB session closes.
+    # Never fails the threat model: on any error the prompt is just the surface above.
+    try:
+        code_lines, stats = code_context.render_code_context(
+            call_sites,
+            secret_spans,
+            code_sites.text_loader(tenant_id, run_id),
+            CODE_BUDGET,
+            verify_secret=code_sites.verify_secret,
+        )
+    except Exception:
+        log.warning("threat_model.code_context_failed", run_id=run_id, exc_info=True)
+        code_lines, stats = [], code_context.CodeContextStats()
+    lines += code_lines
+    log.info(
+        "threat_model.code_context",
+        tenant_id=tenant_id,
+        run_id=run_id,
+        call_sites=len(call_sites),
+        snippets=stats.snippets,
+        chars=stats.chars,
+        omitted=stats.omitted,
+        missing_files=stats.missing_files,
+        fenced_files=stats.fenced_files,
+        out_of_range=stats.out_of_range,
+        redactions=stats.redactions,
+    )
 
     return _Context("\n".join(lines), frozenset(valid_hashes), run_id)

@@ -15,6 +15,7 @@ exist in the run are silently dropped rather than blocking the whole result.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import uuid
 from typing import Any
@@ -164,7 +165,8 @@ async def run_generation(tenant_id: str, session_id: str, preset: str | None = N
         return
 
     try:
-        context = _assemble_context(tenant_id, resolved)
+        # Off the event loop: assembly reads the DB and, for the code windows, the object store.
+        context = await asyncio.to_thread(_assemble_context, tenant_id, resolved)
     except ValueError as exc:
         store.set_status(tenant_id, resolved, "failed", error=str(exc))
         log.warning("threat_model.context_failed", session_id=resolved, error=str(exc))
