@@ -25,6 +25,14 @@ describe("FindingDetail", () => {
     expect(screen.getByText(/GET \/api\/users/)).toBeInTheDocument();
   });
 
+  it("shows each occurrence's own page source for an unresolved URL (#235)", () => {
+    show(finding({ type: "endpoint_unresolved", value: "GET EXPR", occurrences: [
+      occ({ url_source: "{attr:data-url}" }), occ({ url_source: "{stimulus:url}" }), occ(),
+    ] }));
+    const sources = screen.getAllByTestId("occ-url-source").map((n) => n.textContent);
+    expect(sources).toEqual([" · URL from the page: {attr:data-url}", " · URL from the page: {stimulus:url}"]);
+  });
+
   it("suppresses evidence for secret-type findings", () => {
     show(finding({ type: "secret", value: "aws:sha256:abcd", revealable: true,
       occurrences: [occ({ evidence: "LEAKED-SECRET-MARKER-XYZ" })] }));

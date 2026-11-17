@@ -1390,6 +1390,7 @@ def _record_unresolved_endpoint(
             run_asset_id=run_asset_id,
             asset_url=asset_url,
             view=view,
+            url_source=ep.url_source,
         ),
         attributes=attributes,
     )
@@ -1440,6 +1441,7 @@ def _record_suspected_endpoint(
             run_asset_id=run_asset_id,
             asset_url=asset_url,
             view=view,
+            url_source=ep.url_source,
         ),
         attributes=attributes,
     )

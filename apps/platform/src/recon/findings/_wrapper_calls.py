@@ -34,6 +34,7 @@ from recon.findings._jsast import (
     _string_value,
     _text,
 )
+from recon.findings._url_source import url_source_token
 
 _MAX_DEPTH = 16
 Substitution = dict[str, Node | None]
@@ -59,7 +60,9 @@ def record_wrapper_call(
         result.unattributed += 1
         skeleton = _skeleton(wrapper.url, subs, env, 0)
         row = _endpoint("fetch", method or "GET", skeleton, [], call, mark=mark)
-        result.unresolved.append(replace(row, inferred_wrapper=key))
+        result.unresolved.append(
+            replace(row, inferred_wrapper=key, url_source=url_source_token(mark))
+        )
         return
     assert options is not None
     params = _query_params(url)

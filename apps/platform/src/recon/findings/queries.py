@@ -63,6 +63,8 @@ class OccurrenceView:
     # An occurrence recorded before exact locations has only the detector's own line: offered
     # as "approximate" so the UI never presents it as exact. None on every newer occurrence.
     approximate_line: int | None = None
+    # Where in the page an unresolved URL comes from (`{attr:data-url}`, #235); None otherwise.
+    url_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1000,4 +1002,5 @@ def _occurrence_view(
         asset_url=asset_url,
         loc=loc,
         approximate_line=legacy_line,
+        url_source=occurrence.url_source,
     )

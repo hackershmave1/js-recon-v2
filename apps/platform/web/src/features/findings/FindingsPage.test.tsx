@@ -75,6 +75,20 @@ describe("FindingsPage", () => {
     expect(screen.queryByText("endpoint_unresolved")).toBeNull();
   });
 
+  it("shows every page source a row merged (#235), and none on rows without one", () => {
+    const d: FindingsResponse = {
+      run_id: "r", count: 2, coverage: null, spec: null,
+      findings: [
+        f({ finding_hash: "u1", type: "endpoint_unresolved", value: "GET EXPR",
+          occurrences: [occ({ url_source: "{attr:data-url}" }), occ({ url_source: "{data:js-ajax-href}" })] }),
+        f({ finding_hash: "e1", value: "GET /api/plain" }),
+      ],
+    };
+    render(<TenantProvider><FindingsPage data={d} runId="r" onJumpToSource={() => {}} /></TenantProvider>);
+    expect(screen.getByText("URL from the page: {attr:data-url}, {data:js-ajax-href}")).toBeInTheDocument();
+    expect(screen.getAllByText(/URL from the page/)).toHaveLength(1);
+  });
+
   it("labels the generic-call lane (endpoint_generic) as 'generic call'", () => {
     const d: FindingsResponse = {
       run_id: "r", count: 1, coverage: null, spec: null,

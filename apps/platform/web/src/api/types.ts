@@ -35,6 +35,8 @@ export interface Occurrence {
   loc?: ViewLoc | null;
   // A run analyzed before exact locations: its old line, shown only as "approximate".
   approximate_line?: number | null;
+  // #235: where in the page an unresolved URL is read from (`{attr:data-url}`); display-only.
+  url_source?: string | null;
 }
 // 1-based line counting newlines only; 0-based columns in UTF-16 code units (JS string indices);
 // end exclusive.
