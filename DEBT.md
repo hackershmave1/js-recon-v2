@@ -63,9 +63,12 @@ run them under `node --test`, which reports a never-settled test as a failure).
 > outside every module; a write to a name a module does not declare counts against the outer region.
 > Each module gets its own env (its bindings layered over the outer region's with no per-module copy),
 > and a sink resolves against the env of the module it sits in. With identity per module, a member
-> factory `t.A.create({baseURL})` claims `t.A` as the default client when `t` is bound once in its
-> module (a sibling module reusing `t` for a store is a different binding; `t.A = …` un-claims it), so
-> the strict-xfail `DELETE /api/v1/session` test now passes. Residual: the cross-chunk alias map
+> factory `t.A.create({baseURL})` claims `t.A` as the default client only when `t` is that module's own
+> `t = require(<id>)` alias, bound once, and nothing in the file writes `t.A` / `t["A"]` (a sibling
+> module reusing `t` for a store is a different binding; outside every module `t.A` is never claimed),
+> so the strict-xfail `DELETE /api/v1/session` test now passes. Accepted limit: an aliased or bulk
+> write (`const u=t; u.A=x`, `Object.assign(t,{A:x})`) is not tracked. webpack defines `require.d`
+> exports as getter-only, so such a write cannot replace the export. Residual: the cross-chunk alias map
 > (`_modulegraph.collect_webpack_requires`) still poisons aliases file-wide — lossy, never wrong.
 
 `_base_env._declared_names` poisons a name bound more than once ANYWHERE in the file, and webpack

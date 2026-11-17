@@ -1809,17 +1809,29 @@ def test_a_create_with_base_url_result_is_a_client_and_so_is_its_factory():
     assert [p.name for p in checkout.params] == ["token"]
 
 
-def test_a_webpack_member_chain_factory_call():
-    # recon-range webpack-nomap (D80): `t.A` is "export A of module 690". `t` is bound once in
-    # its scope, so the object that creates the `{baseURL}` client IS the default client.
-    src = 'var t=n(690);const s=t.A.create({baseURL:"/api/v2"});t.A.delete("/api/v1/session")'
-    assert ("DELETE", "/api/v1/session") in _eps(src)
+def test_a_flat_member_chain_factory_is_not_guessed():
+    # Outside every webpack module `t.A` is "export A of whatever `t` is" — there is no
+    # `require(<id>)` alias to prove it, so the factory is never claimed (only the instance is).
+    src = (
+        'var t=n(690);const s=t.A.create({baseURL:"/api/v2"});'
+        'async function c(){await s.get("/inventory"),await t.A.delete("/api/v1/session")}'
+    )
+    assert _eps(src) == [("GET", "/api/v2/inventory")]
 
 
 def _chunk(*modules: str) -> str:
     """A webpack-5 production chunk: `{id:(e,t,n)=>{body}, ...}` pushed onto the jsonp global."""
     registry = ",".join(f"{100 + i}:(e,t,n)=>{{{body}}}" for i, body in enumerate(modules))
     return f"(self.webpackChunkapp=self.webpackChunkapp||[]).push([[1],{{{registry}}}]);"
+
+
+def test_a_webpack_member_chain_factory_call():
+    # recon-range webpack-nomap (D80; was a strict xfail): inside a module, `a = n(690)` is that
+    # module's require alias, so `a.A` is "export A of module 690" — the default client.
+    src = _chunk(
+        'var a=n(690);const s=a.A.create({baseURL:"/api/v2"});a.A.delete("/api/v1/session")'
+    )
+    assert ("DELETE", "/api/v1/session") in _eps(src)
 
 
 def test_a_sibling_webpack_module_reusing_a_name_does_not_poison_a_literal_base():
@@ -1888,9 +1900,26 @@ def test_a_member_chain_factory_is_not_claimed_when_reused_in_the_same_scope():
     assert ("DELETE", "/x") not in _eps(src)
 
 
-def test_a_reassigned_member_chain_factory_is_not_claimed():
-    src = 'var t=n(690);const s=t.A.create({baseURL:"/api/v2"});t.A=store;t.A.delete("/x")'
-    assert ("DELETE", "/x") not in _eps(src)
+_CLIENT = 'const c=a.A.create({baseURL:"https://api.example.test"});'
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # Review 2026-11-17 (each was a reproduced FP): the receiver is not a module-local
+        # require alias — an outer object, a free global, the module's own exports param.
+        "var a={};" + _chunk(_CLIENT + 'a.A.delete("/session")', "a.A=mk()"),
+        _chunk(_CLIENT + 'a.A.delete("/session")', "a.A=mk()"),
+        _chunk(_CLIENT.replace("a.A", "t.A") + 't.A.delete("/session")'),
+        # The alias's export is written somewhere in the file (dotted or string-indexed).
+        _chunk("var a=n(690);" + _CLIENT + 'a.A=store;a.A.delete("/session")'),
+        _chunk("var a=n(690);" + _CLIENT + 'a["A"]=new Map();a.A.delete("/session")'),
+        _chunk("var a=n(690);" + _CLIENT + 'a.A.delete("/session")', "a.A=mk()"),
+        "var a=n(690);" + _CLIENT + 'a.A=store;a.A.delete("/session")',
+    ],
+)
+def test_a_member_chain_factory_without_a_proven_require_alias_is_not_claimed(src):
+    assert ("DELETE", "/session") not in _eps(src)
 
 
 def test_a_create_result_that_behaves_like_a_collection_is_not_a_client():

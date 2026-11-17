@@ -7,9 +7,10 @@ principle: decide by what the code does with a value). Two evidence rules, gathe
 - R1 client by configuration: ``X = F.create({ baseURL: ... })`` — ``baseURL`` is the HTTP
   client configuration contract (axios, ofetch, apisauce), so ``X`` is a client, and ``F`` —
   the object that creates clients — is the default client (``T.delete(...)``). A plain
-  identifier ``F`` is claimed, and so is a webpack ``t.A`` ("export A of module ``t``") when
-  ``t`` is bound once in its webpack module: poison is per module (DEBT D80), so a sibling
-  module reusing ``t`` for a store is a different binding. The extractor still drops a
+  identifier ``F`` is claimed, and so is a webpack ``t.A`` ("export A of module 690") when
+  ``t`` is the module's own ``t = require(690)`` alias and nothing in the file writes ``t.A``
+  (DEBT D80: a sibling module reusing ``t`` for a store is a different binding; outside every
+  webpack module a ``t.A`` is never claimed). The extractor still drops a
   candidate the bundle shows behaving like a collection (Ember's ``cfg.get``/``cfg.set``).
 - R2 one-hop wrapper: a function whose RETURNED call is ``fetch(<expr of its params>, ...)``
   (``a => fetch(a)``, ``function c(e,t,n){return fetch(s+e, {method: t||"GET"})}``). Its call
@@ -136,9 +137,10 @@ def _observe_create(
 
 def _is_claimable_factory(factory: Node, factory_text: str, poisoned: Container[str]) -> bool:
     """A plain identifier ``F``, or a webpack module export ``t.A`` (``t = require(690)``) —
-    whose receiver ``t`` is bound once in its scope. DEBT D80: the poison set is per webpack
-    module, so a sibling module that reuses ``t`` for a store is a different binding and claims
-    nothing. A later ``t.A = …`` in the scope un-claims it (``_ScopeBindings.proven_instances``)."""
+    whose receiver ``t`` is bound once in its scope. This is only a CANDIDATE for a member
+    chain: ``_module_scopes.ScopeBindings.proven_instances`` keeps it only when ``t`` is the
+    module's own ``t = require(<id>)`` alias and no ``t.A``/``t["A"]`` write exists in the file
+    (DEBT D80; a sibling module reusing ``t`` for a store is a different binding)."""
     if factory.type == "identifier":
         return factory_text not in poisoned
     receiver = factory.child_by_field_name("object")

@@ -64,6 +64,52 @@ def module_function(node: Node) -> Node | None:
     return function if require is not None and require.type == "identifier" else None
 
 
+def module_require_name(function: Node) -> str:
+    """The ``__webpack_require__`` parameter name of a :func:`module_function` result."""
+    params = function.child_by_field_name("parameters")
+    require = params.named_child(2) if params is not None else None
+    return (require.text or b"").decode("utf-8", "replace") if require is not None else ""
+
+
+def is_require_alias(value: Node, require_name: str | None) -> bool:
+    """``value`` is ``require(<numeric id>)`` for this module's require parameter."""
+    if not require_name or value.type != "call_expression":
+        return False
+    fn = value.child_by_field_name("function")
+    args = value.child_by_field_name("arguments")
+    return (
+        fn is not None
+        and fn.type == "identifier"
+        and fn.text == require_name.encode()
+        and args is not None
+        and args.named_child_count == 1
+        and (arg := args.named_child(0)) is not None
+        and arg.type == "number"
+    )
+
+
+def member_write_key(left: Node | None) -> str | None:
+    """``"X.P"`` for an assignment target ``X.P`` or ``X["P"]`` (``X`` an identifier), else None.
+    Reads only the identifier / property / string-index leaves, so it is O(1) per assignment."""
+    if left is None or left.type not in ("member_expression", "subscript_expression"):
+        return None
+    obj = left.child_by_field_name("object")
+    if obj is None or obj.type != "identifier":
+        return None
+    if left.type == "member_expression":
+        prop = left.child_by_field_name("property")
+        name = prop.text if prop is not None and prop.type == "property_identifier" else None
+    else:
+        index = left.child_by_field_name("index")
+        name = None
+        if index is not None and index.type == "string" and index.named_child_count <= 1:
+            fragment = index.named_child(0)
+            name = fragment.text if fragment is not None else b""
+    if name is None:
+        return None
+    return f"{(obj.text or b'').decode('utf-8', 'replace')}.{name.decode('utf-8', 'replace')}"
+
+
 class ScopeCursor:
     """Which module span a node starts in, for a walk in non-decreasing ``start_byte`` order
     (``_jsast._walk``'s pre-order). Spans are disjoint and sorted, so one forward pointer makes
@@ -139,6 +185,7 @@ class BindingCounts:
     spans: list[tuple[int, int]] = field(default_factory=list)
     outer: dict[str, int] = field(default_factory=dict)
     local: list[dict[str, int]] = field(default_factory=list)
+    requires: list[str] = field(default_factory=list)  # each module's require parameter name
 
     def poison(self, scope: int) -> Container[str]:
         if scope < 0:
@@ -160,14 +207,25 @@ class ScopeBindings:
     inferred_instances: set[str] = field(default_factory=set)
     wrappers: dict[str, InferredWrapper | None] = field(default_factory=dict)
 
-    def proven_instances(self) -> dict[str, str | None]:
-        """`instances` minus a member-chain factory (`t.A`) the scope reassigns (`t.A = store`):
-        `_inferred.observe` marks that member write as an ambiguous (None) wrapper key."""
-        return {
-            key: base
-            for key, base in self.instances.items()
-            if "." not in key or key not in self.wrappers or self.wrappers[key] is not None
-        }
+    # The module's `__webpack_require__` parameter, and the names bound once to `require(<id>)`.
+    require_name: str | None = None
+    require_aliases: set[str] = field(default_factory=set)
+
+    def _is_proven(self, key: str, member_writes: AbstractSet[str]) -> bool:
+        """A plain name always; a member-chain factory `t.A` only when `t` is this module's own
+        `t = require(<id>)` alias (bound once) and nothing in the FILE writes `t.A`/`t["A"]` —
+        so `t.A` is "export A of module <id>", which webpack defines getter-only (`require.d`).
+        Outside every module there is no require alias, so no member factory is claimed."""
+        if "." not in key:
+            return True
+        receiver = key.split(".", 1)[0]
+        return receiver in self.require_aliases and key not in member_writes
+
+    def proven_instances(self, member_writes: AbstractSet[str]) -> dict[str, str | None]:
+        return {k: v for k, v in self.instances.items() if self._is_proven(k, member_writes)}
+
+    def proven_inferred(self, member_writes: AbstractSet[str]) -> frozenset[str]:
+        return frozenset(k for k in self.inferred_instances if self._is_proven(k, member_writes))
 
     def proven_wrappers(self) -> dict[str, InferredWrapper]:
         return {key: w for key, w in self.wrappers.items() if w is not None}
@@ -190,6 +248,7 @@ def module_scope(
     outer_env: BaseEnv,
     outer: OuterLayer,
     has_with: bool,
+    member_writes: AbstractSet[str],
 ) -> ModuleScope:
     """One module's env: its own bindings first, then the outer region's. The two never share a
     key: an outer binding is kept only when its name is bound once in the WHOLE file, so no
@@ -200,10 +259,10 @@ def module_scope(
     )
     env = replace(
         outer_env,
-        instances=ChainMap(bindings.proven_instances(), outer.instances),
+        instances=ChainMap(bindings.proven_instances(member_writes), outer.instances),
         const_prefixes=ChainMap(local_consts, outer.const_prefixes),
         inferred_instances=LayeredSet(
-            frozenset(bindings.inferred_instances), outer.inferred_instances
+            bindings.proven_inferred(member_writes), outer.inferred_instances
         ),
         wrappers=ChainMap(bindings.proven_wrappers(), outer.wrappers),
     )
