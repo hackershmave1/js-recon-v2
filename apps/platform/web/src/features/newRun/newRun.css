@@ -78,3 +78,12 @@
   .nr-page { grid-template-columns: minmax(0, 1fr); }
   .nr-guide { position: static; }
 }
+
+/* Advanced fold (closed by default): only settings the API already accepts. */
+.nr-advanced { margin: 0 0 16px; border: 1px solid var(--border); border-radius: var(--r); background: var(--field); }
+.nr-advanced > summary { cursor: pointer; padding: 9px 12px; font-size: 13px; color: var(--text-2); user-select: none; }
+.nr-advanced > summary:hover { color: var(--text); }
+.nr-advanced > summary:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); border-radius: var(--r); }
+.nr-advanced[open] > summary { border-bottom: 1px solid var(--border); }
+.nr-advanced-body { padding: 12px 12px 0; }
+.nr-advanced-body .nr-field > input { width: 100%; box-sizing: border-box; }

@@ -39,6 +39,12 @@ export function NewRunGuide({ mode, captureAvailable }: {
         </dd>
         <dt>Broader secret scan</dt>
         <dd>Finds more possible secrets, but about half are false alarms. They stay in their own &quot;suspected secret&quot; list.</dd>
+        <dt>Advanced</dt>
+        <dd>
+          {mode === "crawl"
+            ? "Max file size to fetch: files bigger than this are skipped. Leave it blank unless a large bundle was skipped."
+            : "Source map: add the bundle's .map file, if you have it, to recover the original source files."}
+        </dd>
         <dt>Authorized by</dt>
         <dd>Who approved testing this target. Required: it is your authorization record.</dd>
       </dl>

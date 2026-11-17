@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { NewRunPanel, addScopeHost } from "./NewRunPanel";
+import { MIB, parseFetchCap } from "./NewRunAdvanced";
 import { TenantProvider } from "../../tenant/TenantContext";
 import * as api from "../../api/apiClient";
 
@@ -69,6 +70,7 @@ describe("NewRunPanel", () => {
   it("hides runtime capture when the server reports capture mode off", async () => {
     renderPanel();
     await waitFor(() => expect(api.getServerHealth).toHaveBeenCalled());
+    await act(async () => {}); // let the probe's promise settle before asserting the result
     expect(screen.queryByRole("checkbox", { name: /runtime capture/i })).not.toBeInTheDocument();
   });
 
@@ -76,6 +78,7 @@ describe("NewRunPanel", () => {
     vi.mocked(api.getServerHealth).mockRejectedValue(new Error("offline"));
     renderPanel();
     await waitFor(() => expect(api.getServerHealth).toHaveBeenCalled());
+    await act(async () => {}); // let the probe's promise settle before asserting the result
     expect(screen.queryByRole("checkbox", { name: /runtime capture/i })).not.toBeInTheDocument();
   });
 
@@ -138,6 +141,56 @@ describe("NewRunPanel", () => {
     expect(api.startRun).toHaveBeenCalledWith(TENANT, { session_id: "s1", target: "acme.io", scan_suspected: true });
   });
 
+  it("Advanced: shows the server's fetch-cap default and sends a typed cap as max_fetch_bytes", async () => {
+    vi.mocked(api.getServerHealth).mockResolvedValue(
+      { status: "ok", captureMode: false, maxFetchBytes: 20 * MIB, maxFetchBytesCeiling: 32 * MIB });
+    vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: ["acme.io"], authorization_ack: true });
+    vi.spyOn(api, "startRun").mockResolvedValue({ run_id: "run-cap", state: "queued" });
+    renderPanel();
+    await userEvent.click(screen.getByText("Advanced", { selector: "summary" }));
+    const cap = screen.getByLabelText(/max file size to fetch/i);
+    await waitFor(() => expect(cap).toHaveAttribute("placeholder", "20 (default)"));
+    expect(screen.getByText(/default \(20 MiB; at most 32 MiB\)/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
+    await userEvent.type(screen.getByLabelText("Domain"), "acme.io");
+    await userEvent.type(cap, "25");
+    await userEvent.click(screen.getByRole("button", { name: /crawl/i }));
+    expect(api.startRun).toHaveBeenCalledWith(TENANT,
+      { session_id: "s1", target: "acme.io", max_fetch_bytes: 25 * MIB });
+  });
+
+  it("Advanced: a fetch cap above the server ceiling blocks submit", async () => {
+    vi.mocked(api.getServerHealth).mockResolvedValue(
+      { status: "ok", maxFetchBytes: 20 * MIB, maxFetchBytesCeiling: 32 * MIB });
+    renderPanel();
+    await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
+    await userEvent.type(screen.getByLabelText("Domain"), "acme.io");
+    await userEvent.click(screen.getByText("Advanced", { selector: "summary" }));
+    const cap = screen.getByLabelText(/max file size to fetch/i);
+    await waitFor(() => expect(cap).toHaveAttribute("max", "32"));
+    await userEvent.type(cap, "33");
+    expect(screen.getByRole("button", { name: /crawl/i })).toBeDisabled();
+    expect(cap).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("Advanced: an upload sends the optional source map as the `map` field", async () => {
+    vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: [], authorization_ack: true });
+    vi.spyOn(api, "uploadRun").mockResolvedValue({ run_id: "run-map", state: "queued" });
+    renderPanel();
+    await chooseUpload();
+    expect(screen.queryByLabelText(/max file size to fetch/i)).not.toBeInTheDocument(); // crawl-only
+    await userEvent.type(screen.getByLabelText(/authorized by/i), "tester");
+    await userEvent.upload(screen.getByLabelText(/javascript file/i),
+      new File(["x"], "app.js", { type: "text/javascript" }));
+    await userEvent.click(screen.getByText("Advanced", { selector: "summary" }));
+    const map = new File(["{}"], "app.js.map", { type: "application/json" });
+    await userEvent.upload(screen.getByLabelText(/source map/i), map);
+    await userEvent.click(screen.getByRole("button", { name: /analyze/i }));
+    const form = vi.mocked(api.uploadRun).mock.calls[0][1];
+    expect(form.get("map")).toBeInstanceOf(File);
+    expect((form.get("map") as File).name).toBe("app.js.map");
+  });
+
   it("adds a scope host on Enter without submitting the form", async () => {
     renderPanel();
     await userEvent.click(screen.getByRole("radio", { name: /crawl/i }));
@@ -166,6 +219,19 @@ describe("NewRunPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: /crawl/i }));
     expect(api.createSession).toHaveBeenCalledWith(TENANT,
       { scope_hosts: ["static.acme.io"], authorized_by: "tester", target: "acme.io" });
+  });
+});
+
+describe("parseFetchCap (MiB as typed -> bytes for max_fetch_bytes)", () => {
+  it("treats blank as the server default (field omitted)", () => {
+    expect(parseFetchCap("  ", 32 * MIB)).toBeNull();
+  });
+  it("converts MiB to bytes within the ceiling", () => {
+    expect(parseFetchCap("25", 32 * MIB)).toBe(25 * MIB);
+    expect(parseFetchCap("32", 32 * MIB)).toBe(32 * MIB);
+  });
+  it("rejects zero, negatives, junk and values over the ceiling", () => {
+    for (const bad of ["0", "-1", "abc", "33"]) expect(parseFetchCap(bad, 32 * MIB)).toBe("invalid");
   });
 });
 

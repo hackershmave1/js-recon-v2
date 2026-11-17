@@ -3,8 +3,10 @@ import type React from "react";
 import { useNavigate } from "react-router";
 import { useTenant } from "../../tenant/TenantContext";
 import { createSession, getServerHealth, startRun, uploadRun } from "../../api/apiClient";
+import type { ServerHealth } from "../../api/apiClient";
 import { ApiError } from "../../api/apiClient";
 import { ENGAGEMENT_STORAGE_KEY } from "../sessions/engagementFilter";
+import { NewRunAdvanced, parseFetchCap } from "./NewRunAdvanced";
 import { NewRunGuide } from "./NewRunGuide";
 import "./newRun.css";
 
@@ -51,22 +53,28 @@ export function NewRunPanel() {
   const [scanSuspected, setScanSuspected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Runtime capture is a server kill-switch (RECON_ENABLE_CAPTURE_MODE): offer it only when
-  // the server says it is on, like the Tech stack tab that appears only when it applies.
-  // Hidden while loading or if the probe fails; POST /runs still rejects it when off.
-  const [captureAvailable, setCaptureAvailable] = useState(false);
+  // Advanced fold: a per-run fetch cap (crawl, MiB as typed) and a source map (upload).
+  const [capMiB, setCapMiB] = useState("");
+  const [mapFile, setMapFile] = useState<File | null>(null);
+  // Server switches + limits from GET /api/health. Runtime capture is a kill-switch
+  // (RECON_ENABLE_CAPTURE_MODE): offer it only when the server says it is on, like the Tech
+  // stack tab that appears only when it applies. Hidden while loading or if the probe
+  // fails; POST /runs still rejects it when off.
+  const [health, setHealth] = useState<ServerHealth | null>(null);
   useEffect(() => {
     let live = true;
     getServerHealth()
-      .then((h) => { if (live) setCaptureAvailable(h.captureMode === true); })
-      .catch(() => { if (live) setCaptureAvailable(false); });
+      .then((h) => { if (live) setHealth(h); })
+      .catch(() => { if (live) setHealth(null); });
     return () => { live = false; };
   }, []);
+  const captureAvailable = health?.captureMode === true;
+  const fetchCap = parseFetchCap(capMiB, health?.maxFetchBytesCeiling);
 
   // Scope is optional now (S4): a crawl with no scope defaults to the target's
   // host + subdomains server-side (S3); an upload needs no scope at all. So the
   // gate is just the authorization ack plus the mode's own input.
-  const targetReady = mode === "upload" ? file !== null : domain.trim() !== "";
+  const targetReady = mode === "upload" ? file !== null : domain.trim() !== "" && fetchCap !== "invalid";
   const ready = authorizedBy.trim() !== "" && targetReady;
 
   function addHost() {
@@ -113,6 +121,7 @@ export function NewRunPanel() {
           session_id: session.session_id, target: domain.trim(),
           ...(capture && captureAvailable ? { capture: true } : {}),
           ...(scanSuspected ? { scan_suspected: true } : {}),
+          ...(typeof fetchCap === "number" ? { max_fetch_bytes: fetchCap } : {}),
         });
         navigate(`/runs/${run.run_id}`);
         return;
@@ -121,6 +130,7 @@ export function NewRunPanel() {
       const form = new FormData();
       form.append("file", file);
       form.append("session_id", session.session_id);
+      if (mapFile) form.append("map", mapFile);
       // Only send the opt-in when set, mirroring `capture` — keeps the default body lean.
       if (scanSuspected) form.append("scan_suspected", "true");
       const run = await uploadRun(tenantId, form);
@@ -224,8 +234,9 @@ export function NewRunPanel() {
           </span>
         </label>
 
-        {/* NOTE: an "Advanced" fold (e.g. max fetch size, source-map upload) goes here, between
-            the options and the authorization field, once its settings are built (#263). */}
+        <NewRunAdvanced mode={mode} capMiB={capMiB} onCapMiB={setCapMiB}
+          defaultBytes={health?.maxFetchBytes} ceilingBytes={health?.maxFetchBytesCeiling}
+          mapFile={mapFile} onMapFile={setMapFile} />
 
         <div className="nr-field"><label htmlFor="auth">Authorized by</label>
           <input id="auth" value={authorizedBy} placeholder="your name / ticket"
