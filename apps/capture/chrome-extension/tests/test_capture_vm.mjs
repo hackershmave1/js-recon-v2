@@ -6,6 +6,7 @@ import {
   defaultChoice, liveSubtitle, endedBanner, startErrorText, analyzeLabel,
   analyzeOutcome, progressStatus, startEngagement, engagementName,
   newEngagementBody,
+  showStartAction,
   SECRET_HINTS_LABEL, SECRET_HINTS_HELP, secretHintBadge,
 } from '../src/popup/viewmodels/captureVm.js';
 
@@ -158,3 +159,10 @@ assert.equal(
   "Its scripts are not being captured. Add widens this capture's scope to acme-static.com and its subdomains.",
 );
 assert.match(newSiteExplanation('x.io', undefined), /widens this capture's scope/);
+
+// --- Start capture is not offered until a scope is picked (#261) ---
+assert.equal(showStartAction(''), false, 'no scope: no Start action at all');
+assert.equal(showStartAction(null), false);
+assert.equal(showStartAction(undefined), false);
+assert.equal(showStartAction('acme.io'), true, 'scope set: Start is offered');
+console.log('ok');

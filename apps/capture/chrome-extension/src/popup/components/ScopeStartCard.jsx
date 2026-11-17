@@ -1,12 +1,12 @@
 // ScopeStartCard.jsx — the idle popup: scope first, then what to capture into, then Start.
-// Nothing captures until a scope is chosen; Start is disabled until then. The scope is set here,
+// Nothing captures until a scope is chosen; Start is not shown until then. The scope is set here,
 // per capture (it clears at End) — there is no scope editor in Settings any more.
 import { useState } from 'preact/hooks';
 import { C, F } from '../theme.js';
 import { Dot } from './ui.jsx';
 import { PlayIcon, CloseIcon } from '../icons.jsx';
 import { EngagementPicker, EngagementLocked } from './EngagementPicker.jsx';
-import { scopeLabel } from '../viewmodels/captureVm.js';
+import { scopeLabel, showStartAction } from '../viewmodels/captureVm.js';
 
 const sectionLabel = { display: 'block', fontSize: '10.5px', color: C.faint, fontWeight: 700, letterSpacing: '0.8px', marginBottom: '7px' };
 
@@ -87,16 +87,19 @@ export function ScopeStartCard({ vm }) {
           ))}
 
           {!draft && (
-            <form onSubmit={(e) => { e.preventDefault(); if (f.setTypedScope(typed)) setTyped(''); }} style={{ display: 'flex', gap: '7px' }}>
-              <input value={typed} onInput={(e) => setTyped(e.target.value)} aria-label="Scope domain"
-                     placeholder="or type a domain, e.g. acme.io" style={{
-                       flex: 1, minWidth: 0, background: C.inset, border: `1px solid ${C.lineStrong}`, borderRadius: '9px',
-                       padding: '9px 11px', fontFamily: F.mono, fontSize: '12px', color: C.text, outline: 'none'
-                     }} />
-              <button type="submit" disabled={!typed.trim()} style={{
-                flex: '0 0 auto', padding: '0 13px', borderRadius: '9px', border: `1px solid ${C.lineHover}`,
-                background: C.control, color: typed.trim() ? C.textSoft : C.dim, cursor: typed.trim() ? 'pointer' : 'default', fontSize: '12px', fontWeight: 600
-              }}>Set</button>
+            <form onSubmit={(e) => { e.preventDefault(); if (f.setTypedScope(typed)) setTyped(''); }} style={{ display: 'grid', gap: '6px' }}>
+              <label htmlFor="scope-domain" style={{ fontSize: '12px', fontWeight: 700, color: C.text }}>Enter a domain</label>
+              <div style={{ display: 'flex', gap: '7px' }}>
+                <input id="scope-domain" value={typed} onInput={(e) => setTyped(e.target.value)} autoComplete="off" spellcheck={false}
+                       placeholder="e.g. acme.io" style={{
+                         flex: 1, minWidth: 0, background: C.inset, border: `1.5px solid ${C.lineHover}`, borderRadius: '9px',
+                         padding: '10px 11px', fontFamily: F.mono, fontSize: '13px', color: C.text, outline: 'none'
+                       }} />
+                <button type="submit" disabled={!typed.trim()} style={{
+                  flex: '0 0 auto', padding: '0 15px', borderRadius: '9px', border: `1px solid ${C.lineHover}`,
+                  background: C.control, color: typed.trim() ? C.text : C.dim, cursor: typed.trim() ? 'pointer' : 'default', fontSize: '12px', fontWeight: 700
+                }}>Set</button>
+              </div>
             </form>
           )}
         </div>
@@ -124,7 +127,7 @@ export function ScopeStartCard({ vm }) {
         </div>
       )}
 
-      <div style={{ padding: '0 17px 15px' }}>
+      {showStartAction(draft) && <div style={{ padding: '0 17px 15px' }}>
         <button onClick={f.start} disabled={!canStart} style={{
           width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
           padding: '10px', borderRadius: '10px', border: 'none', background: C.lime, color: C.onLime,
@@ -138,7 +141,7 @@ export function ScopeStartCard({ vm }) {
             “Capture every tab” is on: the scope names the session, but every tab is captured.
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }
