@@ -10,6 +10,7 @@ import { useResizableRail } from "../../shell/useResizableRail";
 import { Icon } from "../../shell/icons";
 import { TuningRail } from "../tuning/TuningRail";
 import { useTuningRail } from "../tuning/TuningRailContext";
+import { URL_SOURCE_LABEL, urlSources } from "./urlSource";
 import "./findings.css";
 
 // Real-field facets only. Severity/Scope/Detection-engine/Confidence were omitted while findings
@@ -323,6 +324,7 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                 const evidence = f.type === "endpoint_unresolved"
                   ? f.occurrences.find((o) => o.evidence)?.evidence
                   : null;
+                const pageSources = urlSources(f.occurrences);
                 return (
                   <li key={f.finding_hash} className="fp-li">
                     <input type="checkbox" className="fp-check"
@@ -357,6 +359,12 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                             title="Same finding in other runs of this engagement">{sight}</span>
                         )}
                       </span>
+                      {pageSources.length > 0 && (
+                        <span className="fp-evidence fp-urlsrc"
+                          title="The URL is read from this attribute in the page's HTML">
+                          {URL_SOURCE_LABEL}: {pageSources.join(", ")}
+                        </span>
+                      )}
                       {evidence && (
                         <span className="fp-evidence" title="The call site — where to dig deeper">
                           {evidence}
