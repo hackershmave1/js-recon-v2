@@ -356,9 +356,10 @@ persist the outbox entry before the dedup entry.
 > run assets — the never-executed one the browser never requested — and the extension fetched them WITH
 > that host's cookies (`credentials: 'include'`) and probed their `.map`. Fix: a dependency child is
 > followed only when the ordered rule (`admitDependency`, `modules/script-admission.js`) would CAPTURE it;
-> anything the browser actually loads still goes through `handleRequest` and is quarantined like any
-> undecided host. Re-run: only the 2 in-scope files stored; the 3 browser-loaded out-of-scope scripts
-> (static, dynamic, worker `importScripts`) held for `cdn.other-d44a.test`; no cookies sent to it; the
+> anything the browser actually loads still goes through `handleRequest` and the ordered rule (an unknown
+> host on a known page is quarantined; with no page, `tabId` -1, it is dropped). Re-run: only the 2
+> in-scope files stored; the 3 browser-loaded out-of-scope scripts (static, dynamic, and the worker's
+> `importScripts`, which Chrome tagged with the tab) held for `cdn.other-d44a.test`; no cookies sent to it; the
 > never-executed one never fetched. The concern that deferred this (cross-origin app chunks) is now met by
 > ADR-0010: such a chunk is quarantined and analyzed on Add. Tests: `tests/test_script_admission.mjs`,
 > `tests/test_script_admission_wiring.mjs`.

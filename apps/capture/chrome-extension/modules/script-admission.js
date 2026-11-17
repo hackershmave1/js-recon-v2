@@ -46,7 +46,7 @@ export function admitScript({
 // is followed only when the rule would CAPTURE it (DEBT D44a). The parent was admitted, so its page
 // is ours and the child inherits it; what is left is the host and third-party rules. Anything else is
 // not followed: the extension never fetches it, and if the browser itself loads it, that request goes
-// through admitScript like any other and an unknown host is quarantined.
+// through admitScript like any other (an unknown host on a known page is quarantined).
 export function admitDependency({
   captureEverything = false,
   thirdPartyFile = false,
