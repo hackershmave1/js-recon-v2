@@ -254,20 +254,36 @@ def _static_host(url: str) -> str | None:
     return None if "${" in parts.netloc else host
 
 
-def first_party_hosts(session: Session, run: Run) -> list[str] | None:
-    """The run's first-party hosts for display: the session's scope plus its engagement's
-    in-scope domains, apex-expanded. With none declared (most extension captures), the hosts the
-    run's assets were captured from stand in. ``None`` when there is nothing to go on."""
+def declared_scope_hosts(session: Session, session_id: str) -> list[str] | None:
+    """The session's DECLARED first-party scope (its scope plus its engagement's in-scope
+    domains, apex-expanded), with no fallback to the hosts a run happened to capture from;
+    ``None`` when nothing is declared. For a filter that must give the same answer for every
+    batch of a capture (the extension's tech signal, D77): the asset-host fallback of
+    :func:`first_party_hosts` grows as files arrive."""
+    entries = _declared_scope_entries(session, session_id)
+    if not entries:
+        return None
+    return expand_scope_for_display(entries, allow_local=get_settings().allow_local_egress)
+
+
+def _declared_scope_entries(session: Session, session_id: str) -> list[str]:
     scope = session.scalar(
-        select(EngagementSession.scope_hosts).where(EngagementSession.id == run.session_id)
+        select(EngagementSession.scope_hosts).where(EngagementSession.id == session_id)
     )
     entries = [str(h) for h in scope or []]
     domains = session.scalar(
         select(Engagement.in_scope_domains)
         .join(EngagementSession, EngagementSession.engagement_id == Engagement.id)
-        .where(EngagementSession.id == run.session_id)
+        .where(EngagementSession.id == session_id)
     )
-    entries += [str(d) for d in domains or []]
+    return entries + [str(d) for d in domains or []]
+
+
+def first_party_hosts(session: Session, run: Run) -> list[str] | None:
+    """The run's first-party hosts for display: the session's scope plus its engagement's
+    in-scope domains, apex-expanded. With none declared (most extension captures), the hosts the
+    run's assets were captured from stand in. ``None`` when there is nothing to go on."""
+    entries = _declared_scope_entries(session, str(run.session_id))
     if not entries:
         asset_urls = session.scalars(select(RunAsset.url).where(RunAsset.run_id == run.id)).all()
         entries = sorted(

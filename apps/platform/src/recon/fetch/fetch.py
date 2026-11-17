@@ -678,9 +678,9 @@ def _fetch_assets(
     NOTE: because ``signal`` is local to THIS call, a redelivered/retried
     invocation (a crash or lease-timeout mid-crawl, per the idempotency note
     above) skips already-terminal assets without re-harvesting them, so its own
-    end-of-call write reflects only the assets fetched in that invocation — a
-    known limitation of "one write per call", not per logical run, tracked as
-    follow-up debt rather than solved here."""
+    end-of-call write reflects only the assets fetched in that invocation. The
+    analyze pass merges EVERY ``fingerprint.signal`` blob of the run (D77), so the
+    earlier invocation's write still counts."""
     engagement, run_cap = _authorized_engagement(tenant_id, run_id)
     settings = get_settings()
     cap = clamp_fetch_bytes(run_cap, settings)

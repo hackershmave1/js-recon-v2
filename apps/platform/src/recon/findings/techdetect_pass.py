@@ -1,8 +1,8 @@
 """Analyze's best-effort per-host tech-detection fingerprint pass (Task 8).
 
-Runs AFTER per-asset analysis (Vespasian/Kingfisher): loads the run's ONE
-``fingerprint-signal`` blob (Tasks 6/7 — allowlisted headers/scripts/meta/cookies
-per host), matches it against the vendored dataset via ``techdetect.detect``
+Runs AFTER per-asset analysis (Vespasian/Kingfisher): loads and merges the run's
+``fingerprint-signal`` blobs (Tasks 6/7, plus one per extension upload batch, D77 —
+allowlisted headers/scripts/meta/cookies per host), matches it against the vendored dataset via ``techdetect.detect``
 (Tasks 2-5), and upserts ``run_technology`` per ``(run_id, host, name)`` (T3).
 
 This module raises normally — a ``ControlInterrupt`` (REQ-A4) from a mid-pass
@@ -14,20 +14,17 @@ so the pass can never fail the run (T2), re-raising only the control interrupt.
 
 from __future__ import annotations
 
-import json
-from typing import Any
 from urllib.parse import urlsplit
 
 from redis import Redis
-from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from recon import storage
 from recon.db.base import tenant_session
-from recon.db.models import RunEvent, RunTechnology
+from recon.db.models import RunTechnology
 from recon.events.log import publish, record_event
-from recon.findings import techdetect
+from recon.findings import techdetect, techdetect_signal
 from recon.observability import get_logger
 from recon.progress import heartbeat as progress
 from recon.runs import assets as run_assets
@@ -35,16 +32,16 @@ from recon.runs import queries as run_queries
 
 log = get_logger("recon.findings.techdetect_pass")
 
-_MAX_SIGNAL_BYTES = 2_000_000  # cap on the loaded signal blob (best-effort, bounded)
 _MAX_JS_BYTES_PER_HOST = 2_000_000  # cap on JS fed to the scripts-field matcher, per host
 
 
 def run_fingerprint_pass(redis: Redis, *, tenant_id: str, run_id: str, job_id: str | None) -> None:
-    """Detect per-host technologies from the run's fingerprint-signal blob and upsert
-    ``run_technology`` (T3). Heartbeats + checks control between hosts (REQ-A4). A
+    """Detect per-host technologies from the run's (merged) fingerprint signal and upsert
+    ``run_technology`` (T3). The signal is the merge of every producer's blobs
+    (``techdetect_signal``). Heartbeats + checks control between hosts (REQ-A4). A
     run with no fingerprint-signal event (no crawl/capture producer ran, or a legacy
     upload run) is a silent no-op — there is nothing to detect."""
-    signal = _load_fingerprint_signal(tenant_id, run_id)
+    signal = techdetect_signal.load_fingerprint_signal(tenant_id, run_id)
     if not signal:
         return
     js_by_host = _js_texts_by_host(tenant_id, run_id, hosts=set(signal))
@@ -79,28 +76,6 @@ def run_fingerprint_pass(redis: Redis, *, tenant_id: str, run_id: str, job_id: s
         )
     publish(redis, event)  # commit-then-publish (REQ-R2)
     log.info("analyze.technologies", run_id=run_id, hosts=host_counts)
-
-
-def _load_fingerprint_signal(tenant_id: str, run_id: str) -> dict[str, Any]:
-    """The latest ``fingerprint.signal`` blob for the run as ``{host: HostSignal}``,
-    size-capped; ``{}`` if absent/oversized/invisible."""
-    with tenant_session(tenant_id) as session:
-        payload = session.scalar(
-            select(RunEvent.payload)
-            .where(RunEvent.run_id == str(run_id), RunEvent.type == "fingerprint.signal")
-            .order_by(RunEvent.id.desc())
-        )
-    if not payload:
-        return {}
-    ref = payload.get("signal_ref")
-    if not ref:
-        return {}
-    raw = storage.get_blob(ref)
-    if len(raw) > _MAX_SIGNAL_BYTES:
-        log.warning("analyze.fingerprint_signal_oversized", run_id=run_id, bytes=len(raw))
-        return {}
-    data = json.loads(raw.decode("utf-8"))
-    return data if isinstance(data, dict) else {}
 
 
 def _js_texts_by_host(tenant_id: str, run_id: str, *, hosts: set[str]) -> dict[str, list[str]]:

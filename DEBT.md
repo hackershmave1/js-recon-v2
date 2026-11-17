@@ -395,7 +395,7 @@ reads keep only the resolved value, not the declarator node.
 **Fix:** carry the declarator's byte span on the declared `RawEndpoint` (as `mark_start_byte` /
 `mark_end_byte`), so `analyze._endpoint_view` locates it like any other endpoint.
 
-### 2026-11-04 QA run (recon-range) — OPEN (D77)
+### 2026-11-04 QA run (recon-range) — RESOLVED (D77)
 
 #### D77 · Extension captures never get technology detection [M]  ·  recall
 
@@ -409,4 +409,23 @@ while the run is active) instead of a misleading 0 (`detection_ran`).
 **Fix:** the extension already uploads each file's response `headers` and URL; build the same
 fingerprint-signal from the run's captured files at analyze time (allowlist the same headers), so the
 existing pass runs unchanged.
+
+> ✅ **RESOLVED** (2026-11-17, #269). No extension change: `/api/save-files` builds a per-batch
+> fingerprint signal from each stored file's uploaded `headers` + URL (`capture/ingest_signal.py`,
+> the same `_allowlisted_headers`/`_cookie_names` choke point as the crawl/capture producers) and
+> records its `fingerprint.signal` event in the batch's own row transaction. The analyze pass now
+> MERGES every `fingerprint.signal` blob of a run (oldest first, headers later-wins, total bytes
+> capped) instead of reading the latest only — which also closes the crawl's redelivered-fetch
+> partial-signal caveat. Review fixes: only files from the session's DECLARED scope contribute (T1
+> parity with `capture/stage._build_signal`; no declared scope = keep all); the budget caps what the
+> merge ADDS (repeated per-batch headers cost nothing) and stops downloading once spent; a pass that
+> merged new blobs stores a `fingerprint.merged` blob naming the refs it covers, so later passes read
+> only new ones (`findings/techdetect_signal.py`). Still no `meta` for extension runs (it uploads
+> scripts, not the HTML document); uploads and legacy single-URL runs still have no signal.
+>
+> **Left open (small, follow-ups):** (a) hosts promoted from quarantine (`quarantine/service._promote`)
+> write no signal, so their scripts are not tech-scanned; (b) tech rows are not hidden read-time when a
+> host is later REMOVED from scope (findings are, #218) — `list_technologies`, `hosts.py` and the
+> threat-model context read `run_technology` unfiltered; (c) the extension keeps one value per header
+> and registers no `extraHeaders`, so Set-Cookie names are mostly absent from extension signals.
 

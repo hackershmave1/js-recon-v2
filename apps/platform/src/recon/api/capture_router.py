@@ -46,13 +46,15 @@ from sqlalchemy.exc import IntegrityError
 from recon import storage
 from recon.api.deps import get_redis
 from recon.auth import token as auth_token
+from recon.capture import ingest_signal
 from recon.config import get_settings
 from recon.db.base import admin_session, tenant_session
 from recon.db.models import EngagementSession, Job, Run, RunAsset, Tenant
 from recon.discover import manifest as discovery
 from recon.domain import TERMINAL_STATES, AssetStatus, DiscoveryStatus, RunStage, RunState
 from recon.engagements import service as engagements_service
-from recon.events.log import emit, publish
+from recon.events.log import emit, publish, record_event
+from recon.findings import visibility
 from recon.observability import get_logger
 from recon.runs import assets, capture_lifecycle, captured_versions, coordinator
 from recon.runs import service as runs_service
@@ -476,6 +478,7 @@ def _seed_fetched_assets(
     max_versions: int,
     *,
     open_capture_of: str | None = None,
+    signal_ref: str | None = None,
 ) -> tuple[int, int]:
     """Seed this batch's stored files as ``run_asset`` rows in ONE transaction — every
     version of a re-captured url kept (``assets.add_captured_versions``) — and mark each file
@@ -502,6 +505,17 @@ def _seed_fetched_assets(
         # Same transaction as the rows: an analyzed capture's next pass is scheduled atomically
         # with the files it must cover (a crash between two commits would strand them).
         capture_lifecycle.note_batch(session, run_id)
+        if signal_ref is not None:
+            # D77: index this batch's fingerprint signal in the rows' own transaction, so a
+            # batch refused as ended leaves no signal behind. Recorded, not published (the
+            # analyze pass reads the durable log), like the crawl/capture producers.
+            record_event(
+                session,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                event_type="fingerprint.signal",
+                payload={"signal_ref": signal_ref, "source": "extension"},
+            )
     for url in added.versions:
         log.info("capture.asset_version_added", run_id=run_id, url=url)
     for asset, result in uploads:
@@ -512,6 +526,30 @@ def _seed_fetched_assets(
             result.update(stored=False, error="asset removed during upload")
             log.warning("capture.asset_vanished", run_id=run_id, url=asset.url)
     return added.total, len(added.versions)
+
+
+def _store_batch_signal(
+    tenant_id: str, run_id: str, session_id: str, files: list[tuple[str, Any]]
+) -> str | None:
+    """Store this batch's tech-detection fingerprint signal (DEBT D77) and return its ref.
+
+    Only files from the session's declared scope count (T1 parity with the server-side
+    capture). Best-effort enrichment: a failure is logged and the batch still lands (its files
+    are the durable part). A retried batch re-stores the same content-addressed blob."""
+    try:
+        with tenant_session(tenant_id) as session:
+            scope = visibility.declared_scope_hosts(session, session_id)
+        signal = ingest_signal.build_batch_signal(
+            files, scope_hosts=scope, allow_local=get_settings().allow_local_egress
+        )
+        if not signal:
+            return None
+        return storage.put_blob(
+            tenant_id, run_id, "fingerprint-signal", json.dumps(signal).encode("utf-8")
+        )
+    except Exception as exc:  # noqa: BLE001 - never fail a batch over enrichment
+        log.warning("capture.fingerprint_signal_failed", run_id=run_id, error=str(exc))
+        return None
 
 
 @router.post("/save-files")
@@ -564,6 +602,7 @@ def save_files(
     file_results: list[dict] = []
     uploads: list[tuple[captured_versions.CapturedAsset, dict]] = []
     seen: set[tuple[str, str]] = set()  # (url, content sha) already in this batch
+    signal_inputs: list[tuple[str, Any]] = []  # (url, uploaded response headers), D77
     failed = 0
     total_bytes = 0
     # Timing observability (§5): the batch is stored synchronously and the response
@@ -629,6 +668,7 @@ def save_files(
             log.error("capture.save_files.blob_failed", url=url, error=str(exc))
             raise HTTPException(status_code=503, detail="blob storage unavailable") from exc
         total_bytes += len(data)
+        signal_inputs.append((url, f.get("headers")))
         result = {"url": url, "contentHash": content_hash, "runId": run_id, "stored": True}
         file_results.append(result)
         uploads.append(
@@ -649,6 +689,7 @@ def save_files(
                 uploads,
                 settings.capture_max_versions_per_url,
                 open_capture_of=ext_session_id if explicit_run is not None else None,
+                signal_ref=_store_batch_signal(tenant_id, run_id, session_id, signal_inputs),
             )
         except _CaptureEnded:
             return _ended_capture_batch(tenant_id, run_id, payload, paired, session_id)
