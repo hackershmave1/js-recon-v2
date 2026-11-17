@@ -10,7 +10,7 @@ import { useResizableRail } from "../../shell/useResizableRail";
 import { Icon } from "../../shell/icons";
 import { TuningRail } from "../tuning/TuningRail";
 import { useTuningRail } from "../tuning/TuningRailContext";
-import { URL_SOURCE_LABEL, urlSources } from "./urlSource";
+import { URL_SOURCE_LABEL, rowUrlSourceText, urlSources } from "./urlSource";
 import "./findings.css";
 
 // Real-field facets only. Severity/Scope/Detection-engine/Confidence were omitted while findings
@@ -361,8 +361,8 @@ export function FindingsPage({ data, runId, onJumpToSource }: {
                       </span>
                       {pageSources.length > 0 && (
                         <span className="fp-evidence fp-urlsrc"
-                          title="The URL is read from this attribute in the page's HTML">
-                          {URL_SOURCE_LABEL}: {pageSources.join(", ")}
+                          title={`The URL is read from the page's HTML: ${pageSources.join(", ")}`}>
+                          {URL_SOURCE_LABEL}: {rowUrlSourceText(pageSources)}
                         </span>
                       )}
                       {evidence && (

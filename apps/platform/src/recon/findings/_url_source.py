@@ -32,7 +32,14 @@ _MAX_TOKENS = 3  # distinct sources shown per occurrence
 _NAME = re.compile(r"[A-Za-z_][\w:.-]{0,63}")
 _ATTR_METHODS = frozenset({"attr", "prop", "getAttribute"})
 _CHAIN_OPERATORS = frozenset({"+", "||", "??"})
-_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_UPPER = re.compile(r"[A-Z]")
+# Receivers whose `.action` is a form's action: `form`, `searchForm`, `this.form`, an event's
+# `target` / `currentTarget`. Anything else (`this.props.action`, a Redux `payload.action`) is a
+# JS value, not the page, so it gets no token.
+_FORM_RECEIVERS = frozenset({"target", "currenttarget", "srcelement"})
+# Native DOM properties that end in `Value` but are not Stimulus values.
+_NATIVE_VALUE_PROPS = frozenset({"defaultValue", "nodeValue"})
+_MORE = "…"  # marks that more sources existed than `_MAX_TOKENS`
 
 
 def url_source_token(node: Node | None) -> str | None:
@@ -42,11 +49,14 @@ def url_source_token(node: Node | None) -> str | None:
     tokens: list[str] = []
     budget = [_MAX_VISITS]
     _collect(node, 0, budget, tokens)
+    if len(tokens) > _MAX_TOKENS:  # never drop sources silently
+        tokens = [*tokens[:_MAX_TOKENS], _MORE]
     return " ".join(tokens) if tokens else None
 
 
 def _collect(node: Node, depth: int, budget: list[int], tokens: list[str]) -> None:
-    if depth >= _MAX_DEPTH or budget[0] <= 0 or len(tokens) >= _MAX_TOKENS:
+    # One extra token is collected so the caller can tell "exactly 3" from "more than 3".
+    if depth >= _MAX_DEPTH or budget[0] <= 0 or len(tokens) > _MAX_TOKENS:
         return
     budget[0] -= 1
     children: list[Node | None] = []
@@ -103,8 +113,8 @@ def _call_token(call: Node) -> str | None:
         return None
     if method in _ATTR_METHODS:
         return "{attr:" + name + "}"
-    if method == "data":
-        return "{data:" + name + "}"
+    if method == "data":  # jQuery maps `data("ajaxUrl")` and `data("ajax-url")` to one attribute
+        return "{data:" + _kebab(name) + "}"
     if method == "get" and _text_if_short(fn.child_by_field_name("object")) == "this.data":
         return "{stimulus:" + name + "}"
     return None
@@ -112,20 +122,33 @@ def _call_token(call: Node) -> str | None:
 
 def _member_token(node: Node) -> str | None:
     """``this.minifyUrlValue`` -> ``{stimulus:minify-url}``; ``el.dataset.validationUrl`` ->
-    ``{data:validation-url}``; ``form.action`` -> ``{form:action}``; ``a.href`` -> ``{attr:href}``."""
+    ``{data:validation-url}``; ``form.action`` / ``e.target.action`` -> ``{form:action}``.
+
+    A bare ``.href`` gets NO token: ``url.href``, ``new URL(..).href`` and HAL
+    ``_links.next.href`` hold JS / API-response values, not markup, so naming an attribute there
+    would send the researcher to search the DOM for something that isn't in it."""
     prop = _text_if_short(node.child_by_field_name("property"))
     obj = node.child_by_field_name("object")
     if obj is None or not _NAME.fullmatch(prop):
         return None
-    if obj.type == "this" and prop.endswith("Value") and len(prop) > len("Value"):
+    if (
+        obj.type == "this"
+        and prop.endswith("Value")
+        and len(prop) > len("Value")
+        and prop not in _NATIVE_VALUE_PROPS
+    ):
         return "{stimulus:" + _kebab(prop[: -len("Value")]) + "}"
-    if _last_segment(obj) == "dataset":
+    receiver = _last_segment(obj)
+    if receiver == "dataset":
         return "{data:" + _kebab(prop) + "}"
-    if prop == "action":
+    if prop == "action" and _is_form_receiver(receiver):
         return "{form:action}"
-    if prop == "href" and _last_segment(obj) != "location":  # `location.href` is the page itself
-        return "{attr:href}"
     return None
+
+
+def _is_form_receiver(name: str) -> bool:
+    lowered = name.lower()
+    return lowered.endswith("form") or lowered in _FORM_RECEIVERS
 
 
 def _subscript_token(node: Node) -> str | None:
@@ -154,5 +177,6 @@ def _last_segment(node: Node) -> str:
 
 def _kebab(camel: str) -> str:
     """The HTML attribute spelling of a DOM ``dataset`` / Stimulus value key — the spec's own
-    camelCase -> kebab-case mapping, so the token names what is literally in the markup."""
-    return _CAMEL_BOUNDARY.sub("-", camel).lower()
+    camelCase -> kebab-case mapping (a ``-`` before EVERY capital: ``apiURL`` -> ``api-u-r-l``, as
+    the DOM and Stimulus do), so the token names what is literally in the markup."""
+    return _UPPER.sub(lambda match: "-" + match.group().lower(), camel)

@@ -183,7 +183,9 @@ value / form field an unresolved URL is read from (`{attr:data-url}`, `{stimulus
 `{form:action}`, built by `recon.findings._url_source`). It lives on the occurrence, outside both
 hashes, and never enters `value`, so the skeleton (`GET EXPR`, `POST :action`) and its triage are
 unchanged. Accepted trade-off: two sites with one skeleton but different attributes stay ONE finding;
-each occurrence keeps its own token.
+each occurrence keeps its own token. Rows recorded before 0040 read `url_source = NULL`, and
+re-analyzing an existing run does not backfill them (occurrences insert `ON CONFLICT DO NOTHING`);
+a new run carries the token.
 
 - `value` is Unicode **NFC-normalized** before serialization, so two builds differing only in composition form don't churn the D5 diff (review LOW-5).
 - `v` (`FINDING_HASH_VERSION`) ⇒ a future identity change bumps it, giving a disjoint hash space and a clean new-runs-only rollout (no false "all removed + all added" against older runs).

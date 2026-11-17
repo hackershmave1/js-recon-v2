@@ -36,7 +36,11 @@ CASES = {
     'fetch(this.data.get("url"))': ("GET EXPR", "{stimulus:url}"),
     'fetch(form.action, {method: "POST"})': ("POST :action", "{form:action}"),
     "fetch(e.target.action)": ("GET :action", "{form:action}"),
-    "fetch(link.href)": ("GET :href", "{attr:href}"),
+    'fetch($(a).attr("href"))': ("GET EXPR", "{attr:href}"),
+    'fetch($(el).data("ajaxUrl"))': ("GET EXPR", "{data:ajax-url}"),
+    "fetch(el.dataset.apiURL)": ("GET :apiURL", "{data:api-u-r-l}"),
+    "fetch(this.form.action)": ("GET :action", "{form:action}"),
+    "fetch(searchForm.action)": ("GET :action", "{form:action}"),
     "axios.post(this.urlValue, body)": ("POST :urlValue", "{stimulus:url}"),
     'x.open("GET", $(el).data("url"))': ("GET EXPR", "{data:url}"),
     "new WebSocket(this.element.dataset.socketUrl)": ("WS :socketUrl", "{data:socket-url}"),
@@ -100,6 +104,14 @@ def test_two_sources_both_shown_in_order():
         'fetch($(el).attr("{evil}"))',  # would break the token: refused
         "fetch(window.location.href)",  # the page itself, not an attribute
         "fetch(getUrl())",
+        # Review of #235: shapes whose value lives in JS memory / an API response, not the HTML.
+        "fetch(link.href)",
+        "fetch(new URL(p, base).href)",
+        "fetch(data._links.next.href)",
+        "fetch(this.props.action)",
+        'fetch(payload.action + "/x")',
+        "fetch(this.defaultValue)",
+        "fetch(this.nodeValue)",
     ],
 )
 def test_no_token_when_the_source_is_not_the_page(source):
@@ -142,4 +154,11 @@ def test_token_walk_is_bounded_on_a_huge_concat_chain():
     for _ in range(200):
         token = url_source_token(node)
     assert time.perf_counter() - start < 1.0
-    assert token is not None and token.count("{attr:") == 3
+    assert token is not None and token.count("{attr:") == 3 and token.endswith(" …")
+
+
+def test_more_sources_than_the_cap_are_marked_not_dropped_silently():
+    row = _only_unresolved(
+        " + ".join(f'$(e).attr("data-k{i}")' for i in range(4)).join(("fetch(", ")"))
+    )
+    assert row.url_source == "{attr:data-k0} {attr:data-k1} {attr:data-k2} …"
