@@ -48,6 +48,9 @@ def test_health_reports_contract_version(capture_client):
         "allowLocalTargets": False,
         # Additive: the runtime-capture kill-switch, read by New Recon to show the option.
         "captureMode": False,
+        # Additive: the crawl fetch-size default + override ceiling (New Recon's Advanced fold).
+        "maxFetchBytes": get_settings().max_fetch_bytes,
+        "maxFetchBytesCeiling": get_settings().max_fetch_bytes_ceiling,
     }
     assert isinstance(capture_router.CAPTURE_CONTRACT_VERSION, str)
 

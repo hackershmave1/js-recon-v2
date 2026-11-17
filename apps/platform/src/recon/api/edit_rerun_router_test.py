@@ -176,6 +176,21 @@ def test_rerun_cap_above_ceiling_is_rejected(tenant, redis):
     assert _run_count(client, tenant, session_id) == 1  # nothing persisted
 
 
+def test_new_crawl_with_a_cap_persists_it_for_the_rerun_prefill(tenant, redis):
+    # New Recon's Advanced fold sends max_fetch_bytes on POST /runs; it is stored on the
+    # run (not silently dropped), so Edit & re-run prefills it.
+    client = _client()
+    session_id = _session(client, tenant)
+    r = client.post(
+        "/runs",
+        headers=_hdr(tenant),
+        json={"session_id": session_id, "target": "acme.io", "max_fetch_bytes": 25 * 1024 * 1024},
+    )
+    assert r.status_code == 202, r.text
+    cfg = client.get(f"/runs/{r.json()['run_id']}/config", headers=_hdr(tenant)).json()
+    assert cfg["max_fetch_bytes"] == 25 * 1024 * 1024
+
+
 def test_rerun_cross_tenant_is_404(tenant, redis):
     client = _client()
     session_id = _session(client, tenant)

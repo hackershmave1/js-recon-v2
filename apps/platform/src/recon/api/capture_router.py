@@ -107,6 +107,10 @@ def capture_health() -> dict:
         # The runtime-capture kill-switch (RECON_ENABLE_CAPTURE_MODE), so New Recon offers the
         # "Runtime capture" option only where a crawl run can use it (POST /runs still 400s).
         "captureMode": get_settings().enable_capture_mode,
+        # The crawl fetch-size default and the per-run override ceiling, so New Recon's
+        # Advanced fold shows this server's real values instead of a hardcoded guess.
+        "maxFetchBytes": get_settings().max_fetch_bytes,
+        "maxFetchBytesCeiling": get_settings().max_fetch_bytes_ceiling,
     }
 
 
