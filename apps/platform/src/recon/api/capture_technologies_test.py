@@ -144,3 +144,73 @@ def test_a_capture_with_no_headers_still_detects_from_script_bytes(client, redis
     with tenant_session(tenant) as s:
         names = set(s.scalars(select(RunTechnology.name)).all())
     assert "Ember.js" in names
+
+
+def _signal_events(tenant: str, run_id: str) -> list[dict]:
+    with tenant_session(tenant) as s:
+        return list(
+            s.scalars(
+                select(RunEvent.payload).where(
+                    RunEvent.run_id == run_id, RunEvent.type == "fingerprint.signal"
+                )
+            ).all()
+        )
+
+
+def test_an_off_scope_third_party_gets_no_signal_and_no_tech_row(client, redis):
+    # The capture declared acme.io; the page also loaded a tag manager. T1 parity with the
+    # server-side capture: its headers and URL are never persisted, and it gets no row.
+    sid = str(uuid.uuid4())
+    run_id = _capture(
+        client,
+        sid,
+        [
+            _file("https://app.acme.io/a.js", "a()", sid, {"server": "nginx"}),
+            _file("https://www.googletagmanager.com/gtm.js", "g()", sid, {"server": "Apache"}),
+        ],
+    )
+    tenant = _tenant(client)
+    [payload] = _signal_events(tenant, run_id)
+    assert set(json.loads(storage.get_blob(payload["signal_ref"]))) == {"app.acme.io"}
+
+    analyze.analyze_run(redis, tenant_id=tenant, run_id=run_id)
+
+    with tenant_session(tenant) as s:
+        hosts = set(s.scalars(select(RunTechnology.host)).all())
+    assert hosts == {"app.acme.io"}
+
+
+def test_a_batch_refused_as_ended_records_no_signal(client, monkeypatch):
+    # The signal event rides the batch's row transaction: a batch whose capture closed while it
+    # uploaded rolls back with no signal left behind.
+    from recon.runs import capture_lifecycle
+
+    sid = str(uuid.uuid4())
+    r = client.post(f"/api/sessions/{sid}/capture/start", json={"rootDomains": ["acme.io"]})
+    run_id = r.json()["runId"]
+    monkeypatch.setattr(capture_lifecycle, "accept_batch", lambda *a, **k: False)
+
+    saved = client.post(
+        "/api/save-files",
+        json={
+            "metadata": {"sessionId": sid, "runId": run_id},
+            "files": [_file("https://app.acme.io/a.js", "a()", sid, {"server": "nginx"})],
+        },
+    )
+
+    assert saved.status_code == 409
+    assert _signal_events(_tenant(client), run_id) == []
+
+
+def test_a_signal_store_failure_never_fails_the_batch(client, monkeypatch):
+    from recon.capture import ingest_signal
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("signal builder exploded")
+
+    monkeypatch.setattr(ingest_signal, "build_batch_signal", boom)
+    sid = str(uuid.uuid4())
+
+    run_id = _capture(client, sid, [_file("https://app.acme.io/a.js", "a()", sid, {"server": "x"})])
+
+    assert _signal_events(_tenant(client), run_id) == []

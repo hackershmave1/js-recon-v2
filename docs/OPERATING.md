@@ -175,9 +175,10 @@ fingerprint dataset. A detection made only from a JS window-global (a bundled SP
 **suspected** with no version — static source carries no runtime value, so those are deliberately
 capped, never asserted as "certain".
 
-Detection needs the response headers and page signals a crawl collects. Extension captures, uploads
-and single-URL runs don't provide them yet (DEBT D77), so their Tech stack reads **not collected**
-(unknown) rather than 0; while a run is still active it reads **awaiting analysis**.
+Detection needs the response headers and script URLs a crawl or capture collects. Extension captures
+use the headers the extension uploads with each in-scope file (no `<meta generator>`: it uploads
+scripts, not the page). Uploads and single-URL runs carry no such signal, so their Tech stack reads
+**not collected** (unknown) rather than 0; while a run is still active it reads **awaiting analysis**.
 
 ### API Spec (OpenAPI export)
 

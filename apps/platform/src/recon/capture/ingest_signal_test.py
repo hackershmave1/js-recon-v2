@@ -67,3 +67,25 @@ def test_malformed_headers_and_urls_are_skipped_never_raised() -> None:
 
 def test_empty_batch_is_an_empty_signal() -> None:
     assert build_batch_signal([]) == {}
+
+
+def test_a_file_from_an_off_scope_host_contributes_nothing() -> None:
+    # T1 parity with the server-side capture: a third party the page loaded (ads, analytics,
+    # a CDN outside the declared scope) never has its headers or URL persisted.
+    signal = build_batch_signal(
+        [
+            ("https://app.acme.io/a.js", {"server": "nginx"}),
+            ("https://www.googletagmanager.com/gtm.js", {"server": "Google Tag Manager"}),
+        ],
+        scope_hosts=["acme.io"],
+    )
+
+    assert set(signal) == {"app.acme.io"}
+
+
+def test_no_declared_scope_keeps_every_host() -> None:
+    signal = build_batch_signal(
+        [("https://a.io/x.js", None), ("https://b.io/y.js", None)], scope_hosts=None
+    )
+
+    assert set(signal) == {"a.io", "b.io"}

@@ -115,8 +115,8 @@ def analyze_run(
     no-op.
 
     Both branches then flow through a best-effort per-host tech-detection
-    fingerprint pass (tech-detection slice, Task 8): it loads the run's
-    ``fingerprint-signal`` blob (Tasks 6/7) and upserts ``run_technology``. This
+    fingerprint pass (tech-detection slice, Task 8): it merges the run's
+    ``fingerprint-signal`` blobs (Tasks 6/7, D77) and upserts ``run_technology``. This
     is enrichment, not a finding — it is swallowed and logged on any failure so
     it can never fail the run (T2), and it never affects the returned
     ``Coverage``."""

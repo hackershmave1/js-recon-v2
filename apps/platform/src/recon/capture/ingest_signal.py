@@ -8,9 +8,10 @@ already uploads every file's response ``headers`` (lowercased, from
 from one ``/api/save-files`` batch, through the SAME allowlist choke point as the other
 two producers, so the existing pass runs unchanged.
 
-Scope: the signal covers exactly the files the batch stored. Those are the files analyze
-reads, so header-derived detections sit on the same hosts as the script-derived ones —
-no host appears in the tech stack that the run did not also analyze.
+Scope: like the server-side capture producer (``capture.stage._build_signal``), a file served
+by a host outside the session's DECLARED scope contributes nothing — its headers, cookie names
+and URL are never persisted (T1), so an ad/analytics/CDN third party the page loaded gets no
+tech-stack row. With no declared scope there is nothing to be outside of, and every file counts.
 """
 
 from __future__ import annotations
@@ -18,12 +19,19 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlsplit
 
+from recon.fetch import egress
 from recon.fetch.fetch import _allowlisted_headers, _cookie_names
 
 
-def build_batch_signal(files: list[tuple[str, Any]]) -> dict[str, dict]:
+def build_batch_signal(
+    files: list[tuple[str, Any]],
+    *,
+    scope_hosts: list[str] | None = None,
+    allow_local: bool = False,
+) -> dict[str, dict]:
     """``{host: {headers, scripts, meta, cookies}}`` for one batch of stored files, given
-    each file's ``(url, uploaded headers)``. TOTAL: the headers come from an untrusted
+    each file's ``(url, uploaded headers)``; ``scope_hosts`` (``None`` = none declared) drops
+    every file served by an off-scope host. TOTAL: the headers come from an untrusted
     client, so a malformed url or headers value is skipped, never raised (a raise here
     would 5xx an otherwise durable batch). ``meta`` stays empty — the extension uploads
     scripts, not the HTML document a ``<meta generator>`` lives in."""
@@ -35,11 +43,16 @@ def build_batch_signal(files: list[tuple[str, Any]]) -> dict[str, dict]:
             continue  # e.g. an unterminated IPv6 literal
         if not host:
             continue
+        if scope_hosts is not None and not egress.host_in_scope(
+            host, scope_hosts, allow_local=allow_local
+        ):
+            continue
         entry = signal.setdefault(host, {"headers": {}, "scripts": [], "meta": [], "cookies": []})
         headers = _lowercased(raw_headers)
         entry["headers"].update(_allowlisted_headers(headers))
-        # webRequest folds a repeated header into one value; a multi-cookie Set-Cookie
-        # arrives "\n"-joined, the same shape the CDP capture path splits.
+        # Best-effort: the extension keeps one value per header name (the last), and Chrome
+        # may withhold Set-Cookie from webRequest without "extraHeaders", so cookie names are
+        # often absent. Split on "\n" in case a client sends the CDP-style joined form.
         set_cookie = headers.get("set-cookie")
         if set_cookie:
             for name in _cookie_names(set_cookie.split("\n")):

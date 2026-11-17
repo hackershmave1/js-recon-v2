@@ -53,6 +53,7 @@ from recon.discover import manifest as discovery
 from recon.domain import TERMINAL_STATES, AssetStatus, DiscoveryStatus, RunStage, RunState
 from recon.engagements import service as engagements_service
 from recon.events.log import emit, publish, record_event
+from recon.findings import visibility
 from recon.observability import get_logger
 from recon.runs import assets, capture_lifecycle, captured_versions, coordinator
 from recon.runs import service as runs_service
@@ -511,13 +512,20 @@ def _seed_fetched_assets(
     return added.total, len(added.versions)
 
 
-def _store_batch_signal(tenant_id: str, run_id: str, files: list[tuple[str, Any]]) -> str | None:
+def _store_batch_signal(
+    tenant_id: str, run_id: str, session_id: str, files: list[tuple[str, Any]]
+) -> str | None:
     """Store this batch's tech-detection fingerprint signal (DEBT D77) and return its ref.
 
-    Best-effort enrichment: a failure is logged and the batch still lands (its files are
-    the durable part). A retried batch re-stores the same content-addressed blob."""
+    Only files from the session's declared scope count (T1 parity with the server-side
+    capture). Best-effort enrichment: a failure is logged and the batch still lands (its files
+    are the durable part). A retried batch re-stores the same content-addressed blob."""
     try:
-        signal = ingest_signal.build_batch_signal(files)
+        with tenant_session(tenant_id) as session:
+            scope = visibility.declared_scope_hosts(session, session_id)
+        signal = ingest_signal.build_batch_signal(
+            files, scope_hosts=scope, allow_local=get_settings().allow_local_egress
+        )
         if not signal:
             return None
         return storage.put_blob(
@@ -665,7 +673,7 @@ def save_files(
                 uploads,
                 settings.capture_max_versions_per_url,
                 open_capture_of=ext_session_id if explicit_run is not None else None,
-                signal_ref=_store_batch_signal(tenant_id, run_id, signal_inputs),
+                signal_ref=_store_batch_signal(tenant_id, run_id, session_id, signal_inputs),
             )
         except _CaptureEnded:
             return _ended_capture_batch(tenant_id, run_id, payload, paired, session_id)

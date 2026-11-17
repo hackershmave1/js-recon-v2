@@ -194,7 +194,7 @@ class TechnologiesView:
     run_id: str
     hosts: dict[str, list[TechnologyView]]
     # Whether detection ran at all. It needs a fingerprint signal (response headers, script URLs)
-    # that crawls and server-side captures collect and extension captures do not yet (DEBT D77):
+    # that crawls and captures (server-side or extension, D77) collect and uploads do not:
     # False means "not collected", which the UI must not show as "0 technologies".
     detection_ran: bool = True
 
