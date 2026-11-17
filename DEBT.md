@@ -350,10 +350,20 @@ persist the outbox entry before the dedup entry.
 > 🟡 **PARTIAL 2026-09-04** (PR #126). Shipped (c) out-of-scope script-host discovery — the worker
 > records out-of-scope `type:script` hosts (bounded, session-scoped, workspace/denylist-filtered), and Home
 > shows them with a one-click "+ add"; and (b) an in-app confirm before enabling `captureEverything`.
-> **STILL OPEN:** (a) dependency-child chunks bypass the scope gate — deferred deliberately because gating
-> children by `isInScope` risks dropping legitimately-discovered in-scope app chunks served cross-origin (the
-> ESM/webpack chunk-discovery differentiator), so it needs its own adversarial design review; and (b)
-> `captureEverything` auto-expire / per-tab arming (the confirm lands the headline safety win).
+> ✅ **(a) RESOLVED 2026-11-17** (#271). Proven open first in a real run (built extension, Chromium
+> chromium-1234, :8000 stack): an in-scope `app.d44a.test` module with a static `import`, a dynamic
+> `import()` and a never-executed `import()` of `cdn.other-d44a.test` files stored all three as analyzed
+> run assets — the never-executed one the browser never requested — and the extension fetched them WITH
+> that host's cookies (`credentials: 'include'`) and probed their `.map`. Fix: a dependency child is
+> followed only when the ordered rule (`admitDependency`, `modules/script-admission.js`) would CAPTURE it;
+> anything the browser actually loads still goes through `handleRequest` and is quarantined like any
+> undecided host. Re-run: only the 2 in-scope files stored; the 3 browser-loaded out-of-scope scripts
+> (static, dynamic, worker `importScripts`) held for `cdn.other-d44a.test`; no cookies sent to it; the
+> never-executed one never fetched. The concern that deferred this (cross-origin app chunks) is now met by
+> ADR-0010: such a chunk is quarantined and analyzed on Add. Tests: `tests/test_script_admission.mjs`,
+> `tests/test_script_admission_wiring.mjs`.
+> **STILL OPEN:** (b) `captureEverything` auto-expire / per-tab arming (the confirm lands the headline
+> safety win).
 Three scope-enforcement / rules-of-engagement gaps: (a) **dependency-child chunks bypass the scope
 gate** — resolved child URLs are captured/uploaded with `isInScope` deliberately skipped (only denylist
 + exclude-mode-only third-party filtering apply), and the default `outOfScopeMode` is `tag`, so an

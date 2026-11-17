@@ -24,7 +24,7 @@ import { CaptureApi } from './modules/capture-api.js';
 import { loadSavedTeamRules, syncTeamRules, resetTeamRules, STORAGE_KEY as TEAM_RULES_KEY } from './modules/team-rules.js';
 import { CaptureLifecycle, badgeText } from './modules/capture-lifecycle.js';
 import { apexForHost, isNoiseHost } from './modules/capture-scope.js';
-import { ADMIT, admitScript } from './modules/script-admission.js';
+import { ADMIT, admitDependency, admitScript } from './modules/script-admission.js';
 import { topFramePageHost } from './modules/top-frame-page.js';
 import { QuarantineQueue } from './modules/quarantine-queue.js';
 
@@ -455,6 +455,18 @@ class JSExtractor {
     try { return new URL(url).hostname.toLowerCase(); } catch (e) { return ''; }
   }
 
+  // The facts of one dependency child (a URL found inside a captured script), judged by the rule.
+  admitDependencyUrl(url) {
+    const host = this.hostOf(url);
+    return admitDependency({
+      captureEverything: this.settings.captureEverything === true,
+      thirdPartyFile: matchesThirdPartyFile(url),
+      thirdPartyHost: isNoiseHost(host),
+      scriptInScope: this.isInScope(url),
+      ignored: this.capture.isIgnoredSite(host),
+    });
+  }
+
   // A script that is not captured. Offering the host (the "new site seen" prompt) still happens for
   // an unknown host; a quarantined script is additionally held by the platform until the researcher
   // decides, but only for a host actually on offer (the offer list is bounded).
@@ -749,10 +761,13 @@ class JSExtractor {
       if (!this.isLikelyScriptResource(depUrl)) {
         continue;
       }
-      // Dependency children must honour the same third-party rules
-      // as top-level requests (isInScope is intentionally NOT applied here —
-      // dependency resolution may legitimately pull cross-scope libraries).
       if (this.shouldSkipUrl(depUrl)) {
+        continue;
+      }
+      // A child is followed only if the ordered rule would capture it (DEBT D44a): an `import` of
+      // another site's file must not be fetched with its cookies and uploaded as analyzed code. If
+      // the browser loads it, handleRequest quarantines it like any undecided host.
+      if (this.admitDependencyUrl(depUrl) !== ADMIT.CAPTURE) {
         continue;
       }
       if (!this.session.capturedFiles.has(depUrl)) {

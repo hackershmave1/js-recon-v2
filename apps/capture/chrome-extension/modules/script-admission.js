@@ -41,3 +41,21 @@ export function admitScript({
   if (!pageKnown) return ADMIT.DROP_UNKNOWN_PAGE;
   return ADMIT.QUARANTINE;
 }
+
+// A script URL found INSIDE a captured script (`import`, `import()`, `require`, a webpack deps array)
+// is followed only when the rule would CAPTURE it (DEBT D44a). The parent was admitted, so its page
+// is ours and the child inherits it; what is left is the host and third-party rules. Anything else is
+// not followed: the extension never fetches it, and if the browser itself loads it, that request goes
+// through admitScript like any other and an unknown host is quarantined.
+export function admitDependency({
+  captureEverything = false,
+  thirdPartyFile = false,
+  thirdPartyHost = false,
+  scriptInScope,
+  ignored = false,
+}) {
+  return admitScript({
+    captureEverything, pageKnown: true, pageInScope: true,
+    thirdPartyFile, thirdPartyHost, scriptInScope, ignored,
+  });
+}
