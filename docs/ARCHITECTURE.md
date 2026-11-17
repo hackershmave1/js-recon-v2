@@ -231,7 +231,7 @@ to the right tenant.
 
 | route | purpose |
 |---|---|
-| `POST /api/save-files` | batched JSON push of captured files; accumulates into the capture session's single open run — one `run_asset` row per file, pre-marked `fetch_ok`, blobs to S3. Binds a valid `projectId`→engagement defensively (an unknown id is ignored, never dropping the batch). |
+| `POST /api/save-files` | batched JSON push of captured files; accumulates into the capture session's single open run — one `run_asset` row per file, pre-marked `fetch_ok`, blobs to S3. Binds a valid `projectId`→engagement defensively (an unknown id is ignored, never dropping the batch). The binding is set only when the session is created (keyed by the extension's `sessionId`), so batches for a session whose engagement was later deleted keep landing in that same, now standalone, session. |
 | `POST /api/sessions/{id}/analyze/start` | emits `discover.assets` and enqueues one worker walk; the pre-fetched assets make DISCOVER/FETCH no-op (no katana, no network egress of captured URLs), so only ANALYZE does real work. |
 | `GET /api/sessions/{id}/analyze/progress` | adapts the run's per-asset status into the popup's counts+files `job` shape. |
 | `GET\|POST /api/projects` | adapts platform engagements to the extension's project shape (a bare JSON array, `id`, a synthesized `defaults.scope`). |
@@ -270,7 +270,9 @@ capture yields duplicate findings across two runs (REQ-D5 keeps findings per-run
 collapses this at read time: each finding carries **sightings** — counts of *other runs in the same
 engagement* sharing its `finding_hash`, split by origin (`capture` = extension session, `platform` =
 crawl/upload), or `null` when the run's session has no engagement (surfaced in the workspace as a
-per-finding badge or a "group under an engagement" hint).
+per-finding badge or a "group under an engagement" hint). Deleting an engagement
+(`DELETE /engagements/{id}`) detaches its sessions in the same transaction (they become
+standalone; nothing else is deleted), so their sightings read `null` from then on.
 
 ## Convergence history (v1 retired)
 
