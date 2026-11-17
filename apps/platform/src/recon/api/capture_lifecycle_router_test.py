@@ -179,7 +179,7 @@ def test_lookup_finds_the_session_for_a_scope(client, monkeypatch):
     assert match["captures"] == 1
     assert c.get(
         "/api/capture/sessions", params={"scope": "beta.example"}, headers=auth
-    ).json() == {"sessions": []}
+    ).json() == {"sessions": [], "workspace": []}
 
 
 def test_lookup_requires_a_login(client):
@@ -264,3 +264,91 @@ def test_progress_names_its_run_and_can_be_asked_for_one(client):
     assert latest["runId"] == first  # the latest analyzed run, now named
     assert mine["runId"] == second
     assert mine["job"]["counts"]["total"] == 0  # idle: nothing analyzed for THIS capture yet
+
+
+# --- ADR-0012: adopt a session started in the workspace ---------------------------------------
+
+
+def _workspace_session_for(auth_client, headers) -> str:
+    tenant = auth_client.tenant_id
+    from recon.sessions import service as sessions_service
+
+    return sessions_service.create_session(
+        tenant, name="crawl", scope_hosts=["acme.io"], authorized_by="t"
+    ).id
+
+
+def _operator_with_tenant(monkeypatch):
+    c, auth = _operator(monkeypatch)
+    from recon.auth import token as auth_token
+
+    c.tenant_id = auth_token.verify(auth["Authorization"].split()[1], key=_AUTH_KEY).tenant_id
+    return c, auth
+
+
+def test_adopt_requires_a_login(client):
+    r = client.post(f"/api/capture/sessions/{uuid.uuid4()}/adopt")
+    assert r.status_code == 401
+
+
+def test_lookup_lists_workspace_sessions_without_an_id(client, monkeypatch):
+    c, auth = _operator_with_tenant(monkeypatch)
+    sid = _workspace_session_for(c, auth)
+
+    body = c.get("/api/capture/sessions", params={"scope": "acme.io"}, headers=auth).json()
+
+    assert body["sessions"] == []
+    (w,) = body["workspace"]
+    assert w["session_id"] == sid and "external_id" not in w
+
+
+def test_adopt_then_capture_lands_in_the_same_session_and_a_second_adopt_is_refused(
+    client, monkeypatch
+):
+    c, auth = _operator_with_tenant(monkeypatch)
+    sid = _workspace_session_for(c, auth)
+
+    first = c.post(f"/api/capture/sessions/{sid}/adopt", headers=auth)
+    assert first.status_code == 200, first.text
+    ext = first.json()["externalId"]
+    assert first.json()["sessionId"] == sid
+
+    # the extension's Start with the minted id joins the SAME session
+    started = c.post(
+        f"/api/sessions/{ext}/capture/start", json={"rootDomains": ["acme.io"]}, headers=auth
+    )
+    assert started.status_code == 200, started.text
+    assert started.json()["sessionId"] == sid
+
+    second = c.post(f"/api/capture/sessions/{sid}/adopt", headers=auth)
+    assert second.status_code == 409
+    assert second.json()["detail"] == "already_adopted" and ext not in second.text
+
+
+def test_adopting_a_session_of_another_tenant_is_404(client, monkeypatch):
+    mine, auth = _operator_with_tenant(monkeypatch)
+    from recon.sessions import service as sessions_service
+
+    other = sessions_service.create_tenant(f"other-{uuid.uuid4().hex[:6]}")
+    foreign = sessions_service.create_session(
+        other, name="x", scope_hosts=["acme.io"], authorized_by="t"
+    ).id
+
+    r = mine.post(f"/api/capture/sessions/{foreign}/adopt", headers=auth)
+
+    assert r.status_code == 404
+    assert (
+        mine.get("/api/capture/sessions", params={"scope": "acme.io"}, headers=auth).json()[
+            "workspace"
+        ]
+        == []
+    )
+
+
+def test_adopt_with_a_web_origin_is_refused(client, monkeypatch):
+    c, auth = _operator_with_tenant(monkeypatch)
+    sid = _workspace_session_for(c, auth)
+    r = c.post(
+        f"/api/capture/sessions/{sid}/adopt", headers={**auth, "Origin": "https://evil.example"}
+    )
+    assert r.status_code == 403

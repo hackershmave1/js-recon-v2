@@ -27,7 +27,8 @@ export function useCaptureFlow({
 }) {
   const phase = capturePhase(status);
   const [scope, setScopeState] = useState(readDraft);
-  const [lookup, setLookup] = useState({ state: 'idle', sessions: [] });
+  const [lookupTick, setLookupTick] = useState(0);  // bumped to re-read the Continue list
+  const [lookup, setLookup] = useState({ state: 'idle', sessions: [], workspace: [] });
   const [choice, setChoice] = useState('new');
   const [busy, setBusy] = useState('');  // the action in flight ('start' | 'end' | ...), for disabling
 
@@ -37,25 +38,26 @@ export function useCaptureFlow({
   // is running (`ready`: the worker's real status has arrived, so "idle" is not just the default).
   // A failed lookup still lets you start a New session.
   useEffect(() => {
-    if (!ready || !scope || phase !== 'idle') { setLookup({ state: 'idle', sessions: [] }); return undefined; }
+    if (!ready || !scope || phase !== 'idle') { setLookup({ state: 'idle', sessions: [], workspace: [] }); return undefined; }
     let alive = true;
-    setLookup({ state: 'loading', sessions: [] });
+    setLookup({ state: 'loading', sessions: [], workspace: [] });
     api.captureLookup(scope).then((res) => {
       if (!alive) return;
       if (res?.ok) {
         const sessions = Array.isArray(res.sessions) ? res.sessions : [];
-        setLookup({ state: 'ready', sessions });
-        setChoice(defaultChoice(continueOptions(sessions, [], scope)));
+        const workspace = Array.isArray(res.workspace) ? res.workspace : [];
+        setLookup({ state: 'ready', sessions, workspace });
+        setChoice(defaultChoice(continueOptions(sessions, [], scope, workspace)));
       } else {
         if (res?.status === 401) onSessionExpired();
-        setLookup({ state: 'error', sessions: [] });
+        setLookup({ state: 'error', sessions: [], workspace: [] });
         setChoice('new');
       }
     });
     return () => { alive = false; };
-  }, [scope, phase, ready]);
+  }, [scope, phase, ready, lookupTick]);
 
-  const options = continueOptions(lookup.sessions, projects, scope);
+  const options = continueOptions(lookup.sessions, projects, scope, lookup.workspace);
   const picked = options.find((o) => o.key === choice) || null;
 
   async function run(name, action) {
@@ -74,7 +76,7 @@ export function useCaptureFlow({
     const engagement = startEngagement(projectId, projects, projectsLoaded);
     if (!picked && engagement.wait) { showToast('Loading engagements…'); return; }
     const payload = picked
-      ? { scope, mode: 'continue', match: { external_id: picked.match.external_id, engagement_id: picked.match.engagement_id || null, captures: picked.match.captures || 0 } }
+      ? { scope, mode: 'continue', match: { external_id: picked.match.external_id || null, workspace_session_id: picked.match.workspace_session_id || null, engagement_id: picked.match.engagement_id || null, captures: picked.match.captures || 0 } }
       : { scope, mode: 'new', projectId: engagement.projectId };
     const res = await run('start', () => api.captureStart(payload));
     if (res?.ok) {
@@ -82,6 +84,9 @@ export function useCaptureFlow({
       onCaptureStarted();
       showToast(`Capturing ${scopeLabel(scope)}`);
     } else {
+      // Another extension (or the workspace) took the session first: it now has an id, so re-read
+      // the Continue list and offer it from there.
+      if (res?.error === 'already_adopted') setLookupTick((n) => n + 1);
       fail(res, startErrorText(res));
     }
   }

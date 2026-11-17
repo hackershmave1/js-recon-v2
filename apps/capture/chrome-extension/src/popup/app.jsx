@@ -228,17 +228,16 @@ export function App() {
     }
   }
 
-  function openWorkspace() {
-    const base = settings?.workspaceUrl || 'http://localhost:8000';
-    // Deep-link the current capture session so the workspace opens INTO it instead of
-    // defaulting to whatever run is newest. This id is the EXTENSION's session id (the
-    // backend session's external_id, NOT its primary key); the workspace resolves
-    // ?capture=<external_id> to that session's latest run. Bare URL when none is known yet.
+  async function openWorkspace() {
+    // The extension's session id (the backend session's external_id, NOT its primary key); the
+    // workspace resolves ?capture=<external_id> to that session's latest run.
     const sid = status.capture?.sessionId || status.lastEnded?.sessionId || status?.sessionId;
-    const url = sid
-      ? `${base}${base.includes('?') ? '&' : '?'}capture=${encodeURIComponent(sid)}`
-      : base;
-    api.openTab(url);
+    // The worker builds the URL: when signed in it adds a single-use handoff code in the URL
+    // fragment so the workspace signs you in (ADR-0011); otherwise the bare URL, as before.
+    const res = await api.workspaceUrl(sid || '');
+    if (res?.url) { api.openTab(res.url); return; }
+    const base = settings?.workspaceUrl || 'http://localhost:8000';
+    api.openTab(sid ? `${base}${base.includes('?') ? '&' : '?'}capture=${encodeURIComponent(sid)}` : base);
   }
 
   async function testConnection() {

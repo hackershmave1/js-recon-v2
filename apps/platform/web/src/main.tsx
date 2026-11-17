@@ -1,3 +1,6 @@
+// MUST stay the first import: lifts the extension handoff code out of the URL fragment before
+// anything else (router, React) can read `location` (ADR-0011).
+import "./auth/handoffFragment";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter } from "react-router";

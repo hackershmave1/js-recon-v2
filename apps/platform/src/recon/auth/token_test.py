@@ -74,3 +74,21 @@ def test_empty_and_malformed_rejected() -> None:
     assert auth_token.verify("not-a-token", key=KEY) is None
     assert auth_token.verify(_mint(), key="") is None  # empty key never verifies
     assert auth_token.verify("\x80.\x80", key=KEY) is None  # non-ascii never raises
+
+
+def test_verify_exposes_exp_and_mint_accepts_an_absolute_expiry() -> None:
+    import time
+
+    now = time.time()
+    tok = auth_token.mint(
+        user_id="u",
+        tenant_id="t",
+        role="r",
+        key="k",
+        ttl_seconds=3600,
+        now=now,
+        expires_at=int(now) + 60,
+    )
+    claims = auth_token.verify(tok, key="k", now=now)
+    assert claims is not None and claims.exp == int(now) + 60
+    assert auth_token.verify(tok, key="k", now=now + 61) is None

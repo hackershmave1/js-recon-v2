@@ -209,13 +209,47 @@ def test_add_widens_scope_and_promotes_into_normal_run_assets(world):
     assert _admit(world)[0].outcome == service.IN_SCOPE
 
 
-def test_add_after_the_capture_ended_promotes_and_says_it_needs_a_rerun(world):
+def _session_runs(tenant, session_id):
+    with tenant_session(tenant) as session:
+        return list(
+            session.scalars(select(models.Run).where(models.Run.session_id == session_id)).all()
+        )
+
+
+def test_add_after_the_capture_ended_goes_to_a_followup_run_that_is_analyzed_on_its_own(
+    world, redis
+):
+    from recon.runs import capture_pass
+
+    tenant, session_id, _ = world
+    done = _run(tenant, session_id, "done")
+    _admit(world, run_id=done)
+    result = service.decide(
+        tenant_id=tenant, session_id=session_id, host=HOST, decision="add", redis=redis
+    )
+    assert result.promoted == 1
+    outcome = result.analysis[done]
+    assert outcome.startswith("followup:")
+    followup = outcome.split(":", 1)[1]
+    # A finished run is an immutable snapshot: it is untouched, the scripts live in a new run of the
+    # same session, which is sealed and already has its analysis pass queued (no button to press).
+    assert _run_assets(tenant, done) == []
+    assert [a.url for a in _run_assets(tenant, followup)] == [f"https://{HOST}/app.js"]
+    with tenant_session(tenant) as session:
+        run = session.get(models.Run, followup)
+        assert run.capture_external_id is None and str(run.session_id) == session_id
+        assert capture_pass.has_job(session, followup)
+    assert (
+        len(_session_runs(tenant, session_id)) == 3
+    )  # the open capture, the finished one, the follow-up
+
+
+def test_a_followup_that_cannot_start_is_reported_not_an_error(world):
     tenant, session_id, _ = world
     done = _run(tenant, session_id, "done")
     _admit(world, run_id=done)
     result = service.decide(tenant_id=tenant, session_id=session_id, host=HOST, decision="add")
     assert result.promoted == 1 and result.analysis == {done: "needs_rerun"}
-    assert len(_run_assets(tenant, done)) == 1
 
 
 # --- compare-and-set -------------------------------------------------------------------------- #

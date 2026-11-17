@@ -52,7 +52,24 @@ export function engagementName(engagementId, projects) {
 
 // One "Continue" option per session whose scope holds this entry (the server's lookup). The largest
 // capture is shown rather than the latest, so a big earlier run stays in view.
-export function continueOptions(sessions, projects, scope) {
+export function continueOptions(sessions, projects, scope, workspaceSessions = []) {
+  const adoptable = (workspaceSessions || []).filter((m) => m && m.session_id && !m.external_id).map((m) => {
+    const runs = Number(m.runs) || 0;
+    const parts = ['started in the workspace', plural(runs, 'run')];
+    return {
+      key: `ws:${m.session_id}`,
+      match: { workspace_session_id: m.session_id, engagement_id: m.engagement_id || null, captures: 0 },
+      title: `Continue “${scope}”`,
+      engagement: engagementName(m.engagement_id, projects),
+      line: parts.join(' · '),
+      best: '',
+      workspace: true,
+    };
+  });
+  return [...mapSessions(sessions, projects, scope), ...adoptable];
+}
+
+function mapSessions(sessions, projects, scope) {
   return (sessions || []).filter((m) => m && m.external_id).map((match) => {
     const parts = [plural(match.captures || 0, 'capture')];
     if (match.last_capture_at) {
@@ -100,6 +117,8 @@ export function startErrorText(res) {
   if (error === 'session_expired') return 'Session expired — sign in to start';
   if (error === 'capture_in_progress') return 'A capture is already running';
   if (error === 'no_scope') return 'Set a scope to start';
+  if (error === 'already_adopted') return 'That session was just taken by another capture; pick it again from the list';
+  if (error === 'no_match') return 'That session is no longer available';
   return 'Could not start the capture';
 }
 

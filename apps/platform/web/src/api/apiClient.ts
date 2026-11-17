@@ -78,6 +78,19 @@ export async function login(username: string, password: string): Promise<LoginRe
   return res.json() as Promise<LoginResult>;
 }
 
+// POST /auth/handoff/exchange — spend a single-use handoff code (ADR-0011). Throws ApiError;
+// the caller shows NO error detail (a failed handoff falls back to the login screen).
+export async function exchangeHandoffCode(code: string): Promise<LoginResult> {
+  const res = await fetch("/auth/handoff/exchange", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ code }),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new ApiError(res.status, "handoff failed");
+  return res.json() as Promise<LoginResult>;
+}
+
 // The capture health probe (public): carries the stack's local-targets switch.
 export interface ServerHealth { status: string; allowLocalTargets?: boolean; }
 export async function getServerHealth(): Promise<ServerHealth> {
@@ -297,7 +310,7 @@ export function removeScopeHost(tenantId: string, sessionId: string, host: strin
 // Add or Ignore for a host whose scripts are held, undecided.
 export function decideHost(
   tenantId: string, sessionId: string, host: string, decision: "add" | "ignore",
-): Promise<{ state: string; promoted: number; deleted: number; recrawl?: { source_run_id: string; run_id: string | null; error?: string } | null }> {
+): Promise<{ state: string; promoted: number; deleted: number; analysis?: Record<string, string>; recrawl?: { source_run_id: string; run_id: string | null; error?: string } | null }> {
   return request(
     `/sessions/${encodeURIComponent(sessionId)}/hosts/${encodeURIComponent(host)}/decision`,
     json("POST", { decision }), tenantId,

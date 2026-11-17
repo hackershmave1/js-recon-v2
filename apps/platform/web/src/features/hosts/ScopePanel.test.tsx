@@ -144,6 +144,39 @@ describe("ScopePanel", () => {
   });
 });
 
+describe("Add after a capture ended", () => {
+  beforeEach(() => {
+    localStorage.setItem("recon.tenantId", "123e4567-e89b-12d3-a456-426614174000");
+    vi.clearAllMocks();
+    vi.mocked(api.getSessionScope).mockResolvedValue(full);
+  });
+
+  it("says the scripts are analyzed in a new run (no button to press)", async () => {
+    vi.mocked(api.decideHost).mockResolvedValueOnce({ state: "added", promoted: 1, deleted: 1, analysis: { "run-1": "followup:run-2" } });
+    show();
+    const group = await screen.findByRole("region", { name: "Waiting for your decision" });
+    await userEvent.click(within(group).getByRole("button", { name: "Add" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(/being analyzed in a new run of this session/);
+  });
+
+  it("reports a follow-up that could not start", async () => {
+    vi.mocked(api.decideHost).mockResolvedValueOnce({ state: "added", promoted: 1, deleted: 1, analysis: { "run-1": "needs_rerun" } });
+    show();
+    const group = await screen.findByRole("region", { name: "Waiting for your decision" });
+    await userEvent.click(within(group).getByRole("button", { name: "Add" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(/analysis didn't start/);
+  });
+
+  it("says nothing extra when the run was still open (scheduled)", async () => {
+    vi.mocked(api.decideHost).mockResolvedValueOnce({ state: "added", promoted: 1, deleted: 1, analysis: { "run-1": "scheduled" } });
+    show();
+    const group = await screen.findByRole("region", { name: "Waiting for your decision" });
+    await userEvent.click(within(group).getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(api.decideHost).toHaveBeenCalled());
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
 describe("expiryLabel", () => {
   const now = Date.parse("2026-11-16T00:00:00Z");
   it("counts the days until held scripts are deleted", () => {
