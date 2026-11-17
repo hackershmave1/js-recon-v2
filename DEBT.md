@@ -11,23 +11,42 @@ Effort: S (hours) · M (a day-ish) · L (multi-day).
 > history - `git log -p -- DEBT.md` recovers the full "why isn't X done" trail. This register now tracks
 > only the currently-open items.
 
+> **Pruned (2026-11-17, #214):** resolved and obsolete entries (D40-D43, D45, D47-D53, D55-D63, D67, D68,
+> D71, D74, D85) were removed. They live in git history: `git log -p -- DEBT.md`.
+
+## Priority (agreed 2026-11-17, #214)
+
+**Now** - wrong or missing results, or the capture path misleads you:
+- ~~**D69 + D70** (#267)~~ ✅ resolved by PR #277: session-rotation races could bleed captures into the wrong engagement or session. Its review found **D86** (old-session outbox files upload with the new binding), not yet ranked.
+- **D80** (#268): webpack module identity breaks recall on the most common bundler; the scoped fix is known.
+- **D77** (#269): every extension capture shows "no tech stack", and the extension is now the main capture path.
+- **D64** (#270): the threat model is generic without call-site code; the design is already decided.
+- **D44a check** (#271): re-check whether the ADR-0010 quarantine already closes the cross-origin-import scope bypass; Now only if it still leaks.
+
+**Next** - real but narrower:
+- **D78**: stale `localhost` crawl scope still reaches katana; one filter call, and fail-closed is a repo invariant.
+- **D82 + D83**: later capture passes miss earlier files and re-read everything; routine under the multi-pass model, fix together.
+- **D84**: an identity bump during an open capture duplicates findings; cheap, only bites around a deploy.
+- **D81**: the extension CI lane can pass a hung suite; cheap CI-trust fix.
+- **D66**: the 5-minute orphan window lets a direct API call re-trigger a long threat-model run and pay twice.
+- **D65**: a saved hyphenated model id may point at a dead model with no Settings flag.
+- **D75**: huge bundles lose jump-to-location marks in Pretty print; raw mode is a workaround.
+
+**Later** - rare, accepted, or maintainability:
+- **D76**: base-URL rows show "no exact location"; cosmetic, the finding is correct.
+- **D79**: rare URL shapes stay as two rows; accepted, fix only if seen in data.
+- **D44b**: `captureEverything` has no auto-expire; low frequency since the confirm shipped.
+- **D46**: Burp/Caido/HAR export is a feature, not a defect.
+- **D54c**: a second operator needs the `seed-admin` CLI; solo use is the stated audience.
+- **D72**: a rare delete race orphans two blobs; same accepted class as D47, wait for the storage GC.
+- **D73**: files over the 300-line cap; split `threat_model/service.py` as part of D64.
+
 ## Open debt
 
-### 2026-11-03 extension end-to-end walkthrough — RESOLVED (D71) · OPEN (D78)
+### 2026-11-03 extension end-to-end walkthrough — OPEN (D78–D81)
 
 Found while driving the unpacked extension against the live stack (the findings-summary 404 found in the
 same walkthrough was fixed with it).
-
-#### D71 · An IP-literal capture scope makes `/api/save-files` return 500, and the extension retries forever [S]  ·  correctness
-
-> ✅ **RESOLVED** (2026-11-04). Wider than recorded: `localhost` hit it too on the default stack. Capture scope is display-only, so `sessions.capture_scope_hosts` now leaves out entries the server can't accept (an IP literal; `localhost` unless the dev switch is on) instead of failing the upload. The switch is passed through compose, reported by `/api/health` and the Settings page, and the Hosts tab explains a local host that can't be in scope.
-
-`sessions/service.py:_resolve_scope_hosts` rejects an IP-literal scope host (e.g. `127.0.0.1`) by design, but
-the `SessionInvalid` it raises escapes `capture_router.save_files` → `_get_or_create_session` as an HTTP 500.
-The extension treats 500 as retryable, so the popup shows "1 pending" indefinitely with no reason given.
-
-**Fix:** map `SessionInvalid` to a 4xx in the capture ingest, and have the extension surface a non-retryable
-scope error (or reject IP-literal scopes in the popup's scope field up front).
 
 #### D81 · extension CI lane passes a test suite that hangs [S]  ·  ci
 
@@ -70,70 +89,6 @@ scope stored while the switch was on (`["acme.io","localhost"]`) keeps `-crawl-s
 turned off. Bounded by the seed guard, `-field-scope rdn` and the `_revalidate` post-filter; katana's own
 requests are the documented residual. **Fix:** filter `scope_hosts` through `egress.is_valid_scope_entry`
 with the current flag in `build_argv`.
-
-### 2026-09-06 extension swarm review — OPEN (D55–D63)
-
-Uncovered by a 5-agent Google-engineer-style review of the chrome-extension against MV3 best-practices
-guidance. Cross-cutting theme: the extension capture core is well-built, but has gaps in SW-respawn
-fidelity, security trust boundaries, and test safety nets. Tier-1 items below are mostly small verified
-fixes; Tier-2 items are background risks and maintainability. Evidence is `file:line` at time of review.
-
-#### D55 · SW respawn zeroes delivery health display + byte cap escapes per-respawn [S]  ·  reliability — Tier 1
-> ✅ **RESOLVED** (6d086e8). `BatchUploader` accepts an `onStatsChange` callback; `restoreStats()` rehydrates `uploadedFiles`/`droppedFiles`/`failedBatches` from `chrome.storage.local` on cold start. `totalCapturedBytes` reconstructed from persisted metadata. `processingTimer` initialized to `null` in constructor. `syncResponseBodyHook()` awaited in `initialize()`.
-
-`batchUploader.stats` (`uploadedFiles`, `droppedFiles`, `failedBatches`, `lastError`) are in-memory only; every MV3 service-worker respawn (triggered by ~30 s of inactivity) resets them to zero. The popup's delivery health strip goes dark and reports "health: ok / uploaded: 0" after any tab-switch or idle, destroying operator trust. Compounding issues: `totalCapturedBytes` (the 200 MB session cap, `background.js:69`) also resets, making the cap per-SW-lifetime rather than per-session; `syncResponseBodyHook()` is called without `await` in `initialize()` (`background.js:166`) so the XHR hook may be unregistered when the first requests arrive post-respawn; and `this.processingTimer` is never initialized in the constructor (`background.js:49–146`), creating a latent undefined where a null is expected. **Fix:** persist stats to `chrome.storage.local` via an `onStatsChange` callback in `BatchUploader` and restore in `initialize()`; reconstruct `totalCapturedBytes` by summing `contentLength` from `capturedFilesMeta` on rehydration; `await this.syncResponseBodyHook()`; add `this.processingTimer = null` in constructor.
-
-#### D56 · Extension CWS blockers: placeholder icons + dead `downloads` permission [S]  ·  correctness — Tier 1
-> ✅ **RESOLVED** (a9827de + 6d086e8). Icons replaced with real-sized 16×16, 48×48, 128×128 PNGs (branding commit). `downloads` permission removed from manifest (was already absent in 6d086e8 pass).
-
-All three declared icons (`icons/icon16.png`, `icons/icon48.png`, `icons/icon128.png`) are identical 68-byte 1×1 pixel PNGs — confirmed by MD5 hash and IHDR inspection. CWS automated review checks pixel dimensions; a 1×1 PNG for a 128×128 slot triggers rejection. The `"downloads"` permission (`manifest.json:13`) is declared but never used: the file export uses a `<a download>` anchor + Blob URL (`src/popup/api.js:59–71`), not `chrome.downloads`. Both are first-submission blockers. **Fix:** generate real 16×16, 48×48, 128×128 pixel PNG icons; remove `"downloads"` from the permissions array.
-
-#### D57 · `credentials: 'include'` in content-script fetch enables SSRF-style reads via `sourceMappingURL` [S]  ·  supply-chain/security — Tier 1
-> ✅ **RESOLVED** (6d086e8). `fetchFromPage` uses `credentials: 'omit'`. Cross-origin source map URLs are rejected in `sourcemap-detector.js` origin-match guard.
-
-`fetchFromPage` in `content-script.js:27` uses `credentials: 'include'`, forwarding the user's browser cookies on every URL the extension fetches for JS/map content. A hostile in-scope page can set `//# sourceMappingURL=https://internal.corp/sensitive-resource` and the extension will fetch that URL with the operator's session cookies — a credentialed read of an arbitrary internal resource. `sourcemap-detector.js` resolves absolute source-map URLs without checking that the map's origin matches the parent JS file's origin, so any `sourceMappingURL` pointing cross-origin is followed. **Fix:** change `credentials: 'include'` to `credentials: 'omit'` in `fetchFromPage` (JS/map assets don't need cookies — `ContentFetcher` handles auth-gated assets via captured webRequest headers); add an origin-match guard in `sourcemap-detector.js` to reject cross-origin source map URLs.
-
-#### D58 · Workspace URL injection — social-engineered operator exfiltrates all captured data [M]  ·  supply-chain/security — Tier 2
-> ✅ **RESOLVED** (6d086e8). `resolveApiBase()` in `workspace-client.js` validates the scheme via `new URL()` and falls back to `http://localhost:8000` for any non-`http:`/`https:` scheme. Active workspace URL is visible in the popup Settings view.
-
-`workspace-client.js:resolveApiBase()` uses the user-supplied `workspaceUrl` setting verbatim, with no scheme validation beyond stripping trailing slashes. A tricked operator entering `http://attacker.com` as their workspace URL causes the extension to POST all captured JS files, captured auth headers (Authorization, Cookie, x-api-key), and the operator's own Bearer token to the attacker's server. The attack also works via `normalizeEndpoint` in `batch-uploader.js` which constructs upload targets from the same setting. Non-`http/https` schemes (e.g., `file://`, `javascript://`) are also accepted. **Fix:** validate scheme in `resolveApiBase()` — reject non-`http:`/`https:` schemes with a localhost fallback; surface the active workspace URL prominently in the popup so operators can detect a wrong value.
-
-#### D59 · Auth token over-exposed across three surfaces [M]  ·  supply-chain/security — Tier 2
-> ✅ **Content-script access closed** (2026-11-04, `modules/message-sender.js` + `modules/storage-access.js`). Verified in real Chrome from the content script's isolated world on a web page — before: a forged `updateSettings` re-pointed `workspaceUrl`, a forged `getExportData` returned every capture, and `chrome.storage.local` (exposed to content scripts by default) yielded the Bearer token and accepted a new `workspaceUrl`; after: commands from the wrong sender get `forbidden`, `storage.local` is `TRUSTED_CONTEXTS` (set on every worker start, which also wakes on browser start/install), and the content script reads only the `isCapturing` bit from `storage.session`. So (c) below is no longer "co-installed extensions" only — our own content script was the closer reader, and it is closed. Known trade-off: page notices from a web frame embedded in a NON-tab surface (another extension's popup, a side panel) carry no `sender.tab` and are dropped; `<script src>` loads there are still captured via webRequest.
-> ✅ **RESOLVED** (6d086e8). (a) `getStatus` strips the raw `authToken` — returns `'session'` (truthy) or `''` instead of the literal token value. (b) Raw auth header values in the IDB outbox are necessary for the upload path; accepted risk documented here — platform must not log them server-side. (c) `chrome.storage.local` readable by co-installed extensions is an accepted risk for the professional-use audience.
-
-Three independent exposures of the operator's Bearer token beyond its minimum necessary scope: (a) **`getStatus` leaks the raw token** — `background.js:~1656` returns `settings: this.settings` in the `getStatus` response, which includes the live `authToken`; any content script can send `{action:'getStatus'}` and receive it (content scripts share the extension's message channel); (b) **raw auth header values persist in IDB outbox** — `auth-context.js:47–77` captures the full `Authorization`, `x-api-key`, `x-session-token` header values and stores them in `fileObject.authContext` (`background.js:607`), which is persisted to the durable IndexedDB outbox unencrypted and survives browser restarts; (c) **token in `chrome.storage.local`** — readable by any co-installed extension that requests the `storage` permission. **Fix:** strip `authToken` from the `getStatus` response (replace with `isAuthenticated: bool`); document (a) and (c) as accepted risks given the professional-use context; for (b), consider whether the platform requires raw credential values or only the schema (header names + presence) — if raw values are necessary, document that they must not be logged server-side.
-
-#### D60 · Capture items lost in SW teardown window + 750 ms observation debounce gap [M]  ·  reliability — Tier 2
-> ✅ **RESOLVED** (6d086e8). `scheduleQueueProcessing` debounce narrowed from 500 ms to 50 ms. `recordObservation` eager-persists every 50 observations in addition to the 750 ms debounce.
-
-Two independent teardown-loss windows: (a) **500 ms `processingQueue` debounce** — `scheduleQueueProcessing` (`background.js:897–905`) debounces queue processing by 500 ms; items added to `processingQueue` in that window are never persisted before processing and are silently dropped if the SW tears down before the timer fires. The URLs won't be re-requested by any alarm. (b) **750 ms observation debounce** — `schedulePersistObservations` (`background.js:1296–1306`) persists observations to `chrome.storage.local` on a 750 ms debounce; observations fired in the last 750 ms before SW teardown or operator clicking Analyze are lost from the confirmation set. **Fix:** reduce processingQueue debounce from 500 ms to 50 ms (narrows the window without changing batching behavior); add an eager-persist threshold in `recordObservation` — persist immediately every 50 new observations in addition to the debounce.
-
-#### D61 · MutationObserver wakes SW on all pages unconditionally + message dispatch swallows rejections [S]  ·  reliability — Tier 2
-> ✅ **RESOLVED** (6d086e8). `scriptObserver` MutationObserver callback guards on `chrome.storage.local.get('isCapturing')` before emitting. `testConnection`, `analyzeSession`, `getAnalysisProgress`, and `createProject` message handlers are wrapped in `async` try/catch that calls `sendResponse({ success: false, error })` on failure.
-
-Two independent reliability gaps: (a) **MutationObserver unconditional** — the `scriptObserver` in `content-script.js:162–180` calls `emitScript`/`emitInline` immediately on every DOM mutation on every page, waking the service worker even when `isCapturing` is false. `scanIfCapturing()` already has the correct storage-read guard for the initial scan; the observer does not. (b) **Message dispatch swallows rejections** — `background.js:~1062–1066` dispatches `testConnection`, `analyzeSession`, `getAnalysisProgress`, and `createProject` as `.then(sendResponse)` chains without a `.catch`; any unhandled rejection leaves the popup's message port open until it times out, silently failing with no operator feedback. **Fix:** add a `chrome.storage.local.get('isCapturing')` guard in the MutationObserver callback (matching `scanIfCapturing`'s pattern); wrap each `.then(sendResponse)` dispatch in an `async` handler with `try/catch { sendResponse({ success: false, error }) }`.
-
-#### D62 · `background.js` god-file (1,740 lines, 5.8× cap) + popup components over limit + dist in git [L]  ·  maintainability — Tier 2
-> ✅ **RESOLVED 2026-09-07** (incremental fixes complete). All four tracked items shipped:
-> (a) `_resetSessionState()` private method extracted — eliminates 4× copy-paste of the session-reset block;
-> (b) `EngagementPicker` extracted to its own component file (PR #126, 2026-09-04);
-> (c) `buildHomeViewModel` + `buildSettingsViewModel` extracted to `src/popup/viewmodels/homeVm.js` +
-> `settingsVm.js` — pure factory functions, no hooks, closing over pre-bound actions passed as params;
-> (d) `dist/popup.js` + `dist/popup.css` removed from git tracking (`git rm --cached`) — `.gitignore` entries
-> already in place, `npm run build` CI gate already enforcing compile on every PR (added D55-D63 pass).
-> Also fixed a pre-existing test regression in `test_workspace_client.mjs` where D57's `new URL()` scheme
-> guard was running in a vm sandbox without `URL`, silently failing since D55-D63. 41/41 tests now pass.
-> **Deferred (as designed):** full `background.js` module split into `SessionManager` / `FileProcessor` /
-> `AuthManager` / `SettingsManager` — the DEBT entry always labelled this "a separate L-effort slice";
-> it is not required for this resolution and is now its own open item if needed in future.
-
-Three co-located maintainability debts: (a) **`background.js` god-file** — the `JSExtractor` class owns 7 distinct responsibilities (listener wiring `225–307`, file processing pipeline `391–688`, session management `1346–1643`, auth/login `1388–1503`, settings `907–965`, message dispatch `1052–1078`, and orchestration throughout), making it 1,740 lines at 5.8× the 300-line cap. The same 12-line session-state reset block is copy-pasted at 4 sites (constructor line ~96, `newSession`, `resetCaptureSession`, `clearFiles`). Natural extraction seams: `SessionManager`, `FileProcessor`, `AuthManager`, `SettingsManager`. (b) **Popup components over limit** — `src/popup/app.jsx` (571 lines) builds two large view-model objects inline; `src/popup/components/HomeView.jsx` (516 lines) embeds a self-contained `EngagementPicker` sub-component (lines 64–198) with its own local state. (c) **`dist/popup.js` committed but CI doesn't rebuild** — the extension CI lane runs `tests/test_*.mjs` without `npm run build`, so a PR touching `src/popup/**` without rebuilding ships stale compiled JS silently. **Fix (incremental):** extract `_resetSessionState()` private method (eliminates 4×duplication); extract `EngagementPicker` to its own file; extract `buildHomeViewModel`/`buildSettingsViewModel` to `src/popup/viewmodels/`; add `dist/popup.js` + `dist/popup.css` to `.gitignore` and add a build+check step to the extension CI lane. Full `background.js` module split is a separate L-effort slice.
-
-#### D63 · Test safety net gaps: content-script behavioral coverage + popup + cap enforcement [M]  ·  maintainability — Tier 2
-> ✅ **RESOLVED** (6d086e8 + this commit). `test_content_script_behavioral.mjs` covers postMessage filter, MutationObserver guard, script classification. `test_auth_context_scope.mjs` covers out-of-scope suppression, `captureAuthContext:false`, 64-cookie cap. `test_caps_enforcement.mjs` covers `OBSERVATION_CAP`, `INLINE_PER_PAGE_CAP`, `BODY_TOTAL_CAP` behavioral enforcement. `test_popup_api.mjs` covers the `send()` error paths and `getActiveTabHost()`.
-
-Four gaps in the test safety net: (a) **`content-script.js` (205 lines) has zero behavioral tests** — the 12 tests that mention it are Pattern-B source-text assertions (regex on the raw string); not a single line executes. The security-critical postMessage relay filter (`event.source !== window`, `d.source` tag, `content-script.js:186–204`) and the new `isCapturing` MutationObserver guard are entirely untested. (b) **Auth context scope suppression never exercised** — `isInScope` is stubbed as `() => true` in every `test_auth_context.mjs` case; a regression that removes the scope gate would pass all current tests; `captureAuthContext: false` and `maxAuthContextEntries` eviction are also untested. (c) **Quantitative caps are presence-only** — `OBSERVATION_CAP` (1000), `INLINE_PER_PAGE_CAP` (100), and `BODY_TOTAL_CAP` (2 MB) are guarded only by Pattern-B name-existence checks; no test verifies that the 1001st item is actually dropped. (d) **Popup (1,820 LOC) has zero tests** — the sign-in gate invariant, tenant-change session reset, and toggle behaviors are entirely untested. **Fix:** add `test_content_script_behavioral.mjs` (Node VM + minimal DOM stub covering classification, MutationObserver guard, postMessage filter); add `test_auth_context_scope.mjs` (out-of-scope, `captureAuthContext:false`, sanitizer edge cases, 64-cookie cap); add `test_caps_enforcement.mjs` (behavioral cap tests); add popup `api.js` unit tests for the sign-in gate state machine.
 
 ### 2026-09-08 swarm review — OPEN (D64)
 
@@ -212,27 +167,9 @@ Since the LLM call records (D72 section), the same race is visible: the old task
 overwrite the re-triggered run's threats while the Threat Model tab shows the new run's call details. Also
 guard those writes with `WHERE llm_call_id = <this run's call>`.
 
-### 2026-11-02 capture history fix + CaptureSession refactor — OPEN (D67, D68, D86) · RESOLVED (D69, D70)
+### 2026-11-02 capture history fix + CaptureSession refactor — RESOLVED (D69, D70) · OPEN (D86)
 
 Left on purpose when the past-sessions findings count was fixed (session-keyed cache + tenant-tagged rows).
-
-#### D67 · Past-session finding counts only exist if the popup was open when analysis finished [S]  ·  correctness
-
-The findings summary is fetched by the popup (`src/popup/app.jsx` effect on `analysis.status === 'done'`),
-and the worker caches only what the popup asked for, in memory. Close the popup before analysis finishes,
-or let the MV3 worker idle out (~30 s) after it did, then start a new session, and that history row has no
-count. Separately, logout and a tenant-changing login rotate the session without saving it to history, so
-a same-tenant logout drops that session's row (deliberate for tenant isolation; unchanged by the fix).
-
-**Fix:** have the worker fetch the summary itself at save time (or persist the cache), and decide whether a
-same-tenant logout should save its row.
-
-#### D68 · A history row without a count can mean "0 findings" or "never fetched" [S]  ·  UX
-
-`HomeView.jsx` shows the count only when `counts.total > 0`, and D67 rows have no summary at all, so the two
-cases look identical.
-
-**Fix:** render "0 findings" for a fetched summary with no findings, and nothing (or "—") for no summary.
 
 #### D69 · "New session" leaves the old binding persisted while it rotates [S]  ·  correctness
 
@@ -270,7 +207,7 @@ doesn't. Same class as D69; found by the D69/D70 code review (PR #277).
 **Fix:** stamp the binding on each file at enqueue (as `runId` already is) and keep batches from mixing
 bindings, or drain the outbox fully before switching.
 
-### 2026-09-03 review swarm — OPEN (D40–D54)
+### 2026-09-03 review swarm — OPEN (D44, D46, D54: partial)
 
 Uncovered by a 7-agent review focused on the chrome-extension capture journey (4 agents) plus the
 platform (3 agents). **Cross-cutting theme (extension):** the capture core (MV3 durability, tenant
@@ -278,89 +215,6 @@ isolation, auth-context) is well-built, but the operator cannot *trust* it — i
 "I captured nothing" and "my captures never uploaded," are the two the UI hides or misrepresents. The
 Tier-1 items below are mostly small, verified-in-code fixes; several were flagged independently by
 multiple agents (noted `◆N`). Evidence is `file:line` at time of review.
-
-#### D40 · Silent no-op capture: fail-closed scope + `*.` wildcard mismatch + "CAPTURING" lie [S]  ·  correctness — Tier 1  ◆3
-> ✅ **RESOLVED 2026-09-04** (PR #126). `normalizeRootDomains` strips a leading `*.` (extracted to
-> `modules/normalize-scope.js` + colocated test), and `updateSettings` normalizes scope so the gate is robust
-> to `*.`/scheme/www/port in every write path (not just newSession). `toggleCapture` blocks a no-scope start
-> (warn toast) and Home shows a "No scope — capturing nothing" prompt with a one-tap "Capture <activeHost>";
-> the misleading placeholders were corrected. Also repaired the main-view `<Toast>` prop missed in D42.
-A first-time / Solo operator can sign in, press the single most prominent button, browse, and capture
-**zero** with no error. Three compounding causes: (a) `normalizeRootDomains` never strips a leading
-`*.`, so `*.target.com` — the syntax the popup's own placeholder suggests — is stored literally and
-matches no host (`background.js:27`, `isInScope` exact/suffix-only at `background.js:711`; misleading
-placeholder `src/popup/components/HomeView.jsx:137`, `src/popup/components/SettingsView.jsx:139`
-"auto (active tab domain)"); (b) `isInScope` fails closed (captures nothing) when no scope is set, but
-the Pause/Resume toggle has no scope guard and flips the card to a green pulsing "CAPTURING"
-(`src/popup/app.jsx:136-149`); (c) the only counter-signal is a small amber "no scope · capturing
-nothing" string (`src/popup/app.jsx:330-335`). **Fix:** strip `*.` in `normalizeRootDomains` (one
-`.replace(/^\*\./,'')`); block the capture toggle when `scopeMode==='none'` with an inline "set a scope
-or enable capture-every-tab" prompt (offer a one-tap "capture this site" → `activeHost`); fix the
-placeholder. See also [[D41]] (delivery visibility), [[D44]] (scope safety).
-
-#### D41 · Auth-token expiry mid-capture permanently drops captured JS [M]  ·  reliability — Tier 1
-> ✅ **RESOLVED 2026-09-04** (PR #129). 401/403 from `save-files` are no longer permanent drops: the
-> uploader re-queues the batch and PAUSES the drain (`authPaused`) instead of `forget()`ing it, and
-> `onAuthFailure` → `handleAuthExpired` fires a one-shot "session expired" notification + unhealthy
-> badge. The popup shows a "session expired — sign in again" banner (single source of truth:
-> `uploader.authPaused`); capture KEEPS running (buffers to the durable outbox, nothing lost), and a
-> re-login calls `resumeUploads()` which lifts the pause UNCONDITIONALLY (`mint()` stamps `exp` at 1s
-> resolution over a fixed payload, so a token can repeat within a second — a token-change gate would
-> latch forever) and drains the backlog. `clearOutbox()` also lifts a latched pause (tenant switch /
-> new session). 400/422 stay permanent drops. Deliberately keeps capturing rather than the literal
-> "pause capture" — buffering loses nothing vs a capture gap (both review gates approved).
-The login token TTL is 8h (`apps/platform/src/recon/config.py:226`). On a long/overnight engagement it
-expires; `save-files` then returns 401 (`apps/platform/src/recon/api/capture_router.py:186-196`), which
-the uploader classifies as non-retriable (`retriable=false` for any 4xx except 429,
-`modules/batch-uploader.js:297`) and **drops the batch from the durable outbox** via `forget()`
-(`modules/batch-uploader.js:154-169`). Capture keeps running, the popup's counts keep climbing, and
-`lastPaired` is untouched on a throw so Settings still shows "paired ✓" (`modules/batch-uploader.js:306`)
-— the operator ships a fraction of the surface and cannot recover the dropped files by re-login. **Fix:**
-treat 401/403 as retriable (re-queue, don't drop), pause capture into a "session expired — sign in
-again" state, resume the outbox after re-auth; keep 400/422 as the only permanent drops.
-
-#### D42 · Capture pipeline has no operator-facing delivery / skip / failure visibility [M]  ·  correctness — Tier 1  ◆5
-> ✅ **RESOLVED 2026-09-04** (PR #126). Home now renders a DELIVERY strip (N sent · M pending · X
-> failed + the last reason), the header connection dot/label are driven by real upload health (not a manual
-> test), and the Toast gained ok/warn/error tones — all wiring the worker's existing `getStatus`
-> (`processingStats` + uploader health). New pure `modules/delivery-health.js` + colocated 9-case test.
-The worker already computes everything needed to answer "did it all land, and what was skipped?" —
-`processingStats` (failedFiles, lastFailureReason/Url/Message) and uploader health (`lastError`,
-`pendingQueueLength`, `droppedFiles`, `failedBatches`, `paired`) are returned by `getStatus`
-(`background.js:1210-1222`) and `getStats` (`modules/batch-uploader.js:385-397`) — but **none of it is
-rendered.** Home shows only js/maps/secrets counts (`src/popup/components/HomeView.jsx:300-305`); the
-header "connected to workspace" dot is fake-green, mutated only by a manual Test, never by upload
-outcomes (`src/popup/app.jsx:48,267-277`); per-file skips (`asset_too_large` `background.js:433-440`,
-`fetch_failed` `:347-357`, `decompress_failed` `:370`, denylist/exclude `:273-279`) are silent; and every
-error renders as a green success Toast that auto-dismisses in ~2.2s (`src/popup/components/ui.jsx:43-59`,
-error call-sites `src/popup/app.jsx:222,235,246,250,276,408`). **Fix (mostly wiring existing data):** a
-Home status strip "N uploaded · M pending · X failed/skipped (with reasons)"; drive the connection dot
-from real upload results; add an error/warning Toast variant. The highest-leverage single item in this
-batch.
-
-#### D43 · Capture-pipeline reliability edges (four small correctness bugs) [S]  ·  reliability — Tier 1
-> ✅ **RESOLVED 2026-09-04** (PR #129). All four: (a) `ContentFetcher.fetch` now has a per-attempt 30s
-> `AbortController` timeout so one blackholed asset can't hang the strictly-serial capture queue; (b)
-> the per-asset `maxAssetMb` default is 8→10, matching the backend's 10 MiB `max_upload_bytes` (8-10 MB
-> main bundles no longer silently skipped); (c) `analyzeSession` blocks when `pendingQueueLength>0 ||
-> isUploading` and returns a typed reason, so analysis can't run on a partial set and report complete;
-> (d) `processFile` persists the outbox entry (enqueue) BEFORE the dedup entry, closing the "marked
-> seen but never queued" drop. NOTE: only the fetch timeout is added for (a) — bounded fetch
-> concurrency (a possible future refinement) is not, since the timeout alone unstalls the queue; and
-> the analyze-block (c) has no "analyze anyway" override in v1.
-Four independent, verified holes, each S-effort: (a) **no fetch timeout** — the uploader added an
-`AbortController` because "Chrome has no default," but `ContentFetcher.fetch` has none
-(`modules/content-fetcher.js:13-18`) and the queue is strictly serial (`background.js:315-317`), so one
-blackholed in-scope asset (or its map) hangs `fetch()` and stalls *all* capture; (b) **8 MB under-cap**
-— default `maxAssetMb` is 8 while the backend accepts 10, so 8–10 MB main bundles are silently skipped
-(`background.js:432,808`); (c) **analyze-before-drain** — `analyzeSession` flushes with an 8s cap that
-early-breaks on one transient failure (`modules/workspace-client.js:95-105`,
-`modules/batch-uploader.js:214-226`), so Analyze can run on a partial set yet report "complete ✓"; (d)
-**dedup-before-outbox race** — `processFile` awaits `dedupStore.put(hash)` (`background.js:506`) before
-`batchUploader.enqueue` persists the outbox record (`background.js:541`), so a teardown in that gap marks
-the file "seen" but never sends it. **Fix:** (a) 30s `AbortController` on the content fetch + bounded
-concurrency; (b) default to 10; (c) block Analyze on `pendingQueueLength>0` (already exposed); (d)
-persist the outbox entry before the dedup entry.
 
 #### D44 · Scope-safety gaps: dependency-child bypass, `captureEverything` footgun, no CDN-apex discovery [S]  ·  supply-chain/security — Tier 1
 > 🟡 **PARTIAL 2026-09-04** (PR #126). Shipped (c) out-of-scope script-host discovery — the worker
@@ -383,45 +237,6 @@ dropped (`background.js:711-742`, dropped requests just `return` at `:292-296`) 
 script host seen — add?" hint. **Fix:** apply `isInScope` to children (or gate behind an explicit
 "follow cross-scope deps" opt-in); gate `captureEverything` behind confirm + auto-expire and/or a
 per-tab "armed" binding; surface out-of-scope hosts that served `type:script` with one-click add.
-
-#### D45 · Capture coverage gaps: inline/eval, XHR/JSON/GraphQL bodies, source-map header/`.map` probe [M]  ·  correctness — Tier 1
-> ✅ **RESOLVED 2026-09-05** (D45 capture-coverage slice). Shipped in 4 slices; both §4 gates passed
-> (design GO-WITH-CHANGES + code review SHIP-WITH-NITS, all findings folded). Design spec:
-> `apps/platform/docs/superpowers/specs/2026-09-05-d45-capture-coverage-design.md`.
-> - **(c) source maps** — detection now reads the `SourceMap:`/`X-SourceMap` response header (already
->   captured, previously unused) + a SINGLE no-retry `<file>.js.map` probe (`sourcemap-detector.js`);
->   `docs/OPERATING.md` claim corrected.
-> - **(a) inline** — inline `<script>` bodies captured as synthetic files (content-script DOM read →
->   `handleInlineScript`), keyed on page+ordinal, per-page capped, filtered by a CONTENT-based
->   `modules/inline-relevance.js` (drops an in-scope-page GTM/hydration snippet the URL gate can't).
->   **`eval` DEFERRED (operator-approved):** the review showed an `eval`/`Function` main-world hook is
->   race-prone (a page can stash native `eval` first), misses `new Function`/`setTimeout`/`import()`/Wasm,
->   is CSP-gated, and inherently noisy — so inline ships + the false OPERATING.md eval claim is corrected,
->   and the hook is not built speculatively (YAGNI).
-> - **(b) bodies** — runtime XHR/fetch `{method,url}` observations CONFIRM endpoints (extension webRequest
->   observer → sent with `analyze/start` → `capture-requests` blob → `requests_ref` → the existing
->   correlate stage promotes suspected→confirmed). Request bodies incl. GraphQL captured via webRequest
->   `onBeforeRequest` (ON, no main world); RESPONSE bodies via an OPT-IN main-world hook
->   (`inject/xhr-hook.js` + conditional `chrome.scripting`, off by default, Settings toggle) — both
->   redacted + capped + bounded by a per-session budget. Platform (pragmatic v1): bodies ride the
->   capture-requests blob (no new kind/migration) + Kingfisher secret-scan + light top-level param hints
->   (`correlate/bodies.py`, best-effort, offset-less secrets so reveal fail-closes, `engine="capture"`
->   lower-trust provenance). **Deferred (operator-approved pragmatic-v1):** deep GraphQL-operation /
->   JSON-schema extraction. Verification: 37 extension Node suites + platform full fast lane green + ruff
->   + mypy-strict + capture-contract unchanged.
-Capture is script-response-only, missing high-value post-auth recon the platform is otherwise trying to
-reconstruct: (a) **inline & `eval`'d scripts are never captured** — `webRequest` filters
-`types:["script"]` (`background.js:194-201`) and the content-script enumerates only `script[src]` +
-resource-timing (`content-script.js:69-85,113-121`); inline `<script>` `.textContent` is never read —
-and `docs/OPERATING.md:57` *falsely claims* inline/eval coverage; (b) **XHR/fetch/JSON/GraphQL response
-bodies are ignored** (`manifest.json:22-29`, `isLikelyScriptResource` `background.js:689-709`) — passive
-observation of the app's real calls would convert *suspected* endpoints (D29/D30 static ceiling) into
-confirmed ones; (c) **source-map recovery is inline-comment-only** — `SourceMapDetector` reads only
-`//# sourceMappingURL=` (`modules/sourcemap-detector.js:10-23`) and never consults the captured
-`SourceMap:`/`X-SourceMap` header (`background.js:561-573` captured but not passed at `:382-383`) or
-probes the conventional `<file>.js.map`. **Fix:** collect inline `<script>` bodies as synthetic files;
-add an opt-in "capture JSON/config + XHR" mode; read the map header + attempt `url+'.map'`. At minimum,
-correct the OPERATING.md claim.
 
 #### D46 · Extension value-loop + activation affordances [M]  ·  maintainability — Tier 2  ◆2
 > 🟡 **PARTIAL 2026-09-04** (PR #126). Shipped (b) a live toolbar badge, (d) reachable "clear
@@ -451,153 +266,6 @@ UI; (e) **no Burp/Caido/HAR interchange** and **no first-run onboarding** (`src/
 has no help). **Fix (incremental):** post-analyze summary card via a `sessions/{id}/findings/summary`
 fetch; a live badge; a persisted per-session summary list; an "include code" export toggle + reachable
 "clear"; HAR export; a 3-step first-run coach.
-
-#### D47 · "Delete" doesn't delete object-storage blobs — REQ-S4 purge unmet [M–L]  ·  supply-chain/security — Tier 2
-> ✅ **RESOLVED 2026-09-06** (D47 blob-purge slice; both §4 gates passed — design GO-WITH-CHANGES + code
-> review SHIP-WITH-NITS, all folded). `DELETE /sessions/{id}` now PURGES the run's object-storage blobs,
-> not just its Postgres rows. New `storage.delete_run_blobs` sweeps every object under the run-scoped
-> prefix `{tenant}/{run}/` (`list_objects_v2` paginator + batched `delete_objects` ≤1000, inspecting the
-> per-key `Errors[]` an HTTP-200 can still carry → `BlobPurgeError` with a bounded sample of WHICH keys
-> survived + WHY); `delete_session` collects the run ids BEFORE the cascade, commits, then sweeps
-> best-effort — a failure is loud-structured-logged (`blob_purge_failed`), never a dangling ref, orphans
-> await the GC backstop. Complete + safe by construction: keys embed `run_id`, so one sweep hits every
-> blob kind (incl. the D45 capture bodies whose ref lives in a `run_event` payload, not a column) and can
-> reach neither another run nor another tenant. Verified: 5 hermetic + 5 integration cases (real PG +
-> MinIO). Design spec: `apps/platform/docs/superpowers/specs/2026-09-06-d47-blob-purge-design.md`.
-> **Deferred (documented, NOT claimed done):** REQ-S4's *default-TTL enforcement* — a raw age-based S3
-> lifecycle rule would reintroduce dangling refs (expiry decoupled from session liveness), so it needs a
-> liveness-aware retention job; a scheduled GC (diffing bucket prefixes vs live run ids, **special-casing
-> the session-scoped `spec` blob** — a per-run sweep would corrupt a live session's spec) as the
-> crash/failure + delete-while-running orphan backstop; and async/queued purge for very large runs.
-> OPERATING.md carries the `s3:ListBucket` + `s3:DeleteObject` IAM requirement + the no-raw-lifecycle warning.
-`docs/REQUIREMENTS.md:88` mandates retention/purge as a **MUST**. `DELETE /sessions/{id}` hard-deletes
-Postgres rows only; the S3/MinIO blobs (raw JS, source maps, recovered sources — the bytes secrets /
-config-GUIDs / internal IPs live in) are never touched — no `delete_blob` exists in `storage.py`, and
-`apps/platform/src/recon/sessions/service.py:223-226` states outright that blobs "are not swept here; a
-GC pass is future work." Deleting a session at engagement close (or on a compliance request) leaves the
-sensitive bytes orphaned in the bucket forever: unbounded storage growth + a breach/compliance liability
-for a tool whose premise is trustworthy secret handling. Not previously tracked. **Fix:** blob sweep on
-session/run delete (or a scheduled GC diffing live `finding`/`run_asset` refs against the bucket) + a
-documented default retention window.
-
-#### D48 · Sensitive-action audit trail isn't bound to verified identity [S]  ·  supply-chain/security — Tier 2
-> ✅ **RESOLVED 2026-09-07**. Added `get_actor` dependency to `deps.py` — when auth is on it derives the
-> actor server-side from the verified JWT user_id; when auth is off it returns None and the body field is
-> used as fallback so dev/header-based tests are unchanged. `probe_router`: triage + reveal now use
-> `effective_actor = actor or body.actor`. `runs_router`: pause, cancel, and resume all inject `get_actor`
-> and pass it to service functions, which include `{"actor": actor}` in their `run.pause_requested`,
-> `run.cancel_requested`, and `run.transition` event payloads. `sessions_router`: delete injects
-> `get_actor` and passes it to `sessions.service.delete_session`, which emits structured
-> `session.delete_requested` + `session.deleted` log entries with the actor (session delete cascades DB
-> rows so no run_event survives — structured logging is the audit trail). 5 fast-lane unit tests +
-> 2 integration tests added.
-The reveal audit mechanism is durable and denial-inclusive (`apps/platform/src/recon/probe/reveal.py:111-142`),
-but the `actor` it records is a client-supplied, optional free-text request field
-(`apps/platform/src/recon/api/probe_router.py:23,27,63,85`), never derived from the verified
-`get_principal()` identity auth already resolves (`apps/platform/src/recon/api/deps.py:68-80`);
-pause/cancel/resume record no actor at all (`apps/platform/src/recon/api/runs_router.py:364-391`). In a
-tenant shared by multiple operators (docs already note "no RBAC — everyone is effectively an operator")
-the reveal log is spoofable/blank and run-control actions are unattributed — quietly defeating the
-accountability guarantee. **Fix:** when auth is on, derive `actor` server-side from `get_principal()`
-(ignore the client field); add it to pause/cancel/resume/delete event payloads.
-
-#### D49 · Findings prioritization is absent end-to-end [M]  ·  correctness — Tier 1  ◆2
-> ✅ **RESOLVED 2026-09-04** (PR #127). A pure `findings/priority.py` derives a deterministic,
-> explainable 0-100 priority at READ time (type + highest risk tag; no migration, applies to every
-> existing run); `queries._finding_view` fills the view's `severity` with the label + adds `priority`,
-> and the findings API exposes both. The Findings list renders a severity pill + risk-tag chips per row,
-> adds a Risk facet, and defaults to priority-first sort. (Shadow-status/unattributed inputs to the score
-> were intentionally left simple rather than baked into an opaque number.)
-Nothing tells an operator what to look at first on a 500+/2000-asset run. The `severity` column exists
-but no pipeline path ever populates it (`apps/platform/src/recon/db/models.py:324`,
-`apps/platform/src/recon/findings/store.py:119,139`; the Overview widget even hardcodes a heuristic and
-comments that "findings carry severity = null" `apps/platform/web/src/features/overview/OverviewPanel.tsx:12-26`).
-The one real signal that *is* computed — param `risk_tags` (auth/admin/idor/flag,
-`apps/platform/src/recon/findings/analyze.py:1253-1258`) — reaches the browser in `finding.attributes`
-but is never rendered anywhere in `apps/platform/web/src` (and path-segment params, the common IDOR
-shape, are excluded even from the OpenAPI `x-recon-risk` at `apps/platform/src/recon/probe/openapi.py:149-159`).
-The Findings page has facets + search but **no sort control**. **Fix:** a deterministic, explainable
-priority score (shadow status + risk tags + secret/internal-IP type + unattributed) surfaced as a real
-sort key + badge; render `attributes.risk_tags` as a badge + 5th facet (near-free, data is client-side).
-
-#### D50 · Findings triage & reporting don't scale [M]  ·  performance — Tier 1  ◆2
-> ✅ **RESOLVED 2026-09-07**. Shipped (a) multi-select + bulk triage, (b) client-side CSV/JSON export,
-> (c) render cap ("show more"). Server-side filter + pagination shipped in this session:
-> `GET /runs/{id}/findings` now accepts `types`, `triage_statuses`, `q`, `risk_tags`, `limit`,
-> `offset` query params; `FindingsView.total` carries the pre-pagination count; `FindingsParams`
-> object wraps the API call on the FE; `FindingsResponse.total/offset/limit` added to `types.ts`.
-> Fast-lane router tests verify param threading + response envelope (1295 passing).
-Breaks at exactly the scale the tool just built for (crawl cap 500→2000; an E2E already hit 567
-findings): (a) **triage is one-at-a-time** — `TriageControls` takes a single hash
-(`apps/platform/web/src/features/findings/TriageControls.tsx:6`, `apps/platform/src/recon/api/probe_router.py:48-73`),
-no multi-select/bulk-dismiss; (b) **the only export is OpenAPI** — no findings CSV/JSON, no report
-(`apps/platform/web/src/features/export/ExportSpecButton.tsx`,
-`apps/platform/src/recon/api/export_router.py` json/yaml only); (c) **the findings list is unpaginated
-and unwindowed** — `GET /runs/{id}/findings` takes no limit/offset
-(`apps/platform/src/recon/api/findings_router.py:18-27`, `apps/platform/src/recon/findings/queries.py:178-183`)
-and the UI renders every row into the DOM (`apps/platform/web/src/features/findings/FindingsPage.tsx:165-166`)
-— the same main-thread-freeze class [[D35]] fixed for Sources, now unaddressed for a multi-thousand-row
-findings response; no sort control either. **Fix:** limit/offset (or cursor) on the API + D35's spacer
-virtualization; multi-select + bulk triage looping the existing endpoint; a client-side findings
-CSV/JSON download from already-fetched data.
-
-#### D51 · Probe artifacts aren't ready-to-fire: auth header omitted, WebSocket dead-ends [S]  ·  correctness — Tier 2
-> ✅ **RESOLVED 2026-09-04** (PR #127). `to_curl`/`to_http` now emit a real placeholder for each
-> OBSERVED auth header (Bearer/Basic/named slot; deduped + control-free, no header injection) instead of a
-> static stub comment; and a new `serialize.to_websocat` emits a runnable `websocat` scaffold for WS/WSS
-> ops (the probe endpoint returns `{ websocat }`, ProbePanel shows "Copy websocat") instead of the
-> "not probeable" dead-end.
-The Probe panel's whole promise is a one-step runnable request, but: (a) **`to_curl`/`to_http` never emit
-the observed auth** — they print a static `# add auth/headers here` comment
-(`apps/platform/src/recon/probe/serialize.py:73-96,99-113`) even though `request.auth` (header + scheme)
-is known and already used to build OpenAPI `securitySchemes` (`apps/platform/src/recon/probe/openapi.py:179,343`),
-so every authenticated endpoint's copied curl 401s with no hint; (b) **WebSocket findings dead-end** —
-WS/WSS ops are `probeable=False` (`apps/platform/src/recon/probe/reconstruct.py:22,217`) and both
-serializers `return None` (`serialize.py:59-60,99-100`), giving "not probeable" instead of a one-line
-`websocat`/`wscat` scaffold. **Fix:** emit a real placeholder header per `request.auth`; generate a
-`websocat` command for WS/WSS analogous to `to_curl`.
-
-#### D52 · Recon coverage: no source full-text search; postMessage/storage sinks aren't a finding type [M]  ·  correctness — Tier 2
-> ✅ **RESOLVED 2026-09-07** (both halves). (a) run-scoped full-text search — PR #127 (2026-09-04).
-> (b) postMessage/storage sink FindingType + detector — migration 0025 widens `ck_finding_type`;
-> `findings/data_sinks.py` regex detector (POSTMESSAGE_RE + STORAGE_RE, per-type cap 500); wired into
-> `_analyze_blob` after internal-IP pass; `priority.py` scores postmessage_sink=35, storage_sink=25;
-> frontend label + CSS pill added; type facet auto-enumerates new types.
-Two coverage gaps that lose real attack surface: (a) **no full-text search across recovered sources** —
-`apps/platform/src/recon/probe/sources.py` has no grep endpoint, `SourcesPage` filters file *names*
-only, and `CodeViewer` windowing (`apps/platform/web/src/features/sources/CodeViewer.tsx:73-74,117-134`)
-means even the browser's native Ctrl-F silently misses matches outside the viewport — "grep the whole
-target for X" is impossible in-tool on a 500-file run; (b) **postMessage / Web-Storage / cookie sinks are
-not a `FindingType`** — the enum has 9 members and none for a `postMessage` listener or
-`localStorage`/`sessionStorage`/cookie access (`apps/platform/src/recon/domain.py:65-128`), though the
-tree-sitter pass is already positioned to catch the call sites (common high-signal client-side bug
-classes). **Fix:** a run-scoped source-search endpoint over stored blobs; a new detector + FindingType
-for postMessage/storage sinks mirroring the recent internal-IP pattern ([[D33]]).
-
-#### D53 · Platform observability & ops gaps [M]  ·  reliability — Tier 2
-> ✅ **RESOLVED 2026-09-06** (PR #132). All 5 facets shipped:
-> (a) `prometheus-client` added; `recon/metrics.py` defines `recon_jobs_total{queue,outcome}`,
-> `recon_job_duration_seconds{queue}`, `recon_http_requests_total{method,path,status}`; `/metrics`
-> endpoint (multiprocess mode via `PROMETHEUS_MULTIPROC_DIR` + shared `prometheusdata` Docker volume)
-> aggregates api + worker processes. (b) `/healthz` extended: S3 `head_bucket` check + per-queue
-> `pending`/`dlq` counts for all `QueueName` values. (c) Worker Docker healthcheck added (liveness
-> file `/tmp/recon-worker-liveness` touched each serve_forever loop iteration, threshold 600 s).
-> (d) `pg_dump` + `mc mirror` recipes added to `docs/OPERATING.md` §4. (e) Worker consumer name
-> derived from `socket.gethostname()` + `os.getpid()` — unique per container per process, stale PEL
-> entries autoclaimed within one lease window (REQ-R3).
-The async spine is solid but under-instrumented for operation: (a) **no metrics/tracing** — `REQ-S3`
-(`docs/REQUIREMENTS.md:87`) requires per-stage metrics + traces; there is no metrics lib, `/metrics`
-route, or OTel span anywhere (`apps/platform/src/recon/observability.py` is logging-only); (b) **no
-queue/DLQ visibility** — `/healthz` checks only Redis ping + `SELECT 1` (`apps/platform/src/recon/api/app.py:83-87`),
-`pending_count()` exists but is called only from tests (`apps/platform/src/recon/queue/streams.py:159-163`),
-and there's no admin/ops route; (c) **the worker container has no healthcheck** — `docker-compose.yml`
-gives `api` one but not `worker`, so a *hang* (not a crash) is never detected/restarted and runs sit
-`stalled` forever; (d) **no backup/restore** procedure for Postgres or MinIO anywhere in the repo; (e)
-**no horizontal worker scaling** — the Redis consumer name is the hardcoded literal `"worker-1"`
-(`apps/platform/src/recon/worker/main.py:275,287`), so replicas are indistinguishable in Redis
-bookkeeping. **Fix:** `prometheus_client` counters/histograms at `/metrics`; extend `/healthz` with S3 +
-per-queue pending/DLQ; a worker liveness healthcheck; a documented `pg_dump` + `mc mirror` recipe;
-derive the consumer name from hostname/PID.
 
 #### D54 · Continuous-use & collaboration features [L]  ·  maintainability — Tier 2
 > 🟡 **PARTIAL 2026-09-04** (PR #127). Shipped (b) a run-finished browser Notification and (d) global
@@ -679,33 +347,6 @@ A capture can now stay open across a deploy that bumps `FINDING_HASH_VERSION`
 The 24 h idle auto-end bounds the window.
 
 **Fix:** end open captures (final pass) as part of an identity-version deploy, or re-key on the bump.
-
-### 2026-11-13 Capture popup screens — RESOLVED (D85)
-
-#### D85 · Worker code the popup no longer calls [S]  ·  dead code  ·  ✅ RESOLVED 2026-11-14
-
-The scope-first popup drives the capture only through the lifecycle actions, so the worker's
-`startCapture`, `stopCapture`, `newSession` and `getHistory` handlers had no sender. Removed with
-everything only they reached: their methods in `background.js`, `modules/capture-history.js` (and
-the history write at session rotation), `modules/project-config.js` (the per-session config
-resolver), and `CaptureSession.startNew`'s `persistWith` / `onRotated` hooks. The capture
-lifecycle is now the only way capture starts or stops (`test_popup_reply_contract.mjs` pins that
-no such handler returns). Two behaviours the old handlers carried moved to the gate
-(`applyCaptureGate`): pending request bodies are dropped when it closes, and the rows an older
-build stored under `captureHistory` are deleted at worker start.
-
-### 2026-11-03 Hidden findings overlay — RESOLVED (D74)
-
-#### D74 · The ApiSpec page's endpoint classification ignores the hidden-findings overlay [S]  ·  correctness
-
-> ✅ **RESOLVED** (2026-11-07). Narrower than recorded: the ApiSpec page's operations and the reloaded summary already read the shown findings (`reconstruct_run` and `list_findings`). The leak was the summary returned right after attaching a spec or saving a base-URL rule (`_run_scoped_summary`), which counted hidden endpoints, so the numbers shrank on reload. It now leaves hidden findings out; their verdicts are still stored, so "Show hidden" brings them back classified.
-
-`findings/visibility.hidden_finding_ids` drives every list and count of a run's findings, but
-`spec/service.py` (the ApiSpec page's shadow-API buckets) reads `endpoint` findings directly, so an
-analytics-vendor endpoint the workspace hides can still be classified there. Pre-existing for the old
-analytics filter.
-
-**Fix:** filter the endpoint read in `spec/service` through `hidden_finding_ids`.
 
 ### 2026-11-03 Exact source locations — OPEN (D75, D76)
 

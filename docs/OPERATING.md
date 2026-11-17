@@ -283,7 +283,7 @@ Deliberately deferred — safe for internal single-operator use, revisit before 
   reject them regardless.
 - **No role-based authorization yet.** Every signed-in user in a tenant is effectively an operator.
   Fine for a single trusted operator; add RBAC before multi-user tenants.
-- **Automated retention TTL isn't enforced yet (DEBT D47).** Purge is tenant-initiated — deleting a
+- **Automated retention TTL isn't enforced yet (the D47 purge path shipped; the storage GC is tracked under D72 in `DEBT.md`).** Purge is tenant-initiated — deleting a
   session reclaims its blobs — but there's no scheduled expiry. Do **not** add a raw age-based S3
   lifecycle rule: it expires objects by age decoupled from session liveness, so a live session's older
   blobs would vanish and its reveal/source reads would 500. A default TTL must be *liveness-aware*
