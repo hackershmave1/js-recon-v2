@@ -1809,9 +1809,9 @@ def test_a_create_with_base_url_result_is_a_client_and_so_is_its_factory():
     assert [p.name for p in checkout.params] == ["token"]
 
 
-def test_a_webpack_instance_resolves_but_its_member_chain_factory_is_not_guessed():
-    # `t.A` means "export A of whatever module t is" — a sibling module may reuse `t` for a
-    # store, so the factory is not claimed without per-module identity (DEBT D80).
+def test_a_flat_member_chain_factory_is_not_guessed():
+    # Outside every webpack module `t.A` is "export A of whatever `t` is" — there is no
+    # `require(<id>)` alias to prove it, so the factory is never claimed (only the instance is).
     src = (
         'var t=n(690);const s=t.A.create({baseURL:"/api/v2"});'
         'async function c(){await s.get("/inventory"),await t.A.delete("/api/v1/session")}'
@@ -1819,10 +1819,119 @@ def test_a_webpack_instance_resolves_but_its_member_chain_factory_is_not_guessed
     assert _eps(src) == [("GET", "/api/v2/inventory")]
 
 
-@pytest.mark.xfail(strict=True, reason="known-red: needs per-webpack-module identity (DEBT D80)")
-def test_known_red_a_webpack_member_chain_factory_call():
-    src = 'var t=n(690);const s=t.A.create({baseURL:"/api/v2"});t.A.delete("/api/v1/session")'
+def _chunk(*modules: str) -> str:
+    """A webpack-5 production chunk: `{id:(e,t,n)=>{body}, ...}` pushed onto the jsonp global."""
+    registry = ",".join(f"{100 + i}:(e,t,n)=>{{{body}}}" for i, body in enumerate(modules))
+    return f"(self.webpackChunkapp=self.webpackChunkapp||[]).push([[1],{{{registry}}}]);"
+
+
+def test_a_webpack_member_chain_factory_call():
+    # recon-range webpack-nomap (D80; was a strict xfail): inside a module, `a = n(690)` is that
+    # module's require alias, so `a.A` is "export A of module 690" — the default client.
+    src = _chunk(
+        'var a=n(690);const s=a.A.create({baseURL:"/api/v2"});a.A.delete("/api/v1/session")'
+    )
     assert ("DELETE", "/api/v1/session") in _eps(src)
+
+
+def test_a_sibling_webpack_module_reusing_a_name_does_not_poison_a_literal_base():
+    # DEBT D80: webpack modules are disjoint function scopes, so a sibling module that rebinds
+    # `o` (here: twice) says nothing about THIS module's `o`.
+    src = _chunk(
+        'var o="https://api.example.test/v1";fetch(o+"/orders")',
+        "let o=n(5);o=o.default;o.render()",
+    )
+    assert _eps(src) == [("GET", "https://api.example.test/v1/orders")]
+
+
+def test_a_wrapper_base_survives_a_sibling_module_reusing_its_name():
+    # example_js_files/02 shape: an inferred wrapper whose base const a sibling module reuses.
+    src = _chunk(
+        'var o="https://api.example.test",i="/v2",s=o+i;'
+        'function c(a,m){return fetch(s+a,{method:m||"GET"})}'
+        'c("/orders"),c("/orders/1","DELETE")',
+        "var o=n(9004);o.mount()",
+    )
+    eps = _eps(src)
+    assert ("DELETE", "https://api.example.test/v2/orders/1") in eps
+    assert ("GET", "https://api.example.test/v2/orders") in eps
+    assert not [u for u in extract(src).unresolved if "orders" in u.url]  # pre-D80: EXPR/orders
+
+
+def test_a_name_reassigned_inside_its_own_webpack_module_stays_unresolved():
+    src = _chunk('var o="/a";o="/b";fetch(o+"/x")', 'var u="/c";fetch(u)')
+    eps = _eps(src)
+    assert ("GET", "/a/x") not in eps
+    assert ("GET", "/c") in eps
+
+
+def test_a_webpack_module_never_sees_a_sibling_module_const():
+    # Module 101's `o` is a free (global) name: module 100's local `o` is not in its scope.
+    src = _chunk('var o="/a";fetch(o)', 'fetch(o+"/x")')
+    eps = _eps(src)
+    assert ("GET", "/a") in eps
+    assert ("GET", "/a/x") not in eps
+
+
+def test_an_outer_name_assigned_from_one_module_is_unresolved_in_another():
+    # `o="/b"` (no declaration) in module 100 writes the OUTER `o` that module 101 reads.
+    src = 'var o="/a";' + _chunk('o="/b"', 'fetch(o+"/x")')
+    assert ("GET", "/a/x") not in _eps(src)
+
+
+def test_an_outer_const_is_still_visible_inside_a_webpack_module():
+    src = 'var o="https://api.example.test";' + _chunk('var p=o+"/v1";fetch(p+"/x")')
+    assert ("GET", "https://api.example.test/v1/x") in _eps(src)
+
+
+def test_a_member_chain_factory_is_scoped_to_its_webpack_module():
+    # The adversarial-review FP (2026-11-04): a sibling module reuses `a` for a store, so its
+    # `a.A.delete(...)` must not become a DELETE. Only the module that created the client claims.
+    src = _chunk(
+        'var a=n(690);const s=a.A.create({baseURL:"/api/v2"});'
+        's.get("/inventory"),a.A.delete("/api/v1/session")',
+        'var a=n(12);a.A.delete("cart")',
+    )
+    assert _eps(src) == [("DELETE", "/api/v1/session"), ("GET", "/api/v2/inventory")]
+
+
+def test_a_member_chain_factory_is_not_claimed_when_reused_in_the_same_scope():
+    src = 'var t=n(690),t=n(12);const s=t.A.create({baseURL:"/api/v2"});t.A.delete("/x")'
+    assert ("DELETE", "/x") not in _eps(src)
+
+
+_CLIENT = 'const c=a.A.create({baseURL:"https://api.example.test"});'
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # Review 2026-11-17 (each was a reproduced FP): the receiver is not a module-local
+        # require alias — an outer object, a free global, the module's own exports param.
+        "var a={};" + _chunk(_CLIENT + 'a.A.delete("/session")', "a.A=mk()"),
+        _chunk(_CLIENT + 'a.A.delete("/session")', "a.A=mk()"),
+        _chunk(_CLIENT.replace("a.A", "t.A") + 't.A.delete("/session")'),
+        # The alias's export is written somewhere in the file (dotted or string-indexed).
+        _chunk("var a=n(690);" + _CLIENT + 'a.A=store;a.A.delete("/session")'),
+        _chunk("var a=n(690);" + _CLIENT + 'a["A"]=new Map();a.A.delete("/session")'),
+        _chunk("var a=n(690);" + _CLIENT + "[a.A]=[mk()];" + 'a.A.delete("/session")'),
+        _chunk("var a=n(690);" + _CLIENT + "({x:a.A}=o);" + 'a.A.delete("/session")'),
+        _chunk("var a=n(690);" + _CLIENT + "for(a.A of xs);" + 'a.A.delete("/session")'),
+        _chunk("var a=n(690);" + _CLIENT + "a[`A`]=mk();" + 'a.A.delete("/session")'),
+        # The require parameter itself is shadowed or reassigned (re-review 2026-11-17).
+        _chunk("function f(n){var a=n(690);" + _CLIENT + 'a.A.delete("/session")}f(mk)'),
+        _chunk("n=function(){return store};var a=n(690);" + _CLIENT + 'a.A.delete("/session")'),
+        "var a=n(690);" + _CLIENT + 'a.A=store;a.A.delete("/session")',
+    ],
+)
+def test_a_member_chain_factory_without_a_proven_require_alias_is_not_claimed(src):
+    assert ("DELETE", "/session") not in _eps(src)
+
+
+def test_a_sibling_module_writing_its_own_alias_export_does_not_unclaim_this_one():
+    # The alias is module-local: module 101's `a.A = …` writes ITS `a`, not module 100's.
+    src = _chunk("var a=n(690);" + _CLIENT + 'a.A.delete("/session")', "var a=n(5);a.A=mk()")
+    assert ("DELETE", "/session") in _eps(src)
 
 
 def test_a_create_result_that_behaves_like_a_collection_is_not_a_client():

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 
 import tree_sitter_javascript as tsjs
@@ -218,9 +219,9 @@ class InferredWrapper:
 
 @dataclass(frozen=True)
 class BaseEnv:
-    instances: dict[str, str | None]  # axios.create var -> base literal, or None if dynamic
+    instances: Mapping[str, str | None]  # axios.create var -> base literal, or None if dynamic
     default_base: str | None  # axios.defaults.baseURL literal
-    const_prefixes: dict[str, str]  # LOCAL const name -> string literal (for `${NAME}` prefixes)
+    const_prefixes: Mapping[str, str]  # LOCAL const name -> string literal (for `${NAME}` prefixes)
     # Names imported from ANOTHER module resolved to their exporter's string literal
     # (recon.findings._modulegraph). Kept SEPARATE from const_prefixes on purpose: the
     # `+`-folder consults only this map + literals, never local consts, so a same-file
@@ -237,12 +238,27 @@ class BaseEnv:
     window_globals: dict[str, str] = field(default_factory=dict)
     # What each `.get()`-style receiver IS, per the bundle's own evidence (recon.findings._receivers):
     # receiver text -> evidence rank. Read through `_receivers.kind_of`.
-    receivers: dict[str, int] = field(default_factory=dict)
+    receivers: Mapping[str, int] = field(default_factory=dict)
     # QA #4 evidence rules (recon.findings._inferred): instances recognized from a
     # `.create({baseURL})` result/factory (still subject to the collection-evidence gate), and
     # one-hop wrappers — a function whose param flows into a fetch URL — keyed by callee text.
-    inferred_instances: frozenset[str] = frozenset()
-    wrappers: dict[str, InferredWrapper] = field(default_factory=dict)
+    inferred_instances: AbstractSet[str] = frozenset()
+    wrappers: Mapping[str, InferredWrapper] = field(default_factory=dict)
+    # DEBT D80: one env per webpack module function (recon.findings._module_scopes), in source
+    # order. The fields above are the env for code OUTSIDE every module; a sink inside a module
+    # resolves against that module's env, which layers its own bindings over the outer ones.
+    scopes: tuple[ModuleScope, ...] = ()
+
+
+@dataclass(frozen=True)
+class ModuleScope:
+    """One webpack module function's byte span, its env, and the consts it declares itself
+    (``env.const_prefixes`` also layers in the outer region's, which are emitted once there)."""
+
+    start: int
+    end: int
+    env: BaseEnv
+    local_consts: Mapping[str, str]
 
 
 # --- tree helpers ------------------------------------------------------------

@@ -72,6 +72,7 @@ from recon.findings._jsast import (
     _text_if_short,
     _walk,
 )
+from recon.findings._module_scopes import ScopeCursor, with_imports
 from recon.findings._url_source import url_source_token
 from recon.findings._wrapper_calls import record_wrapper_call
 from recon.findings.wrappers import WrapperRule, wrapper_callees
@@ -114,11 +115,9 @@ def extract(
     """
     data = source.encode("utf-8") if isinstance(source, str) else source
     tree = _PARSER.parse(data)
-    env = collect_base_env(tree.root_node, data, window_globals)
-    if cross_module_consts:
-        env = replace(env, cross_module_consts=dict(cross_module_consts))
-    if webpack_members:
-        env = replace(env, webpack_members={k: dict(v) for k, v in webpack_members.items()})
+    env = with_imports(
+        collect_base_env(tree.root_node, data, window_globals), cross_module_consts, webpack_members
+    )
     # One-shot DoS work budget (DEBT D21), checked once via `descendant_count` (O(1)): a
     # pathologically large tree caps the two EXPENSIVE passes (this sink walk + harvest) to a
     # prefix; a normal bundle passes `None` and is untouched. This does NOT bound `collect_base_env`
@@ -131,11 +130,18 @@ def extract(
     # D31 honesty (REQ-C2): a bounded walk means the tree's tail was not examined — record it so
     # the partial extract is surfaced on coverage downstream, never a silent under-report.
     result.curtailed = walk_limit is not None
+    # DEBT D80: a sink inside a webpack module function resolves against that module's env.
+    cursor = ScopeCursor([(scope.start, scope.end) for scope in env.scopes])
+
+    def env_at(node: Node) -> BaseEnv:
+        index = cursor.index_at(node.start_byte) if env.scopes else -1
+        return env.scopes[index].env if index >= 0 else env
+
     for node in _walk(tree.root_node, walk_limit):
         if node.type == "call_expression":
-            _handle_call(node, result, env, callees)
+            _handle_call(node, result, env_at(node), callees)
         elif node.type == "new_expression":
-            _handle_new(node, result, env)
+            _handle_new(node, result, env_at(node))
         elif node.type == "pair":  # object-literal href/src/action value -> a page route
             _handle_property_url(node, result)
     _harvest_routes(tree.root_node, result, walk_limit)  # off-sink literals, after the sinks
@@ -210,9 +216,10 @@ def _emit_declared_consts(result: Extraction, env: BaseEnv, data: bytes) -> None
     # Local consts only: cross-module consts are resolution aids for consuming files (so
     # `fetch(IMPORTED_CONST + "/path")` can fold), NOT declarations in this file. Emitting
     # them here would add false findings for every base URL imported from another module.
-    all_consts: dict[str, str] = dict(env.const_prefixes)
-
-    for name, value in all_consts.items():
+    # Every scope's OWN consts (DEBT D80): a module env layers the outer ones in too, so reading
+    # each module's `const_prefixes` would re-visit the outer consts once per module.
+    declared = [env.const_prefixes, *(scope.local_consts for scope in env.scopes)]
+    for name, value in ((n, v) for consts in declared for n, v in consts.items()):
         # Skip intermediate prefix consts: if ${Name} appears in the source as a template
         # substitution, this const is a building block (e.g. `const url = `${base}/path``)
         # used to compose other consts, not a terminal endpoint declaration.

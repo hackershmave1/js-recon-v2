@@ -40,7 +40,9 @@ _MAX_RESOLVE_DEPTH = 40
 
 
 def resolve_local_consts(
-    raw: dict[str, Node], window_globals: Mapping[str, str] | None = None
+    raw: dict[str, Node],
+    window_globals: Mapping[str, str] | None = None,
+    inherited: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Resolve pre-collected single-unshadowed local bindings to their string values.
 
@@ -53,14 +55,21 @@ def resolve_local_consts(
     Two exceptions fold, because they are as certain as a literal: ``window.NAME`` when
     ``window_globals`` (already poison-filtered by the caller) holds it, and
     ``<resolvable>.replace("lit", "lit")`` (the first occurrence only, as in JS).
+
+    ``inherited`` (DEBT D80) is the ENCLOSING scope's already-resolved consts: a webpack module's
+    ``const p = o + "/v1"`` reads the outer region's ``o``. The caller guarantees its names are
+    not bound in ``raw``'s scope, so a name in neither map stays unresolvable. Only ``raw``'s
+    names are returned — the inherited ones belong to (and are emitted by) their own scope.
     """
     resolved: dict[str, str] = {}
 
     def resolve_name(name: str, active: frozenset[str]) -> str | None:
         if name in resolved:
             return resolved[name]
-        if name not in raw or name in active:
-            return None  # not a local const, or a reference cycle -> unresolvable (honest)
+        if name not in raw:
+            return inherited.get(name) if inherited else None  # an enclosing scope's const
+        if name in active:
+            return None  # a reference cycle -> unresolvable (honest)
         value = _resolve_node(raw[name], active | {name}, 0)
         if value is not None:
             resolved[name] = value

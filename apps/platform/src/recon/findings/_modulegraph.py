@@ -32,6 +32,7 @@ from tree_sitter import Node
 from recon.findings._base_env import _declared_names
 from recon.findings._dataflow import resolve_local_consts
 from recon.findings._jsast import _MAX_URL_SPAN, _PARSER, _string_value, _text, _walk
+from recon.findings._module_scopes import module_function
 
 # A scheme://authority prefix (e.g. `webpack://recon-range`) that a recovered
 # source path might retain, split off so relative resolution operates on the path
@@ -367,40 +368,24 @@ def _decode_nd(defn: Node, consts: dict[str, str]) -> dict[str, str]:
     return out
 
 
-def _webpack_require_param(method: Node) -> str | None:
-    """The 3rd formal parameter of a webpack module fn — its ``__webpack_require__``."""
-    params = method.child_by_field_name("parameters")
-    if params is None or len(params.named_children) < 3:
-        return None
-    require = params.named_children[2]
-    return _text(require) if require.type == "identifier" else None
-
-
 def _webpack_module_defs(root: Node) -> Iterator[tuple[str, str, Node]]:
     """Yield ``(module_id, require_name, body)`` for each numeric-keyed webpack module in
-    the chunk that binds a require param. Covers the three real registry forms: a
-    ``method_definition`` (``{389(e,t,n){…}}``) and a ``pair`` whose value is an
-    ``arrow_function`` (``{389:(e,t,n)=>{…}}``) or a ``function_expression``
-    (``{389:function(e,t,n){…}}``). Webpack 5 PRODUCTION emits the latter two (the
-    method-shorthand alone was a fixture artifact); the ``require.d`` export gate in
-    `collect_webpack_modules` + the poison-safe alias rules keep a non-module numeric-keyed
-    function inert, so widening the accepted declaration form adds no false positives."""
+    the chunk that binds a require param — the three registry forms
+    :func:`recon.findings._module_scopes.module_function` accepts (a ``method_definition``
+    ``{389(e,t,n){…}}``, or a ``pair`` whose value is an ``arrow_function`` / a
+    ``function_expression``; webpack 5 PRODUCTION emits the latter two). The ``require.d``
+    export gate in `collect_webpack_modules` + the poison-safe alias rules keep a non-module
+    numeric-keyed function inert, so the widened declaration form adds no false positives."""
     for node in _walk(root):
-        if node.type == "method_definition":
-            name = node.child_by_field_name("name")
-            fn = node
-        elif node.type == "pair":
-            value = node.child_by_field_name("value")
-            if value is None or value.type not in ("arrow_function", "function_expression"):
-                continue
-            name = node.child_by_field_name("key")
-            fn = value
-        else:
+        fn = module_function(node)
+        if fn is None:
             continue
+        key = node.child_by_field_name("name" if node.type == "method_definition" else "key")
+        params = fn.child_by_field_name("parameters")
+        require = params.named_child(2) if params is not None else None
         body = fn.child_by_field_name("body")
-        require = _webpack_require_param(fn)
-        if name is not None and name.type == "number" and body is not None and require is not None:
-            yield _text(name), require, body
+        if key is not None and require is not None and body is not None:
+            yield _text(key), _text(require), body
 
 
 def collect_webpack_modules(root: Node) -> dict[str, dict[str, str]]:

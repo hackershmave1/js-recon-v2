@@ -18,7 +18,7 @@ Effort: S (hours) · M (a day-ish) · L (multi-day).
 
 **Now** - wrong or missing results, or the capture path misleads you:
 - ~~**D69 + D70** (#267)~~ ✅ resolved by PR #277: session-rotation races could bleed captures into the wrong engagement or session. Its review found **D86** (old-session outbox files upload with the new binding), not yet ranked.
-- **D80** (#268): webpack module identity breaks recall on the most common bundler; the scoped fix is known.
+- ~~**D80** (#268)~~ ✅ resolved by PR #280: webpack names are poisoned per module, not per file, so multi-module chunks resolve their own bases and `DELETE /api/v1/session` is found.
 - **D77** (#269): every extension capture shows "no tech stack", and the extension is now the main capture path.
 - **D64** (#270): the threat model is generic without call-site code; the design is already decided.
 - **D44a check** (#271): re-check whether the ADR-0010 quarantine already closes the cross-origin-import scope bypass; Now only if it still leaks.
@@ -56,6 +56,20 @@ green (C7 review: `test_popup_api.mjs` silently stopped running this way; fixed 
 "exited before finishing" guard). **Fix:** have the lane require each suite's final sentinel line (or
 run them under `node --test`, which reports a never-settled test as a failure).
 #### D80 · webpack module identity: names are poisoned bundle-wide, not per module [M]  ·  recall
+
+> ✅ **RESOLVED** (2026-11-17, PR #280 for #268). The base-env pre-pass now finds the outermost webpack
+> module functions (`_module_scopes.module_function`, shared with `_modulegraph`) and counts bindings
+> per module: a name a module declares is ambiguous only if it is bound twice in that module or also
+> outside every module; a write to a name a module does not declare counts against the outer region.
+> Each module gets its own env (its bindings layered over the outer region's with no per-module copy),
+> and a sink resolves against the env of the module it sits in. With identity per module, a member
+> factory `t.A.create({baseURL})` claims `t.A` as the default client only when `t` is that module's own
+> `t = require(<id>)` alias, bound once, and nothing in the file writes `t.A` / `t["A"]` (a sibling
+> module reusing `t` for a store is a different binding; outside every module `t.A` is never claimed),
+> so the strict-xfail `DELETE /api/v1/session` test now passes. Accepted limit: an aliased or bulk
+> write (`const u=t; u.A=x`, `Object.assign(t,{A:x})`) is not tracked. webpack defines `require.d`
+> exports as getter-only, so such a write cannot replace the export. Residual: the cross-chunk alias map
+> (`_modulegraph.collect_webpack_requires`) still poisons aliases file-wide — lossy, never wrong.
 
 `_base_env._declared_names` poisons a name bound more than once ANYWHERE in the file, and webpack
 emits many modules per chunk that each reuse the same short names (`t`, `s`, `o`). So on real
