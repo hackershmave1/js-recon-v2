@@ -16,7 +16,9 @@ export function parseFetchCap(raw: string, ceilingBytes: number | undefined): nu
   const text = raw.trim();
   if (text === "") return null;
   const mib = Number(text);
-  if (!Number.isFinite(mib) || mib <= 0) return "invalid";
+  // Whole MiB only, matching the input's step="1" (a fraction would pass here but then be
+  // blocked by the browser's own validation with no explanation).
+  if (!Number.isInteger(mib) || mib <= 0) return "invalid";
   const bytes = Math.round(mib * MIB);
   if (bytes <= 0) return "invalid";
   if (ceilingBytes !== undefined && bytes > ceilingBytes) return "invalid";

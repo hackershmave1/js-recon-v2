@@ -171,6 +171,21 @@ describe("NewRunPanel", () => {
     await userEvent.type(cap, "33");
     expect(screen.getByRole("button", { name: /crawl/i })).toBeDisabled();
     expect(cap).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText(/check advanced/i)).toBeInTheDocument(); // explained even if folded
+  });
+
+  it("Advanced: a chosen source map is cleared when switching to crawl", async () => {
+    vi.spyOn(api, "createSession").mockResolvedValue({ session_id: "s1", scope_hosts: [], authorization_ack: true });
+    vi.spyOn(api, "uploadRun").mockResolvedValue({ run_id: "run-x", state: "queued" });
+    renderPanel();
+    await chooseUpload();
+    await userEvent.click(screen.getByText("Advanced", { selector: "summary" }));
+    await userEvent.upload(screen.getByLabelText(/source map/i),
+      new File(["{}"], "old.js.map", { type: "application/json" }));
+    expect(screen.getByText(/old\.js\.map will be sent/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: /crawl/i }));
+    await chooseUpload();
+    expect(screen.queryByText(/old\.js\.map will be sent/)).not.toBeInTheDocument();
   });
 
   it("Advanced: an upload sends the optional source map as the `map` field", async () => {
@@ -231,7 +246,7 @@ describe("parseFetchCap (MiB as typed -> bytes for max_fetch_bytes)", () => {
     expect(parseFetchCap("32", 32 * MIB)).toBe(32 * MIB);
   });
   it("rejects zero, negatives, junk and values over the ceiling", () => {
-    for (const bad of ["0", "-1", "abc", "33"]) expect(parseFetchCap(bad, 32 * MIB)).toBe("invalid");
+    for (const bad of ["0", "-1", "abc", "33", "1.5"]) expect(parseFetchCap(bad, 32 * MIB)).toBe("invalid");
   });
 });
 

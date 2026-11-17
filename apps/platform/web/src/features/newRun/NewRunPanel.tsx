@@ -153,7 +153,7 @@ export function NewRunPanel() {
         <div className="nr-modes" role="radiogroup" aria-label="Run mode">
           <label className={mode === "crawl" ? "is-active" : ""}>
             <input type="radio" name="mode" value="crawl" checked={mode === "crawl"}
-              onChange={() => setMode("crawl")} />
+              onChange={() => { setMode("crawl"); setMapFile(null); }} />
             <GlobeIcon /> Crawl a domain
           </label>
           <label className={mode === "upload" ? "is-active" : ""}>
@@ -242,6 +242,9 @@ export function NewRunPanel() {
           <input id="auth" value={authorizedBy} placeholder="your name / ticket"
             onChange={(e) => setAuthorizedBy(e.target.value)} /></div>
 
+        {mode === "crawl" && fetchCap === "invalid" && (
+          <p className="sev-high nr-error">Check Advanced: the max file size to fetch is not valid.</p>
+        )}
         {error && <p className="sev-high nr-error">{error}</p>}
         <button type="submit" className="btn-primary nr-submit" disabled={!ready || busy}>
           {busy ? "Starting…" : mode === "crawl" ? "Crawl domain" : "Analyze file"}
