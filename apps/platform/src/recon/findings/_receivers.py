@@ -25,6 +25,7 @@ the SUSPECTED lane rather than being dropped or confirmed on contradictory evide
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 
 from tree_sitter import Node
 
@@ -55,13 +56,13 @@ def receiver_key(text: str) -> str:
     return _WS.sub("", text)
 
 
-def is_proven_http(evidence: dict[str, int], receiver: str) -> bool:
+def is_proven_http(evidence: Mapping[str, int], receiver: str) -> bool:
     """The bundle itself shows ``receiver`` is a client (``axios.create``, ``.interceptors``), as
     opposed to the weaker "a constructor stored a parameter on it" provenance (INJECTED)."""
     return bool(evidence.get(receiver_key(receiver), 0) & _HTTP_SEEN)
 
 
-def kind_of(evidence: dict[str, int], receiver: str) -> str | None:
+def kind_of(evidence: Mapping[str, int], receiver: str) -> str | None:
     """``HTTP`` / ``COLLECTION`` when the bundle's evidence about ``receiver`` decides it, else
     None (no evidence, or contradictory injected-vs-collection evidence)."""
     flags = evidence.get(receiver_key(receiver), 0)

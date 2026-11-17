@@ -6,9 +6,10 @@ principle: decide by what the code does with a value). Two evidence rules, gathe
 
 - R1 client by configuration: ``X = F.create({ baseURL: ... })`` — ``baseURL`` is the HTTP
   client configuration contract (axios, ofetch, apisauce), so ``X`` is a client, and ``F`` —
-  the object that creates clients — is the default client (``T.delete(...)``). Only a plain
-  identifier ``F`` is claimed: a webpack ``t.A`` means "export A of whatever module ``t`` is"
-  and a sibling module may reuse ``t`` for a store (DEBT D80). The extractor still drops a
+  the object that creates clients — is the default client (``T.delete(...)``). A plain
+  identifier ``F`` is claimed, and so is a webpack ``t.A`` ("export A of module ``t``") when
+  ``t`` is bound once in its webpack module: poison is per module (DEBT D80), so a sibling
+  module reusing ``t`` for a store is a different binding. The extractor still drops a
   candidate the bundle shows behaving like a collection (Ember's ``cfg.get``/``cfg.set``).
 - R2 one-hop wrapper: a function whose RETURNED call is ``fetch(<expr of its params>, ...)``
   (``a => fetch(a)``, ``function c(e,t,n){return fetch(s+e, {method: t||"GET"})}``). Its call
@@ -20,6 +21,8 @@ Bindings the poison set marks as ambiguous (bound more than once) are never used
 """
 
 from __future__ import annotations
+
+from collections.abc import Container
 
 from tree_sitter import Node
 
@@ -41,7 +44,7 @@ _MAX_CHAIN = 8
 
 def observe(
     node: Node,
-    poisoned: set[str],
+    poisoned: Container[str],
     instances: dict[str, str | None],
     inferred_instances: set[str],
     wrappers: dict[str, InferredWrapper | None],
@@ -98,7 +101,7 @@ def _observe_wrapper_member(
 def _observe_create(
     name: str,
     call: Node,
-    poisoned: set[str],
+    poisoned: Container[str],
     instances: dict[str, str | None],
     inferred_instances: set[str],
 ) -> None:
@@ -126,9 +129,27 @@ def _observe_create(
     # `a`'s known base (nor may a later sighting overwrite an earlier one).
     instances.setdefault(name, base)
     inferred_instances.add(name)
-    if factory.type == "identifier" and factory_text not in poisoned:
+    if _is_claimable_factory(factory, factory_text, poisoned):
         instances.setdefault(factory_text, None)
         inferred_instances.add(factory_text)
+
+
+def _is_claimable_factory(factory: Node, factory_text: str, poisoned: Container[str]) -> bool:
+    """A plain identifier ``F``, or a webpack module export ``t.A`` (``t = require(690)``) —
+    whose receiver ``t`` is bound once in its scope. DEBT D80: the poison set is per webpack
+    module, so a sibling module that reuses ``t`` for a store is a different binding and claims
+    nothing. A later ``t.A = …`` in the scope un-claims it (``_ScopeBindings.proven_instances``)."""
+    if factory.type == "identifier":
+        return factory_text not in poisoned
+    receiver = factory.child_by_field_name("object")
+    prop = factory.child_by_field_name("property")
+    return (
+        receiver is not None
+        and receiver.type == "identifier"
+        and prop is not None
+        and prop.type == "property_identifier"
+        and _text(receiver) not in poisoned
+    )
 
 
 def _base_url(config: Node) -> tuple[bool, str | None]:

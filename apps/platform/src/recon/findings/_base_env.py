@@ -10,7 +10,8 @@ and is itself imported by :mod:`recon.findings.extract` (the sink handlers).
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from dataclasses import replace
 
 from tree_sitter import Node
 
@@ -19,13 +20,21 @@ from recon.findings._dataflow import resolve_local_consts
 from recon.findings._jsast import (
     _MAX_URL_SPAN,
     BaseEnv,
-    InferredWrapper,
     _args,
     _object_pairs,
     _string_value,
     _text,
     _text_if_short,
     _walk,
+)
+from recon.findings._module_scopes import (
+    _MODULE_OPENERS,
+    BindingCounts,
+    OuterLayer,
+    ScopeBindings,
+    ScopeCursor,
+    module_function,
+    module_scope,
 )
 
 # --- base-environment collection (scope-safe pre-pass; Task 1) ---------------
@@ -40,7 +49,14 @@ from recon.findings._jsast import (
 
 
 def _declared_names(root: Node) -> set[str]:
-    """Every identifier bound — or reassigned — anywhere in the tree.
+    """Every identifier bound — or reassigned — more than once anywhere in the tree (the whole-
+    file poison set; :func:`_binding_counts` documents the rule and its per-module refinement)."""
+    total = _binding_counts(root).total
+    return {name for name, count in total.items() if count > 1}
+
+
+def _binding_counts(root: Node) -> BindingCounts:
+    """Count every identifier bound — or reassigned — in the tree, per scope.
 
     This pass has no real lexical scoping, so a name touched more than once
     (redeclared in a nested scope, shadowed by a parameter, or reassigned — by
@@ -65,14 +81,15 @@ def _declared_names(root: Node) -> set[str]:
     underlying node. Every check below matches on node type/field membership
     instead of identity.
     """
-    seen: dict[str, int] = {}
+    counts = BindingCounts()
+    writes: list[dict[str, int]] = []  # per module: assignments, attributed after the walk
     # Grammar-verified via `_PARSER`: object-pattern shorthand (`{ loc }`)
     # binds through a `shorthand_property_identifier_pattern` leaf, not
     # `identifier` — it doubles as both the key and the bound name.
     binding_leaf_types = ("identifier", "shorthand_property_identifier_pattern")
 
-    def mark(candidate: Node | None) -> None:
-        """Mark every binding name `candidate` introduces.
+    def bound_names(candidate: Node | None) -> Iterator[str]:
+        """Every binding name `candidate` introduces.
 
         A plain `identifier` (or an object-pattern shorthand leaf) is marked
         directly. Anything else is a destructuring/default/rest pattern:
@@ -94,8 +111,7 @@ def _declared_names(root: Node) -> set[str]:
             if node is None:
                 continue
             if node.type in binding_leaf_types:
-                name = _text(node)
-                seen[name] = seen.get(name, 0) + 1
+                yield _text(node)
             elif node.type == "pair_pattern":  # `{ key: value }` -- only `value` binds
                 stack.append(node.child_by_field_name("value"))
             elif node.type in ("assignment_pattern", "object_assignment_pattern"):
@@ -111,7 +127,32 @@ def _declared_names(root: Node) -> set[str]:
                 if len(inner) == 1:
                     stack.append(inner[0])
 
+    scope = -1
+
+    def mark(candidate: Node | None, declares: bool = True) -> None:
+        for name in bound_names(candidate):
+            counts.total[name] = counts.total.get(name, 0) + 1
+            if scope < 0:
+                target = counts.outer
+            else:
+                target = counts.local[scope] if declares else writes[scope]
+            target[name] = target.get(name, 0) + 1
+
     for node in _walk(root):
+        spans = counts.spans
+        if spans and spans[-1][0] <= node.start_byte < spans[-1][1]:
+            scope = len(spans) - 1
+        else:
+            scope = -1
+            # Only outside a module: the OUTERMOST one opens a scope. The type test first keeps
+            # the per-node cost one string compare on the hot path (DoS: this walk is unbounded).
+            module = module_function(node) if node.type in _MODULE_OPENERS else None
+            if module is not None:
+                spans.append((module.start_byte, module.end_byte))
+                counts.local.append({})
+                writes.append({})
+                if module.start_byte == node.start_byte:
+                    scope = len(spans) - 1  # a method_definition IS its module function
         if node.type in ("variable_declarator", "function_declaration"):
             mark(node.child_by_field_name("name"))
         elif node.type == "class_declaration":
@@ -141,22 +182,29 @@ def _declared_names(root: Node) -> set[str]:
             for child in node.named_children:
                 mark(child)  # any param shape: plain/destructured/default/rest
         elif node.type == "assignment_expression":
-            mark(node.child_by_field_name("left"))  # plain reassignment: `loc = other`
+            mark(node.child_by_field_name("left"), declares=False)  # reassignment: `loc = b`
         elif node.type == "augmented_assignment_expression":
             # In-place mutation `path += "/x"`, `u ||= v`, `n -= 1` — the name's value AFTER this
             # differs from its declared literal, so it must poison (§4 gate: this omission let a
             # `let p="/a"; p+="/b"; fetch(p)` fold to the stale `/a` — a 0-FP). Field is `left`.
-            mark(node.child_by_field_name("left"))
+            mark(node.child_by_field_name("left"), declares=False)
         elif node.type == "update_expression":
-            mark(node.child_by_field_name("argument"))  # `u++` / `--u` in-place mutation
+            mark(node.child_by_field_name("argument"), declares=False)  # `u++` / `--u`
         elif node.type == "for_in_statement":
             # `for (x of y)` / `for (x in y)` reassigns its loop target each pass. For a BARE
             # target (`for (x of y)`) `left` IS the `identifier`, which `mark` poisons directly —
             # the vector this closes. For `for (const x of y)` `left` is a declaration whose inner
             # `variable_declarator` is already marked above and `mark` no-ops on the wrapper, so
             # either form is handled; `mark` also recurses a destructuring target (`for ([a,b] of y)`).
-            mark(node.child_by_field_name("left"))
-    return {name for name, count in seen.items() if count > 1}
+            # A `kind` (`for (const x of y)`) declares the target; a bare target assigns it.
+            declares = node.child_by_field_name("kind") is not None
+            mark(node.child_by_field_name("left"), declares=declares)
+    # A module's write to a name it never declares lands on the enclosing / global binding.
+    for local, module_writes in zip(counts.local, writes, strict=True):
+        for name, count in module_writes.items():
+            target = local if name in local else counts.outer
+            target[name] = target.get(name, 0) + count
+    return counts
 
 
 def _merge_window_globals(
@@ -178,15 +226,15 @@ def collect_base_env(
 ) -> BaseEnv:
     # `data` isn't read here — every helper resolves text via `node.text` — but
     # stays part of the signature to match the interface Task 2 will call.
-    poisoned = _declared_names(root)
-    instances: dict[str, str | None] = {}
+    counts = _binding_counts(root)
+    # DEBT D80: one binding set per webpack module function, plus the outer region (whole-file
+    # poison, as before). Collected per scope in THIS single walk — not a walk per module — so
+    # the pass stays linear (the base-env walks are the extractor's unbounded worst case; see
+    # DEBT D21). An `axios.create(...)` binding goes to `instances`, not `raw_consts`.
+    outer = ScopeBindings(poisoned=counts.poison(-1))
+    modules = [ScopeBindings(poisoned=counts.poison(i)) for i in range(len(counts.spans))]
+    cursor = ScopeCursor(counts.spans)
     default_base: str | None = None
-    # Candidate LOCAL consts (single-unshadowed name -> value node) collected in THIS single walk,
-    # then resolved once below (Phase 2). Collecting here — rather than in a second full-tree pass
-    # inside _dataflow — means Phase 2 adds NO new walk (the base-env walks are the extractor's
-    # unbounded worst case; see DEBT D21). An `axios.create(...)` binding goes to `instances`, not
-    # here (its value is a call, so it would not resolve to a string anyway — no collision).
-    raw_consts: dict[str, Node] = {}
     # `with (obj) { … }` rebinds every free name inside the block against `obj` at runtime, which
     # static analysis cannot follow — so a local const referenced in the block could differ at the
     # sink. `with` is a SyntaxError in strict mode / ES modules (absent from any real bundle), so
@@ -196,12 +244,19 @@ def collect_base_env(
     local_window: dict[str, str | None] = {}
     # What `.get()`/`.post()` receivers ARE (collection vs HTTP client), gathered in this same walk.
     receivers: dict[str, int] = {}
-    # QA #4: clients/wrappers the bundle proves under any (minified) name, same walk.
-    inferred_instances: set[str] = set()
-    wrappers: dict[str, InferredWrapper | None] = {}
     for node in _walk(root):
+        index = cursor.index_at(node.start_byte)
+        scope = modules[index] if index >= 0 else outer
         _receivers.observe(node, receivers)
-        _inferred.observe(node, poisoned, instances, inferred_instances, wrappers)
+        _inferred.observe(
+            node, scope.poisoned, scope.instances, scope.inferred_instances, scope.wrappers
+        )
+        if index >= 0 and node.type == "assignment_expression":
+            # A member write inside a module (`t.k = …`) may target an OUTER object: it makes
+            # that wrapper key ambiguous outside too, exactly as the whole-file pass did.
+            _inferred.observe(
+                node, outer.poisoned, outer.instances, outer.inferred_instances, outer.wrappers
+            )
         if node.type == "with_statement":
             has_with = True
         elif node.type == "variable_declarator":
@@ -210,10 +265,10 @@ def collect_base_env(
             if name_node is None or name_node.type != "identifier" or value is None:
                 continue
             name = _text(name_node)
-            if name in poisoned:
+            if name in scope.poisoned:
                 continue  # bound/reassigned/shadowed >once -> ambiguous, never resolved (0-FP)
             if _is_axios_create(value):
-                instances[name] = _base_url_arg(value)
+                scope.instances[name] = _base_url_arg(value)
             elif value.type == "object":
                 # Extract string-valued properties as dotted keys so a member access like
                 # `environment.apiBaseUrl` folds at the sink (Angular/Vue environment objects).
@@ -221,10 +276,10 @@ def collect_base_env(
                 # — that is a known limitation; the object itself IS poison-checked above.
                 for prop_name, prop_value_node in _object_pairs(value).items():
                     dotted = f"{name}.{prop_name}"
-                    if dotted not in raw_consts:
-                        raw_consts[dotted] = prop_value_node
-            elif name not in raw_consts:
-                raw_consts[name] = value
+                    if dotted not in scope.raw_consts:
+                        scope.raw_consts[dotted] = prop_value_node
+            elif name not in scope.raw_consts:
+                scope.raw_consts[name] = value
         elif node.type == "assignment_expression":
             # `_text_if_short`, not `_text`: a left-nested member-target assignment
             # (`((a.x=1).x=1).x=1…`) makes each LHS a member expression that CONTAINS every
@@ -249,16 +304,29 @@ def collect_base_env(
     # differ at the sink (0-FP); the sink resolver then folds by an O(1) `const_prefixes` lookup.
     # A `with` anywhere drops them all (see above) — its dynamic scope defeats the certainty.
     merged_window = {} if has_with else _merge_window_globals(local_window, window_globals)
-    const_prefixes = {} if has_with else resolve_local_consts(raw_consts, merged_window)
-    return BaseEnv(
-        instances=instances,
-        default_base=default_base,
+    const_prefixes = {} if has_with else resolve_local_consts(outer.raw_consts, merged_window)
+    outer_layer = OuterLayer(
+        instances=outer.proven_instances(),
         const_prefixes=const_prefixes,
+        inferred_instances=frozenset(outer.inferred_instances),
+        wrappers=outer.proven_wrappers(),
+    )
+    outer_env = BaseEnv(
+        instances=outer_layer.instances,
+        default_base=default_base,
+        const_prefixes=outer_layer.const_prefixes,
         window_globals=merged_window,
         receivers=receivers,
-        inferred_instances=frozenset(inferred_instances),
-        wrappers={key: w for key, w in wrappers.items() if w is not None},
+        inferred_instances=outer_layer.inferred_instances,
+        wrappers=outer_layer.wrappers,
     )
+    if not modules:
+        return outer_env
+    scopes = tuple(
+        module_scope(span, bindings, outer_env, outer_layer, has_with)
+        for span, bindings in zip(counts.spans, modules, strict=True)
+    )
+    return replace(outer_env, scopes=scopes)
 
 
 def _is_axios_create(node: Node) -> bool:

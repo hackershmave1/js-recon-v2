@@ -57,6 +57,17 @@ green (C7 review: `test_popup_api.mjs` silently stopped running this way; fixed 
 run them under `node --test`, which reports a never-settled test as a failure).
 #### D80 · webpack module identity: names are poisoned bundle-wide, not per module [M]  ·  recall
 
+> ✅ **RESOLVED** (2026-11-17, PR for #268). The base-env pre-pass now finds the outermost webpack
+> module functions (`_module_scopes.module_function`, shared with `_modulegraph`) and counts bindings
+> per module: a name a module declares is ambiguous only if it is bound twice in that module or also
+> outside every module; a write to a name a module does not declare counts against the outer region.
+> Each module gets its own env (its bindings layered over the outer region's with no per-module copy),
+> and a sink resolves against the env of the module it sits in. With identity per module, a member
+> factory `t.A.create({baseURL})` claims `t.A` as the default client when `t` is bound once in its
+> module (a sibling module reusing `t` for a store is a different binding; `t.A = …` un-claims it), so
+> the strict-xfail `DELETE /api/v1/session` test now passes. Residual: the cross-chunk alias map
+> (`_modulegraph.collect_webpack_requires`) still poisons aliases file-wide — lossy, never wrong.
+
 `_base_env._declared_names` poisons a name bound more than once ANYWHERE in the file, and webpack
 emits many modules per chunk that each reuse the same short names (`t`, `s`, `o`). So on real
 multi-module chunks: a local const base used by a wrapper is unresolvable (example_js_files/02: the
