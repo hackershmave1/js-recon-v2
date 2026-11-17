@@ -178,6 +178,13 @@ would re-hash every sighting on a re-extract). The exact place a finding is SHOW
 display-only `view_line/view_col/view_end_line/view_end_col` columns (migration 0032,
 `recon.findings.located`), which are deliberately outside this hash.
 
+`url_source` (migration 0040, #235) is display-only in the same way: the page attribute / Stimulus
+value / form field an unresolved URL is read from (`{attr:data-url}`, `{stimulus:url}`,
+`{form:action}`, built by `recon.findings._url_source`). It lives on the occurrence, outside both
+hashes, and never enters `value`, so the skeleton (`GET EXPR`, `POST :action`) and its triage are
+unchanged. Accepted trade-off: two sites with one skeleton but different attributes stay ONE finding;
+each occurrence keeps its own token.
+
 - `value` is Unicode **NFC-normalized** before serialization, so two builds differing only in composition form don't churn the D5 diff (review LOW-5).
 - `v` (`FINDING_HASH_VERSION`) ⇒ a future identity change bumps it, giving a disjoint hash space and a clean new-runs-only rollout (no false "all removed + all added" against older runs).
 - Canonical JSON (sorted keys, no whitespace, UTF-8) ⇒ deterministic bytes.
