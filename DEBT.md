@@ -18,7 +18,7 @@ Effort: S (hours) · M (a day-ish) · L (multi-day).
 
 **Now** - wrong or missing results, or the capture path misleads you:
 - ~~**D69 + D70** (#267)~~ ✅ resolved by PR #277: session-rotation races could bleed captures into the wrong engagement or session. Its review found **D86** (old-session outbox files upload with the new binding), not yet ranked.
-- **D80** (#268): webpack module identity breaks recall on the most common bundler; the scoped fix is known.
+- ~~**D80** (#268)~~ ✅ resolved by PR #280: webpack names are poisoned per module, not per file, so multi-module chunks resolve their own bases and `DELETE /api/v1/session` is found.
 - **D77** (#269): every extension capture shows "no tech stack", and the extension is now the main capture path.
 - **D64** (#270): the threat model is generic without call-site code; the design is already decided.
 - **D44a check** (#271): re-check whether the ADR-0010 quarantine already closes the cross-origin-import scope bypass; Now only if it still leaks.
@@ -57,7 +57,7 @@ green (C7 review: `test_popup_api.mjs` silently stopped running this way; fixed 
 run them under `node --test`, which reports a never-settled test as a failure).
 #### D80 · webpack module identity: names are poisoned bundle-wide, not per module [M]  ·  recall
 
-> ✅ **RESOLVED** (2026-11-17, PR for #268). The base-env pre-pass now finds the outermost webpack
+> ✅ **RESOLVED** (2026-11-17, PR #280 for #268). The base-env pre-pass now finds the outermost webpack
 > module functions (`_module_scopes.module_function`, shared with `_modulegraph`) and counts bindings
 > per module: a name a module declares is ambiguous only if it is bound twice in that module or also
 > outside every module; a write to a name a module does not declare counts against the outer region.
