@@ -255,8 +255,13 @@ export interface Engagement {
   engagement_id: string; name: string;
   in_scope_domains: string[]; out_of_scope_domains: string[];
   created_at: string; updated_at: string;
+  // Sessions it groups (archived included) = what a delete would detach (#262). Optional for
+  // older servers, where the confirm can't name a number.
+  session_count?: number;
 }
 export interface EngagementsListResponse { count: number; engagements: Engagement[]; }
+// DELETE /engagements/{id}: its sessions move to "No engagement"; none are deleted.
+export interface DeleteEngagementResponse { engagement_id: string; detached_sessions: number; }
 // Tech detection: one detected technology (recon.findings.queries.TechnologyView).
 // `version` is null when not statically derivable (Phase 1 honesty — T12).
 export interface Technology {
